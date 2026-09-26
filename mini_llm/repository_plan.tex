@@ -303,55 +303,397 @@ X_0 \in \mathbb{R}^{B \times T \times d_{\text{model}}},
 \]
 where \(B\) is the batch size and \(T\) is the sequence length.
 
-\subsection{Transformer block}
-Each Transformer block contains two residual branches.
+\subsection{How vectors, ``nodes'', and weight matrices should be interpreted}
 
-\paragraph{Attention branch.}
+It is useful to connect the usual neural-network picture of nodes and edges to the
+actual arrays stored in the repository. A token representation
 \[
-Z_1 = \mathrm{RMSNorm}(X),
+x=(x_1,\ldots,x_{d_{\mathrm{model}}})
+\]
+can be pictured as a row of $d_{\mathrm{model}}$ scalar nodes. A learned linear
+map does not store explicit graph edges. Instead, all connection weights are
+stored in one matrix. For
+\[
+y=xW,\qquad W\in\mathbb{R}^{d_{\mathrm{in}}\times d_{\mathrm{out}}},
+\]
+the scalar output node $y_j$ is
+\[
+y_j=\sum_{i=1}^{d_{\mathrm{in}}}x_iW_{ij}.
+\]
+Thus $W_{ij}$ is exactly the weight of the connection from input feature $i$ to
+output feature $j$. In the code, opening \texttt{W.data} exposes this complete
+matrix directly.
+
+There are two conceptually different kinds of coupling in a Transformer:
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Feature coupling:} matrices such as $W_Q$, $W_K$, $W_V$,
+    $W_O$, $W_{\mathrm{gate}}$, and $W_{\mathrm{up}}$ mix coordinates inside one
+    token representation.
+    \item \textbf{Token-to-token coupling:} the attention matrix $P$ mixes
+    information between different sequence positions. It is not a learned
+    parameter; it is recomputed from the current queries and keys for every input.
+\end{itemize}
+The feed-forward network therefore acts independently at each token position,
+whereas attention is what couples different token positions.
+
+\subsection{Transformer block: detailed structure}
+
+A Transformer block is the repeated computational unit of the model.  In a
+modern decoder-only language model, every token position carries a vector of
+length $d_{\mathrm{model}}$.  For a batch of $B$ sequences of length $T$, the
+input to one block is therefore
+\[
+X\in\mathbb{R}^{B\times T\times d_{\mathrm{model}}}.
+\]
+The block preserves this outer shape.  Internally, however, the vector is split
+into multiple attention heads and is also temporarily expanded inside the
+feed-forward or mixture-of-experts sublayer.
+
+The block has two main residual branches:
+\[
+\boxed{\text{attention branch}}
+\qquad\text{and}\qquad
+\boxed{\text{feed-forward / MoE branch}}.
+\]
+A residual branch computes a transformation $F(X)$ and adds it back to the
+original signal:
+\[
+Y=X+F(X).
+\]
+This means that the block can learn a correction to the existing representation
+instead of replacing it completely.
+
+\subsubsection{First normalization: RMSNorm}
+The first operation is root-mean-square normalization (RMSNorm). For one token
+vector $x\in\mathbb{R}^{d_{\mathrm{model}}}$,
+\[
+r(x)=\sqrt{\frac{1}{d_{\mathrm{model}}}\sum_{j=1}^{d_{\mathrm{model}}}x_j^2+\epsilon},
 \]
 \[
-Q = Z_1 W_Q,\qquad K = Z_1 W_K,\qquad V = Z_1 W_V.
+\widehat{x}_j=\frac{x_j}{r(x)},
+\qquad
+z_j=\gamma_j\widehat{x}_j.
 \]
-Then RoPE is applied to \(Q\) and \(K\). Next, causal grouped-query attention is evaluated:
+The learned parameter
 \[
-S = \frac{QK^\top}{\sqrt{d_h}} + M,
+\gamma\in\mathbb{R}^{d_{\mathrm{model}}}
 \]
-where \(M\) is the causal mask. The attention probabilities are
+rescales each component after normalization. The tensor shape remains
+$B\times T\times d_{\mathrm{model}}$.
+
+\subsubsection{Query, key and value projections}
+For the normalized tensor $Z$, three learned linear maps create the query, key,
+and value tensors:
 \[
-P = \mathrm{softmax}(S),
+Q_{\mathrm{flat}}=ZW_Q,
+\qquad
+K_{\mathrm{flat}}=ZW_K,
+\qquad
+V_{\mathrm{flat}}=ZW_V.
 \]
-and the context is
+For grouped-query attention (GQA), the matrix dimensions are
 \[
-C = PV.
+W_Q\in\mathbb{R}^{d_{\mathrm{model}}\times(H_Qd_h)},
 \]
-After output projection,
 \[
-A = C W_O,
+W_K,W_V\in\mathbb{R}^{d_{\mathrm{model}}\times(H_{KV}d_h)},
 \]
-the residual update gives:
+where
+\begin{itemize}[leftmargin=1.5em]
+    \item $H_Q$ is the number of query heads,
+    \item $H_{KV}$ is the number of key/value heads,
+    \item $d_h$ is the dimension of one attention head.
+\end{itemize}
+We choose
 \[
-X' = X + A.
+H_Qd_h=d_{\mathrm{model}}.
+\]
+For the planned small model,
+\[
+d_{\mathrm{model}}=384,\qquad H_Q=6,\qquad H_{KV}=2,\qquad d_h=64.
+\]
+Hence
+\[
+W_Q\in\mathbb{R}^{384\times384},
+\qquad
+W_K,W_V\in\mathbb{R}^{384\times128}.
+\]
+After reshaping,
+\[
+Q\in\mathbb{R}^{B\times T\times6\times64},
+\]
+\[
+K,V\in\mathbb{R}^{B\times T\times2\times64}.
 \]
 
-\paragraph{Feed-forward branch.}
+\subsubsection{What is an attention head?}
+An attention head is not a separate neuron or a separate network. It is one slice
+of the projected feature space.  For query head $h$, token $t$ has a vector
 \[
-Z_2 = \mathrm{RMSNorm}(X'),
+q_{t,h}\in\mathbb{R}^{d_h}.
 \]
-then the SwiGLU feed-forward network computes:
+That vector is compared with the key vectors of earlier tokens to determine how
+much information should be read from their value vectors.
+
+With GQA, several query heads share one key/value head.  In the proposed
+configuration the mapping is
 \[
-G = Z_2 W_{\text{gate}},\qquad U = Z_2 W_{\text{up}},
+(Q_0,Q_1,Q_2)\longrightarrow(K_0,V_0),
 \]
 \[
-H = \mathrm{SiLU}(G)\odot U,
+(Q_3,Q_4,Q_5)\longrightarrow(K_1,V_1).
+\]
+This reduces the size of the key-value cache during generation while preserving
+multiple query heads.
+
+\subsubsection{Rotary positional embedding (RoPE)}
+Attention by itself does not know token order. Rotary positional embedding (RoPE)
+encodes position by rotating pairs of coordinates of the query and key vectors.
+For one coordinate pair,
+\[
+\begin{bmatrix}q'_{2i}\\q'_{2i+1}\end{bmatrix}
+=
+\begin{bmatrix}
+\cos\theta_{t,i} & -\sin\theta_{t,i}\\
+\sin\theta_{t,i} & \cos\theta_{t,i}
+\end{bmatrix}
+\begin{bmatrix}q_{2i}\\q_{2i+1}\end{bmatrix}.
+\]
+The same transformation is applied to $K$.  In the implementation this rotation
+is performed directly on coordinate pairs rather than by constructing a large
+block-diagonal matrix, although a debug function can materialize that matrix for
+inspection.
+
+\subsubsection{Causal attention scores}
+For one query head, the raw attention score between query token $t$ and key token
+$s$ is
+\[
+S_{t,s}=\frac{q_t^\top k_s}{\sqrt{d_h}}.
+\]
+The factor $1/\sqrt{d_h}$ prevents the dot products from becoming excessively
+large as the head dimension grows.
+
+Because this is an autoregressive decoder, token $t$ must not see future token
+$s>t$. We therefore add a causal mask $M$:
+\[
+M_{t,s}=\begin{cases}
+0, & s\le t,\\
+-\infty, & s>t.
+\end{cases}
+\]
+The normalized attention weights are
+\[
+P_{t,s}=\mathrm{softmax}_s(S_{t,s}+M_{t,s}).
+\]
+Thus every row of $P$ sums to one, but only over the current and previous tokens.
+
+For all heads and batches the score tensor has shape
+\[
+S,P\in\mathbb{R}^{B\times H_Q\times T\times T}.
+\]
+This $T\times T$ object is the main reason ordinary full attention has quadratic
+memory and compute scaling with sequence length.
+
+\subsubsection{Reading information through the value vectors}
+The attention probability matrix is used to form a weighted average of the value
+vectors:
+\[
+C_{t,h}=\sum_{s\le t}P_{h,t,s}v_{s,h}.
+\]
+After all query heads are concatenated,
+\[
+C_{\mathrm{flat}}\in\mathbb{R}^{B\times T\times(H_Qd_h)}
+=
+\mathbb{R}^{B\times T\times d_{\mathrm{model}}}.
+\]
+The attention output projection is
+\[
+A=C_{\mathrm{flat}}W_O,
+\qquad
+W_O\in\mathbb{R}^{d_{\mathrm{model}}\times d_{\mathrm{model}}}.
+\]
+The first residual update is therefore
+\[
+X'=X+A.
+\]
+
+\subsubsection{Second normalization}
+The second branch begins with another RMSNorm:
+\[
+Z_2=\mathrm{RMSNorm}(X').
+\]
+From here the model can use either a dense feed-forward network or a sparse
+mixture-of-experts feed-forward network.
+
+\subsubsection{Dense SwiGLU feed-forward path}
+In the dense baseline every token passes through the same feed-forward matrices:
+\[
+G=Z_2W_{\mathrm{gate}},
+\qquad
+U=Z_2W_{\mathrm{up}},
 \]
 \[
-F = H W_{\text{down}}.
+H=\mathrm{SiLU}(G)\odot U,
 \]
-The second residual update gives:
 \[
-Y = X' + F.
+F=HW_{\mathrm{down}}.
 \]
+Here $\odot$ denotes elementwise multiplication and SiLU denotes the sigmoid
+linear unit activation,
+\[
+\mathrm{SiLU}(x)=x\,\sigma(x).
+\]
+For feed-forward width $d_{\mathrm{ff}}$,
+\[
+W_{\mathrm{gate}},W_{\mathrm{up}}
+\in\mathbb{R}^{d_{\mathrm{model}}\times d_{\mathrm{ff}}},
+\]
+\[
+W_{\mathrm{down}}
+\in\mathbb{R}^{d_{\mathrm{ff}}\times d_{\mathrm{model}}}.
+\]
+For the proposed model, $d_{\mathrm{ff}}=1024$.
+The second residual update is
+\[
+Y=X'+F.
+\]
+
+\subsubsection{Sparse mixture-of-experts replacement}
+In the MoE version, the attention branch is unchanged. Only the dense feed-forward
+path is replaced.  Instead of using one SwiGLU network for every token, the model
+contains several SwiGLU experts:
+\[
+E_0,E_1,\ldots,E_{N_E-1}.
+\]
+Each expert has its own matrices
+\[
+W_{\mathrm{gate}}^{(e)},\quad
+W_{\mathrm{up}}^{(e)},\quad
+W_{\mathrm{down}}^{(e)}.
+\]
+A router chooses which experts process each token.  The router is simply another
+learned matrix
+\[
+W_R\in\mathbb{R}^{d_{\mathrm{model}}\times N_E}.
+\]
+For one normalized token vector $z$,
+\[
+r=zW_R\in\mathbb{R}^{N_E}
+\]
+contains one routing logit per expert.  A softmax gives routing probabilities
+\[
+p_e=\frac{\exp(r_e)}{\sum_j\exp(r_j)}.
+\]
+
+For the planned model,
+\[
+N_E=6,\qquad k=2,
+\]
+so only the two highest-probability experts are selected for a token.  For example,
+if
+\[
+p=[0.03,\;0.12,\;0.51,\;0.07,\;0.23,\;0.04],
+\]
+then experts 2 and 4 are selected. Their selected probabilities are renormalized:
+\[
+\widetilde p_2=\frac{0.51}{0.51+0.23},
+\qquad
+\widetilde p_4=\frac{0.23}{0.51+0.23}.
+\]
+The sparse feed-forward output becomes
+\[
+F_{\mathrm{MoE}}(z)
+=
+\widetilde p_2E_2(z)+\widetilde p_4E_4(z).
+\]
+The other experts do not evaluate this token. This is the source of sparse
+conditional computation: the model owns many parameters, but only a subset is
+active for a given token.
+
+The second residual update becomes
+\[
+Y=X'+F_{\mathrm{MoE}}(Z_2).
+\]
+
+\subsubsection{Optional shared expert}
+A later variant will add a shared expert that is always active:
+\[
+F_{\mathrm{MoE}}(z)
+=E_{\mathrm{shared}}(z)
++\sum_{e\in\mathrm{TopK}(p)}\widetilde p_eE_e(z).
+\]
+The shared expert can represent transformations useful to most tokens, while the
+routed experts are free to specialize.
+
+\subsubsection{How the top-k selection is differentiated}
+The expert indices selected by top-$k$ are discrete. During the local backward
+pass, the selected expert identities are treated as fixed and gradients propagate
+through:
+\begin{itemize}[leftmargin=1.5em]
+    \item the selected expert outputs,
+    \item their selected routing weights,
+    \item and therefore the router logits that produced those weights.
+\end{itemize}
+At the exact point where two experts exchange rank, the top-$k$ selection is
+non-smooth. This is important when performing finite-difference checks: a numerical
+perturbation that changes the selected expert set can cross a genuine routing
+boundary.
+
+\subsubsection{Why load balancing is required}
+Without additional control, a router can collapse and send most tokens to only a
+few experts. We will therefore record for each expert:
+\[
+N_e=\text{number of routed tokens},
+\]
+as well as routing probabilities and entropy. The first MoE implementation will
+use a conventional auxiliary balancing objective; a later version can test
+bias-based or auxiliary-loss-free balancing. The point of the repository is to
+make these choices measurable rather than hidden.
+
+\subsubsection{Dense and MoE blocks have the same external shape}
+Importantly, both variants map
+\[
+\mathbb{R}^{B\times T\times d_{\mathrm{model}}}
+\longrightarrow
+\mathbb{R}^{B\times T\times d_{\mathrm{model}}}.
+\]
+Therefore the rest of the decoder stack does not need to know whether the second
+branch is dense or sparse. This allows the repository to implement both versions
+behind a common block interface and compare them directly.
+
+
+\subsubsection{Tensor-shape trace for the planned model}
+For $d_{\mathrm{model}}=384$, $H_Q=6$, $H_{KV}=2$, $d_h=64$,
+$d_{\mathrm{ff}}=1024$, $N_E=6$, and $k=2$, the main tensors inside one block are:
+
+\begin{center}
+\small
+\begin{tabular}{p{0.27\linewidth} p{0.29\linewidth} p{0.36\linewidth}}
+\toprule
+\textbf{Quantity} & \textbf{Shape} & \textbf{Role} \\
+\midrule
+Block input $X$ & $B\times T\times384$ & Current representation of every token. \\
+Normalized input $Z_1$ & $B\times T\times384$ & Input to attention. \\
+Queries $Q$ & $B\times T\times6\times64$ & Six query heads per token. \\
+Keys/values $K,V$ & $B\times T\times2\times64$ & Two shared key/value heads. \\
+Logical GQA-expanded $K,V$ & $B\times T\times6\times64$ & Each key/value head serves three query heads. \\
+Scores/probabilities $S,P$ & $B\times6\times T\times T$ & Causal token-to-token attention matrices. \\
+Head context $C$ & $B\times T\times6\times64$ & Weighted sums of value vectors. \\
+Merged attention output & $B\times T\times384$ & Concatenated attention heads. \\
+Dense SwiGLU $G,U,H$ & $B\times T\times1024$ & Expanded per-token feature space. \\
+Dense FFN output $F$ & $B\times T\times384$ & Returned to the residual stream. \\
+MoE router logits/probabilities & $B\times T\times6$ & One score/probability per expert. \\
+Top-$k$ expert indices & $B\times T\times2$ & Two selected experts per token. \\
+MoE combined output & $B\times T\times384$ & Weighted sum of selected expert outputs. \\
+Block output $Y$ & $B\times T\times384$ & Same external shape as the input. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first implementation will \textbf{not drop tokens because of expert capacity}.
+Every top-$k$ assignment will be evaluated. This keeps routing transparent; expert
+capacity limits and token dropping can be studied later as separate systems-level
+optimizations.
 
 \subsection{Stacking}
 If there are \(L\) layers, the sequence passes through:
@@ -409,135 +751,241 @@ Before any serious training run, the repository should verify:
     \item \textbf{Scaling checks:} only after the above are correct do we train on larger corpora.
 \end{enumerate}
 
-\section{Planned future MoE extension}
+\section{MoE design planned for this repository}
 
-Later, the dense feed-forward branch will be replaced by a sparse MoE block.
+The first complete language model will be dense because it is easier to verify.
+Once that implementation can overfit a tiny corpus and passes end-to-end gradient
+checks, the dense SwiGLU branch will be replaced by a mixture-of-experts (MoE)
+branch while leaving the attention sublayer unchanged.
 
-The idea is:
+\subsection{Initial MoE configuration}
+The initial target configuration is:
+\[
+N_E=6\ \text{routed experts},\qquad k=2,
+\]
+with one optional shared expert added in a later experiment. Each routed expert is
+itself a complete SwiGLU feed-forward network.
+
+For every token, the router performs the following sequence:
+\[
+z\in\mathbb{R}^{d_{\mathrm{model}}}
+\xrightarrow{\;W_R\;}
+r\in\mathbb{R}^{N_E}
+\xrightarrow{\;\mathrm{softmax}\;}
+p
+\xrightarrow{\;\mathrm{top}\mbox{-}k\;}
+\{e_1,\ldots,e_k\}.
+\]
+The selected probabilities are renormalized and used as mixture coefficients.
+Consequently, a token can use different feed-forward parameters from another token
+in the same sequence and even from another position in the same sentence.
+
+\subsection{Token-to-expert dispatch}
+For a batch containing $B T$ token representations, the implementation will first
+flatten the token dimensions:
+\[
+Z\in\mathbb{R}^{(BT)\times d_{\mathrm{model}}}.
+\]
+The router then computes
+\[
+R=ZW_R\in\mathbb{R}^{(BT)\times N_E}.
+\]
+After top-$k$ selection, each token has an integer expert-index vector and a
+floating-point routing-weight vector. Conceptually:
+\[
+\text{token }i\longrightarrow
+\big[(e_{i,1},\widetilde p_{i,1}),\ldots,(e_{i,k},\widetilde p_{i,k})\big].
+\]
+Tokens assigned to expert $e$ are gathered into a temporary expert batch, processed
+by that expert, multiplied by the corresponding routing weights, and scattered
+back into their original token locations. If a token is sent to two experts, two
+weighted contributions are accumulated at the same output location.
+
+\subsection{What will be inspected}
+The repository will explicitly expose:
 \begin{itemize}[leftmargin=1.5em]
-    \item a router computes a score for each expert,
-    \item only the top-\(k\) experts are selected,
-    \item the selected expert outputs are combined,
-    \item and this replaces the ordinary dense feed-forward transformation.
+    \item the router matrix $W_R$,
+    \item router logits for each token,
+    \item routing probabilities,
+    \item selected expert indices,
+    \item number of tokens handled by each expert,
+    \item routing entropy,
+    \item gradient norms for each expert,
+    \item and expert activation statistics by data domain.
 \end{itemize}
+Because dataset metadata will retain whether a document came from prose, code,
+mathematics, or synthetic educational data, we will eventually be able to measure
+quantities such as
+\[
+P(\text{expert }e\mid\text{code})
+\quad\text{and}\quad
+P(\text{expert }e\mid\text{mathematics}).
+\]
+This provides a direct way to test whether the experts actually specialize.
 
-This makes it possible to study:
+\subsection{Dense versus sparse comparison}
+A central research comparison will hold the approximate active computation per
+token roughly fixed while increasing the total number of available parameters in
+the MoE model.  We will then compare:
 \begin{itemize}[leftmargin=1.5em]
-    \item sparse conditional computation,
-    \item expert specialization,
-    \item routing statistics,
-    \item load balancing,
-    \item and domain-sensitive expert behavior.
+    \item training loss versus tokens seen,
+    \item validation loss and perplexity,
+    \item wall-clock throughput,
+    \item active floating-point operations per token,
+    \item router balance,
+    \item and expert specialization.
 \end{itemize}
 
 \begin{landscape}
-\section*{Full model diagram}
+\section*{Full model diagram: text to next-token prediction}
 
 \begin{center}
-\resizebox{1.20\textheight}{!}{%
-\begin{tikzpicture}[node distance=5mm and 6mm]
+\resizebox{0.95\linewidth}{!}{%
+\begin{tikzpicture}[x=1mm,y=1mm]
 
-% Row 1
-\node[data] (text) {Raw text\\[1mm]\footnotesize ``The fluid velocity $\ldots$''};
-\node[op, right=of text] (tok) {Tokenizer\\[1mm]\footnotesize byte-pair encoding (BPE)};
-\node[data, right=of tok] (ids) {Token IDs\\[1mm]\footnotesize $[t_0,\dots,t_{T-1}]$};
-\node[op, right=of ids] (embed) {Embedding lookup\\[1mm]\footnotesize matrix $E \in \mathbb{R}^{V \times d_{\text{model}}}$};
-\node[data, right=of embed] (x0) {Embedded sequence\\[1mm]\footnotesize $X_0 \in \mathbb{R}^{B \times T \times d_{\text{model}}}$};
+% ---------- Input pipeline ----------
+\node[data, minimum width=31mm] (text) at (15,0) {Raw text\\[-1mm]\scriptsize ``The fluid velocity $\ldots$''};
+\node[op, minimum width=31mm] (tok) at (58,0) {Tokenizer\\[-1mm]\scriptsize byte-pair encoding (BPE)};
+\node[data, minimum width=29mm] (ids) at (101,0) {Token IDs\\[-1mm]\scriptsize $[t_0,\ldots,t_{T-1}]$};
+\node[op, minimum width=38mm] (embed) at (149,0) {Embedding lookup\\[-1mm]\scriptsize $E\in\mathbb{R}^{V\times d_{\rm model}}$};
+\node[data, minimum width=38mm] (x0) at (203,0) {Embedded sequence\\[-1mm]\scriptsize $X_0\in\mathbb{R}^{B\times T\times d_{\rm model}}$};
+\draw[arr] (text)--(tok); \draw[arr] (tok)--(ids); \draw[arr] (ids)--(embed); \draw[arr] (embed)--(x0);
 
-\draw[arr] (text) -- (tok);
-\draw[arr] (tok) -- (ids);
-\draw[arr] (ids) -- (embed);
-\draw[arr] (embed) -- (x0);
+% ---------- Transformer attention branch ----------
+\node[data, minimum width=25mm] (xin) at (18,-33) {Block input\\[-1mm]\scriptsize $X$};
+\node[op, minimum width=27mm] (n1) at (55,-33) {RMSNorm\\[-1mm]\scriptsize $Z_1$};
+\node[op, minimum width=36mm] (qkv) at (99,-33) {Q/K/V projections\\[-1mm]\scriptsize $ZW_Q,ZW_K,ZW_V$};
+\node[op, minimum width=41mm] (attn) at (150,-33) {RoPE + causal GQA\\[-1mm]\scriptsize $P=\mathrm{softmax}(QK^T/\sqrt{d_h}+M)$};
+\node[op, minimum width=28mm] (wo) at (200,-33) {Output map\\[-1mm]\scriptsize $A=CW_O$};
+\node[critical, minimum width=27mm] (r1) at (239,-33) {Residual\\[-1mm]\scriptsize $X'=X+A$};
+\draw[arr] (xin)--(n1); \draw[arr] (n1)--(qkv); \draw[arr] (qkv)--(attn); \draw[arr] (attn)--(wo); \draw[arr] (wo)--(r1);
+\draw[arrthin] (xin.south) -- ++(0,-8) -| (r1.south);
 
-% Transformer block container
-\node[op, below=18mm of x0, minimum width=28mm] (norm1) {RMSNorm\\[1mm]\footnotesize gain $\gamma_1$};
-\node[op, right=of norm1, minimum width=38mm] (proj) {QKV projections\\[1mm]
-\footnotesize $Q=XW_Q,\;K=XW_K,\;V=XW_V$};
-\node[op, right=of proj, minimum width=25mm] (rope) {RoPE\\[1mm]\footnotesize on $Q$ and $K$};
-\node[op, right=of rope, minimum width=40mm] (attn) {Causal GQA attention\\[1mm]
-\footnotesize $P=\mathrm{softmax}(QK^\top/\sqrt{d_h}+M)$};
-\node[op, right=of attn, minimum width=26mm] (wo) {Output projection\\[1mm]\footnotesize $A=CW_O$};
-\node[critical, right=of wo, minimum width=26mm] (res1) {Residual add\\[1mm]\footnotesize $X' = X + A$};
+% ---------- Second norm and choice ----------
+\node[op, minimum width=30mm] (n2) at (50,-69) {RMSNorm\\[-1mm]\scriptsize $Z_2=\mathrm{RMSNorm}(X')$};
+\draw[arr] (r1.south) |- (n2.east);
+\node[note, minimum width=37mm] (choice) at (98,-69) {Feed-forward branch\\[-1mm]\scriptsize dense SwiGLU or sparse MoE};
+\draw[arr] (n2)--(choice);
 
-\draw[arr] ($(x0.south)+(0,-0.5mm)$) -- (norm1.north);
-\draw[arr] (norm1) -- (proj);
-\draw[arr] (proj) -- (rope);
-\draw[arr] (rope) -- (attn);
-\draw[arr] (attn) -- (wo);
-\draw[arr] (wo) -- (res1);
+% Dense path
+\node[op, minimum width=46mm] (dense) at (157,-58) {Dense SwiGLU\\[-1mm]\scriptsize $G=Z_2W_g,\ U=Z_2W_u$\\[-1mm]\scriptsize $F=(\mathrm{SiLU}(G)\odot U)W_d$};
+\draw[arr] (choice.east) |- (dense.west);
 
-% Skip connection line 1
-\draw[arrthin] ($(x0.south west)+(-1mm,-2mm)$) |- ++(0,-19mm) -| node[pos=0.75, below, font=\footnotesize] {skip / residual path} (res1.south west);
+% MoE path
+\node[future, minimum width=42mm] (router) at (151,-82) {MoE router\\[-1mm]\scriptsize $r=Z_2W_R$, $p=\mathrm{softmax}(r)$};
+\node[future, minimum width=38mm] (topk) at (202,-82) {Top-$k$ routing\\[-1mm]\scriptsize select $k=2$ of $N_E=6$};
+\node[future, minimum width=42mm] (experts) at (253,-82) {Selected experts\\[-1mm]\scriptsize evaluate only $E_{e_1},E_{e_2}$};
+\draw[arr] (choice.east) |- (router.west); \draw[arr] (router)--(topk); \draw[arr] (topk)--(experts);
 
-% Second branch
-\node[op, below=16mm of res1, minimum width=28mm] (norm2) {RMSNorm\\[1mm]\footnotesize gain $\gamma_2$};
-\node[op, right=of norm2, minimum width=34mm] (gateup) {SwiGLU input maps\\[1mm]
-\footnotesize $G=ZW_{\text{gate}},\;U=ZW_{\text{up}}$};
-\node[op, right=of gateup, minimum width=34mm] (glumix) {Gate \& multiply\\[1mm]
-\footnotesize $H=\mathrm{SiLU}(G)\odot U$};
-\node[op, right=of glumix, minimum width=32mm] (down) {Down projection\\[1mm]\footnotesize $F=HW_{\text{down}}$};
-\node[critical, right=of down, minimum width=28mm] (res2) {Residual add\\[1mm]\footnotesize $Y = X' + F$};
+\node[critical, minimum width=44mm] (r2) at (254,-58) {Residual output\\[-1mm]\scriptsize $Y=X'+F$ or $Y=X'+F_{\rm MoE}$};
+\draw[arr] (dense)--(r2);
+\draw[arr] (experts.north) -- (r2.south);
+\draw[arrthin] (r1.south) -- ++(0,-53) -| (r2.south west);
 
-\draw[arr] (res1.south) -- (norm2.north);
-\draw[arr] (norm2) -- (gateup);
-\draw[arr] (gateup) -- (glumix);
-\draw[arr] (glumix) -- (down);
-\draw[arr] (down) -- (res2);
+\begin{pgfonlayer}{background}
+\node[draw, rounded corners=3pt, thick, fill=boxgray,
+      fit=(xin)(n1)(qkv)(attn)(wo)(r1)(n2)(choice)(dense)(router)(topk)(experts)(r2),
+      inner sep=5mm,
+      label={[font=\normalsize\bfseries]north:One Transformer block - repeated $L$ times}] (blockframe) {};
+\end{pgfonlayer}
+\draw[arr] (x0.south) |- (xin.north);
 
-% Skip connection line 2
-\draw[arrthin] ($(res1.south west)+(-1mm,-2mm)$) |- ++(0,-15mm) -| node[pos=0.75, below, font=\footnotesize] {skip / residual path} (res2.south west);
+% ---------- Output pipeline ----------
+\node[data, minimum width=29mm] (xl) at (32,-123) {Final state\\[-1mm]\scriptsize $X_L$};
+\node[op, minimum width=29mm] (nf) at (73,-123) {Final RMSNorm};
+\node[op, minimum width=38mm] (head) at (120,-123) {Language-model head\\[-1mm]\scriptsize tied matrix $E^T$};
+\node[data, minimum width=31mm] (logits) at (167,-123) {Logits\\[-1mm]\scriptsize $B\times T\times V$};
+\node[op, minimum width=25mm] (sm) at (207,-123) {Softmax};
+\node[data, minimum width=42mm] (pred) at (254,-123) {Next-token distribution\\[-1mm]\scriptsize $p(x_{t+1}\mid x_{\le t})$};
+\draw[arr] (r2.south) |- (xl.north); \draw[arr] (xl)--(nf); \draw[arr] (nf)--(head); \draw[arr] (head)--(logits); \draw[arr] (logits)--(sm); \draw[arr] (sm)--(pred);
 
-% Block frame
-\node[note, fit=(norm1)(proj)(rope)(attn)(wo)(res1)(norm2)(gateup)(glumix)(down)(res2),
-      inner sep=6mm, label={[font=\normalsize\bfseries]north:One Transformer block}] (blockframe) {};
+% ---------- Training path ----------
+\node[note, minimum width=73mm] (weights) at (43,-152) {Explicit learned arrays\\[-1mm]\scriptsize $E,W_Q,W_K,W_V,W_O,W_g,W_u,W_d,\gamma$\\[-1mm]\scriptsize MoE adds $W_R$ and expert-specific $W_g^{(e)},W_u^{(e)},W_d^{(e)}$};
+\node[train, minimum width=39mm] (loss) at (124,-152) {Cross-entropy loss\\[-1mm]\scriptsize shifted target tokens};
+\node[train, minimum width=34mm] (bw) at (174,-152) {Backward pass\\[-1mm]\scriptsize analytical gradients};
+\node[train, minimum width=30mm] (opt) at (216,-152) {AdamW\\[-1mm]\scriptsize optimizer};
+\node[train, minimum width=43mm] (upd) at (263,-152) {Weight update\\[-1mm]\scriptsize including router and experts};
+\draw[arr] (logits.south) |- (loss.north); \draw[arr] (loss)--(bw); \draw[arr] (bw)--(opt); \draw[arr] (opt)--(upd);
 
-% Stack note
-\node[note, below=16mm of norm1, xshift=-66mm, minimum width=40mm] (stack) {Repeat block\\[1mm]\footnotesize $L$ times};
+\end{tikzpicture}%
+}
+\end{center}
 
-\draw[arrthin] (stack.east) -- ++(10mm,0) |- (blockframe.west);
+\end{landscape}
 
-% Final row
-\node[data, below=30mm of blockframe.south, xshift=-38mm] (xl) {Final hidden state\\[1mm]\footnotesize $X_L$};
-\node[op, right=of xl, minimum width=27mm] (normf) {Final RMSNorm};
-\node[op, right=of normf, minimum width=36mm] (head) {Language-model head\\[1mm]\footnotesize tied weights $E^\top$};
-\node[data, right=of head, minimum width=33mm] (logits) {Logits\\[1mm]\footnotesize $\in \mathbb{R}^{B \times T \times V}$};
-\node[op, right=of logits, minimum width=28mm] (softmax) {Softmax};
-\node[data, right=of softmax, minimum width=30mm] (pred) {Next-token probabilities\\[1mm]\footnotesize $p(x_{t+1}\mid x_{\le t})$};
+\begin{landscape}
+\section*{Detailed mixture-of-experts routing diagram}
 
-\draw[arr] ($(res2.south)+(0,-1mm)$) |- (xl.north);
-\draw[arr] (xl) -- (normf);
-\draw[arr] (normf) -- (head);
-\draw[arr] (head) -- (logits);
-\draw[arr] (logits) -- (softmax);
-\draw[arr] (softmax) -- (pred);
+\begin{center}
+\resizebox{0.95\linewidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 8mm]
 
-% Loss and backward
-\node[train, below=16mm of logits, minimum width=36mm] (loss) {Cross-entropy loss\\[1mm]\footnotesize compare with shifted targets};
-\node[train, right=18mm of loss, minimum width=34mm] (backward) {Backward pass\\[1mm]\footnotesize explicit gradients};
-\node[train, right=18mm of backward, minimum width=30mm] (optim) {Optimizer\\[1mm]\footnotesize AdamW};
-\node[train, right=18mm of optim, minimum width=35mm] (update) {Weight update\\[1mm]
-\footnotesize update $E$, $W_Q$, $W_K$, $W_V$, $W_O$,\\
-$W_{\text{gate}}$, $W_{\text{up}}$, $W_{\text{down}}$, $\gamma$};
+\node[data, minimum width=36mm] (zin) {Normalized token representation\\[1mm]
+\footnotesize $z_i\in\mathbb{R}^{d_{\mathrm{model}}}$};
 
-\draw[arr] (logits.south) -- (loss.north);
-\draw[arr] (loss) -- (backward);
-\draw[arr] (backward) -- (optim);
-\draw[arr] (optim) -- (update);
+\node[op, right=of zin, minimum width=37mm] (router) {Router matrix\\[1mm]
+\footnotesize $r_i=z_iW_R$\\
+\footnotesize $W_R\in\mathbb{R}^{d_{\mathrm{model}}\times N_E}$};
 
-% Model states note
-\node[future, below=16mm of update, minimum width=60mm] (futureext) {Future extensions:\\[1mm]
-\footnotesize Mixture of experts (MoE), router, expert diagnostics,\\
-dataset pipeline, key-value cache, inference sampling};
+\node[op, right=of router, minimum width=38mm] (rsoft) {Router softmax\\[1mm]
+\footnotesize $p_i=\mathrm{softmax}(r_i)$};
 
-\draw[arrthin] (update.south) -- (futureext.north);
+\node[data, right=of rsoft, minimum width=45mm] (pvec) {Example probabilities\\[1mm]
+\footnotesize $[0.03,0.12,0.51,0.07,0.23,0.04]$};
 
-% Weight notes
-\node[note, above=10mm of proj, minimum width=48mm] (matrixnote) {Main weight matrices:\\[1mm]
-\footnotesize $W_Q,\;W_K,\;W_V,\;W_O,\;W_{\text{gate}},\;W_{\text{up}},\;W_{\text{down}},\;E$};
+\node[critical, right=of pvec, minimum width=34mm] (topk) {Top-$k$ selection\\[1mm]
+\footnotesize $k=2$\\
+\footnotesize choose $E_2,E_4$};
 
-\draw[arrthin] (matrixnote.south) -- (proj.north);
+\draw[arr] (zin) -- (router);
+\draw[arr] (router) -- (rsoft);
+\draw[arr] (rsoft) -- (pvec);
+\draw[arr] (pvec) -- (topk);
 
-\end{tikzpicture}
+\node[op, below=18mm of topk, xshift=-71mm, minimum width=35mm] (renorm) {Renormalize selected weights\\[1mm]
+\footnotesize $\tilde p_2=0.51/(0.51+0.23)$\\
+\footnotesize $\tilde p_4=0.23/(0.51+0.23)$};
+\draw[arr] (topk.south) |- (renorm.east);
+
+% Experts
+\node[op, below=36mm of zin, xshift=20mm, minimum width=28mm] (e0) {Expert 0\\\footnotesize SwiGLU};
+\node[op, right=of e0, minimum width=28mm] (e1) {Expert 1\\\footnotesize SwiGLU};
+\node[future, right=of e1, minimum width=30mm] (e2) {Expert 2\\\footnotesize selected};
+\node[op, right=of e2, minimum width=28mm] (e3) {Expert 3\\\footnotesize SwiGLU};
+\node[future, right=of e3, minimum width=30mm] (e4) {Expert 4\\\footnotesize selected};
+\node[op, right=of e4, minimum width=28mm] (e5) {Expert 5\\\footnotesize SwiGLU};
+
+\node[note, below=6mm of e2, minimum width=30mm] (e2mats) {\footnotesize $W_{g}^{(2)},W_{u}^{(2)},W_{d}^{(2)}$};
+\node[note, below=6mm of e4, minimum width=30mm] (e4mats) {\footnotesize $W_{g}^{(4)},W_{u}^{(4)},W_{d}^{(4)}$};
+
+% dispatch arrows
+\draw[arrthin] (zin.south) |- (e2.north);
+\draw[arrthin] (zin.south) |- (e4.north);
+\draw[arrthin] (renorm.south) |- node[pos=0.82, above, font=\footnotesize] {$\tilde p_2$} (e2.north);
+\draw[arrthin] (renorm.south) |- node[pos=0.82, above, font=\footnotesize] {$\tilde p_4$} (e4.north);
+
+\node[train, below=25mm of e3, minimum width=56mm] (combine) {Weighted sparse combination\\[1mm]
+\footnotesize $F_{\mathrm{MoE}}(z_i)=\tilde p_2E_2(z_i)+\tilde p_4E_4(z_i)$};
+
+\draw[arr] (e2.south) |- (combine.north);
+\draw[arr] (e4.south) |- (combine.north);
+
+\node[future, below=18mm of e0, minimum width=42mm] (shared) {Optional shared expert\\[1mm]
+\footnotesize always active};
+\draw[arrthin] (zin.south) |- (shared.north);
+\draw[arrthin] (shared.east) -| (combine.west);
+
+\node[critical, right=16mm of combine, minimum width=36mm] (res) {Residual update\\[1mm]
+\footnotesize $Y_i=X'_i+F_{\mathrm{MoE}}(z_i)$};
+\draw[arr] (combine) -- (res);
+
+\node[note, below=16mm of combine, minimum width=100mm] (dispatchnote) {Batch implementation: flatten $B\times T$ tokens $\rightarrow$ compute all router logits $\rightarrow$ gather token rows by expert\\
+\footnotesize $\rightarrow$ evaluate selected experts $\rightarrow$ multiply by routing weights $\rightarrow$ scatter-add contributions back to original token positions};
+
+\node[note, below=11mm of dispatchnote, minimum width=100mm] (gradnote) {Backward pass: selected expert indices are locally fixed; gradients flow through selected experts and selected routing weights.\\
+\footnotesize Top-$k$ itself is non-smooth exactly when expert ranks exchange order.};
+
+\end{tikzpicture}%
 }
 \end{center}
 

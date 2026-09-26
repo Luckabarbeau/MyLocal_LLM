@@ -26,6 +26,8 @@ class ModelConfig:
     dtype: str = "float32"
 
     def __post_init__(self):
+        if self.dtype is None:
+            self.dtype = "float32"
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if self.n_q_heads % self.n_kv_heads != 0:

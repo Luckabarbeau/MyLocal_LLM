@@ -1,13 +1,17 @@
 from ..backend import xp
 
 
-def _rope_cos_sin(seq_len, d_head, base, dtype):
+def _rope_cos_sin(seq_len, d_head, base, dtype=None):
     if d_head % 2 != 0:
         raise ValueError("RoPE requires an even d_head.")
     i = xp.arange(0, d_head, 2, dtype="float32")
     inv_freq = 1.0 / (float(base) ** (i / float(d_head)))
     positions = xp.arange(seq_len, dtype="float32")
     theta = positions[:, None] * inv_freq[None, :]
+    
+    if dtype is None:
+        dtype = "float32"
+        
     cos = xp.cos(theta).astype(dtype)
     sin = xp.sin(theta).astype(dtype)
     return cos[None, :, None, :], sin[None, :, None, :]
@@ -35,9 +39,11 @@ def rope_backward(dy, cache):
     return dx
 
 
-def build_rope_matrix(position, d_head, base=10_000.0, dtype="float64"):
+def build_rope_matrix(position, d_head, base=10_000.0, dtype=None):
     if d_head % 2 != 0:
         raise ValueError("d_head must be even.")
+    if dtype is None:
+        dtype = "float64"
     R = xp.zeros((d_head, d_head), dtype=dtype)
     for pair in range(d_head // 2):
         theta = float(position) / (float(base) ** (2.0 * pair / float(d_head)))

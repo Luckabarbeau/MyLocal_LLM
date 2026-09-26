@@ -26,8 +26,11 @@ class SwiGLU:
 
     def __init__(
         self, d_model, d_ff, input_std, output_std, rng,
-        name="swiglu", dtype="float32"
+        name="swiglu", dtype=None
     ):
+        if dtype is None:
+            dtype = "float32"
+            
         self.W_gate = matrix_parameter(
             (d_model, d_ff), input_std, rng, f"{name}.W_gate", dtype=dtype
         )
@@ -41,12 +44,16 @@ class SwiGLU:
     def parameters(self):
         return [self.W_gate, self.W_up, self.W_down]
 
-    def forward(self, x):
+    def forward(self, x, return_cache=True):
         g = x @ self.W_gate.data
         u = x @ self.W_up.data
         a = silu(g)
         h = a * u
         y = h @ self.W_down.data
+        
+        if not return_cache:
+            return y
+            
         return y, {"x": x, "g": g, "u": u, "a": a, "h": h}
 
     def backward(self, dy, cache):

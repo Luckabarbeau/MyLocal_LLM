@@ -3,7 +3,7 @@ from ..init import matrix_parameter
 
 
 class Embedding:
-    def __init__(self, vocab_size, d_model, std, rng, name="embedding", dtype="float32"):
+    def __init__(self, vocab_size, d_model, std, rng, name="embedding", dtype=None):
         self.W = matrix_parameter(
             (vocab_size, d_model), std, rng, f"{name}.W",
             dtype=dtype, decay=False,

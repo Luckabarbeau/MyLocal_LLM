@@ -30,12 +30,15 @@ class GQAAttention:
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
         input_std, output_std, rng, rope_base=10_000.0,
-        name="attention", dtype="float32"
+        name="attention", dtype=None
     ):
         if n_q_heads * d_head != d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if n_q_heads % n_kv_heads != 0:
             raise ValueError("n_q_heads must be divisible by n_kv_heads.")
+
+        if dtype is None:
+            dtype = "float32"
 
         self.d_model = d_model
         self.n_q_heads = n_q_heads

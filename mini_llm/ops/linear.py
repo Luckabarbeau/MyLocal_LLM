@@ -4,7 +4,7 @@ from ..init import matrix_parameter
 class Linear:
     """Bias-free explicit matrix multiplication Y = X W."""
 
-    def __init__(self, d_in, d_out, std, rng, name="linear", dtype="float32", decay=True):
+    def __init__(self, d_in, d_out, std, rng, name="linear", dtype=None, decay=True):
         self.W = matrix_parameter(
             (d_in, d_out), std, rng, f"{name}.W", dtype=dtype, decay=decay
         )

@@ -21,3 +21,7 @@ class Parameter:
     @property
     def size(self):
         return self.data.size
+
+    @property
+    def default_dtype(self):
+        return "float32"

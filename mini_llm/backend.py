@@ -49,3 +49,7 @@ class RandomStream:
         if dtype is not None:
             x = x.astype(dtype)
         return x
+
+    @property
+    def default_dtype(self):
+        return "float32"

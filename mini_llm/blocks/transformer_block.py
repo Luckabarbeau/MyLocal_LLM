@@ -53,7 +53,47 @@ class TransformerBlock:
         eps: float = 1e-6,
         name: str = "transformer_block",
         dtype: str = "float32",
+        rng=None,
     ):
+        """Create a new transformer block.
+
+        Args:
+            d_model: Model dimension.
+            n_q_heads: Number of query heads (must be divisible by n_kv_heads).
+            n_kv_heads: Number of key/value heads.
+            d_head: Dimension per head.
+            d_ff: Hidden size of the feed‑forward network.
+            eps: Epsilon for RMSNorm.
+            name: Prefix for parameter names.
+            dtype: Parameter dtype.
+            rng: RandomStream used for weight initialization (optional).
+        """
+        if d_ff is None:
+            d_ff = 4 * d_model
+
+        # Primitive components
+        self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1")
+        # Pass the provided rng to the attention module
+        self.attn = GQAAttention(
+            d_model,
+            n_q_heads,
+            n_kv_heads,
+            d_head,
+            input_std=0.02,
+            output_std=0.02,
+            rng=rng,
+            name=f"{name}.attn",
+        )
+        self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2")
+        # Pass rng to SwiGLU as well
+        self.swi = SwiGLU(
+            d_model,
+            d_ff,
+            input_std=0.02,
+            output_std=0.02,
+            rng=rng,
+            name=f"{name}.swi",
+        )
         """Create a new transformer block.
 
         Args:

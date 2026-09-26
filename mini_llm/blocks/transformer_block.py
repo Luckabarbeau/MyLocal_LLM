@@ -1,30 +1,144 @@
-'''Transformer block implementation using the existing primitive ops.
+"""Transformer block implementation using existing primitive ops.
 
-The block follows the design described in `repository_plan.tex`:
+Implements the computation graph:
+    x -> RMSNorm -> GQAAttention -> + -> RMSNorm -> SwiGLU -> + -> y
+where the '+' denotes residual connections. This mirrors the design in
+`repository_plan.tex`.
 
-    RMSNorm -> GQAAttention -> Residual
-    RMSNorm -> SwiGLU -> Residual
-
-Both residual connections are added to the input of the respective sub‑layer.
-The implementation mirrors the style of the other ops (e.g. `RMSNorm`, `Linear`, `SwiGLU`).
-
-The block exposes the usual methods used throughout the codebase:
-
-* `parameters()` – returns a flat list of all parameters (so the optimiser can
-  collect them in a single pass).
-* `zero_grad()` – clears the `.grad` field of every parameter.
-* `forward(x)` – computes the forward pass, returning the output and a cache that
-  contains the intermediate values needed for the backward pass.
-* `backward(dy, cache)` – back‑propagates the gradient `dy` through the block,
-  updating all parameter gradients and returning the gradient w.r.t. the block input.
-
-The implementation deliberately avoids any external dependencies; it only
-uses the project's `backend` (for the NumPy/CuPy abstraction) and the
-primitive ops located under `mini_llm/ops`.
-''' 
+Provides:
+- `parameters()` – flat list of all Parameter objects.
+- `zero_grad()` – clears gradients.
+- `forward(x)` – returns (y, cache).
+- `backward(dy, cache)` – back‑propagates and updates grads.
+"""
 
 from ..backend import xp
-from . import 
+from ..ops.rmsnorm import RMSNorm
+from ..ops.attention import GQAAttention
+from ..ops.swiglu import SwiGLU
+
+
+class TransformerBlock:
+    """Dense transformer block.
+
+    The forward path is:
+        x -> RMSNorm -> GQAAttention -> + (residual) -> RMSNorm -> SwiGLU -> + (residual) -> y
+    """
+
+    def __init__(self, d_model: int, n_q_heads: int, n_kv_heads: int, d_head: int,
+                 d_ff: int = None, eps: float = 1e-6, name: str = "transformer_block",
+                 dtype: str = "float32", rng=None):
+        """Create a transformer block.
+
+        Args:
+            d_model: Model dimension.
+            n_q_heads: Number of query heads (must be divisible by n_kv_heads).
+            n_kv_heads: Number of key/value heads.
+            d_head: Dimension per head.
+            d_ff: Hidden size of the feed‑forward network (defaults to 4*d_model).
+            eps: Epsilon for RMSNorm.
+            name: Prefix for parameter names.
+            dtype: Parameter dtype.
+            rng: Optional RandomStream for weight init.
+        """
+        if d_ff is None:
+            d_ff = 4 * d_model
+
+        # Primitive components
+        self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1")
+        self.attn = GQAAttention(
+            d_model, n_q_heads, n_kv_heads, d_head,
+            input_std=0.02, output_std=0.02,
+            rng=rng,
+            name=f"{name}.attn",
+        )
+        self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2")
+        self.swi = SwiGLU(
+            d_model, d_ff,
+            input_std=0.02, output_std=0.02,
+            rng=rng,
+            name=f"{name}.swi",
+        )
+
+    # ---------------------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------------------
+    def parameters(self):
+        """Return a flat list of all Parameter objects used by the block."""
+        return (
+            self.norm1.parameters()
+            + self.attn.parameters()
+            + self.norm2.parameters()
+            + self.swi.parameters()
+        )
+
+    def zero_grad(self):
+        """Zero gradients of all parameters."""
+        for p in self.parameters():
+            p.zero_grad()
+
+    # ---------------------------------------------------------------------
+    # Forward / backward
+    # ---------------------------------------------------------------------
+    def forward(self, x):
+        """Forward pass.
+
+        Returns (y, cache) where ``y`` has shape [B, T, D] and ``cache`` stores
+        intermediate values needed for the backward pass.
+        """
+        # First RMSNorm
+        x_norm, cache_norm1 = self.norm1.forward(x)
+        # Attention
+        attn_out, cache_attn = self.attn.forward(x_norm, return_cache=True)
+        # First residual
+        y1 = x + attn_out
+        # Second RMSNorm
+        y1_norm, cache_norm2 = self.norm2.forward(y1)
+        # SwiGLU
+        ff_out, cache_swi = self.swi.forward(y1_norm)
+        # Second residual
+        y = y1 + ff_out
+        cache = {
+            "x": x,
+            "norm1": cache_norm1,
+            "attn": cache_attn,
+            "y1": y1,
+            "norm2": cache_norm2,
+            "swi": cache_swi,
+        }
+        return y, cache
+
+    def backward(self, dy, cache):
+        """Backward pass.
+
+        Args:
+            dy: Gradient of loss w.r.t. block output.
+            cache: Cache from forward.
+        Returns:
+            Gradient w.r.t. block input.
+        """
+        # Unpack cache
+        x = cache["x"]
+        norm1_cache = cache["norm1"]
+        attn_cache = cache["attn"]
+        y1 = cache["y1"]
+        norm2_cache = cache["norm2"]
+        swi_cache = cache["swi"]
+
+        # Backprop through second residual
+        # Gradient splits to y1 and through SwiGLU
+        dff = self.swi.backward(dy, swi_cache)
+        dnorm2 = self.norm2.backward(dff, norm2_cache)
+        # Combine gradients for y1
+        dy1 = dy + dnorm2
+        # Backprop through first residual (x + attn_out)
+        self.attn.backward(dy1, attn_cache)
+        dnorm1 = self.norm1.backward(dy1, norm1_cache)
+        # Return gradient w.r.t. input x
+        return dnorm1
+"
+
+from ..backend import xp
 
 # Import the primitive modules
 from ..ops.rmsnorm import RMSNorm
@@ -94,43 +208,7 @@ class TransformerBlock:
             rng=rng,
             name=f"{name}.swi",
         )
-        """Create a new transformer block.
 
-        Args:
-            d_model: Model dimension (the size of the hidden vectors).
-            n_q_heads: Number of query heads (must be divisible by ``n_kv_heads``).
-            n_kv_heads: Number of key/value heads.
-            d_head: Dimension of each head.
-            d_ff: Size of the feed‑forward hidden dimension. If ``None`` it defaults
-                to ``4 * d_model`` (a common choice).
-            eps: Small epsilon for RMSNorm stability.
-            name: Optional name prefix for the underlying parameter objects.
-            dtype: Data type for the parameters (e.g. ``"float32"``).
-        """
-        if d_ff is None:
-            d_ff = 4 * d_model
-
-        # Primitive components
-        self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1")
-        self.attn = GQAAttention(
-            d_model,
-            n_q_heads,
-            n_kv_heads,
-            d_head,
-            input_std=0.02,
-            output_std=0.02,
-            rng=None,  # RNG is handled inside ``matrix_parameter``
-            name=f"{name}.attn",
-        )
-        self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2")
-        self.swi = SwiGLU(
-            d_model,
-            d_ff,
-            input_std=0.02,
-            output_std=0.02,
-            rng=None,
-            name=f"{name}.swi",
-        )
 
     # ---------------------------------------------------------------------
     # Helper methods for the optimiser / training loop

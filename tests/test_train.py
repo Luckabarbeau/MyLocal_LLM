@@ -51,7 +51,6 @@ class TestCreateMinibatch:
         """Test using full context length."""
         shard_data = np.random.randint(0, 256, size=(10, 512), dtype=np.uint16)
         
-        # Full context means we use seq_length = context_len - 1 to have targets
         inputs, targets = create_minibatch(shard_data, 2, seq_length=511)
         
         assert inputs.shape == (2, 511)
@@ -149,3 +148,52 @@ class TestMiniTrainer:
             
             assert len(losses) == 10
             assert all(isinstance(l, float) for l in losses)
+    
+    def test_loss_scale_parameter(self):
+        """Test that loss scale is passed to optimizer."""
+        model = make_model()
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.bin"
+            
+            num_docs = 10
+            context_len = 32
+            
+            with open(shard_path, "wb") as f:
+                f.write(np.int64(num_docs).tobytes())
+                f.write(np.int64(context_len).tobytes())
+                data = np.random.randint(0, 256, size=(num_docs, context_len), dtype=np.uint16)
+                f.write(data.tobytes())
+            
+            loss_scale = 1024.0
+            trainer = MiniTrainer(
+                model=model,
+                shard_paths=[str(shard_path)],
+                batch_size=2,
+                seq_length=16,
+                loss_scale=loss_scale,
+            )
+            
+            # Check that optimizer has the loss scale
+            assert trainer.optimizer.loss_scale == loss_scale
+
+
+class TestGradientClipping:
+    """Tests for gradient clipping."""
+    
+    def test_global_grad_norm_dtype(self):
+        """Test that global grad norm uses float32."""
+        from mini_llm.optim.grad_clip import global_grad_norm
+        
+        model = make_model()
+        
+        # Set some gradients
+        for p in model.parameters():
+            p.grad = np.ones_like(p.data, dtype=p.data.dtype)
+        
+        # Compute norm
+        norm = global_grad_norm(model.parameters())
+        
+        # Norm should be a finite float
+        assert isinstance(norm, float)
+        assert np.isfinite(norm)

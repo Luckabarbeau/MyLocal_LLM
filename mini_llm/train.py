@@ -14,6 +14,7 @@ import numpy as np
 from mini_llm.data.token_shards import TokenShardWriter
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
+from mini_llm.optim.grad_clip import clip_grad_global_norm
 from mini_llm.optim.schedule import WarmupCosineSchedule
 
 
@@ -114,6 +115,7 @@ class MiniTrainer:
         total_steps: int = 1000,
         peak_lr: float = 3e-4,
         grad_clip: float = 1.0,
+        loss_scale: float = 1.0,
     ):
         """
         Initialize the trainer.
@@ -127,15 +129,17 @@ class MiniTrainer:
             total_steps: Total training steps
             peak_lr: Peak learning rate
             grad_clip: Gradient clipping norm
+            loss_scale: Static loss scale factor for mixed precision (default 1.0)
         """
         self.model = model
         self.shard_paths = [Path(p) for p in shard_paths]
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.grad_clip = grad_clip
+        self.loss_scale = loss_scale
         
-        # Optimizer and scheduler
-        self.optimizer = AdamW(model.parameters(), lr=peak_lr)
+        # Optimizer and scheduler (with loss scaling)
+        self.optimizer = AdamW(model.parameters(), lr=peak_lr, loss_scale=loss_scale)
         self.scheduler = WarmupCosineSchedule(
             peak_lr=peak_lr,
             warmup_steps=warmup_steps,
@@ -185,16 +189,19 @@ class MiniTrainer:
         logits, cache = self.model.forward(inputs)
         loss, loss_cache = self.model.compute_loss(logits, targets)
         
+        # Check for NaN in loss
+        if np.isnan(loss):
+            print(f"WARNING: NaN loss detected!")
+            print(f"  logits range: [{np.min(logits):.4f}, {np.max(logits):.4f}]")
+            print(f"  logits has NaN: {np.any(np.isnan(logits))}")
+            print(f"  logits has Inf: {np.any(np.isinf(logits))}")
+        
         # Backward pass
         d_logits = self.model.backward_loss(loss_cache)
         self.model.backward(d_logits, cache)
         
-        # Gradient clipping
-        for p in self.model.parameters():
-            norm = np.sqrt(np.sum(p.grad * p.grad))
-            if norm > self.grad_clip:
-                scale = self.grad_clip / (norm + 1e-8)
-                p.grad *= scale
+        # Global gradient clipping in float32
+        clip_grad_global_norm(self.model.parameters(), max_norm=self.grad_clip)
         
         # Update parameters
         self.optimizer.step(lr=lr)

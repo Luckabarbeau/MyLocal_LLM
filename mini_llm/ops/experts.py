@@ -1,4 +1,4 @@
-"""Expert FFN layers for Mixture of Experts."""
+"""Expert FFN layers for Mixture of Experts - Sparse evaluation with vectorization."""
 
 from ..backend import xp
 
@@ -38,7 +38,6 @@ class ExpertFFN:
         """
         from ..parameter import Parameter
         
-        # Expert weights: same structure as SwiGLU
         std = input_std
         self.W_gate = Parameter(
             xp.asarray(rng.normal((d_model, d_ff), std=std, dtype=dtype)),
@@ -115,24 +114,16 @@ class ExpertFFN:
         h_2d = h.reshape(-1, h.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
         
-        # Gradient w.r.t. W_down
         self.W_down.grad += h_2d.T @ dy_2d
         
-        # Gradient through Y = H W_down
         dh = dy_2d @ self.W_down.data.T
-        
-        # Gradient through H = A * U
         da = dh * u.reshape(-1, u.shape[-1])
         du = dh * a.reshape(-1, a.shape[-1])
-        
-        # Gradient through A = SiLU(G)
         dg = da * silu_prime(g.reshape(-1, g.shape[-1]))
         
-        # Gradient w.r.t. W_gate and W_up
         self.W_gate.grad += x_2d.T @ dg
         self.W_up.grad += x_2d.T @ du
         
-        # Gradient w.r.t. input
         dx = dg @ self.W_gate.data.T + du @ self.W_up.data.T
         dx = dx.reshape(dy.shape)
         
@@ -141,9 +132,10 @@ class ExpertFFN:
 
 class Experts:
     """
-    Mixture of Expert FFN layers.
+    Mixture of Expert FFN layers with sparse expert evaluation.
     
-    Computes weighted combination of expert outputs.
+    Only evaluates the unique experts that are selected, not all experts.
+    Uses vectorized operations for each expert's full batch computation.
     """
 
     def __init__(
@@ -194,7 +186,10 @@ class Experts:
 
     def forward(self, x, weights, expert_indices):
         """
-        Forward pass through experts with weighted combination.
+        Forward pass through experts with sparse evaluation.
+        
+        Only evaluates unique experts that are selected, not all experts.
+        Each selected expert processes the full batch once.
         
         Args:
             x: Input tensor of shape (B, T, d_model)
@@ -208,16 +203,14 @@ class Experts:
         batch_size, seq_len, _ = x.shape
         k = weights.shape[-1]
         
-        # Compute all experts' outputs once (all process the same input)
-        all_outputs = []
-        all_caches = []
-        for expert in self.experts:
-            out, cache = expert.forward(x)
-            all_outputs.append(out)
-            all_caches.append(cache)
+        # Find all unique experts that need to be evaluated
+        unique_experts = xp.unique(expert_indices)
         
-        # Shape: (n_experts, B, T, d_model)
-        all_outputs_stack = xp.stack(all_outputs, axis=0)
+        # Evaluate only the unique selected experts on the full batch
+        computed_outputs = {}  # exp_idx -> (output, cache)
+        for exp_idx in unique_experts:
+            out, cache = self.experts[exp_idx].forward(x)
+            computed_outputs[exp_idx] = (out, cache)
         
         # Create output by selecting and weighting
         y = xp.zeros_like(x)
@@ -227,6 +220,16 @@ class Experts:
         )
         flat_batch = batch_idx.flatten()
         flat_seq = seq_idx.flatten()
+        
+        # Pre-compute all outputs stack (only for selected experts)
+        all_outputs_list = []
+        for exp_idx in range(self.n_experts):
+            if exp_idx in computed_outputs:
+                all_outputs_list.append(computed_outputs[exp_idx][0])
+            else:
+                all_outputs_list.append(xp.zeros_like(x))
+        
+        all_outputs_stack = xp.stack(all_outputs_list, axis=0)
         
         for i in range(k):
             expert_idx = expert_indices[..., i]  # (B, T)
@@ -239,11 +242,15 @@ class Experts:
             # Weight it
             y += weights[..., i:i+1] * expert_out
         
+        # Store caches for backward pass
+        all_caches = [computed_outputs[exp_idx][1] if exp_idx in computed_outputs else None 
+                      for exp_idx in range(self.n_experts)]
+        
         cache = {
             "x": x,
             "weights": weights,
             "expert_indices": expert_indices,
-            "all_outputs": all_outputs_stack,
+            "computed_outputs": computed_outputs,
             "all_caches": all_caches,
             "y": y,
         }
@@ -252,7 +259,10 @@ class Experts:
 
     def backward(self, dy, cache):
         """
-        Backward pass through experts.
+        Backward pass through experts with sparse evaluation.
+        
+        For each expert that was selected, accumulates gradients from all
+        positions where it was selected, then calls backward once.
         
         Args:
             dy: Gradient w.r.t. output, shape (B, T, d_model)

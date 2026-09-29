@@ -120,24 +120,46 @@ class MoE:
         # Backward through router to get router parameter gradients
         # The gradient for router is the weights (since y = sum_i weight[i] * expert_output[i])
         # So dL/dweights = expert_output weighted by dy
+        
         weights = experts_cache["weights"]
         expert_indices = experts_cache["expert_indices"]
-        all_outputs = experts_cache["all_outputs"]
+        computed_outputs = experts_cache["computed_outputs"]
+        all_caches = experts_cache["all_caches"]
         
         batch_size, seq_len, _ = dx.shape
         k = weights.shape[-1]
         
-        # Compute gradient w.r.t. router output weights
-        # dL/dweights[b,t,i] = dy[b,t] @ expert_output[selected_expert[b,t,i]][b,t]
-        dweights = xp.zeros_like(weights)
+        # Build all_outputs stack from computed outputs
+        all_outputs_list = []
+        for exp_idx in range(self.n_experts):
+            if exp_idx in computed_outputs:
+                all_outputs_list.append(computed_outputs[exp_idx][0])
+            else:
+                all_outputs_list.append(xp.zeros((batch_size, seq_len, dx.shape[-1])))
         
-        for i in range(k):
-            expert_idx = expert_indices[..., i]
-            for b in range(batch_size):
-                for t in range(seq_len):
-                    exp_idx = expert_idx[b, t]
-                    # Gradient flows: dy * expert_output
-                    dweights[b, t, i] = xp.dot(dy[b, t], all_outputs[exp_idx, b, t])
+        all_outputs = xp.stack(all_outputs_list, axis=0)
+        
+        # Vectorized computation of dweights using einsum
+        # dweights[b,t,i] = dot(dy[b,t], expert_output[expert_idx[b,t,i], b, t])
+        
+        # all_outputs shape: (n_experts, B, T, d_model)
+        # expert_indices shape: (B, T, k)
+        
+        # Compute expert outputs for selected positions using advanced indexing
+        expert_indices_flat = expert_indices.reshape(-1)  # (BT*k,)
+        batch_seq_idx = xp.arange(batch_size * seq_len)  # (BT,)
+        batch_seq_idx_expanded = xp.repeat(batch_seq_idx, k)  # (BT*k,)
+        
+        batch_idx = batch_seq_idx_expanded // seq_len  # (BT*k,)
+        seq_idx = batch_seq_idx_expanded % seq_len     # (BT*k,)
+        
+        # Get expert outputs: shape (BT*k, d_model)
+        expert_out_flat = all_outputs[expert_indices_flat, batch_idx, seq_idx]
+        expert_out = expert_out_flat.reshape(batch_size, seq_len, k, -1)  # (B, T, k, d_model)
+        
+        # dy shape: (B, T, d_model)
+        # dweights[b,t,i] = dot(dy[b,t], expert_out[b,t,i])
+        dweights = xp.einsum('btd,btkd->btk', dy, expert_out)
         
         # Backward through router
         dx_router = self.router.backward(dweights, router_cache)

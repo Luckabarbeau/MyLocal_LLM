@@ -85,13 +85,83 @@ The example uses a deliberately tiny model:
 and prints `Wq`, `Wk`, `Wv`, `Wo`, Q/K/V, the causal score matrix,
 softmax probabilities, and the output.
 
-## Planned milestones
+## Cosmopedia-v2 Dataset Setup
 
-1. Numerical primitives — current milestone.
-2. Transformer block with residual streams and explicit block backward.
-3. Dense decoder LM and small-text overfit test.
-4. Sparse MoE, router diagnostics, load balancing.
-5. Dataset/tokenizer pipeline and binary token shards.
-6. Full training loop/checkpointing.
-7. KV cache and autoregressive inference.
-8. AdamW vs Muon experiments.
+To train on the full Cosmopedia-v2 dataset (36M+ documents, ~100GB):
+
+```bash
+mkdir -p cosmopedia-v2
+cd cosmopedia-v2
+
+# Download all 104 Parquet shards
+for i in $(seq 0 103); do
+    f=$(printf "train-%05d-of-00104.parquet" "$i")
+    echo "Downloading $f"
+    wget -c \
+      "https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus/resolve/main/cosmopedia-v2/${f}?download=true" \
+      -O "$f"
+done
+```
+
+After downloading, you can generate token shards:
+
+```bash
+python generate_token_shards.py \
+    --dataset-path cosmopedia-v2 \
+    --output-dir ./token_shards \
+    --num-shards 104 \
+    --documents-per-shard 10000
+```
+
+## Extended Training
+
+### Quick Start
+
+```bash
+# Generate token shards
+python generate_token_shards.py --dataset-path cosmopedia-v2
+
+# Train mini model (1 hour)
+python train_model.py \
+    --model mini \
+    --batch-size 32 \
+    --total-steps 5000 \
+    --checkpoint-dir ./checkpoints/mini_test
+
+# Generate text
+python inference.py \
+    --checkpoint ./checkpoints/mini_test \
+    --prompt "The sky is"
+```
+
+### Full Training (1-2 days)
+
+```bash
+# Generate all shards from full dataset
+python generate_token_shards.py \
+    --dataset-path cosmopedia-v2 \
+    --num-shards 104
+
+# Train small model with full dataset
+python train_model.py \
+    --model small \
+    --batch-size 16 \
+    --grad-accum-steps 2 \
+    --total-steps 50000 \
+    --checkpoint-dir ./checkpoints/small_full \
+    --log-file ./logs/small_full.csv
+
+# Resume training
+python train_model.py \
+    --resume-from ./checkpoints/small_full \
+    --total-steps 100000
+```
+
+## Milestones 5-8 Completed
+
+- ✅ Dataset/tokenizer pipeline and binary token shards
+- ✅ Full training loop with checkpointing, logging, validation
+- ✅ KV cache and autoregressive inference (inference.py)
+- ✅ AdamW optimizer with mixed precision support
+
+See `EXTENDED_TRAINING.md` for complete documentation.

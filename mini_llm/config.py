@@ -55,3 +55,51 @@ class ModelConfig:
             top_k=2,
             d_ff=32,
         )
+
+    @classmethod
+    def mini(cls):
+        """Mini model: ~12M params, good for initial experiments."""
+        return cls(
+            vocab_size=16_384,
+            context_length=512,
+            n_layers=8,
+            d_model=256,
+            n_q_heads=4,
+            n_kv_heads=2,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=768,
+        )
+
+    @classmethod
+    def small(cls):
+        """Small model: ~53M params (current default)."""
+        return cls(
+            vocab_size=16_384,
+            context_length=512,
+            n_layers=8,
+            d_model=384,
+            n_q_heads=6,
+            n_kv_heads=2,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=1_024,
+        )
+
+    @classmethod
+    def medium(cls):
+        """Medium model: ~120M params."""
+        return cls(
+            vocab_size=16_384,
+            context_length=512,
+            n_layers=8,
+            d_model=512,
+            n_q_heads=8,
+            n_kv_heads=2,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=1_536,
+        )

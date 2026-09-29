@@ -54,6 +54,7 @@ class TransformerBlock:
             input_std=input_std,
             output_std=output_std,
             rng=rng,
+            name=f"{name}.attention",
             dtype=dtype
         )
         

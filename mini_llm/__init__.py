@@ -11,3 +11,6 @@ from .ops.experts import Experts, ExpertFFN
 
 # Model
 from .model.decoder_lm import DecoderLanguageModel
+
+# Training
+from .train import MiniTrainer

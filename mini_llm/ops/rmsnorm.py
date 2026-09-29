@@ -24,35 +24,37 @@ class RMSNorm:
         Forward pass with mixed precision support.
         
         For float16 inputs:
-        - Perform reductions in float32
+        - Perform numerically sensitive reductions in float32
+        - Keep element-wise operations in float16 for speed
         - Return output in original dtype
         """
         input_dtype = x.dtype
         
         if input_dtype == "float16":
-            # Convert to float32 for numerically stable computation
+            # Convert to float32 only for the numerically sensitive computation
             x_f32 = x.astype("float32", copy=False)
             
-            # Compute mean of squares in FP32
+            # Compute mean of squares in FP32 (reduction is numerically sensitive)
             mean_sq = xp.mean(x_f32 * x_f32, axis=-1, keepdims=True)
             
             # Compute inverse RMS in FP32
             inv_rms = 1.0 / xp.sqrt(mean_sq + self.eps)
             
-            # Normalize in FP32
+            # Normalize: convert gamma to FP32, do element-wise op
             x_hat_f32 = x_f32 * inv_rms
             
-            # Scale by gamma (gamma is in model dtype)
+            # Scale by gamma - keep this in FP32 to avoid extra conversion
             y_f32 = x_hat_f32 * self.gamma.data.astype("float32", copy=False)
             
             # Cache FP32 quantities for backward
             cache = {
                 "x_f32": x_f32,
                 "x_hat_f32": x_hat_f32,
-                "inv_rms": inv_rms,  #FP32 value
+                "inv_rms": inv_rms,
                 "original_dtype": input_dtype,
             }
             
+            # Convert output back to float16
             return y_f32.astype(input_dtype), cache
         else:
             # Float32 path - standard computation

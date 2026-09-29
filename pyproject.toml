@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = [
-    "cupy-cuda12x>=13.0",
+    "cupy-cuda13x>=14.0",
 ]
 
 dev = [

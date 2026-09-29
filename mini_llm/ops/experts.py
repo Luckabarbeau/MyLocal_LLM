@@ -1,6 +1,6 @@
 """Expert FFN layers for Mixture of Experts - Sparse evaluation with vectorization."""
 
-from ..backend import xp
+from ..backend import xp, asnumpy
 
 
 def silu(x):
@@ -204,12 +204,12 @@ class Experts:
         k = weights.shape[-1]
         
         # Find all unique experts that need to be evaluated
-        unique_experts = xp.unique(expert_indices)
+        unique_experts = asnumpy(xp.unique(expert_indices))
         
         # Evaluate only the unique selected experts on the full batch
         computed_outputs = {}  # exp_idx -> (output, cache)
         for exp_idx in unique_experts:
-            out, cache = self.experts[exp_idx].forward(x)
+            out, cache = self.experts[int(exp_idx)].forward(x)
             computed_outputs[exp_idx] = (out, cache)
         
         # Create output by selecting and weighting

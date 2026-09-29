@@ -144,11 +144,12 @@ class DecoderLanguageModel:
         Backward pass through the loss layer.
         
         Args:
-            loss_cache: Cache from cross_entropy_forward
+            loss_cache: Cache (second element) from compute_loss
             
         Returns:
             d_logits: Gradient w.r.t. logits
         """
+        # loss_cache is the cache dict returned by compute_loss (second element)
         return cross_entropy_backward(loss_cache)
     
     def backward(self, d_logits, cache):
@@ -195,6 +196,7 @@ class DecoderLanguageModel:
         for block, block_cache in zip(reversed(self.blocks), reversed(block_caches)):
             dx = block.backward(dx, block_cache)
         
-        # Backward through embedding (if needed - currently not used since we compute gradient directly)
-        # This would require modifying Embedding.backward to handle the case where we pass dx
-        # For now, the gradient is computed directly in this method
+        # Backward through embedding - this computes the gradient for W_E
+        self.embedding.backward(dx, cache["embed_cache"])
+        
+

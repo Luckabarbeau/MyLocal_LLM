@@ -3,17 +3,20 @@
 from mini_llm.backend import xp
 from mini_llm.ops.attention import GQAAttention
 from mini_llm.ops.rmsnorm import RMSNorm
-from mini_llm.ops.swiglu import SwiGLU
+from mini_llm.ops.router import Router
+from mini_llm.ops.experts import Experts
+from mini_llm.blocks.moe_block import MoE
 
 
 class TransformerBlock:
     """
-    Dense Transformer block for decoder-only language models.
+    Sparse Transformer block for decoder-only language models using Mixture of Experts.
     
     Structure:
-        X → RMSNorm → GQAAttention → +X → RMSNorm → SwiGLU → +Y
+        X → RMSNorm → GQAAttention → +X → RMSNorm → MoE → +Y
         
-    Where Y is the final output.
+    Where Y is the final output and MoE is a Mixture of Experts with
+    a router that selects top-k experts per position.
     
     All operations preserve shape B×T×d_model.
     """
@@ -54,17 +57,19 @@ class TransformerBlock:
             dtype=dtype
         )
         
-        # Second RMSNorm (input to FFN)
+        # Second RMSNorm (input to MoE)
         self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2", dtype=dtype)
         
-        # Feed-forward network (SwiGLU)
-        self.ffn = SwiGLU(
+        # Feed-forward network (MoE)
+        self.moe = MoE(
             d_model=d_model,
             d_ff=d_ff,
+            n_experts=4,  # Number of experts
+            k=2,          # Top-k experts to select
             input_std=input_std,
             output_std=output_std,
             rng=rng,
-            name=f"{name}.ffn",
+            name=f"{name}.moe",
             dtype=dtype
         )
     
@@ -74,7 +79,7 @@ class TransformerBlock:
         params.extend(self.norm1.parameters())
         params.extend(self.attention.parameters())
         params.extend(self.norm2.parameters())
-        params.extend(self.ffn.parameters())
+        params.extend(self.moe.parameters())
         return params
     
     def zero_grad(self):
@@ -101,13 +106,13 @@ class TransformerBlock:
         attn_out, attn_cache = self.attention.forward(norm1_out)
         x = residual1 + attn_out
         
-        # Second residual branch: FFN
+        # Second residual branch: MoE
         residual2 = x
         
-        # Norm → FFN → residual
+        # Norm → MoE → residual
         norm2_out, norm2_cache = self.norm2.forward(x)
-        ffn_out, ffn_cache = self.ffn.forward(norm2_out)
-        y = residual2 + ffn_out
+        moe_out, moe_cache = self.moe.forward(norm2_out)
+        y = residual2 + moe_out
         
         cache = {
             "residual1": residual1,
@@ -115,7 +120,7 @@ class TransformerBlock:
             "attn_cache": attn_cache,
             "residual2": residual2,
             "norm2_cache": norm2_cache,
-            "ffn_cache": ffn_cache,
+            "moe_cache": moe_cache,
         }
         
         return y, cache
@@ -133,15 +138,15 @@ class TransformerBlock:
         """
         residual2 = cache["residual2"]
         norm2_cache = cache["norm2_cache"]
-        ffn_cache = cache["ffn_cache"]
+        moe_cache = cache["moe_cache"]
         
-        # Backward through second residual: y = residual2 + ffn_out
-        # The gradient flows through both paths: direct (x1) and through FFN
-        dfn_out = dy  # Gradient w.r.t. ffn_out
+        # Backward through second residual: y = residual2 + moe_out
+        # The gradient flows through both paths: direct (x1) and through MoE
+        dmoe_out = dy  # Gradient w.r.t. moe_out
         dresidual2 = dy  # Gradient w.r.t. residual2 (which is x1)
         
-        # Backward through FFN
-        dnorm2_out = self.ffn.backward(dfn_out, ffn_cache)
+        # Backward through MoE
+        dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
         
         # Backward through second RMSNorm - this gives gradient through FFN path
         dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)

@@ -45,8 +45,11 @@ class SimpleBPETokenizer:
         self.token_to_id: Dict[str, int] = {}
         self.id_to_token: Dict[int, str] = {}
         
-        # BPE merge rules
+        # BPE merge rules: (left, right) -> merged_token
         self.merges: Dict[Tuple[str, str], str] = {}
+        
+        # Merge ranks: rank of each merge (lower = learned earlier, higher priority)
+        self.merge_ranks: Dict[Tuple[str, str], int] = {}
         
         # Pre-add special tokens to vocabulary (to reserve their IDs)
         for i, token in enumerate([self.pad_token, self.eos_token, self.unk_token]):
@@ -68,16 +71,26 @@ class SimpleBPETokenizer:
         return pairs
     
     def _merge_pair(self, tokens: List[str], pair: Tuple[str, str]) -> List[str]:
-        """Merge one pair of tokens."""
-        result = []
-        i = 0
-        while i < len(tokens):
-            if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == pair:
-                result.append(self.merges[pair])
-                i += 2
+        """Merge one pair of tokens.
+        
+        Uses a sliding window approach that's more efficient than the original.
+        """
+        if not tokens:
+            return tokens
+        
+        result = [tokens[0]]
+        
+        for i in range(1, len(tokens)):
+            # Check if we can merge current with previous
+            prev_token = result[-1]
+            curr_token = tokens[i]
+            
+            if (prev_token, curr_token) == pair:
+                # Replace the previous token with merged version
+                result[-1] = self.merges[pair]
             else:
-                result.append(tokens[i])
-                i += 1
+                result.append(curr_token)
+        
         return result
     
     def train(self, texts: List[str]) -> None:
@@ -126,7 +139,7 @@ class SimpleBPETokenizer:
         # Build BPE merges up to target vocab size
         max_merges = self.vocab_size - len(self.token_to_id)
         
-        for _ in range(max_merges):
+        for merge_rank in range(max_merges):
             # Get all current token pairs
             all_pairs = Counter()
             for text_tokens in tokens:
@@ -146,8 +159,9 @@ class SimpleBPETokenizer:
             if merged_token in self.token_to_id:
                 continue
             
-            # Add merge rule
+            # Add merge rule with rank
             self.merges[best_pair[0]] = merged_token
+            self.merge_ranks[best_pair[0]] = merge_rank
             
             # Add to vocabulary
             self.token_to_id[merged_token] = current_id
@@ -173,27 +187,28 @@ class SimpleBPETokenizer:
         # Start with character-level tokens
         tokens = list(text)
         
-        # Apply BPE merges greedily
-        changed = True
-        while changed:
-            changed = False
-            best_pair = None
-            best_score = -1
-            
-            # Find best pair in current tokens
+        # Apply BPE merges in rank order (lowest rank = highest priority)
+        # This ensures merges are applied in the same order they were learned
+        while True:
+            # Find all valid pairs and their ranks
+            valid_pairs = []
             for i in range(len(tokens) - 1):
                 pair = (tokens[i], tokens[i + 1])
                 if pair in self.merges:
-                    score = 1  # Simplified
-                    if score > best_score:
-                        best_score = score
-                        best_pair = pair
+                    rank = self.merge_ranks.get(pair, float('inf'))
+                    valid_pairs.append((i, pair, rank))
             
-            if best_pair:
-                tokens = self._merge_pair(tokens, best_pair)
-                changed = True
+            if not valid_pairs:
+                break
+            
+            # Choose the pair with lowest rank (learned earliest = highest priority)
+            valid_pairs.sort(key=lambda x: x[2])
+            best_idx, best_pair, _ = valid_pairs[0]
+            
+            # Apply the merge
+            tokens = self._merge_pair(tokens, best_pair)
         
-        # Convert to IDs - use unk_token_id directly
+        # Convert to IDs
         unk_token_id = self.token_to_id.get(self.unk_token, 0)
         ids = []
         for token in tokens:
@@ -233,9 +248,10 @@ class SimpleBPETokenizer:
             "pad_token": self.pad_token,
             "eos_token": self.eos_token,
             "unk_token": self.unk_token,
-            "token_to_id": self.token_to_id,
+            "token_to_id": {k: v for k, v in self.token_to_id.items()},
             "id_to_token": {str(k): v for k, v in self.id_to_token.items()},
             "merges": {f"{k[0]}|{k[1]}": v for k, v in self.merges.items()},
+            "merge_ranks": {f"{k[0]}|{k[1]}": v for k, v in self.merge_ranks.items()},
         }
         
         with open(path, "w") as f:
@@ -259,10 +275,13 @@ class SimpleBPETokenizer:
         tokenizer.pad_token = config["pad_token"]
         tokenizer.eos_token = config["eos_token"]
         tokenizer.unk_token = config["unk_token"]
-        tokenizer.token_to_id = config["token_to_id"]
+        tokenizer.token_to_id = {k: v for k, v in config["token_to_id"].items()}
         tokenizer.id_to_token = {int(k): v for k, v in config["id_to_token"].items()}
         tokenizer.merges = {
             tuple(k.split("|")): v for k, v in config["merges"].items()
+        }
+        tokenizer.merge_ranks = {
+            tuple(k.split("|")): v for k, v in config.get("merge_ranks", {}).items()
         }
         
         return tokenizer

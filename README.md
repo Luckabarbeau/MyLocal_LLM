@@ -108,50 +108,70 @@ for i in $(seq 0 103); do
 done
 ```
 
-### Step 2: Generate Token Shards (Test Mode)
+### Step 2: Train the Tokenizer (One-Time)
 
-**Important**: Don't process all 104 shards at once! Start with just 5-10 Parquet shards for testing:
+Train a tokenizer ONCE on a bounded sample of documents (~50k is recommended):
 
 ```bash
 cd ..  # Go back to project root
-python generate_token_shards.py \
+python train_tokenizer.py \
     --dataset-path cosmopedia-v2 \
-    --output-dir ./token_shards \
-    --num-shards 5 \            # Only process 5 Parquet shards
-    --documents-per-shard 1000  # Generate smaller token shards
+    --vocab-size 16384 \
+    --max-documents 50000 \
+    --output tokenizer.json
 ```
 
 This will:
-- Train tokenizer on 500 documents (sample from first Parquet shard)
-- Tokenize ~50,000 documents from 5 Parquet shards using multiprocessing
-- Generate token shards with ~1000 documents each
-- Output: ~50 token shards in `./token_shards/`
+- Sample up to 50,000 documents from the dataset
+- Train BPE merges to build a vocabulary of 16,384 tokens
+- Save the trained tokenizer to `tokenizer.json`
 
-### Step 2b: Accelerating Token Generation (Optional)
+**Why train once?** Tokenizer training is expensive (~5-10 minutes for 50k docs). Train it ONCE and reuse the saved tokenizer.
 
-Token generation uses multiprocessing by default. Adjust worker count based on your CPU:
+### Step 3: Generate Token Shards (Test Mode)
 
-```bash
-# Use all available cores (recommended)
-python generate_token_shards.py --num-workers $(nproc)
-
-# Use a specific number of workers
-python generate_token_shards.py --num-workers 8
-
-# Single-threaded (for debugging)
-python generate_token_shards.py --num-workers 1
-```
-
-### Step 2c: Full Dataset (Optional)
-
-Once testing works, process the full dataset:
+Use the pre-trained tokenizer to generate token shards from a subset of Parquet files:
 
 ```bash
 python generate_token_shards.py \
     --dataset-path cosmopedia-v2 \
+    --tokenizer ./tokenizer.json \        # Use pre-trained tokenizer
+    --output-dir ./token_shards \
+    --num-shards 5 \                    # Only process 5 Parquet shards for testing
+    --documents-per-shard 1000 \
+    --num-workers 8                     # Use 8 CPU cores
+```
+
+This will:
+- Load the pre-trained tokenizer (fast!)
+- Process 5 Parquet shards using 8 parallel workers
+- Tokenize ~50,000 documents
+- Generate token shards with ~1000 documents each
+- Output: ~50 token shards in `./token_shards/`
+
+### Step 3b: Encoding Performance
+
+Token encoding uses multiprocessing to maximize CPU utilization. To benchmark:
+
+```bash
+# Single worker (baseline)
+python generate_token_shards.py --num-workers 1 --num-shards 2
+
+# Multi-worker (should be faster)
+python generate_token_shards.py --num-workers 8 --num-shards 2
+```
+
+### Step 3c: Full Dataset Generation
+
+Once testing works, generate token shards for the full dataset:
+
+```bash
+python generate_token_shards.py \
+    --dataset-path cosmopedia-v2 \
+    --tokenizer ./tokenizer.json \
     --num-shards 104 \
     --documents-per-shard 10000 \
-    --num-workers $(nproc)  # Use all CPU cores
+    --num-workers $(nproc)  # Use all available CPU cores
 
 ### Step 3: Full Dataset (Optional)
 

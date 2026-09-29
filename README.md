@@ -87,9 +87,14 @@ softmax probabilities, and the output.
 
 ## Cosmopedia-v2 Dataset Setup
 
-To train on the full Cosmopedia-v2 dataset (36M+ documents, ~100GB):
+### Step 1: Download the Dataset
+
+The full Cosmopedia-v2 dataset is ~100GB with 104 Parquet shards:
 
 ```bash
+# Activate your virtual environment first
+source .venv/bin/activate
+
 mkdir -p cosmopedia-v2
 cd cosmopedia-v2
 
@@ -103,22 +108,88 @@ for i in $(seq 0 103); do
 done
 ```
 
-After downloading, you can generate token shards:
+### Step 2: Generate Token Shards (Test Mode)
+
+**Important**: Don't process all 104 shards at once! Start with just 5-10 Parquet shards for testing:
+
+```bash
+cd ..  # Go back to project root
+python generate_token_shards.py \
+    --dataset-path cosmopedia-v2 \
+    --output-dir ./token_shards \
+    --num-shards 5 \            # Only process 5 Parquet shards
+    --documents-per-shard 1000  # Generate smaller token shards
+```
+
+This will:
+- Train tokenizer on 500 documents (sample from first Parquet shard)
+- Tokenize ~50,000 documents from 5 Parquet shards using multiprocessing
+- Generate token shards with ~1000 documents each
+- Output: ~50 token shards in `./token_shards/`
+
+### Step 2b: Accelerating Token Generation (Optional)
+
+Token generation uses multiprocessing by default. Adjust worker count based on your CPU:
+
+```bash
+# Use all available cores (recommended)
+python generate_token_shards.py --num-workers $(nproc)
+
+# Use a specific number of workers
+python generate_token_shards.py --num-workers 8
+
+# Single-threaded (for debugging)
+python generate_token_shards.py --num-workers 1
+```
+
+### Step 2c: Full Dataset (Optional)
+
+Once testing works, process the full dataset:
 
 ```bash
 python generate_token_shards.py \
     --dataset-path cosmopedia-v2 \
-    --output-dir ./token_shards \
+    --num-shards 104 \
+    --documents-per-shard 10000 \
+    --num-workers $(nproc)  # Use all CPU cores
+
+### Step 3: Full Dataset (Optional)
+
+Once testing works, you can process the full dataset:
+
+```bash
+python generate_token_shards.py \
+    --dataset-path cosmopedia-v2 \
     --num-shards 104 \
     --documents-per-shard 10000
 ```
 
 ## Extended Training
 
+All training commands require the virtual environment to be activated:
+
+```bash
+source .venv/bin/activate
+```
+
+### Backend Selection (CPU vs GPU)
+
+By default, training runs on CPU. For GPU acceleration with CuPy:
+
+```bash
+export MINI_LLM_BACKEND=cupy  # Enable GPU mode
+```
+
+For CPU mode (default):
+
+```bash
+export MINI_LLM_BACKEND=numpy  # Or unset the variable
+```
+
 ### Quick Start
 
 ```bash
-# Generate token shards
+# Generate token shards from downloaded Cosmopedia data
 python generate_token_shards.py --dataset-path cosmopedia-v2
 
 # Train mini model (1 hour)

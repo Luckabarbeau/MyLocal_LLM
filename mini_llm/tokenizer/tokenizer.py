@@ -48,6 +48,11 @@ class SimpleBPETokenizer:
         # BPE merge rules
         self.merges: Dict[Tuple[str, str], str] = {}
         
+        # Pre-add special tokens to vocabulary (to reserve their IDs)
+        for i, token in enumerate([self.pad_token, self.eos_token, self.unk_token]):
+            self.token_to_id[token] = i
+            self.id_to_token[i] = token
+        
         # Add special tokens to vocab
         special_tokens = [self.pad_token, self.eos_token, self.unk_token]
         for token in special_tokens:
@@ -93,25 +98,26 @@ class SimpleBPETokenizer:
             if token not in vocab:
                 vocab.add(token)
         
-        # Initialize token to id mapping
-        self.token_to_id = {}
-        self.id_to_token = {}
+        # Build vocabulary from characters and special tokens
+        vocab_with_special = set(vocab)
+        for token in special_tokens:
+            vocab_with_special.add(token)
         
-        # Assign IDs: characters first, then special tokens, then BPE merges
+        # Assign IDs: special tokens first, then character tokens, then BPE merges
         current_id = 0
         
-        # Character tokens (sorted for determinism)
-        for char in sorted(vocab):
-            if char not in self.token_to_id:
-                self.token_to_id[char] = current_id
-                self.id_to_token[current_id] = char
-                current_id += 1
-        
-        # Special tokens
+        # Special tokens (already in token_to_id from __init__, just make sure)
         for token in special_tokens:
             if token not in self.token_to_id:
                 self.token_to_id[token] = current_id
                 self.id_to_token[current_id] = token
+            current_id = max(current_id, self.token_to_id[token]) + 1
+        
+        # Character tokens (sorted for determinism)
+        for char in sorted(vocab_with_special):
+            if char not in self.token_to_id:
+                self.token_to_id[char] = current_id
+                self.id_to_token[current_id] = char
                 current_id += 1
         
         # Initialize tokens with individual characters

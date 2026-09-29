@@ -4,6 +4,7 @@ from mini_llm.backend import xp
 from mini_llm.config import ModelConfig
 from mini_llm.blocks.transformer_block import TransformerBlock
 from mini_llm.ops.embedding import Embedding
+from mini_llm.ops.linear import Linear
 from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 from mini_llm.ops.rmsnorm import RMSNorm
 
@@ -13,9 +14,10 @@ class DecoderLanguageModel:
     Decoder-only language model.
     
     Architecture:
-        Token IDs → Embedding → Transformer blocks → RMSNorm → Logits → Loss
+        Token IDs → Embedding → Transformer blocks → RMSNorm → Output Proj → Logits → Loss
         
-    The embedding matrix is tied to the output logits (shared weights).
+    Uses separate output projection layer (untied embeddings by default).
+    The embedding matrix can be optionally tied to the output projection via weight sharing.
     """
     
     def __init__(self, config: ModelConfig, rng_seed: int = 0, dtype: str = None):
@@ -69,6 +71,16 @@ class DecoderLanguageModel:
             name="final_norm",
             dtype=self.dtype
         )
+        
+        # Output projection layer (maps d_model -> vocab_size)
+        self.output_proj = Linear(
+            config.d_model,
+            config.vocab_size,
+            config.init_std,
+            rng,
+            name="output_proj",
+            dtype=self.dtype
+        )
     
     def parameters(self):
         """Return all trainable parameters."""
@@ -77,6 +89,7 @@ class DecoderLanguageModel:
         for block in self.blocks:
             params.extend(block.parameters())
         params.extend(self.final_norm.parameters())
+        params.extend(self.output_proj.parameters())
         return params
     
     def zero_grad(self):
@@ -109,17 +122,15 @@ class DecoderLanguageModel:
         # Final normalization - unpack output and cache
         x, final_norm_cache = self.final_norm.forward(x)
         
-        # Compute logits using tied embedding matrix
-        # logits = x @ W_E^T
-        # x: (B, T, d_model), W_E: (vocab_size, d_model)
-        # So logits: (B, T, vocab_size)
-        logits = x @ self.embedding.W.data.T
+        # Output projection - maps d_model -> vocab_size
+        logits, output_proj_cache = self.output_proj.forward(x)
         
         cache = {
             "token_ids": token_ids,
             "embedding_input": x,  # Input to logits (after final norm)
             "embed_cache": embed_cache,
             "final_norm_cache": final_norm_cache,
+            "output_proj_cache": output_proj_cache,
             "block_caches": block_caches,  # List of caches from each transformer block
         }
         
@@ -168,26 +179,8 @@ class DecoderLanguageModel:
         token_ids = cache["token_ids"]
         block_caches = cache["block_caches"]
         
-        # Gradient of logits w.r.t. embedding output
-        # logits = x @ W_E^T
-        # d_logits: (B, T, vocab_size)
-        # x: (B, T, d_model)
-        # W_E: (vocab_size, d_model)
-        
-        BT = x.shape[0] * x.shape[1]
-        d_logits_flat = d_logits.reshape(BT, -1)  # (B*T, vocab_size)
-        x_flat = x.reshape(BT, -1)  # (B*T, d_model)
-        
-        # Gradient for embedding weight matrix
-        # dW_E = d_logits^T @ x
-        self.embedding.W.grad = d_logits_flat.T @ x_flat
-        
-        # Gradient w.r.t. x (embedding output)
-        # dx = d_logits @ W_E
-        dx = d_logits_flat @ self.embedding.W.data
-        
-        # Reshape dx back to (B, T, d_model)
-        dx = dx.reshape(x.shape)
+        # Backward through output projection
+        dx = self.output_proj.backward(d_logits, cache["output_proj_cache"])
         
         # Backward through final RMSNorm
         dx = self.final_norm.backward(dx, cache["final_norm_cache"])

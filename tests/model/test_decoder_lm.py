@@ -127,3 +127,38 @@ def test_decoder_lm_tied_embeddings():
     assert model.embedding.W.data is not None
     assert model.embedding.W.data.shape[0] == config.vocab_size
     assert model.embedding.W.data.shape[1] == config.d_model
+
+
+def test_decoder_lm_output_proj_exists():
+    """Test that output projection layer exists and has correct shape."""
+    model = make_model()
+    config = model.config
+    
+    # Output projection should exist
+    assert hasattr(model, 'output_proj'), "Model should have output_proj layer"
+    assert model.output_proj.W.data.shape == (config.d_model, config.vocab_size), \
+        f"Output proj shape mismatch: expected {(config.d_model, config.vocab_size)}, got {model.output_proj.W.data.shape}"
+
+
+def test_decoder_lm_output_proj_gradients():
+    """Test that output projection gradients are computed correctly."""
+    model = make_model()
+    config = model.config
+    B, T = 1, 3
+    token_ids = xp.asarray(np.random.default_rng(18).integers(0, config.vocab_size, size=(B, T)), dtype="int64")
+    
+    logits, cache = model.forward(token_ids)
+    _, loss_cache = model.compute_loss(logits, token_ids)
+    d_logits = model.backward_loss(loss_cache)
+    
+    model.zero_grad()
+    model.backward(d_logits, cache)
+    
+    # Check that output projection has non-zero gradients
+    out_proj_param = model.output_proj.W
+    assert out_proj_param.grad is not None, "Output proj should have gradients"
+    assert out_proj_param.grad.shape == out_proj_param.data.shape, \
+        f"Output proj grad shape mismatch: expected {out_proj_param.data.shape}, got {out_proj_param.grad.shape}"
+    
+    # Verify gradient is non-zero (at least one element should be non-trivial)
+    assert xp.any(out_proj_param.grad != 0), "Output proj gradients should not be all zeros"

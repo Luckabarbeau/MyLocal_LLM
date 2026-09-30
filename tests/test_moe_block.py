@@ -80,10 +80,25 @@ def test_moe_backward_direction():
     
     fd = (objective(x + eps * v) - objective(x - eps * v)) / (2 * eps)
     an = float(xp.sum(dx * v))
-    # Analytical gradient should match finite difference within reasonable tolerance
-    # The sparsity introduces approximation error from straight-through estimator
     rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
-    assert rel < 0.5, f"Input backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    
+    # Run convergence study with multiple epsilon values
+    epsilons = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    errors = []
+    for e in epsilons:
+        fd_e = (objective(x + e * v) - objective(x - e * v)) / (2 * e)
+        err = abs(fd_e - an)
+        errors.append((e, err))
+    
+    # Analytical gradient should match finite difference very closely.
+    # Away from top-k boundaries, the selected path is smooth and should check accurately.
+    # Target relative error is on the order of 1e-5 to 1e-6 for float64.
+    assert rel < 1e-3, f"Input backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    
+    # Print convergence diagnostics (only visible when test fails or with -s)
+    print(f"MoE block input backward convergence: rel_error={rel:.6f}")
+    for e, err in errors:
+        print(f"  eps={e:.0e}, fd_err={err:.2e}")
 
 
 def test_moe_parameter_backward():
@@ -127,13 +142,27 @@ def test_moe_parameter_backward():
     an = float(xp.sum(param.grad * v))
     rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
     
+    # Run convergence study with multiple epsilon values
+    epsilons = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    errors = []
+    for e in epsilons:
+        f_plus_e = objective_with_perturbation(e)
+        f_minus_e = objective_with_perturbation(-e)
+        fd_e = (f_plus_e - f_minus_e) / (2 * e)
+        err = abs(fd_e - an)
+        errors.append((e, err))
+    
     # Restore original
     param.data[...] = original_data
     
-    # Sparsity and straight-through estimator introduce approximation error
-    # Tolerance adjusted based on numerical verification
-    rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
-    assert rel < 0.5, f"Parameter backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    # Analytical gradient should match finite difference very closely.
+    # Away from top-k boundaries, the selected path is smooth and should check accurately.
+    assert rel < 1e-3, f"Parameter backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    
+    # Print convergence diagnostics (only visible when test fails or with -s)
+    print(f"MoE block parameter backward convergence: rel_error={rel:.6f}")
+    for e, err in errors:
+        print(f"  eps={e:.0e}, fd_err={err:.2e}")
 
 
 def test_moe_zero_grad():

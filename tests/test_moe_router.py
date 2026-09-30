@@ -85,9 +85,23 @@ def test_router_backward_direction():
     an = float(xp.sum(dx * v))
     
     rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
+    
+    # Run convergence study with multiple epsilon values
+    epsilons = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    errors = []
+    for e in epsilons:
+        fd_e = (objective(x + e * v) - objective(x - e * v)) / (2 * e)
+        err = abs(fd_e - an)
+        errors.append((e, err))
+    
     # The straight-through estimator for top-k selection introduces some error
     # but should still be reasonably close
     assert rel < 0.1, f"Backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    
+    # Print convergence diagnostics (only visible when test fails or with -s)
+    print(f"Router backward convergence: rel_error={rel:.6f}")
+    for e, err in errors:
+        print(f"  eps={e:.0e}, fd_err={err:.2e}")
 
 
 def test_router_top_k_selection():
@@ -113,8 +127,10 @@ def test_router_parameter_gradients():
     weights, expert_indices, cache = router.forward(x)
     router.zero_grad()
     
-    # Use a non-trivial gradient input that won't cancel out
-    dweights = xp.ones_like(weights) * 0.5
+    # Use a non-trivial gradient input with non-uniform values
+    # to avoid the zero-gradient case of uniform dweights through softmax
+    np_dweights = np.random.default_rng(15).uniform(0.1, 1.0, size=weights.shape)
+    dweights = xp.asarray(np_dweights, dtype="float64")
     dx = router.backward(dweights, cache)
     
     # Check that parameter gradients are non-zero

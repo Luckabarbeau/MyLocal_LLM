@@ -259,6 +259,9 @@ class TokenShardGenerator:
                     current_batch_tokens.extend(tokenized)
                     total_dropped += dropped
                     
+                    # Always clear the docs batch after processing
+                    current_batch_docs = []
+                    
                     # Check if we should flush to shard
                     if len(current_batch_tokens) >= self.documents_per_shard:
                         shard_path = self._flush_shard(
@@ -268,9 +271,8 @@ class TokenShardGenerator:
                             shard_paths.append(shard_path)
                             shard_id += 1
                         
-                        # Keep remaining
+                        # Keep remaining tokens
                         current_batch_tokens = current_batch_tokens[self.documents_per_shard :]
-                        current_batch_docs = []
                         total_docs += self.documents_per_shard
                         
                         if max_shards and shard_id >= max_shards:

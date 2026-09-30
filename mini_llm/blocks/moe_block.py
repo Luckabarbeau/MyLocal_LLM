@@ -168,7 +168,8 @@ class MoE:
                 dweights_for_tokens = xp.sum(expert_dy * expert_out, axis=-1)  # [n_assigned]
                 
                 # Accumulate to dweights_flat
-                xp.add.at(dweights_flat, (token_indices, slot_indices), expert_weights * dweights_for_tokens)
+                # DO NOT multiply by expert_weights - that would be incorrect
+                xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
         
         dweights = dweights_flat.reshape(batch_size, seq_len, k)
         

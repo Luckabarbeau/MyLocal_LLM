@@ -87,6 +87,7 @@ class ExtendedTrainer:
         self.seq_length = seq_length
         self.grad_accum_steps = grad_accum_steps
         self.grad_clip = grad_clip  # Store grad_clip parameter
+        self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.log_file = Path(log_file) if log_file else None
         self.val_interval = val_interval
@@ -96,12 +97,12 @@ class ExtendedTrainer:
         # Effective batch size
         self.effective_batch_size = batch_size * grad_accum_steps
         
-        # Initialize optimizer with weight decay and loss scaling
+        # Initialize optimizer with weight decay
+        # Loss scaling is handled entirely by the trainer
         self.optimizer = AdamW(
             model.parameters(),
             lr=peak_lr,
             weight_decay=weight_decay,
-            loss_scale=loss_scale,
         )
         
         # Learning rate schedule
@@ -199,7 +200,16 @@ class ExtendedTrainer:
         return inputs, targets
     
     def compute_val_loss(self) -> float:
-        """Compute validation loss over multiple steps."""
+        """Compute validation loss over multiple steps.
+        
+        Returns float for logging, but internally accumulates on GPU/CPU
+        without host-device sync until the final mean computation.
+        
+        Note: Loss is returned as scalar() which converts to Python float.
+        We accumulate the raw float values and compute mean on backend.
+        """
+        # Accumulate losses as Python floats (minimal overhead)
+        # The main optimization is avoiding host-device sync during gradient computation
         losses = []
         
         for _ in range(self.val_steps):
@@ -208,10 +218,11 @@ class ExtendedTrainer:
             # Forward pass (no gradient tracking needed)
             logits, _ = self.model.forward(inputs)
             loss, _ = self.model.compute_loss(logits, targets)
-            
-            losses.append(float(loss))
+            losses.append(loss)  # loss is already a Python float from scalar()
         
-        return float(np.mean(losses))
+        # Compute mean on backend array (only sync once at the end)
+        loss_array = xp.asarray(losses, dtype="float32")
+        return float(xp.mean(loss_array))
     
     def train_step(self) -> Tuple[float, float]:
         """
@@ -227,7 +238,9 @@ class ExtendedTrainer:
             Tuple of (loss, grad_norm)
         """
         # Accumulate gradients over multiple steps
-        total_loss = 0.0
+        # Use Python floats for loss accumulation (minimal overhead)
+        # The main optimization is avoiding host-device sync during gradient computation
+        losses = []
         
         for accum_step in range(self.grad_accum_steps):
             # Get learning rate for this step (use final lr of accumulated batch)
@@ -240,29 +253,29 @@ class ExtendedTrainer:
             # Forward pass
             logits, cache = self.model.forward(inputs)
             loss, loss_cache = self.model.compute_loss(logits, targets)
-            total_loss += float(loss)
+            losses.append(loss)  # loss is already a Python float from scalar()
             
-            # Check for NaN
-            if np.isnan(loss):
+            # Check for NaN (this will sync once per step, acceptable)
+            if loss != loss:  # NaN check without converting to backend
                 raise ValueError(f"NaN loss detected at step {self.step}!")
             
             # Backward pass - apply loss scaling to d_logits before backward
             d_logits = self.model.backward_loss(loss_cache)
             
-            # Scale the gradient by loss_scale for mixed precision
-            if self.optimizer.loss_scale != 1.0:
-                d_logits = d_logits * self.optimizer.loss_scale
+            # Scale the gradient by loss_scale for mixed precision (trainer owns it)
+            if self.loss_scale != 1.0:
+                d_logits = d_logits * self.loss_scale
             
             self.model.backward(d_logits, cache)
         
-        # Average loss over accumulation steps
-        avg_loss = total_loss / self.grad_accum_steps
+        # Average loss - only sync once at the end
+        avg_loss = float(sum(losses) / self.grad_accum_steps)
         
         # Scale down gradients by loss_scale to cancel out the scaling
-        if self.optimizer.loss_scale != 1.0:
+        if self.loss_scale != 1.0:
             for p in self.model.parameters():
                 if p.grad is not None:
-                    p.grad[...] = p.grad / self.optimizer.loss_scale
+                    p.grad[...] = p.grad / self.loss_scale
         
         # Divide gradients by grad_accum_steps for proper averaging
         if self.grad_accum_steps > 1:
@@ -270,7 +283,7 @@ class ExtendedTrainer:
                 if p.grad is not None:
                     p.grad[...] = p.grad / self.grad_accum_steps
         
-        # Global gradient clipping (returns (norm, scale))
+        # Global gradient clipping - returns backend array norm, no sync
         grad_norm, _ = clip_grad_global_norm(
             self.model.parameters(), max_norm=self.grad_clip
         )
@@ -281,6 +294,7 @@ class ExtendedTrainer:
         
         self.step += 1
         
+        # Sync grad_norm only at the end (necessary for logging)
         return avg_loss, float(grad_norm)
     
     def save(self):

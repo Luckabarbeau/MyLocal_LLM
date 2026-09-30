@@ -74,9 +74,23 @@ def test_transformer_block_backward_direction():
     fd = (objective(x + eps * v) - objective(x - eps * v)) / (2 * eps)
     an = float(xp.sum(dx * v))
     rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
+    
+    # Run convergence study with multiple epsilon values
+    epsilons = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    errors = []
+    for e in epsilons:
+        fd_e = (objective(x + e * v) - objective(x - e * v)) / (2 * e)
+        err = abs(fd_e - an)
+        errors.append((e, err))
+    
     # Tolerance adjusted for numerical stability
     # Tolerance adjusted for sparse expert dispatch
     assert rel < 1e-3, f"Input backward direction check failed: fd={fd}, an={an}, rel={rel}"
+    
+    # Print convergence diagnostics (only visible when test fails or with -s)
+    print(f"Transformer block input backward convergence: rel_error={rel:.6f}")
+    for e, err in errors:
+        print(f"  eps={e:.0e}, fd_err={err:.2e}")
 
 
 def test_transformer_block_parameter_backward():

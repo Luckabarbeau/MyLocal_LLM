@@ -261,8 +261,8 @@ class TestMiniTrainer:
                 loss_scale=loss_scale,
             )
             
-            # Check that optimizer has the loss scale
-            assert trainer.optimizer.loss_scale == loss_scale
+            # Check that trainer stores the loss scale (optimizer no longer stores it)
+            assert trainer.loss_scale == loss_scale
 
 
 class TestGradientClipping:

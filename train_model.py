@@ -241,8 +241,9 @@ def generate_shards_for_training(
     parquet_reader = CosmopediaParquetReader(dataset_path=dataset_path)
     
     # Limit to requested Parquet shards
-    parquet_reader._shard_files = parquet_reader._shard_files[:num_parquet_shards]
-    print(f"Processing {len(parquet_reader._shard_files)} Parquet shards")
+    if len(parquet_reader.shard_paths) > num_parquet_shards:
+        parquet_reader.shard_paths = parquet_reader.shard_paths[:num_parquet_shards]
+    print(f"Processing {len(parquet_reader.shard_paths)} Parquet shards")
     
     # Train tokenizer on a sample
     print("Training tokenizer on sample...")

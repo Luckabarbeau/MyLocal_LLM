@@ -115,8 +115,8 @@ class MiniTrainer:
         self.grad_clip = grad_clip
         self.loss_scale = loss_scale
         
-        # Optimizer and scheduler (with loss scaling)
-        self.optimizer = AdamW(model.parameters(), lr=peak_lr, loss_scale=loss_scale)
+        # Optimizer - loss scaling is handled by trainer
+        self.optimizer = AdamW(model.parameters(), lr=peak_lr)
         self.scheduler = WarmupCosineSchedule(
             peak_lr=peak_lr,
             warmup_steps=warmup_steps,
@@ -150,7 +150,12 @@ class MiniTrainer:
     
     def train_step(self) -> float:
         """
-        Perform one training step.
+        Perform one training step with optional loss scaling.
+        
+        With loss scaling:
+        1. Multiply d_logits by loss_scale before backward
+        2. Backward computes scaled gradients
+        3. Divide gradients by loss_scale after backward
         
         Returns:
             Loss value
@@ -173,9 +178,20 @@ class MiniTrainer:
             print(f"  logits has NaN: {np.any(np.isnan(logits))}")
             print(f"  logits has Inf: {np.any(np.isinf(logits))}")
         
-        # Backward pass
+        # Backward pass - apply loss scaling if enabled
         d_logits = self.model.backward_loss(loss_cache)
+        
+        # Scale gradient by loss_scale before backward
+        if self.loss_scale != 1.0:
+            d_logits = d_logits * self.loss_scale
+        
         self.model.backward(d_logits, cache)
+        
+        # Scale down gradients by loss_scale to cancel out the scaling
+        if self.loss_scale != 1.0:
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    p.grad[...] = p.grad / self.loss_scale
         
         # Global gradient clipping in float32
         clip_grad_global_norm(self.model.parameters(), max_norm=self.grad_clip)

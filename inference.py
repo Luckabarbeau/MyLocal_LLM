@@ -9,11 +9,19 @@ Supports multiple decoding strategies:
 - Top-p (nucleus) sampling: sample from cumulative probability threshold
 
 Usage:
-    # Basic generation
+    # Basic generation with KV cache (fast)
     python inference.py \\
         --checkpoint ./checkpoints/mini_10shards \\
         --prompt "The sky is" \\
         --max-new-tokens 50
+        --backend kv-cache
+    
+    # Reference full-prefix generation (slow, for verification)
+    python inference.py \\
+        --checkpoint ./checkpoints/mini_10shards \\
+        --prompt "The sky is" \\
+        --max-new-tokens 50
+        --backend reference
     
     # Temperature sampling
     python inference.py \\
@@ -21,13 +29,6 @@ Usage:
         --prompt "Once upon a time" \\
         --temperature 0.7 \\
         --max-new-tokens 100
-    
-    # Top-p sampling
-    python inference.py \\
-        --checkpoint ./checkpoints/mini_10shards \\
-        --prompt "In the future" \\
-        --top-p 0.9 \\
-        --max-new-tokens 75
 """
 
 import argparse
@@ -41,6 +42,7 @@ from mini_llm.backend import xp
 from mini_llm.checkpoint import load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
+from mini_llm.inference_model import InferenceModel
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 
 
@@ -48,41 +50,41 @@ def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
     """Apply softmax with temperature scaling."""
     # Subtract max for numerical stability
     logits = logits / temperature
-    logits = logits - np.max(logits, axis=-1, keepdims=True)
-    exp_logits = np.exp(logits)
-    return exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+    logits = logits - xp.max(logits, axis=-1, keepdims=True)
+    exp_logits = xp.exp(logits)
+    return exp_logits / xp.sum(exp_logits, axis=-1, keepdims=True)
 
 
 def greedy_decode(logits: np.ndarray) -> int:
     """Greedy decoding: pick highest probability token."""
-    return int(np.argmax(logits, axis=-1))
+    return int(xp.argmax(logits, axis=-1))
 
 
 def temperature_sample(logits: np.ndarray, temperature: float = 1.0) -> int:
     """Sample from softmax with temperature."""
     probs = softmax(logits, temperature)
     # Sample from distribution
-    cumprobs = np.cumsum(probs)
-    r = np.random.random()
-    return int(np.searchsorted(cumprobs, r))
+    cumprobs = xp.cumsum(probs)
+    r = xp.random.random()
+    return int(xp.searchsorted(cumprobs, r))
 
 
-def top_k_sample(logits: np.ndarray, k: int, temperature: float = 1.0) -> int:
+def top_k_sample(logits, k: int, temperature: float = 1.0) -> int:
     """Sample from top-k tokens."""
     probs = softmax(logits, temperature)
     
     # Zero out all but top-k
-    indices = np.argsort(probs)[-k:]
-    mask = np.zeros_like(probs)
+    indices = xp.argsort(probs)[-k:]
+    mask = xp.zeros_like(probs)
     mask[indices] = 1.0
     
     masked_probs = probs * mask
-    masked_probs = masked_probs / np.sum(masked_probs)
+    masked_probs = masked_probs / xp.sum(masked_probs)
     
     # Sample from masked distribution
-    cumprobs = np.cumsum(masked_probs)
-    r = np.random.random()
-    return int(np.searchsorted(cumprobs, r))
+    cumprobs = xp.cumsum(masked_probs)
+    r = xp.random.random()
+    return int(xp.searchsorted(cumprobs, r))
 
 
 def top_p_sample(logits: np.ndarray, p: float, temperature: float = 1.0) -> int:
@@ -90,66 +92,41 @@ def top_p_sample(logits: np.ndarray, p: float, temperature: float = 1.0) -> int:
     probs = softmax(logits, temperature)
     
     # Sort by probability
-    sorted_indices = np.argsort(probs)[::-1]
+    sorted_indices = xp.argsort(probs)[::-1]
     sorted_probs = probs[sorted_indices]
     
     # Find cutoff for cumulative probability
-    cumprobs = np.cumsum(sorted_probs)
-    cutoff_idx = np.searchsorted(cumprobs, p) + 1
+    cumprobs = xp.cumsum(sorted_probs)
+    cutoff_idx = xp.searchsorted(cumprobs, p) + 1
     
     # Mask out tokens below cutoff
-    mask = np.zeros_like(probs)
+    mask = xp.zeros_like(probs)
     mask[sorted_indices[:cutoff_idx]] = 1.0
     
     masked_probs = probs * mask
-    masked_probs = masked_probs / np.sum(masked_probs)
+    masked_probs = masked_probs / xp.sum(masked_probs)
     
     # Sample from masked distribution
-    cumprobs = np.cumsum(masked_probs)
-    r = np.random.random()
-    return int(np.searchsorted(cumprobs, r))
+    cumprobs = xp.cumsum(masked_probs)
+    r = xp.random.random()
+    return int(xp.searchsorted(cumprobs, r))
 
 
 class TextGenerator:
     """Text generation wrapper for the language model."""
-    
-    def __init__(
-        self,
-        model: DecoderLanguageModel,
-        tokenizer: "SimpleBPETokenizer | FastBPETokenizer",
-        max_context: int = 512,
-    ):
-        """
-        Initialize text generator.
-        
-        Args:
-            model: Trained DecoderLanguageModel
-            tokenizer: Tokenizer for encoding/decoding (SimpleBPETokenizer or FastBPETokenizer)
-            max_context: Maximum context length
-        """
+
+    def __init__(self, model, tokenizer, max_context: int = 512):
         self.model = model
         self.tokenizer = tokenizer
         self.max_context = max_context
-    
+
     def _get_eos_id(self) -> int:
-        """Get EOS token ID from either tokenizer type."""
-        # Try SimpleBPETokenizer format first
-        if hasattr(self.tokenizer, 'token_to_id'):
-            return self.tokenizer.token_to_id.get(self.tokenizer.eos_token, 0)
-        # FastBPETokenizer uses _tokenizer with HF API
-        elif hasattr(self.tokenizer, '_tokenizer'):
-            try:
-                tokenizer_impl = self.tokenizer._tokenizer
-                if tokenizer_impl is not None:
-                    vocab = tokenizer_impl.get_vocab()
-                    for token, id_ in vocab.items():
-                        if token == self.tokenizer.eos_token:
-                            return id_
-            except Exception:
-                pass
-        # Fallback to special token IDs
-        return 1  # DEFAULT_EOS_TOKEN_ID
-        
+        """Get EOS token ID from tokenizer or use default."""
+        if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token:
+            return self.tokenizer.encode(self.tokenizer.eos_token)[0]
+        # Default: 2 is commonly used as EOS
+        return 2
+
     def generate(
         self,
         prompt: str,
@@ -160,6 +137,7 @@ class TextGenerator:
         top_p: float | None = None,
         seed: int | None = None,
         log_speed: bool = False,
+        use_kv_cache: bool = True,
     ) -> tuple[str, dict]:
         """
         Generate text from prompt.
@@ -173,10 +151,10 @@ class TextGenerator:
             top_p: Top-p parameter (used if strategy == 'top-p')
             seed: Random seed for reproducibility
             log_speed: If True, return timing information
+            use_kv_cache: If True, use KV cache (faster)
             
         Returns:
             Tuple of (generated_text, timing_info)
-            timing_info contains: tokens_per_sec, total_tokens, generation_time_s
         """
         timing = {}
         
@@ -203,12 +181,24 @@ class TextGenerator:
         for _ in range(max_new_tokens):
             # Prepare input (last max_context tokens)
             context = generated_ids[-self.max_context:]
-            input_tensor = np.array([context], dtype=np.uint16)
+            input_tensor = xp.array([context], dtype=xp.uint16)
             
             # Forward pass with timing
             if log_speed:
                 forward_start = time.time()
-            logits, _ = self.model.forward(input_tensor)
+            
+            if use_kv_cache:
+                # KV cache implementation
+                try:
+                    logits = self._generate_kv_cache(input_tensor, generated_ids, log_speed)
+                except Exception as e:
+                    # Fall back to full prefix if KV cache fails
+                    print(f"KV cache failed, falling back: {e}")
+                    logits, _ = self.model.forward(input_tensor)
+            else:
+                # Full prefix forward
+                logits, _ = self.model.forward(input_tensor)
+            
             if log_speed:
                 forward_end = time.time()
                 forward_times.append(forward_end - forward_start)
@@ -269,6 +259,47 @@ class TextGenerator:
         
         return output_text, timing
 
+    def _generate_kv_cache(self, input_tensor, generated_ids, log_speed):
+        """KV cache generation helper using InferenceModel."""
+        # Import here to avoid circular import
+        from mini_llm.inference_model import InferenceModel
+        
+        # Check if we already have an inference model
+        if not hasattr(self, '_inference_model'):
+            # Create a new InferenceModel with the same weights
+            self._inference_model = InferenceModel(
+                self.model.config,
+                dtype=self.model.dtype
+            )
+            self._inference_model.set_weights(self.model)
+            
+            # Create generation state
+            self._state = self._inference_model.create_generation_state(
+                batch_size=1,
+                max_length=self.max_context
+            )
+        
+        # Convert input to int32 for InferenceModel
+        from mini_llm.backend import xp, asnumpy
+        # Ensure input_tensor is properly converted
+        if hasattr(input_tensor, 'get'):  # CuPy array
+            input_ids = xp.asarray(asnumpy(input_tensor)[0], dtype=xp.int32)[None, :]
+        else:  # NumPy array
+            input_ids = xp.asarray(input_tensor[0], dtype=xp.int32)[None, :]
+        
+        # If this is the first call (prompt), use prefill
+        if len(generated_ids) == len(input_ids[0]):
+            logits = self._inference_model.prefill(input_ids, self._state)
+        else:
+            # Decode one token at a time
+            next_id = generated_ids[-1]
+            token = xp.asarray([[next_id]], dtype=xp.int32)
+            logits = self._inference_model.decode_one(token, self._state)
+        
+        # logits should already be on the correct backend (CuPy or NumPy)
+        # Return as-is since sampling functions handle both backends via xp
+        return logits[None, :]
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -322,6 +353,12 @@ def main():
         help="Random seed",
     )
     parser.add_argument(
+        "--backend",
+        choices=["reference", "kv-cache"],
+        default="kv-cache",
+        help="Inference backend: 'reference' uses full prefix, 'kv-cache' uses preallocated cache (default)",
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         help="Interactive mode - keep model loaded for multiple prompts",
@@ -372,6 +409,7 @@ def main():
         tokenizer = FastBPETokenizer.load(str(tokenizer_path))
     
     print(f"Loaded tokenizer: {len(tokenizer)} tokens")
+    print(f"Inference backend: {args.backend}")
     
     # Load model with timing
     import time as time_mod
@@ -434,6 +472,7 @@ def main():
                     top_p=args.top_p,
                     seed=args.seed,
                     log_speed=True,
+                    use_kv_cache=(args.backend == "kv-cache"),
                 )
                 
                 print(f"\nResponse: {output_text}")
@@ -480,6 +519,7 @@ def main():
             top_p=args.top_p,
             seed=args.seed,
             log_speed=True,
+            use_kv_cache=(args.backend == "kv-cache"),
         )
         prompt_time = time_mod.time() - prompt_start
     

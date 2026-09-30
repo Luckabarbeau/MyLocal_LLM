@@ -91,7 +91,7 @@ class TestCheckpointResume:
     def test_checkpoint_with_filtered_params(self):
         """Test checkpoint with parameter filtering."""
         config = ModelConfig(
-            vocab_size=1000,
+            tokenizer_vocab_size=1000,
             context_length=64,
             n_layers=2,
             d_model=64,
@@ -120,7 +120,7 @@ class TestCheckpointResume:
     def test_checkpoint_loads_all_params_without_filter(self):
         """Test that loading without filter gets all parameters."""
         config = ModelConfig(
-            vocab_size=1000,
+            tokenizer_vocab_size=1000,
             context_length=64,
             n_layers=2,
             d_model=64,

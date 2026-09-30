@@ -57,6 +57,22 @@ class ModelConfig:
         )
 
     @classmethod
+    def micro_debug(cls):
+        """Micro model: ~500K params, for quick debugging."""
+        return cls(
+            vocab_size=256,
+            context_length=32,
+            n_layers=2,
+            d_model=32,
+            n_q_heads=2,
+            n_kv_heads=1,
+            d_head=16,
+            n_experts=2,
+            top_k=1,
+            d_ff=64,
+        )
+
+    @classmethod
     def mini(cls):
         """Mini model: ~12M params, good for initial experiments."""
         return cls(

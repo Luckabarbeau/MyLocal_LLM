@@ -181,6 +181,9 @@ class TokenShardGenerator:
         """
         Tokenize a single document with EOS token.
         
+        IMPORTANT: We do NOT truncate documents - store complete tokenization.
+        The packed dataset format handles context length at sampling time.
+        
         Args:
             text: Input text
             
@@ -232,6 +235,8 @@ class TokenShardGenerator:
         Returns:
             List of paths to generated shards
         """
+        from tqdm import tqdm
+        
         shard_paths = []
         shard_id = 0
         current_batch_docs: List[str] = []
@@ -243,12 +248,13 @@ class TokenShardGenerator:
         
         total_docs = 0
         total_dropped = 0
+        processed_indices = set()  # Track which documents we've processed (Issue #6)
         
-        for record in tqdm(
+        for record_idx, record in enumerate(tqdm(
             self.parquet_reader.iter_records(),
             desc="Processing documents",
             unit="doc",
-        ):
+        )):
             text = record.get("text", "")
             if text:
                 current_batch_docs.append(text)
@@ -258,6 +264,12 @@ class TokenShardGenerator:
                     tokenized, dropped = self._process_batch(current_batch_docs)
                     current_batch_tokens.extend(tokenized)
                     total_dropped += dropped
+                    total_docs += len(tokenized)
+                    
+                    # Track which documents we processed (Issue #6 - no duplication)
+                    for i in range(len(current_batch_docs)):
+                        if current_batch_docs[i]:  # Non-empty docs get a tokenized entry
+                            processed_indices.add(len(processed_indices))
                     
                     # Always clear the docs batch after processing
                     current_batch_docs = []
@@ -273,7 +285,6 @@ class TokenShardGenerator:
                         
                         # Keep remaining tokens
                         current_batch_tokens = current_batch_tokens[self.documents_per_shard :]
-                        total_docs += self.documents_per_shard
                         
                         if max_shards and shard_id >= max_shards:
                             break
@@ -281,13 +292,19 @@ class TokenShardGenerator:
             if max_shards and shard_id >= max_shards:
                 break
         
-        # Flush remaining
+        # Flush remaining documents - FIX FOR ISSUE #5: This was being skipped!
+        if current_batch_docs:
+            tokenized, dropped = self._process_batch(current_batch_docs)
+            current_batch_tokens.extend(tokenized)
+            total_docs += len(tokenized)
+            total_dropped += dropped
+        
         if current_batch_tokens and (not max_shards or shard_id < max_shards):
             if current_batch_tokens:
                 shard_path = self._flush_shard(shard_id, current_batch_tokens)
                 if shard_path:
                     shard_paths.append(shard_path)
-                total_docs += len(current_batch_tokens)
+            total_docs += len(current_batch_tokens)
         
         print(f"\nGeneration complete!")
         print(f"  Shards written: {len(shard_paths)}")
@@ -369,27 +386,48 @@ def load_token_shard(shard_path: str) -> np.ndarray:
     """
     Load a token shard from binary file.
     
+    Supports both formats:
+    1. OLD FORMAT: Has header (num_documents, context_length) as int64
+    2. NEW FORMAT: Direct packed token stream (1D array)
+    
     Args:
         shard_path: Path to .bin file
         
     Returns:
-        Array of shape (num_documents, context_length)
+        Either (num_docs, context_length) array or 1D packed token array
     """
     import mmap
     
     with open(shard_path, "rb") as f:
-        # Read header: (num_documents, context_length) as int64
-        header = f.read(16)
-        num_docs = int.from_bytes(header[0:8], byteorder="little")
-        context_len = int.from_bytes(header[8:16], byteorder="little")
+        # Check file size - if small, likely old format with header
+        f.seek(0, 2)  # Seek to end
+        file_size = f.tell()
+        f.seek(0)  # Reset
         
-        # Read data using mmap for large files or direct read for small ones
-        f.seek(16)
-        total_bytes = num_docs * context_len * 2  # uint16 = 2 bytes
-        data = f.read(total_bytes)
+        if file_size > 100:  # Heuristic: likely has header
+            try:
+                header = f.read(16)
+                num_docs = int.from_bytes(header[0:8], byteorder="little")
+                context_len = int.from_bytes(header[8:16], byteorder="little")
+                
+                # Verify this looks like valid old-format data
+                expected_data_size = num_docs * context_len * 2
+                if num_docs > 0 and context_len > 0 and expected_data_size < file_size - 16:
+                    # This looks like old format
+                    f.seek(16)
+                    total_bytes = min(expected_data_size, file_size - 16)
+                    data = f.read(total_bytes)
+                    
+                    arr = np.frombuffer(data, dtype=np.uint16)
+                    return arr.reshape(num_docs, context_len)
+            except:
+                pass
         
+        # New format: packed token stream (1D array)
+        f.seek(0)
+        data = f.read()
         arr = np.frombuffer(data, dtype=np.uint16)
-        return arr.reshape(num_docs, context_len)
+        return arr
 
 
 def create_minibatch(
@@ -401,14 +439,47 @@ def create_minibatch(
     """
     Create a random minibatch from shard data.
     
+    This function works with two types of shard data:
+    1. OLD FORMAT (num_docs, context_length): Fixed-length rectangular documents
+    2. NEW FORMAT (packed token stream): 1D array of contiguous tokens with EOS separators
+    
+    For packed data, documents are D_1, EOS, D_2, EOS, ... stored in a flat array.
+    Training samples extract T+1 consecutive tokens where:
+        inputs = tokens[start:start+T]
+        targets = tokens[start+1:start+T+1]
+    
     Args:
-        shard_data: Array of shape (num_docs, context_length)
+        shard_data: Either (num_docs, context_length) or 1D packed token stream
         batch_size: Number of sequences per batch
-        seq_length: Length of each sequence (defaults to full context)
+        seq_length: Length of each sequence T (defaults to full context for old format)
         rng: Random generator for reproducibility (uses global by default)
         
     Returns:
         Tuple of (inputs, targets) where targets are shifted by 1 position
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    
+    # Detect format: old (2D) or new (1D packed)
+    if shard_data.ndim == 1:
+        # NEW FORMAT: Packed token stream
+        return _create_minibatch_packed(shard_data, batch_size, seq_length, rng)
+    else:
+        # OLD FORMAT: Rectangular documents with padding
+        return _create_minibatch_old(shard_data, batch_size, seq_length, rng)
+
+
+def _create_minibatch_old(
+    shard_data: np.ndarray,
+    batch_size: int,
+    seq_length: Optional[int] = None,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Create minibatch from old rectangular format (num_docs, context_length).
+    
+    Note: This format truncates long documents and pads short ones.
+    New code should use packed format instead.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -444,6 +515,65 @@ def create_minibatch(
     # Flatten shard_data and gather
     flat_data = shard_data.ravel()
     all_tokens = flat_data[indices]
+    
+    # Split into inputs and targets
+    inputs = all_tokens[:, :-1]  # shape (batch_size, seq_length)
+    targets = all_tokens[:, 1:]  # shape (batch_size, seq_length)
+    
+    return inputs, targets
+
+
+def _create_minibatch_packed(
+    packed_tokens: np.ndarray,
+    batch_size: int,
+    seq_length: Optional[int] = None,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Create minibatch from packed token stream format.
+    
+    Documents are stored as: D_1, EOS, D_2, EOS, D_3, EOS, ...
+    Training samples draw T+1 consecutive tokens from anywhere in the stream.
+    
+    Args:
+        packed_tokens: 1D array of contiguous token IDs with EOS separators
+        batch_size: Number of sequences per batch
+        seq_length: Length of each sequence T
+        rng: Random generator for reproducibility
+        
+    Returns:
+        Tuple of (inputs, targets) where inputs.shape == targets.shape == (batch_size, T)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    
+    if seq_length is None:
+        raise ValueError("seq_length must be specified for packed token format")
+    
+    # For packed format, we can sample from anywhere in the stream
+    # We need seq_length + 1 consecutive tokens
+    total_tokens = len(packed_tokens)
+    required_length = seq_length + 1
+    
+    if total_tokens < required_length:
+        raise ValueError(
+            f"Packed token stream has {total_tokens} tokens, "
+            f"but need {required_length} for seq_length={seq_length}"
+        )
+    
+    # Sample random starting positions
+    max_start = total_tokens - required_length
+    start_positions = rng.integers(0, max_start + 1, batch_size)
+    
+    # Create offsets [0, 1, ..., seq_length]
+    offsets = np.arange(required_length)
+    
+    # Compute indices for each position in the sequence
+    # indices has shape (batch_size, required_length)
+    indices = start_positions[:, None] + offsets[None, :]
+    
+    # Gather tokens
+    all_tokens = packed_tokens[indices]
     
     # Split into inputs and targets
     inputs = all_tokens[:, :-1]  # shape (batch_size, seq_length)

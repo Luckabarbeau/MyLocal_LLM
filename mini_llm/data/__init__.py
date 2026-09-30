@@ -1,6 +1,13 @@
 """Data pipeline modules for Cosmopedia-v2 dataset."""
 
 from mini_llm.data.parquet_reader import CosmopediaParquetReader
+from mini_llm.data.packed_dataset import (
+    PackedTokenDataset,
+    PackedDatasetGenerator,
+    DatasetManifest,
+    load_packed_dataset,
+    verify_manifest,
+)
 from mini_llm.data.token_shards import (
     TokenShardGenerator,
     TokenShardWriter,
@@ -11,6 +18,11 @@ from mini_llm.data.token_shards import (
 
 __all__ = [
     "CosmopediaParquetReader",
+    "PackedTokenDataset",
+    "PackedDatasetGenerator",
+    "DatasetManifest",
+    "load_packed_dataset",
+    "verify_manifest",
     "TokenShardGenerator",
     "TokenShardWriter",
     "generate_token_shards",

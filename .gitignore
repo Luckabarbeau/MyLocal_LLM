@@ -77,3 +77,12 @@ FILE_SHA256.json
 /data/
 /output/
 /results/
+
+# Checkpoints and model weights
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Token shards (generated data)
+token_shards/

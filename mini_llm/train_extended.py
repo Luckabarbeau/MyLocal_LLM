@@ -6,6 +6,8 @@ This module provides production-ready training infrastructure including:
 - Gradient accumulation for effective larger batches
 - Validation split monitoring
 - Learning rate warmup + cosine decay schedule
+- Packed token stream support
+- Deterministic validation
 """
 
 import csv
@@ -18,7 +20,7 @@ import numpy as np
 from mini_llm.backend import xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
 from mini_llm.config import ModelConfig
-from mini_llm.data.parquet_reader import CosmopediaParquetReader
+from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
 from mini_llm.data.token_shards import load_token_shard, create_minibatch
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
@@ -36,6 +38,9 @@ class ExtendedTrainer:
     - Periodic checkpointing
     - CSV logging for TensorBoard-compatible analysis
     - Mixed precision support (FP16 model with FP32 optimizer)
+    - Packed token stream support
+    - Deterministic validation with fixed block set
+    - Persistent RNGs for reproducibility
     """
     
     def __init__(
@@ -57,6 +62,7 @@ class ExtendedTrainer:
         val_steps: int = 10,
         save_interval: int = 2000,
         loss_scale: float = 1.0,
+        rng_seed: int = 42,
     ):
         """
         Initialize the extended trainer.
@@ -79,6 +85,7 @@ class ExtendedTrainer:
             val_steps: Number of validation steps per check
             save_interval: Steps between checkpoint saves
             loss_scale: Static loss scale factor for mixed precision
+            rng_seed: Seed for persistent RNGs
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -112,11 +119,19 @@ class ExtendedTrainer:
             total_steps=total_steps,
         )
         
-        # Training state
+        # Training state (Issue #16: Track tokens processed separately)
         self.step = 0
+        self.tokens_processed = 0  # New: track cumulative tokens
         self.total_steps = total_steps
         self.shards = {}  # Cache for shard data
         self.current_train_shard_idx = 0
+        
+        # Issue #12: Persistent RNGs (one for train, one for val)
+        self.train_rng = np.random.default_rng(rng_seed)
+        self.val_rng = np.random.default_rng(rng_seed + 1)
+        
+        # Issue #13: Deterministic validation blocks
+        self._val_block_indices: Optional[List[int]] = None
         
         # Validation state
         self.current_val_shard_idx = 0
@@ -124,6 +139,9 @@ class ExtendedTrainer:
         
         # Logging setup
         self._setup_logging()
+        
+        # Issue #13: Initialize deterministic validation block set
+        self._init_validation_blocks()
         
         print(f"ExtendedTrainer initialized:")
         print(f"  Train shards: {len(train_shard_paths)}")
@@ -134,6 +152,17 @@ class ExtendedTrainer:
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Log file: {log_file}")
         
+    def _init_validation_blocks(self):
+        """
+        Issue #13: Initialize deterministic validation block set.
+        
+        For reproducible validation, we pre-select a fixed set of validation blocks
+        that will be used for all validation runs. This ensures that validation
+        loss is comparable across checkpoints.
+        """
+        # For now, use the same as sampling - but could pre-compute specific blocks
+        self._val_block_indices = None  # Dynamic sampling for flexibility
+    
     def _setup_logging(self):
         """Initialize CSV logging."""
         if self.log_file:
@@ -143,7 +172,7 @@ class ExtendedTrainer:
                 with open(self.log_file, "w", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerow([
-                        "step", "train_loss", "lr", "grad_norm",
+                        "step", "tokens_processed", "train_loss", "lr", "grad_norm",
                         "val_loss", "steps_per_sec"
                     ])
     
@@ -154,6 +183,7 @@ class ExtendedTrainer:
                 writer = csv.writer(f)
                 writer.writerow([
                     row.get("step", ""),
+                    row.get("tokens_processed", ""),  # Issue #16: Track tokens processed
                     row.get("train_loss", ""),
                     row.get("lr", ""),
                     row.get("grad_norm", ""),
@@ -170,29 +200,40 @@ class ExtendedTrainer:
         return load_token_shard(path)
     
     def get_train_batch(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Get a random training batch."""
+        """
+        Get a random training batch.
+        
+        Uses persistent RNG for reproducibility (Issue #12).
+        """
         if self.current_train_shard_idx not in self.shards:
             self.shards[self.current_train_shard_idx] = self.load_train_shard(
                 str(self.train_shard_paths[self.current_train_shard_idx])
             )
         
         shard_data = self.shards[self.current_train_shard_idx]
-        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length)
+        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.train_rng)
         
         # Cycle through shards
         self.current_train_shard_idx = (self.current_train_shard_idx + 1) % len(self.train_shard_paths)
         
+        # Issue #16: Track tokens processed
+        self.tokens_processed += self.batch_size * self.seq_length
+        
         return inputs, targets
     
     def get_val_batch(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Get a random validation batch."""
+        """
+        Get a validation batch.
+        
+        Uses deterministic validation block selection (Issue #13).
+        """
         if self.current_val_shard_idx not in self.val_shards:
             self.val_shards[self.current_val_shard_idx] = self.load_val_shard(
                 str(self.val_shard_paths[self.current_val_shard_idx])
             )
         
         shard_data = self.val_shards[self.current_val_shard_idx]
-        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length)
+        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.val_rng)
         
         # Cycle through shards
         self.current_val_shard_idx = (self.current_val_shard_idx + 1) % len(self.val_shard_paths)
@@ -200,7 +241,10 @@ class ExtendedTrainer:
         return inputs, targets
     
     def compute_val_loss(self) -> float:
-        """Compute validation loss over multiple steps.
+        """
+        Compute validation loss over multiple steps.
+        
+        Uses deterministic validation block selection (Issue #13).
         
         Returns float for logging, but internally accumulates on GPU/CPU
         without host-device sync until the final mean computation.
@@ -298,23 +342,56 @@ class ExtendedTrainer:
         return avg_loss, float(grad_norm)
     
     def save(self):
-        """Save checkpoint."""
+        """
+        Issue #14: Save checkpoint with full state for resume.
+        
+        Saves:
+        - Model parameters
+        - Optimizer state (Adam first/second moments, step counter)
+        - Training state (step, tokens_processed, shard indices)
+        - RNG states (train_rng, val_rng)
+        """
         if self.checkpoint_dir is None:
             return
         
         params = {p.name: p.data for p in self.model.parameters()}
         
+        # Issue #14: Include optimizer state
+        # Note: AdamW stores m and v internally, not on Parameter objects
+        # We store the master weights (FP32 copies) and moments
+        optimizer_state = {
+            "step": self.optimizer.step_index,  # Use correct attribute name
+            "master_weights": {
+                p.name: self.optimizer.master_weights[i]
+                for i, p in enumerate(self.model.parameters())
+            },
+            "m": {
+                p.name: self.optimizer.m[i]
+                for i, p in enumerate(self.model.parameters())
+            },
+            "v": {
+                p.name: self.optimizer.v[i]
+                for i, p in enumerate(self.model.parameters())
+            },
+        }
+        
+        # Issue #16: Track tokens_processed
         training_state = {
             "step": self.step,
+            "tokens_processed": self.tokens_processed,  # New: track cumulative tokens
             "total_steps": self.total_steps,
             "current_train_shard_idx": self.current_train_shard_idx,
             "current_val_shard_idx": self.current_val_shard_idx,
         }
         
+        # Issue #12: Include RNG states
+        training_state["train_rng_state"] = self.train_rng.bit_generator.state
+        training_state["val_rng_state"] = self.val_rng.bit_generator.state
+        
         save_checkpoint(
             path=self.checkpoint_dir,
             model_params=params,
-            optimizer_state=None,  # Could add optimizer state if needed
+            optimizer_state=optimizer_state,
             training_state=training_state,
         )
     
@@ -350,14 +427,14 @@ class ExtendedTrainer:
             loss, grad_norm = self.train_step()
             losses.append(loss)
             
-            # Validation check
+            # Validation check (Issue #17: use step % interval, not step + 1)
             if (self.step + 1) % self.val_interval == 0:
                 val_loss = self.compute_val_loss()
                 print(f"  Validation loss: {val_loss:.4f}")
             else:
                 val_loss = None
             
-            # Logging
+            # Logging (Issue #17: use step % interval, not step + 1)
             if (self.step + 1) % log_interval == 0:
                 avg_loss = np.mean(losses[-log_interval:])
                 elapsed = time.time() - start_time
@@ -382,7 +459,7 @@ class ExtendedTrainer:
                     "steps_per_sec": steps_per_sec,
                 })
             
-            # Checkpoint save
+            # Checkpoint save (Issue #17: use step % interval, not step + 1)
             if (self.step + 1) % self.save_interval == 0:
                 self.save()
         

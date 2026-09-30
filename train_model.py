@@ -51,7 +51,7 @@ def parse_args():
     # Model selection
     parser.add_argument(
         "--model",
-        choices=["mini", "small", "medium"],
+        choices=["micro", "mini", "small", "medium"],
         default="mini",
         help="Model size configuration",
     )
@@ -329,7 +329,9 @@ def main():
             config = ModelConfig(**config_dict)
         else:
             # Use args.model config
-            if args.model == "mini":
+            if args.model == "micro":
+                config = ModelConfig.micro_debug()
+            elif args.model == "mini":
                 config = ModelConfig.mini()
             elif args.model == "small":
                 config = ModelConfig.small()
@@ -344,7 +346,7 @@ def main():
         # Load checkpoint
         from mini_llm.checkpoint import load_checkpoint
         param_names = [p.name for p in model.parameters()]
-        loaded_params, _, training_state = load_checkpoint(
+        loaded_params, optimizer_state, training_state = load_checkpoint(
             checkpoint_path,
             param_names=param_names,
         )
@@ -354,11 +356,38 @@ def main():
             if p.name in loaded_params:
                 p.data[...] = loaded_params[p.name]
         
+        # Issue #14: Restore optimizer state
+        if optimizer_state is not None and "m" in optimizer_state:
+            for p in model.parameters():
+                if p.name in optimizer_state.get("m", {}):
+                    p.m[...] = optimizer_state["m"][p.name]
+                if p.name in optimizer_state.get("v", {}):
+                    p.v[...] = optimizer_state["v"][p.name]
+        
         start_step = training_state.get("step", 0) if training_state else 0
+        
+        # Issue #16: Restore tokens_processed
+        if training_state and "tokens_processed" in training_state:
+            tokens_processed = training_state["tokens_processed"]
+        else:
+            tokens_processed = start_step * args.batch_size * args.context_length
+        
+        # Issue #12: Restore RNG states
+        if training_state and "train_rng_state" in training_state:
+            # Note: xp is imported at module level
+            # Note: We'll restore this after creating the trainer
+            rng_states = {
+                "train": training_state["train_rng_state"],
+                "val": training_state["val_rng_state"],
+            }
+        else:
+            rng_states = None
         
     else:
         # Create new model
-        if args.model == "mini":
+        if args.model == "micro":
+            config = ModelConfig.micro_debug()
+        elif args.model == "mini":
             config = ModelConfig.mini()
         elif args.model == "small":
             config = ModelConfig.small()
@@ -424,8 +453,14 @@ def main():
         loss_scale=1.0,  # Can increase for mixed precision
     )
     
-    # Resume training state if applicable
+    # Issue #12 & #14: Restore trainer state including RNGs and tokens_processed
     trainer.step = start_step
+    trainer.tokens_processed = tokens_processed
+    
+    # Issue #12: Restore RNG states after trainer creation
+    if rng_states is not None:
+        trainer.train_rng.bit_generator.state = rng_states["train"]
+        trainer.val_rng.bit_generator.state = rng_states["val"]
     
     print()
     print("=" * 60)

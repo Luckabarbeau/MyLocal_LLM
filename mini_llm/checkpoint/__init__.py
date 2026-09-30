@@ -48,16 +48,19 @@ def save_checkpoint(
     
     # Save optimizer state if provided (convert CuPy to NumPy if needed)
     if optimizer_state is not None:
-        # Convert any CuPy arrays in optimizer state to NumPy
+        # Convert any CuPy/NumPy arrays in optimizer state to Python lists/floats
         opt_state_np = {}
         for key, value in optimizer_state.items():
             if isinstance(value, dict):
-                opt_state_np[key] = {
-                    k: _convert_to_numpy(v) if hasattr(v, '__array__') else v
-                    for k, v in value.items()
-                }
+                opt_state_np[key] = {}
+                for k, v in value.items():
+                    if hasattr(v, '__array__'):
+                        # Convert numpy/cupy array to list for JSON
+                        opt_state_np[key][k] = _convert_to_numpy(v).tolist()
+                    else:
+                        opt_state_np[key][k] = v
             elif hasattr(value, '__array__'):
-                opt_state_np[key] = _convert_to_numpy(value)
+                opt_state_np[key] = _convert_to_numpy(value).tolist()
             else:
                 opt_state_np[key] = value
         with open(path / "optimizer_state.json", "w") as f:

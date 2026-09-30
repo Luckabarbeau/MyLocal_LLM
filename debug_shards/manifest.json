@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0",
+  "tokenizer_hash": "debug_hash",
+  "vocab_size": 256,
+  "token_dtype": "uint16",
+  "eos_token_id": 1,
+  "total_train_tokens": 442,
+  "total_val_tokens": 0,
+  "train_document_count": 50,
+  "val_document_count": 0,
+  "train_shard_count": 1,
+  "val_shard_count": 0,
+  "source_dataset_name": "synthetic_debug",
+  "preprocessing_seed": 42,
+  "context_length": 512,
+  "created_at": null
+}

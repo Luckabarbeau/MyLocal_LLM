@@ -117,7 +117,7 @@ class ModelConfig:
     def medium(cls):
         """Medium model: ~120M params."""
         return cls(
-            tokenizer_vocab_size=8192,
+            tokenizer_vocab_size=8192*2,
             context_length=512,
             n_layers=8,
             d_model=512,

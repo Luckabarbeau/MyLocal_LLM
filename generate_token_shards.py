@@ -192,8 +192,9 @@ def generate_token_shards(
             # Calculate optimal batch size for reducing IPC overhead
             # Target: each worker gets ~4-8 batches total
             # For fast tokenization, use larger batches to amortize IPC overhead
-            target_batches = num_workers * 2  # Fewer, larger batches
-            batch_size = max(128, documents_in_shard // target_batches)
+            # But cap at reasonable max to avoid memory issues
+            target_batches = num_workers * 4  # More batches for better load balancing
+            batch_size = max(128, min(8192, documents_in_shard // target_batches))
             
             doc_indices = list(range(documents_in_shard))
             batches = []

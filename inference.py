@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +41,7 @@ from mini_llm.backend import xp
 from mini_llm.checkpoint import load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
-from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
+from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 
 
 def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -115,7 +116,7 @@ class TextGenerator:
     def __init__(
         self,
         model: DecoderLanguageModel,
-        tokenizer: SimpleBPETokenizer,
+        tokenizer: "SimpleBPETokenizer | FastBPETokenizer",
         max_context: int = 512,
     ):
         """
@@ -123,12 +124,31 @@ class TextGenerator:
         
         Args:
             model: Trained DecoderLanguageModel
-            tokenizer: Tokenizer for encoding/decoding
+            tokenizer: Tokenizer for encoding/decoding (SimpleBPETokenizer or FastBPETokenizer)
             max_context: Maximum context length
         """
         self.model = model
         self.tokenizer = tokenizer
         self.max_context = max_context
+    
+    def _get_eos_id(self) -> int:
+        """Get EOS token ID from either tokenizer type."""
+        # Try SimpleBPETokenizer format first
+        if hasattr(self.tokenizer, 'token_to_id'):
+            return self.tokenizer.token_to_id.get(self.tokenizer.eos_token, 0)
+        # FastBPETokenizer uses _tokenizer with HF API
+        elif hasattr(self.tokenizer, '_tokenizer'):
+            try:
+                tokenizer_impl = self.tokenizer._tokenizer
+                if tokenizer_impl is not None:
+                    vocab = tokenizer_impl.get_vocab()
+                    for token, id_ in vocab.items():
+                        if token == self.tokenizer.eos_token:
+                            return id_
+            except Exception:
+                pass
+        # Fallback to special token IDs
+        return 1  # DEFAULT_EOS_TOKEN_ID
         
     def generate(
         self,
@@ -136,10 +156,11 @@ class TextGenerator:
         max_new_tokens: int = 50,
         strategy: str = "greedy",
         temperature: float = 1.0,
-        top_k: int = None,
-        top_p: float = None,
-        seed: int = None,
-    ) -> str:
+        top_k: int | None = None,
+        top_p: float | None = None,
+        seed: int | None = None,
+        log_speed: bool = False,
+    ) -> tuple[str, dict]:
         """
         Generate text from prompt.
         
@@ -151,10 +172,14 @@ class TextGenerator:
             top_k: Top-k parameter (used if strategy == 'top-k')
             top_p: Top-p parameter (used if strategy == 'top-p')
             seed: Random seed for reproducibility
+            log_speed: If True, return timing information
             
         Returns:
-            Generated text (prompt + completion)
+            Tuple of (generated_text, timing_info)
+            timing_info contains: tokens_per_sec, total_tokens, generation_time_s
         """
+        timing = {}
+        
         if seed is not None:
             np.random.seed(seed)
             xp.random.seed(seed)
@@ -169,18 +194,31 @@ class TextGenerator:
         # Generate tokens
         generated_ids = list(input_ids)
         
+        # Start timing
+        if log_speed:
+            total_start_time = time.time()
+            forward_times = []
+            other_times = []  # Time for sampling, decoding, etc.
+        
         for _ in range(max_new_tokens):
             # Prepare input (last max_context tokens)
             context = generated_ids[-self.max_context:]
             input_tensor = np.array([context], dtype=np.uint16)
             
-            # Forward pass
+            # Forward pass with timing
+            if log_speed:
+                forward_start = time.time()
             logits, _ = self.model.forward(input_tensor)
+            if log_speed:
+                forward_end = time.time()
+                forward_times.append(forward_end - forward_start)
             
             # Get logits for last position
             last_logits = logits[0, -1, :]
             
-            # Sample next token
+            # Sample next token (time this separately)
+            if log_speed:
+                sample_start = time.time()
             if strategy == "greedy":
                 next_id = greedy_decode(last_logits)
             elif strategy == "temperature":
@@ -191,17 +229,45 @@ class TextGenerator:
                 next_id = top_p_sample(last_logits, top_p, temperature)
             else:
                 raise ValueError(f"Unknown strategy: {strategy}")
+            if log_speed:
+                sample_end = time.time()
+                other_times.append(sample_end - sample_start)
             
             generated_ids.append(next_id)
             
             # Stop at EOS
-            if next_id == self.tokenizer.token_to_id.get(self.tokenizer.eos_token, 0):
+            eos_id = self._get_eos_id()
+            if next_id == eos_id:
                 break
         
-        # Decode to text
+        # Decode to text (just the new tokens)
         output_text = self.tokenizer.decode(generated_ids[len(input_ids):])
         
-        return output_text
+        # Calculate timing info
+        if log_speed:
+            total_time = time.time() - total_start_time
+            new_tokens = len(generated_ids) - len(input_ids)
+            
+            # Calculate separate metrics
+            total_forward_time = sum(forward_times) if forward_times else 0
+            total_other_time = sum(other_times) if other_times else 0
+            avg_forward_time = total_forward_time / len(forward_times) if forward_times else 0
+            avg_other_time = total_other_time / len(other_times) if other_times else 0
+            
+            timing = {
+                "tokens_per_sec": new_tokens / total_time if total_time > 0 else 0,
+                "total_tokens": new_tokens,
+                "total_time_s": total_time,
+                "forward_times": forward_times,
+                "other_times": other_times,
+                # Aggregate metrics
+                "total_forward_time_s": total_forward_time,
+                "total_other_time_s": total_other_time,
+                "avg_forward_time_s": avg_forward_time,
+                "avg_other_time_s": avg_other_time,
+            }
+        
+        return output_text, timing
 
 
 def main():
@@ -255,6 +321,17 @@ def main():
         default=None,
         help="Random seed",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactive mode - keep model loaded for multiple prompts",
+    )
+    parser.add_argument(
+        "--max-history",
+        type=int,
+        default=128,
+        help="Maximum tokens to keep in context for interactive mode (default: 128)",
+    )
     
     args = parser.parse_args()
     
@@ -280,53 +357,144 @@ def main():
     if not tokenizer_path.exists():
         raise FileNotFoundError(f"Tokenizer not found: {tokenizer_path}")
     
-    tokenizer = SimpleBPETokenizer.load(str(tokenizer_path))
+    # Detect tokenizer format by reading the file
+    with open(tokenizer_path) as f:
+        tokenizer_config = json.load(f)
+    
+    # Check if it's in SimpleBPETokenizer format (has vocab_size, token_to_id fields)
+    # vs HuggingFace format (has version, model.type fields)
+    is_simple_format = "vocab_size" in tokenizer_config and "token_to_id" in tokenizer_config
+    
+    if is_simple_format:
+        tokenizer = SimpleBPETokenizer.load(str(tokenizer_path))
+    else:
+        # Use FastBPETokenizer for HuggingFace format
+        tokenizer = FastBPETokenizer.load(str(tokenizer_path))
+    
     print(f"Loaded tokenizer: {len(tokenizer)} tokens")
     
-    # Load model
+    # Load model with timing
+    import time as time_mod
+    load_start = time_mod.time()
+    
     model = DecoderLanguageModel(config, rng_seed=42, dtype="float16")
     
-    # Load checkpoint
+    # Load checkpoint (skip optimizer state for inference - it's 12GB and not needed)
     param_names = [p.name for p in model.parameters()]
-    loaded_params, _, _ = load_checkpoint(checkpoint_path, param_names=param_names)
+    loaded_params, _, _ = load_checkpoint(checkpoint_path, param_names=param_names, skip_optimizer=True)
     
     # Apply loaded parameters
     for p in model.parameters():
         if p.name in loaded_params:
             p.data[...] = loaded_params[p.name]
     
+    load_time = time_mod.time() - load_start
     print(f"Loaded {len(loaded_params)} parameter arrays")
+    print(f"Model loading time: {load_time:.3f}s")
     
     # Create generator
     generator = TextGenerator(model, tokenizer, max_context=config.context_length)
     
-    # Generate text
-    print()
-    print("=" * 60)
-    print("Text Generation")
-    print("=" * 60)
-    print(f"Prompt: {args.prompt}")
-    print(f"Strategy: {args.strategy}")
-    if args.strategy in ["temperature", "top-k", "top-p"]:
-        print(f"Temperature: {args.temperature}")
-    if args.strategy == "top-k":
-        print(f"Top-k: {args.top_k}")
-    if args.strategy == "top-p":
-        print(f"Top-p: {args.top_p}")
-    print()
+    if args.interactive:
+        # Interactive mode - keep model loaded for multiple prompts
+        print()
+        print("=" * 60)
+        print("Interactive Mode")
+        print("=" * 60)
+        print("Enter prompts. Type 'quit' or 'exit' to stop.")
+        print(f"Max new tokens per generation: {args.max_new_tokens}")
+        print(f"Strategy: {args.strategy}")
+        if args.strategy in ["temperature", "top-k", "top-p"]:
+            print(f"Temperature: {args.temperature}")
+        if args.strategy == "top-k":
+            print(f"Top-k: {args.top_k}")
+        if args.strategy == "top-p":
+            print(f"Top-p: {args.top_p}")
+        print()
+        
+        # Keep context for interactive mode
+        full_sequence_ids = []  # Track full sequence across turns
+        
+        while True:
+            try:
+                user_input = input("\nPrompt: ").strip()
+                if not user_input:
+                    continue
+                if user_input.lower() in ["quit", "exit", "q"]:
+                    print("Exiting interactive mode.")
+                    break
+                
+                # Generate response (the generator handles context internally)
+                output_text, timing = generator.generate(
+                    prompt=user_input,
+                    max_new_tokens=args.max_new_tokens,
+                    strategy=args.strategy,
+                    temperature=args.temperature,
+                    top_k=args.top_k,
+                    top_p=args.top_p,
+                    seed=args.seed,
+                    log_speed=True,
+                )
+                
+                print(f"\nResponse: {output_text}")
+                
+                # Calculate forward-only time
+                total_forward_time = timing.get('total_forward_time_s', 0)
+                total_other_time = timing.get('total_other_time_s', 0)
+                
+                # Log timing
+                print(f"\n--- Prompt Timing ---")
+                print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
+                print(f"Model Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
+                print(f"Other operations:   {total_other_time:.3f}s")
+                
+            except KeyboardInterrupt:
+                print("\nInterrupted.")
+                break
+            except EOFError:
+                print("\nEOF reached.")
+                break
+    else:
+        # Single generation mode
+        print()
+        print("=" * 60)
+        print("Text Generation")
+        print("=" * 60)
+        print(f"Prompt: {args.prompt}")
+        print(f"Strategy: {args.strategy}")
+        if args.strategy in ["temperature", "top-k", "top-p"]:
+            print(f"Temperature: {args.temperature}")
+        if args.strategy == "top-k":
+            print(f"Top-k: {args.top_k}")
+        if args.strategy == "top-p":
+            print(f"Top-p: {args.top_p}")
+        print()
+        
+        prompt_start = time_mod.time()
+        output, timing = generator.generate(
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
+            strategy=args.strategy,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            seed=args.seed,
+            log_speed=True,
+        )
+        prompt_time = time_mod.time() - prompt_start
     
-    output = generator.generate(
-        prompt=args.prompt,
-        max_new_tokens=args.max_new_tokens,
-        strategy=args.strategy,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        seed=args.seed,
-    )
-    
-    print(f"Generated: {output}")
-    print("=" * 60)
+        print(f"Generated: {output}")
+        # Calculate forward-only time (model inference)
+        total_forward_time = timing.get('total_forward_time_s', 0)
+        total_other_time = timing.get('total_other_time_s', 0)
+        
+        print(f"\n--- Timing ---")
+        print(f"Model loading: {load_time:.3f}s")
+        print(f"Prompt processing: {prompt_time:.3f}s")
+        print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
+        print(f"\nModel Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
+        print(f"Other operations:   {total_other_time:.3f}s")
+        print("=" * 60)
 
 
 if __name__ == "__main__":

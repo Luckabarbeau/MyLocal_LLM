@@ -77,6 +77,8 @@ def save_checkpoint(
 def load_checkpoint(
     path: Union[str, Path],
     param_names: Optional[List[str]] = None,
+    skip_optimizer: bool = False,
+    skip_training: bool = False,
 ) -> Tuple[Dict[str, np.ndarray], Optional[Dict], Optional[Dict]]:
     """
     Load model, optimizer, and training state from disk.
@@ -84,6 +86,8 @@ def load_checkpoint(
     Args:
         path: Directory containing checkpoint
         param_names: Optional list of specific parameter names to load
+        skip_optimizer: If True, skip loading optimizer state (useful for inference)
+        skip_training: If True, skip loading training state
         
     Returns:
         Tuple of (model_params, optimizer_state, training_state)
@@ -97,28 +101,28 @@ def load_checkpoint(
     for npy_file in params_path.glob("*.npy"):
         name = npy_file.stem
         if param_names is None or name in param_names:
-            model_params[name] = np.load(npy_file)
+            arr = np.load(npy_file)
+            # Convert to CuPy array if using CuPy backend
+            if BACKEND_NAME == "cupy":
+                import cupy
+                arr = cupy.asarray(arr)
+            model_params[name] = arr
     
     # Load optimizer state (convert NumPy back to appropriate type if needed)
-    optimizer_path = path / "optimizer_state.json"
     optimizer_state = None
-    if optimizer_path.exists():
-        with open(optimizer_path, "r") as f:
-            optimizer_state = json.load(f)
-    
-    # Load optimizer state
-    optimizer_path = path / "optimizer_state.json"
-    optimizer_state = None
-    if optimizer_path.exists():
-        with open(optimizer_path, "r") as f:
-            optimizer_state = json.load(f)
+    if not skip_optimizer:
+        optimizer_path = path / "optimizer_state.json"
+        if optimizer_path.exists():
+            with open(optimizer_path, "r") as f:
+                optimizer_state = json.load(f)
     
     # Load training state
-    training_path = path / "training_state.json"
     training_state = None
-    if training_path.exists():
-        with open(training_path, "r") as f:
-            training_state = json.load(f)
+    if not skip_training:
+        training_path = path / "training_state.json"
+        if training_path.exists():
+            with open(training_path, "r") as f:
+                training_state = json.load(f)
     
     print(f"Checkpoint loaded from {path}")
     return model_params, optimizer_state, training_state

@@ -27,6 +27,7 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -417,6 +418,8 @@ def main():
         
     else:
         # Create new model
+        shard_dir = Path("./token_shards")
+        
         if args.model == "micro":
             config = ModelConfig.micro_debug()
         elif args.model == "mini":
@@ -425,6 +428,20 @@ def main():
             config = ModelConfig.small()
         else:
             config = ModelConfig.medium()
+        
+        # Load tokenizer to get actual vocab size (if existing shards exist)
+        existing_tokenizer_path = shard_dir / "tokenizer.json"
+        if existing_tokenizer_path.exists():
+            from mini_llm.tokenizer.tokenizer import FastBPETokenizer, SimpleBPETokenizer
+            try:
+                tokenizer = FastBPETokenizer.load(str(existing_tokenizer_path))
+            except Exception:
+                tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
+            
+            # Update config vocab size before creating model
+            import dataclasses
+            config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
+            print(f"Tokenizer vocab size: {len(tokenizer)}")
         
         model = setup_model(config, dtype="float16")
         start_step = 0
@@ -456,8 +473,8 @@ def main():
             val_ratio=args.val_ratio,
         )
         
-        # Update config to match tokenizer vocab size
-        config.tokenizer_vocab_size = tokenizer_vocab_size
+        # Update config vocab size using dataclasses.replace for frozen dataclass
+        config = dataclasses.replace(config, tokenizer_vocab_size=tokenizer_vocab_size)
         print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
     else:
         # Use existing shards
@@ -479,10 +496,10 @@ def main():
             except Exception:
                 tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
             
-            # Update config to match tokenizer vocab size
-            tokenizer_vocab_size = len(tokenizer)
-            config.tokenizer_vocab_size = tokenizer_vocab_size
-            print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
+            # Update config vocab size using dataclasses.replace for frozen dataclass
+            import dataclasses
+            config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
+            print(f"Tokenizer vocab size: {len(tokenizer)}")
     
     # Create trainer
     trainer = ExtendedTrainer(

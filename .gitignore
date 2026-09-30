@@ -86,3 +86,6 @@ checkpoints/
 
 # Token shards (generated data)
 token_shards/
+test_shards_output/
+
+test_full_shards/

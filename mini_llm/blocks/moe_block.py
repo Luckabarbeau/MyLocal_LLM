@@ -118,48 +118,59 @@ class MoE:
         dx = self.experts.backward(dy, experts_cache)
         
         # Backward through router to get router parameter gradients
-        # The gradient for router is the weights (since y = sum_i weight[i] * expert_output[i])
-        # So dL/dweights = expert_output weighted by dy
+        # We need dweights = expert_output weighted by dy
+        # Since we don't cache expert outputs in the sparse implementation,
+        # we recompute them from the caches.
         
+        x = experts_cache["x"]
         weights = experts_cache["weights"]
         expert_indices = experts_cache["expert_indices"]
-        computed_outputs = experts_cache["computed_outputs"]
-        all_caches = experts_cache["all_caches"]
-        
-        batch_size, seq_len, _ = dx.shape
+        batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
+        N = batch_size * seq_len
         
-        # Build all_outputs stack from computed outputs
-        all_outputs_list = []
+        # Flatten for easier indexing
+        x_flat = x.reshape(N, d_model)
+        dy_flat = dy.reshape(N, d_model)
+        weights_flat = weights.reshape(N, k)
+        expert_indices_flat = expert_indices.reshape(N, k)
+        
+        # For each (token, slot) pair, get expert output and compute dweights
+        # dweights[n,i] = dot(dy[n], expert_output[expert_idx[n,i], n])
+        
+        dweights_flat = xp.zeros((N, k))
+        
         for exp_idx in range(self.n_experts):
-            if exp_idx in computed_outputs:
-                all_outputs_list.append(computed_outputs[exp_idx][0])
-            else:
-                all_outputs_list.append(xp.zeros((batch_size, seq_len, dx.shape[-1])))
+            # Find tokens where this expert was selected
+            expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
+            
+            if xp.any(expert_selected):
+                # Get token indices and slot indices
+                flat_mask = expert_selected.flatten()  # [N*k]
+                all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
+                all_slot_indices = xp.tile(xp.arange(k), N)  # [N*k]
+                
+                token_indices = all_token_indices[flat_mask]  # [n_assigned]
+                slot_indices = all_slot_indices[flat_mask]  # [n_assigned]
+                
+                # Gather x for these tokens
+                expert_x = x_flat[token_indices]
+                
+                # Forward through this expert to get outputs
+                expert_out, _ = self.experts.experts[exp_idx].forward(expert_x)
+                
+                # Gather dy and weights
+                expert_dy = dy_flat[token_indices]
+                expert_weights = weights_flat.flatten()[flat_mask]  # [n_assigned]
+                
+                # dweights[n,i] = dot(dy[n], expert_output)
+                # Sum over d_model dimension
+                dweights_for_tokens = xp.sum(expert_dy * expert_out, axis=-1)  # [n_assigned]
+                
+                # Accumulate to dweights_flat
+                xp.add.at(dweights_flat, (token_indices, slot_indices), expert_weights * dweights_for_tokens)
         
-        all_outputs = xp.stack(all_outputs_list, axis=0)
-        
-        # Vectorized computation of dweights using einsum
-        # dweights[b,t,i] = dot(dy[b,t], expert_output[expert_idx[b,t,i], b, t])
-        
-        # all_outputs shape: (n_experts, B, T, d_model)
-        # expert_indices shape: (B, T, k)
-        
-        # Compute expert outputs for selected positions using advanced indexing
-        expert_indices_flat = expert_indices.reshape(-1)  # (BT*k,)
-        batch_seq_idx = xp.arange(batch_size * seq_len)  # (BT,)
-        batch_seq_idx_expanded = xp.repeat(batch_seq_idx, k)  # (BT*k,)
-        
-        batch_idx = batch_seq_idx_expanded // seq_len  # (BT*k,)
-        seq_idx = batch_seq_idx_expanded % seq_len     # (BT*k,)
-        
-        # Get expert outputs: shape (BT*k, d_model)
-        expert_out_flat = all_outputs[expert_indices_flat, batch_idx, seq_idx]
-        expert_out = expert_out_flat.reshape(batch_size, seq_len, k, -1)  # (B, T, k, d_model)
-        
-        # dy shape: (B, T, d_model)
-        # dweights[b,t,i] = dot(dy[b,t], expert_out[b,t,i])
-        dweights = xp.einsum('btd,btkd->btk', dy, expert_out)
+        dweights = dweights_flat.reshape(batch_size, seq_len, k)
         
         # Backward through router
         dx_router = self.router.backward(dweights, router_cache)

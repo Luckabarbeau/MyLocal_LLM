@@ -107,6 +107,34 @@ class TestSimpleBPETokenizer:
             text = "hello world"
             assert tokenizer.encode(text) == loaded.encode(text)
             assert tokenizer.decode(tokenizer.encode(text)) == loaded.decode(loaded.encode(text))
+    
+    def test_save_load_with_pipe_in_text(self):
+        """Test that pipe characters in text don't break save/load."""
+        # Train on text containing pipe characters
+        tokenizer = SimpleBPETokenizer(vocab_size=1000)
+        
+        texts = [
+            "hello | world",
+            "markdown | table",
+            "code | example",
+        ]
+        tokenizer.train(texts)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tokenizer.json"
+            tokenizer.save(str(path))
+            
+            loaded = SimpleBPETokenizer.load(str(path))
+            
+            # Encode/decode should match exactly
+            for text in texts:
+                ids_before = tokenizer.encode(text)
+                ids_after = loaded.encode(text)
+                assert ids_before == ids_after, f"Encoding mismatch for: {text}"
+                
+                decoded_before = tokenizer.decode(ids_before)
+                decoded_after = loaded.decode(ids_after)
+                assert decoded_before == decoded_after, f"Decoding mismatch for: {text}"
 
 
 class TestTokenShardWriter:

@@ -73,7 +73,7 @@ FILE_SHA256.json
 *.rar
 *.7z
 
-# Data files that might be generated
-data/
-output/
-results/
+# Generated data in project root (not mini_llm/data/ which is source)
+/data/
+/output/
+/results/

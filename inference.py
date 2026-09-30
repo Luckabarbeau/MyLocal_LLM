@@ -280,8 +280,7 @@ def main():
     if not tokenizer_path.exists():
         raise FileNotFoundError(f"Tokenizer not found: {tokenizer_path}")
     
-    tokenizer = SimpleBPETokenizer(vocab_size=config.vocab_size)
-    tokenizer.load(str(tokenizer_path))
+    tokenizer = SimpleBPETokenizer.load(str(tokenizer_path))
     print(f"Loaded tokenizer: {len(tokenizer)} tokens")
     
     # Load model

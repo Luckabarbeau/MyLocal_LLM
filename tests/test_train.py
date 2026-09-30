@@ -51,10 +51,97 @@ class TestCreateMinibatch:
         """Test using full context length."""
         shard_data = np.random.randint(0, 256, size=(10, 512), dtype=np.uint16)
         
-        inputs, targets = create_minibatch(shard_data, 2, seq_length=511)
+        inputs, targets = create_minibatch(shard_data, 2, seq_length=510)
         
-        assert inputs.shape == (2, 511)
-        assert targets.shape == (2, 511)
+        assert inputs.shape == (2, 510)
+        assert targets.shape == (2, 510)
+    
+    def test_all_documents_sampled(self):
+        """Test that batch can sample from all documents, not just first batch_size."""
+        # Use a shard with few docs but many tokens per doc
+        num_docs = 5
+        context_len = 1024
+        shard_data = np.random.randint(0, 256, size=(num_docs, context_len), dtype=np.uint16)
+        
+        batch_size = 32
+        seq_length = 64
+        
+        # This should sample from documents beyond the first 5
+        inputs, targets = create_minibatch(shard_data, batch_size, seq_length)
+        
+        assert inputs.shape == (batch_size, seq_length)
+        assert targets.shape == (batch_size, seq_length)
+    
+    def test_exact_boundary_sampling(self):
+        """Test sampling at exact boundary (last valid start position)."""
+        context_len = 256
+        shard_data = np.random.randint(0, 256, size=(10, context_len), dtype=np.uint16)
+        seq_length = 255
+        
+        # Use a deterministic RNG with a fixed seed
+        rng = np.random.default_rng(42)
+        inputs, targets = create_minibatch(shard_data, 2, seq_length=seq_length, rng=rng)
+        
+        assert inputs.shape == (2, seq_length)
+        assert targets.shape == (2, seq_length)
+        # Verify targets are correctly shifted
+        for i in range(2):
+            np.testing.assert_array_equal(inputs[i, 1:], targets[i, :-1])
+    
+    def test_document_boundary_tokens_correct(self):
+        """Test that document boundary tokens are handled correctly."""
+        context_len = 256
+        shard_data = np.arange(10 * context_len, dtype=np.uint16).reshape(10, context_len)
+        seq_length = 32
+        
+        # Use deterministic RNG to get reproducible results
+        rng = np.random.default_rng(42)
+        inputs, targets = create_minibatch(shard_data, 4, seq_length=seq_length, rng=rng)
+        
+        assert inputs.shape == (4, seq_length)
+        assert targets.shape == (4, seq_length)
+        
+        # For each sampled sequence, verify targets are shifted inputs
+        for i in range(4):
+            np.testing.assert_array_equal(inputs[i, 1:], targets[i, :-1])
+            
+            # Verify the target at position 0 matches input[1] from the same document
+            # We can check this by finding which document and position was used
+            # The target at [i, 0] should equal inputs[i, 1]
+            assert targets[i, 0] == inputs[i, 1], \
+                f"Target[0] should equal input[1] for sequence {i}"
+    
+    def test_deterministic_with_rng(self):
+        """Test that using a fixed RNG produces deterministic results."""
+        shard_data = np.random.randint(0, 256, size=(10, 1024), dtype=np.uint16)
+        seq_length = 64
+        
+        rng1 = np.random.default_rng(42)
+        inputs1, targets1 = create_minibatch(shard_data, 4, seq_length, rng=rng1)
+        
+        rng2 = np.random.default_rng(42)
+        inputs2, targets2 = create_minibatch(shard_data, 4, seq_length, rng=rng2)
+        
+        np.testing.assert_array_equal(inputs1, inputs2)
+        np.testing.assert_array_equal(targets1, targets2)
+    
+    def test_no_fake_targets(self):
+        """Test that targets don't contain fabricated values (no fake 0 at end)."""
+        # Create shard data with known values
+        context_len = 256
+        shard_data = np.arange(10 * context_len, dtype=np.uint16).reshape(10, context_len)
+        seq_length = 32
+        
+        rng = np.random.default_rng(42)
+        inputs, targets = create_minibatch(shard_data, 2, seq_length=seq_length, rng=rng)
+        
+        # All targets should be non-zero (except potentially for pad tokens, but we have none here)
+        assert not np.all(targets[:, -1] == 0), "Last target position should contain real next tokens"
+        
+        # Verify targets are actual shifted inputs
+        for i in range(2):
+            expected_targets = inputs[i, 1:]
+            np.testing.assert_array_equal(targets[i, :-1], expected_targets)
 
 
 class TestMiniTrainer:

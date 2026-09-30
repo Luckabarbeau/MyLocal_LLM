@@ -7,6 +7,15 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from mini_llm.backend import xp, BACKEND_NAME, asnumpy
+
+
+def _convert_to_numpy(data):
+    """Convert data to NumPy array, handling CuPy arrays."""
+    if BACKEND_NAME == "cupy":
+        return asnumpy(data)
+    return np.asarray(data)
+
 
 def save_checkpoint(
     path: Union[str, Path],
@@ -17,6 +26,9 @@ def save_checkpoint(
     """
     Save model, optimizer, and training state to disk.
     
+    Handles both NumPy and CuPy arrays correctly by converting to NumPy
+    before saving. This ensures checkpoint compatibility across backends.
+    
     Args:
         path: Directory to save checkpoint
         model_params: Dictionary mapping parameter names to numpy arrays
@@ -26,17 +38,30 @@ def save_checkpoint(
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     
-    # Save model parameters
+    # Save model parameters (convert CuPy to NumPy if needed)
     params_path = path / "model_params"
     params_path.mkdir(exist_ok=True)
     
     for name, data in model_params.items():
-        np.save(params_path / f"{name}.npy", data)
+        data_np = _convert_to_numpy(data)
+        np.save(params_path / f"{name}.npy", data_np)
     
-    # Save optimizer state if provided
+    # Save optimizer state if provided (convert CuPy to NumPy if needed)
     if optimizer_state is not None:
+        # Convert any CuPy arrays in optimizer state to NumPy
+        opt_state_np = {}
+        for key, value in optimizer_state.items():
+            if isinstance(value, dict):
+                opt_state_np[key] = {
+                    k: _convert_to_numpy(v) if hasattr(v, '__array__') else v
+                    for k, v in value.items()
+                }
+            elif hasattr(value, '__array__'):
+                opt_state_np[key] = _convert_to_numpy(value)
+            else:
+                opt_state_np[key] = value
         with open(path / "optimizer_state.json", "w") as f:
-            json.dump(optimizer_state, f, indent=2)
+            json.dump(opt_state_np, f, indent=2)
     
     # Save training state if provided
     if training_state is not None:
@@ -70,6 +95,13 @@ def load_checkpoint(
         name = npy_file.stem
         if param_names is None or name in param_names:
             model_params[name] = np.load(npy_file)
+    
+    # Load optimizer state (convert NumPy back to appropriate type if needed)
+    optimizer_path = path / "optimizer_state.json"
+    optimizer_state = None
+    if optimizer_path.exists():
+        with open(optimizer_path, "r") as f:
+            optimizer_state = json.load(f)
     
     # Load optimizer state
     optimizer_path = path / "optimizer_state.json"

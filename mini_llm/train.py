@@ -50,6 +50,7 @@ def create_minibatch(
     shard_data: np.ndarray,
     batch_size: int,
     seq_length: Optional[int] = None,
+    rng: Optional[np.random.Generator] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Create a random minibatch from shard data.
@@ -58,38 +59,14 @@ def create_minibatch(
         shard_data: Array of shape (num_docs, context_length)
         batch_size: Number of sequences per batch
         seq_length: Length of each sequence (defaults to full context)
+        rng: Random generator for reproducibility (uses global by default)
         
     Returns:
         Tuple of (inputs, targets) where targets are shifted by 1 position
     """
-    if seq_length is None:
-        seq_length = shard_data.shape[1]
-    
-    num_docs, context_len = shard_data.shape
-    
-    # Ensure we can sample valid sequences
-    max_start = context_len - seq_length
-    if max_start <= 0:
-        raise ValueError(
-            f"context_len ({context_len}) must be > seq_length ({seq_length})."
-        )
-    
-    # Sample random starting positions
-    start_pos = np.random.randint(0, max_start, batch_size)
-    
-    # Extract sequences
-    indices = np.arange(seq_length)
-    inputs = np.zeros((batch_size, seq_length), dtype=np.uint16)
-    
-    for i, pos in enumerate(start_pos):
-        inputs[i] = shard_data[i % num_docs, pos : pos + seq_length]
-    
-    # Targets are shifted by 1
-    targets = np.zeros_like(inputs)
-    targets[:, :-1] = inputs[:, 1:]
-    targets[:, -1] = 0  # No target for last position
-    
-    return inputs, targets
+    # Defer to the canonical implementation in token_shards
+    from mini_llm.data.token_shards import create_minibatch as canonical_create_minibatch
+    return canonical_create_minibatch(shard_data, batch_size, seq_length, rng)
 
 
 class MiniTrainer:

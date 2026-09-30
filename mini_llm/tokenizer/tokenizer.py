@@ -250,8 +250,9 @@ class SimpleBPETokenizer:
             "unk_token": self.unk_token,
             "token_to_id": {k: v for k, v in self.token_to_id.items()},
             "id_to_token": {str(k): v for k, v in self.id_to_token.items()},
-            "merges": {f"{k[0]}|{k[1]}": v for k, v in self.merges.items()},
-            "merge_ranks": {f"{k[0]}|{k[1]}": v for k, v in self.merge_ranks.items()},
+            # Store merges as JSON arrays to avoid delimiter issues
+            "merges": [[left, right, token] for (left, right), token in self.merges.items()],
+            "merge_ranks": [[left, right, rank] for (left, right), rank in self.merge_ranks.items()],
         }
         
         with open(path, "w") as f:
@@ -277,11 +278,13 @@ class SimpleBPETokenizer:
         tokenizer.unk_token = config["unk_token"]
         tokenizer.token_to_id = {k: v for k, v in config["token_to_id"].items()}
         tokenizer.id_to_token = {int(k): v for k, v in config["id_to_token"].items()}
+        
+        # Load merges as tuples from JSON arrays
         tokenizer.merges = {
-            tuple(k.split("|")): v for k, v in config["merges"].items()
+            (item[0], item[1]): item[2] for item in config.get("merges", [])
         }
         tokenizer.merge_ranks = {
-            tuple(k.split("|")): v for k, v in config.get("merge_ranks", {}).items()
+            (item[0], item[1]): item[2] for item in config.get("merge_ranks", [])
         }
         
         return tokenizer

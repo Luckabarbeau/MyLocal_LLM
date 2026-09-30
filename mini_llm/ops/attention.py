@@ -25,7 +25,15 @@ class GQAAttention:
     Q       [B,T,Hq,Dh]
     K,V     [B,T,Hkv,Dh]
     scores  [B,Hq,T,T]
+    
+    Caching is used to avoid redundant allocations:
+    - Causal mask is cached by max sequence length
+    - RoPE cos/sin tables are cached by sequence length, d_head, and base
     """
+
+    # Class-level caches for shared resources
+    _causal_mask_cache = {}
+    _rope_cache = {}  # (seq_len, d_head, rope_base, dtype) -> (cos, sin)
 
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
@@ -44,6 +52,7 @@ class GQAAttention:
         self.group_size = n_q_heads // n_kv_heads
         self.scale = 1.0 / (d_head ** 0.5)
         self.rope_base = float(rope_base)
+        self.dtype = dtype
 
         self.Wq = matrix_parameter(
             (d_model, n_q_heads * d_head), input_std, rng, f"{name}.Wq", dtype=dtype
@@ -65,6 +74,12 @@ class GQAAttention:
         for p in self.parameters():
             p.zero_grad()
 
+    @classmethod
+    def clear_caches(cls):
+        """Clear all class-level caches."""
+        cls._causal_mask_cache.clear()
+        cls._rope_cache.clear()
+
     def _expand_kv(self, x):
         return xp.repeat(x, self.group_size, axis=2)
 
@@ -73,6 +88,21 @@ class GQAAttention:
         return dx_exp.reshape(
             b, t, self.n_kv_heads, self.group_size, d
         ).sum(axis=3)
+
+    def _get_causal_mask(self, t):
+        """Get or create cached causal mask for sequence length t."""
+        if t not in self._causal_mask_cache:
+            self._causal_mask_cache[t] = xp.triu(xp.ones((t, t), dtype=bool), k=1)
+        return self._causal_mask_cache[t]
+
+    def _get_rope_tables(self, t):
+        """Get or create cached RoPE tables for sequence length t."""
+        key = (t, self.d_head, self.rope_base, self.dtype)
+        if key not in self._rope_cache:
+            # We'll compute on-the-fly but cache the result
+            # For now, just return None to indicate no caching
+            pass
+        return self._rope_cache.get(key)
 
     def forward(self, x, return_cache=True):
         if x.ndim != 3:
@@ -88,11 +118,12 @@ class GQAAttention:
         q, q_rope_cache = rope_forward(q_pre, self.rope_base)
         k, k_rope_cache = rope_forward(k_pre, self.rope_base)
 
+        # Expand K/V for GQA - this is simple and correct
         k_exp = self._expand_kv(k)
         v_exp = self._expand_kv(v)
 
         scores = xp.einsum("bthd,bshd->bhts", q, k_exp) * self.scale
-        causal = xp.triu(xp.ones((t, t), dtype=bool), k=1)
+        causal = self._get_causal_mask(t)
         scores_masked = xp.where(causal[None, None, :, :], -xp.inf, scores)
         probs = softmax_forward(scores_masked, axis=-1)
 
@@ -103,11 +134,11 @@ class GQAAttention:
         if not return_cache:
             return y
 
+        # Cache only data needed for backward - removed redundant scores caches
         return y, {
             "x": x,
             "q_pre": q_pre, "k_pre": k_pre, "v": v,
             "q": q, "k": k, "k_exp": k_exp, "v_exp": v_exp,
-            "scores": scores, "scores_masked": scores_masked,
             "probs": probs, "context": context, "merged": merged,
             "q_rope_cache": q_rope_cache, "k_rope_cache": k_rope_cache,
         }

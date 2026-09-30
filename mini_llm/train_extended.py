@@ -86,6 +86,7 @@ class ExtendedTrainer:
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.grad_accum_steps = grad_accum_steps
+        self.grad_clip = grad_clip  # Store grad_clip parameter
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.log_file = Path(log_file) if log_file else None
         self.val_interval = val_interval
@@ -216,6 +217,12 @@ class ExtendedTrainer:
         """
         Perform one training step with gradient accumulation.
         
+        With loss scaling:
+        1. Multiply d_logits by loss_scale before backward
+        2. Accumulate scaled gradients
+        3. Divide gradients by loss_scale after accumulation
+        4. Divide by grad_accum_steps for proper averaging
+        
         Returns:
             Tuple of (loss, grad_norm)
         """
@@ -239,16 +246,33 @@ class ExtendedTrainer:
             if np.isnan(loss):
                 raise ValueError(f"NaN loss detected at step {self.step}!")
             
-            # Backward pass
+            # Backward pass - apply loss scaling to d_logits before backward
             d_logits = self.model.backward_loss(loss_cache)
+            
+            # Scale the gradient by loss_scale for mixed precision
+            if self.optimizer.loss_scale != 1.0:
+                d_logits = d_logits * self.optimizer.loss_scale
+            
             self.model.backward(d_logits, cache)
         
         # Average loss over accumulation steps
         avg_loss = total_loss / self.grad_accum_steps
         
+        # Scale down gradients by loss_scale to cancel out the scaling
+        if self.optimizer.loss_scale != 1.0:
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    p.grad[...] = p.grad / self.optimizer.loss_scale
+        
+        # Divide gradients by grad_accum_steps for proper averaging
+        if self.grad_accum_steps > 1:
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    p.grad[...] = p.grad / self.grad_accum_steps
+        
         # Global gradient clipping (returns (norm, scale))
         grad_norm, _ = clip_grad_global_norm(
-            self.model.parameters(), max_norm=1.0
+            self.model.parameters(), max_norm=self.grad_clip
         )
         
         # Update parameters (only once per accumulated batch)

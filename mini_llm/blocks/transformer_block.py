@@ -28,8 +28,11 @@ class TransformerBlock:
         n_kv_heads: int,
         d_head: int,
         d_ff: int,
+        n_experts: int,
+        top_k: int,
         input_std: float,
         output_std: float,
+        rope_base: float,
         rng,
         eps: float = 1e-6,
         name: str = "block",
@@ -41,6 +44,8 @@ class TransformerBlock:
         self.n_kv_heads = n_kv_heads
         self.d_head = d_head
         self.d_ff = d_ff
+        self.n_experts = n_experts
+        self.top_k = top_k
         
         # First RMSNorm (input to attention)
         self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1", dtype=dtype)
@@ -53,6 +58,7 @@ class TransformerBlock:
             d_head=d_head,
             input_std=input_std,
             output_std=output_std,
+            rope_base=rope_base,
             rng=rng,
             name=f"{name}.attention",
             dtype=dtype
@@ -65,8 +71,8 @@ class TransformerBlock:
         self.moe = MoE(
             d_model=d_model,
             d_ff=d_ff,
-            n_experts=4,  # Number of experts
-            k=2,          # Top-k experts to select
+            n_experts=n_experts,
+            k=top_k,
             input_std=input_std,
             output_std=output_std,
             rng=rng,

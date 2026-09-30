@@ -81,7 +81,12 @@ class Router:
         batch_idx = xp.arange(batch_size * seq_len)[:, None]
         
         probs_flat = probs.reshape(-1, self.n_experts)
-        output_weights = probs_flat[batch_idx, flat_indices].reshape(batch_size, seq_len, self.k)
+        selected_probs = probs_flat[batch_idx, flat_indices].reshape(batch_size, seq_len, self.k)
+        
+        # Renormalize selected weights so they sum to 1
+        # This ensures: sum(selected_weights, axis=-1) == 1
+        weight_sums = xp.sum(selected_probs, axis=-1, keepdims=True)
+        output_weights = selected_probs / weight_sums
         
         cache = {
             "x": x,
@@ -98,6 +103,7 @@ class Router:
         Backward pass through the router.
         
         Uses straight-through estimator for top-k selection.
+        Properly handles renormalization of selected weights.
         
         Args:
             dweights: Gradient w.r.t. output weights, shape (B, T, k)
@@ -107,18 +113,48 @@ class Router:
             dx: Gradient w.r.t. input x, shape (B, T, d_model)
         """
         x = cache["x"]
+        logits = cache["logits"]
         probs = cache["probs"]
         expert_indices = cache["expert_indices"]
         
         batch_size, seq_len, _ = x.shape
         
-        # Create gradient w.r.t. probabilities (straight-through for top-k)
-        dprobs_flat = xp.zeros((batch_size * seq_len, self.n_experts), dtype=xp.float64)
+        # The output weights are renormalized top-k softmax probabilities:
+        # output_weights[i] = selected_probs[i] / sum(selected_probs)
+        # where selected_probs = gather(probs, expert_indices)
+        #
+        # For gradient flow, we need to compute dL/d(logits).
+        # The chain is: logits -> softmax -> top-k selection -> renormalization -> output_weights
+        #
+        # Strategy:
+        # 1. Compute dL/d(selected_probs) using the renormalization Jacobian
+        # 2. Scatter to get dL/d(probs)
+        # 3. Apply softmax gradient: dL/d(logits) = probs * (dL/d(probs) - sum(probs * dL/d(probs)))
+        
+        # Get selected probs for computing the gradient through renormalization
+        flat_indices = expert_indices.reshape(-1, self.k)
+        batch_idx = xp.arange(batch_size * seq_len)[:, None]
+        probs_flat = probs.reshape(-1, self.n_experts)
+        selected_probs = probs_flat[batch_idx, flat_indices].reshape(batch_size, seq_len, self.k)
+        
+        # weight_sums = sum(selected_probs, axis=-1), shape (B, T, 1)
+        weight_sums = xp.sum(selected_probs, axis=-1, keepdims=True)  # (B, T, 1)
+        
+        # Renormalization: output_weights = selected_probs / weight_sums
+        # Jacobian: d(output_weights[i])/d(selected_probs[j]) = delta_ij/weight_sums - selected_probs[i]/weight_sums^2
+        # dL/d(selected_probs) = dweights / weight_sums - selected_probs * (dweights · 1) / weight_sums^2
+        #                      = (dweights * weight_sums - selected_probs * sum(dweights)) / weight_sums^2
+        
+        dweights_sum = xp.sum(dweights, axis=-1, keepdims=True)  # (B, T, 1)
+        dselected_probs = (dweights * weight_sums - selected_probs * dweights_sum) / (weight_sums * weight_sums)
+        
+        # Scatter to full probs gradient
+        dprobs_flat = xp.zeros((batch_size * seq_len, self.n_experts), dtype=xp.float32)
         flat_indices = expert_indices.reshape(-1, self.k)
         batch_idx = xp.arange(batch_size * seq_len)[:, None]
         
-        # Gradient flows only through selected experts
-        dprobs_flat[batch_idx, flat_indices] = dweights.reshape(-1, self.k)
+        # Scatter dselected_probs into the correct positions
+        dprobs_flat[batch_idx, flat_indices] = dselected_probs.reshape(-1, self.k)
         dprobs = dprobs_flat.reshape(batch_size, seq_len, self.n_experts)
         
         # Gradient through softmax: dL/dlogits = probs * (dL/dprobs - sum(probs * dL/dprobs))

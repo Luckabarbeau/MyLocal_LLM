@@ -1,6 +1,11 @@
-"""Expert FFN layers for Mixture of Experts - Sparse evaluation with vectorization."""
+"""Expert FFN layers for Mixture of Experts.
 
-from ..backend import xp, asnumpy
+Two implementations:
+1. Dense (reference): Runs all selected experts on full batch
+2. Sparse (optimized): True token-to-expert dispatch
+"""
+
+from ..backend import xp
 
 
 def silu(x):
@@ -186,10 +191,10 @@ class Experts:
 
     def forward(self, x, weights, expert_indices):
         """
-        Forward pass through experts with sparse evaluation.
+        Forward pass through experts with true sparse token-to-expert dispatch.
         
-        Only evaluates unique experts that are selected, not all experts.
-        Each selected expert processes the full batch once.
+        Flattens tokens and dispatches each token to its selected experts.
+        Each expert only processes tokens routed to it (sparse computation).
         
         Args:
             x: Input tensor of shape (B, T, d_model)
@@ -200,58 +205,58 @@ class Experts:
             y: Weighted combination of expert outputs, shape (B, T, d_model)
             cache: Dictionary for backward pass
         """
-        batch_size, seq_len, _ = x.shape
+        batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
+        N = batch_size * seq_len  # Total tokens
         
-        # Find all unique experts that need to be evaluated
-        unique_experts = asnumpy(xp.unique(expert_indices))
+        # Flatten inputs: [B, T, D] -> [N, D]
+        x_flat = x.reshape(N, d_model)
+        weights_flat = weights.reshape(N, k)
+        expert_indices_flat = expert_indices.reshape(N, k)
         
-        # Evaluate only the unique selected experts on the full batch
-        computed_outputs = {}  # exp_idx -> (output, cache)
-        for exp_idx in unique_experts:
-            out, cache = self.experts[int(exp_idx)].forward(x)
-            computed_outputs[exp_idx] = (out, cache)
+        # For each (token, slot) pair, we have: token_idx, expert_idx, weight
+        # Total assignments = N * k
         
-        # Create output by selecting and weighting
-        y = xp.zeros_like(x)
+        # Prepare output: [N, D]
+        y_flat = xp.zeros((N, d_model), dtype=x.dtype)
         
-        batch_idx, seq_idx = xp.meshgrid(
-            xp.arange(batch_size), xp.arange(seq_len), indexing='ij'
-        )
-        flat_batch = batch_idx.flatten()
-        flat_seq = seq_idx.flatten()
-        
-        # Pre-compute all outputs stack (only for selected experts)
-        all_outputs_list = []
+        # Group assignments by expert entirely on GPU (no CPU transfers)
+        # For each expert, gather tokens and compute outputs
         for exp_idx in range(self.n_experts):
-            if exp_idx in computed_outputs:
-                all_outputs_list.append(computed_outputs[exp_idx][0])
-            else:
-                all_outputs_list.append(xp.zeros_like(x))
-        
-        all_outputs_stack = xp.stack(all_outputs_list, axis=0)
-        
-        for i in range(k):
-            expert_idx = expert_indices[..., i]  # (B, T)
-            flat_expert_idx = expert_idx.flatten()
+            # Find tokens where this expert was selected (at any slot)
+            expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
             
-            # Get expert output using advanced indexing
-            expert_out = all_outputs_stack[flat_expert_idx, flat_batch, flat_seq]
-            expert_out = expert_out.reshape(batch_size, seq_len, -1)
-            
-            # Weight it
-            y += weights[..., i:i+1] * expert_out
+            if xp.any(expert_selected):
+                # Get token indices and weights for this expert
+                # Flatten expert_selected to get boolean mask
+                flat_mask = expert_selected.flatten()  # [N*k]
+                
+                # Token indices where this expert was selected
+                all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
+                token_indices = all_token_indices[flat_mask]  # [n_assigned]
+                
+                # Weights for these assignments
+                all_weights = weights_flat.flatten()  # [N*k]
+                expert_weights = all_weights[flat_mask]  # [n_assigned]
+                
+                # Gather tokens: [n_assigned, D]
+                expert_x = x_flat[token_indices]
+                
+                # Forward through this expert
+                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+                
+                # Weight and accumulate to output
+                weighted_out = expert_weights[:, xp.newaxis] * expert_out
+                xp.add.at(y_flat, token_indices, weighted_out)
         
-        # Store caches for backward pass
-        all_caches = [computed_outputs[exp_idx][1] if exp_idx in computed_outputs else None 
-                      for exp_idx in range(self.n_experts)]
+        # Reshape: [N, D] -> [B, T, D]
+        y = y_flat.reshape(batch_size, seq_len, d_model)
         
+        # Store cache for backward
         cache = {
             "x": x,
             "weights": weights,
             "expert_indices": expert_indices,
-            "computed_outputs": computed_outputs,
-            "all_caches": all_caches,
             "y": y,
         }
         
@@ -259,10 +264,10 @@ class Experts:
 
     def backward(self, dy, cache):
         """
-        Backward pass through experts with sparse evaluation.
+        Backward pass through experts with true sparse token-to-expert dispatch.
         
-        For each expert that was selected, accumulates gradients from all
-        positions where it was selected, then calls backward once.
+        For each expert, gathers gradients from tokens that were routed to it,
+        computes gradients, and accumulates to input gradient.
         
         Args:
             dy: Gradient w.r.t. output, shape (B, T, d_model)
@@ -274,36 +279,48 @@ class Experts:
         x = cache["x"]
         weights = cache["weights"]
         expert_indices = cache["expert_indices"]
-        all_caches = cache["all_caches"]
-        
-        batch_size, seq_len, _ = x.shape
+        batch_size, seq_len, d_model = x.shape
+        N = batch_size * seq_len
         k = weights.shape[-1]
         
-        # Initialize gradient w.r.t. input
-        dx = xp.zeros_like(x)
+        # Flatten inputs
+        dy_flat = dy.reshape(N, d_model)
+        weights_flat = weights.reshape(N, k)
+        expert_indices_flat = expert_indices.reshape(N, k)
         
-        # For each expert, accumulate gradients from positions where it was selected
+        # Initialize gradient w.r.t. input
+        dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
+        
+        # For each expert, gather tokens and accumulate gradients
         for exp_idx in range(self.n_experts):
-            # Find all positions where this expert was selected
-            expert_selected = (expert_indices == exp_idx)  # (B, T, k)
+            # Find tokens where this expert was selected
+            expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
             
             if xp.any(expert_selected):
-                # Accumulate weighted dy for this expert
-                # Shape: (B, T, d_model)
-                expert_dy = xp.zeros_like(x)
+                # Get token indices and weights
+                flat_mask = expert_selected.flatten()  # [N*k]
+                all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
+                token_indices = all_token_indices[flat_mask]  # [n_assigned]
                 
-                for i in range(k):
-                    # Positions where this expert is selected at position i
-                    selected_at_i = expert_selected[..., i]
-                    expert_dy += selected_at_i[..., xp.newaxis] * (
-                        weights[..., i:i+1] * dy
-                    )
+                # Weights for these assignments
+                all_weights = weights_flat.flatten()  # [N*k]
+                expert_weights = all_weights[flat_mask]  # [n_assigned]
                 
-                # Backward through this expert with accumulated gradient
-                expert_cache = all_caches[exp_idx]
+                # Gather dy and weight: [n_assigned, D]
+                expert_dy = dy_flat[token_indices] * expert_weights[:, xp.newaxis]
+                
+                # Gather x for forward
+                x_flat = x.reshape(N, d_model)
+                expert_x = x_flat[token_indices]
+                
+                # Forward then backward through this expert
+                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
                 expert_dx = self.experts[exp_idx].backward(expert_dy, expert_cache)
                 
                 # Accumulate to input gradient
-                dx += expert_dx
+                xp.add.at(dx_flat, token_indices, expert_dx)
+        
+        # Reshape: [N, D] -> [B, T, D]
+        dx = dx_flat.reshape(batch_size, seq_len, d_model)
         
         return dx

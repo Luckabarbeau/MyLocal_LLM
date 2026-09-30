@@ -3,8 +3,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelConfig:
-    vocab_size: int = 16_384
+    # Tokenizer vocabulary size (separate from model vocab for flexibility)
+    tokenizer_vocab_size: int = 16_384
+    
+    # Model configuration
     context_length: int = 1_024
+    
+    # Backward compatibility: vocab_size is an alias for tokenizer_vocab_size
+    @property
+    def vocab_size(self) -> int:
+        """Backward compatible alias for tokenizer_vocab_size."""
+        return self.tokenizer_vocab_size
 
     n_layers: int = 8
     d_model: int = 384
@@ -44,7 +53,7 @@ class ModelConfig:
     @classmethod
     def tiny_inspection(cls):
         return cls(
-            vocab_size=256,
+            tokenizer_vocab_size=256,
             context_length=16,
             n_layers=1,
             d_model=16,
@@ -60,7 +69,7 @@ class ModelConfig:
     def micro_debug(cls):
         """Micro model: ~500K params, for quick debugging."""
         return cls(
-            vocab_size=256,
+            tokenizer_vocab_size=256,
             context_length=32,
             n_layers=2,
             d_model=32,
@@ -76,7 +85,7 @@ class ModelConfig:
     def mini(cls):
         """Mini model: ~12M params, good for initial experiments."""
         return cls(
-            vocab_size=16_384,
+            tokenizer_vocab_size=8192,
             context_length=512,
             n_layers=8,
             d_model=256,
@@ -92,7 +101,7 @@ class ModelConfig:
     def small(cls):
         """Small model: ~53M params (current default)."""
         return cls(
-            vocab_size=16_384,
+            tokenizer_vocab_size=8192,
             context_length=512,
             n_layers=8,
             d_model=384,
@@ -108,7 +117,7 @@ class ModelConfig:
     def medium(cls):
         """Medium model: ~120M params."""
         return cls(
-            vocab_size=16_384,
+            tokenizer_vocab_size=8192,
             context_length=512,
             n_layers=8,
             d_model=512,

@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
-from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
+from mini_llm.tokenizer.tokenizer import TokenizerProtocol, SimpleBPETokenizer, FastBPETokenizer
 
 # Global tokenizer for worker processes - DO NOT use at module level in main process
 _worker_tokenizer = None
@@ -44,9 +44,14 @@ _worker_tokenizer = None
 def init_worker(tokenizer_path: str, context_length: int):
     """Initialize worker process with loaded tokenizer."""
     global _worker_tokenizer
-    from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
     
-    _worker_tokenizer = SimpleBPETokenizer.load(tokenizer_path)
+    # Try to load as FastBPETokenizer first, fall back to SimpleBPETokenizer
+    try:
+        from mini_llm.tokenizer.tokenizer import FastBPETokenizer
+        _worker_tokenizer = FastBPETokenizer.load(tokenizer_path)
+    except (ImportError, Exception):
+        _worker_tokenizer = SimpleBPETokenizer.load(tokenizer_path)
+    
     _worker_tokenizer.context_length = context_length
 
 
@@ -55,6 +60,7 @@ def encode_batch(batch: tuple) -> list:
     
     Must be called from a worker process initialized with init_worker().
     Returns list of (doc_index, token_ids) tuples.
+    Uses efficient batch encoding if available.
     """
     if _worker_tokenizer is None:
         raise RuntimeError("Tokenizer not initialized in worker process")
@@ -62,18 +68,33 @@ def encode_batch(batch: tuple) -> list:
     doc_indices, texts = batch
     results = []
     
-    for idx, text in zip(doc_indices, texts):
-        if not text:
-            continue
+    # Try batch encoding first (faster for HF tokenizer)
+    try:
+        all_ids = _worker_tokenizer.encode_batch(texts)
         
-        # Encode
-        ids = _worker_tokenizer.encode(text)
-        
-        # Truncate to context length
-        if len(ids) > _worker_tokenizer.context_length:
-            ids = ids[:_worker_tokenizer.context_length]
-        
-        results.append((idx, ids))
+        for idx, ids in zip(doc_indices, all_ids):
+            if not ids:
+                continue
+            
+            # Truncate to context length
+            if len(ids) > _worker_tokenizer.context_length:
+                ids = ids[:_worker_tokenizer.context_length]
+            
+            results.append((idx, ids))
+    except Exception:
+        # Fall back to single encoding for simple tokenizer
+        for idx, text in zip(doc_indices, texts):
+            if not text:
+                continue
+            
+            # Encode
+            ids = _worker_tokenizer.encode(text)
+            
+            # Truncate to context length
+            if len(ids) > _worker_tokenizer.context_length:
+                ids = ids[:_worker_tokenizer.context_length]
+            
+            results.append((idx, ids))
     
     return results
 
@@ -206,7 +227,8 @@ def generate_token_shards(
             print(f"    Encoding took {batch_elapsed:.1f}s ({docs_per_sec:.0f} docs/s, {tokens_per_sec:.0f} tok/s)")
         else:
             # Single-threaded fallback for debugging
-            tokenizer = SimpleBPETokenizer.load(tokenizer_path)
+            # Use FastBPETokenizer since tokenizer.json is in HuggingFace format
+            tokenizer = FastBPETokenizer.load(tokenizer_path)
             tokenizer.context_length = context_length
             
             start_batch_time = time.time()

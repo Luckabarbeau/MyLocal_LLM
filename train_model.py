@@ -40,7 +40,7 @@ from mini_llm.data.token_shards import TokenShardGenerator, load_token_shard
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.train_extended import ExtendedTrainer
-from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
+from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 
 
 def parse_args():
@@ -186,6 +186,20 @@ def parse_args():
         help="Random seed",
     )
     
+    # Tokenizer configuration
+    parser.add_argument(
+        "--tokenizer-vocab-size",
+        type=int,
+        default=None,
+        help="Tokenizer vocabulary size (default: 512 for small models, 8192 for larger)",
+    )
+    parser.add_argument(
+        "--tokenizer-backend",
+        choices=["simple", "fast"],
+        default="fast",
+        help="Tokenizer backend (default: fast)",
+    )
+    
     return parser.parse_args()
 
 
@@ -231,7 +245,6 @@ def generate_shards_for_training(
     from mini_llm.data.token_shards import (
         TokenShardGenerator,
         CosmopediaParquetReader,
-        SimpleBPETokenizer,
     )
     
     output_dir = Path(output_dir)
@@ -245,8 +258,14 @@ def generate_shards_for_training(
         parquet_reader.shard_paths = parquet_reader.shard_paths[:num_parquet_shards]
     print(f"Processing {len(parquet_reader.shard_paths)} Parquet shards")
     
-    # Train tokenizer on a sample
-    print("Training tokenizer on sample...")
+    # Use a reasonable vocab size for the smoke test or small model
+    # Large models should use pre-trained tokenizers
+    if context_length <= 64:
+        vocab_size = 512  # Small model needs smaller vocab
+    else:
+        vocab_size = 8192  # Reasonable default for most models
+
+    print(f"Training tokenizer on sample (vocab_size={vocab_size}, backend=fast)...")
     sample_texts = []
     count = 0
     for record in parquet_reader.iter_records():
@@ -254,9 +273,17 @@ def generate_shards_for_training(
         count += 1
         if count >= 500:
             break
-    
-    tokenizer = SimpleBPETokenizer(vocab_size=16_384)
-    tokenizer.train(sample_texts)
+
+    # Use FastBPETokenizer for training (faster, production-ready)
+    try:
+        from mini_llm.tokenizer.tokenizer import FastBPETokenizer
+        tokenizer = FastBPETokenizer(vocab_size=vocab_size, threads=8)
+        tokenizer.train(sample_texts)
+    except Exception as e:
+        print(f"Fast tokenizer failed ({e}), falling back to SimpleBPETokenizer")
+        from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
+        tokenizer = SimpleBPETokenizer(vocab_size=vocab_size)
+        tokenizer.train(sample_texts)
     
     # Save tokenizer
     tokenizer_path = output_dir / "tokenizer.json"
@@ -290,7 +317,9 @@ def generate_shards_for_training(
     print(f"  Validation shards: {len(val_shards)}")
     print(f"  Total shards: {len(all_shards)}")
     
-    return train_shards, val_shards, tokenizer_path
+    # Return tokenizer vocab size for model config update
+    tokenizer_vocab_size = len(tokenizer)
+    return train_shards, val_shards, tokenizer_path, tokenizer_vocab_size
 
 
 def main():
@@ -314,6 +343,7 @@ def main():
     print(f"Learning rate: {args.peak_lr}")
     print(f"Warmup: {args.warmup_steps} steps")
     print(f"Validation ratio: {args.val_ratio}")
+    print(f"Documents per shard: {args.documents_per_shard}")
     print()
     
     # Load or create model
@@ -369,8 +399,10 @@ def main():
         # Issue #16: Restore tokens_processed
         if training_state and "tokens_processed" in training_state:
             tokens_processed = training_state["tokens_processed"]
-        else:
+        elif training_state:
             tokens_processed = start_step * args.batch_size * args.context_length
+        else:
+            tokens_processed = 0
         
         # Issue #12: Restore RNG states
         if training_state and "train_rng_state" in training_state:
@@ -396,6 +428,8 @@ def main():
         
         model = setup_model(config, dtype="float16")
         start_step = 0
+        tokens_processed = 0
+        rng_states = None
         
         # Save config
         if args.checkpoint_dir:
@@ -406,14 +440,14 @@ def main():
     
     # Adjust context length in config if needed
     if config.context_length != args.context_length:
-        print(f"Warning: Config context length ({config.context_length}) differs from training ({args.context_length})")
+        print(f"Info: Context length set to {args.context_length} for this run (model config: {config.context_length})")
     
     # Generate or use existing token shards
     shard_dir = Path("./token_shards")
     
     if not any(shard_dir.glob("shard_*.bin")):
         print("\nGenerating token shards...")
-        train_shards, val_shards, _ = generate_shards_for_training(
+        train_shards, val_shards, _, tokenizer_vocab_size = generate_shards_for_training(
             dataset_path=args.dataset_path,
             output_dir=str(shard_dir),
             num_parquet_shards=args.num_parquet_shards,
@@ -421,6 +455,10 @@ def main():
             context_length=args.context_length,
             val_ratio=args.val_ratio,
         )
+        
+        # Update config to match tokenizer vocab size
+        config.tokenizer_vocab_size = tokenizer_vocab_size
+        print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
     else:
         # Use existing shards
         all_shards = sorted(shard_dir.glob("shard_*.bin"))
@@ -431,6 +469,20 @@ def main():
         print(f"Found existing shards:")
         print(f"  Training: {len(train_shards)}")
         print(f"  Validation: {len(val_shards)}")
+        
+        # Load tokenizer from shards directory to get actual vocab size
+        existing_tokenizer_path = shard_dir / "tokenizer.json"
+        if existing_tokenizer_path.exists():
+            from mini_llm.tokenizer.tokenizer import FastBPETokenizer, SimpleBPETokenizer
+            try:
+                tokenizer = FastBPETokenizer.load(str(existing_tokenizer_path))
+            except Exception:
+                tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
+            
+            # Update config to match tokenizer vocab size
+            tokenizer_vocab_size = len(tokenizer)
+            config.tokenizer_vocab_size = tokenizer_vocab_size
+            print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
     
     # Create trainer
     trainer = ExtendedTrainer(

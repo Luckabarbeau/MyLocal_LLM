@@ -169,66 +169,110 @@ class TextGenerator:
         if len(input_ids) > self.max_context:
             input_ids = input_ids[-self.max_context:]
         
-        # Generate tokens
         generated_ids = list(input_ids)
         
         # Start timing
         if log_speed:
             total_start_time = time.time()
             forward_times = []
-            other_times = []  # Time for sampling, decoding, etc.
+            other_times = []
         
-        for _ in range(max_new_tokens):
-            # Prepare input (last max_context tokens)
-            context = generated_ids[-self.max_context:]
-            input_tensor = xp.array([context], dtype=xp.uint16)
+        if use_kv_cache:
+            # Use KV cache with proper prefill-once pattern
+            # Reset state for this new prompt generation
+            self._ensure_inference_model(reset=True)
             
-            # Forward pass with timing
+            # 1. PREFILL ONCE with the entire prompt
+            input_tensor = xp.array([input_ids], dtype=xp.uint16)
+            input_tensor = xp.asarray(input_tensor, dtype=xp.int32)
+            
             if log_speed:
                 forward_start = time.time()
-            
-            if use_kv_cache:
-                # KV cache implementation
-                try:
-                    logits = self._generate_kv_cache(input_tensor, generated_ids, log_speed)
-                except Exception as e:
-                    # Fall back to full prefix if KV cache fails
-                    print(f"KV cache failed, falling back: {e}")
-                    logits, _ = self.model.forward(input_tensor)
-            else:
-                # Full prefix forward
-                logits, _ = self.model.forward(input_tensor)
-            
+            logits = self._inference_model.prefill(input_tensor, self._state)
             if log_speed:
                 forward_end = time.time()
                 forward_times.append(forward_end - forward_start)
             
-            # Get logits for last position
-            last_logits = logits[0, -1, :]
-            
-            # Sample next token (time this separately)
-            if log_speed:
-                sample_start = time.time()
-            if strategy == "greedy":
-                next_id = greedy_decode(last_logits)
-            elif strategy == "temperature":
-                next_id = temperature_sample(last_logits, temperature)
-            elif strategy == "top-k":
-                next_id = top_k_sample(last_logits, top_k, temperature)
-            elif strategy == "top-p":
-                next_id = top_p_sample(last_logits, top_p, temperature)
-            else:
-                raise ValueError(f"Unknown strategy: {strategy}")
-            if log_speed:
-                sample_end = time.time()
-                other_times.append(sample_end - sample_start)
-            
-            generated_ids.append(next_id)
-            
-            # Stop at EOS
-            eos_id = self._get_eos_id()
-            if next_id == eos_id:
-                break
+            # 2. AUTOREGRESSIVE DECODE for each new token
+            for step in range(max_new_tokens):
+                # Get logits for last position and sample
+                if log_speed:
+                    sample_start = time.time()
+                
+                last_logits = logits[0]  # [vocab]
+                
+                if strategy == "greedy":
+                    next_id = greedy_decode(last_logits)
+                elif strategy == "temperature":
+                    next_id = temperature_sample(last_logits, temperature)
+                elif strategy == "top-k":
+                    next_id = top_k_sample(last_logits, top_k, temperature)
+                elif strategy == "top-p":
+                    next_id = top_p_sample(last_logits, top_p, temperature)
+                else:
+                    raise ValueError(f"Unknown strategy: {strategy}")
+                
+                if log_speed:
+                    sample_end = time.time()
+                    other_times.append(sample_end - sample_start)
+                
+                generated_ids.append(next_id)
+                
+                # Stop at EOS
+                eos_id = self._get_eos_id()
+                if next_id == eos_id:
+                    break
+                
+                # Check capacity before decoding next token
+                if not self._state.has_capacity(1):
+                    break
+                
+                # Decode one token
+                if log_speed:
+                    forward_start = time.time()
+                
+                next_tensor = xp.array([[next_id]], dtype=xp.int32)
+                logits = self._inference_model.decode_one(next_tensor, self._state)
+                
+                if log_speed:
+                    forward_end = time.time()
+                    forward_times.append(forward_end - forward_start)
+        else:
+            # Full prefix forward (no KV cache)
+            for _ in range(max_new_tokens):
+                # Prepare input (last max_context tokens)
+                context = generated_ids[-self.max_context:]
+                input_tensor = xp.array([context], dtype=xp.uint16)
+                
+                if log_speed:
+                    forward_start = time.time()
+                
+                logits, _ = self.model.forward(input_tensor)
+                
+                if log_speed:
+                    forward_end = time.time()
+                    forward_times.append(forward_end - forward_start)
+                
+                # Get logits for last position and sample
+                last_logits = logits[0, -1, :]
+                
+                if strategy == "greedy":
+                    next_id = greedy_decode(last_logits)
+                elif strategy == "temperature":
+                    next_id = temperature_sample(last_logits, temperature)
+                elif strategy == "top-k":
+                    next_id = top_k_sample(last_logits, top_k, temperature)
+                elif strategy == "top-p":
+                    next_id = top_p_sample(last_logits, top_p, temperature)
+                else:
+                    raise ValueError(f"Unknown strategy: {strategy}")
+                
+                generated_ids.append(next_id)
+                
+                # Stop at EOS
+                eos_id = self._get_eos_id()
+                if next_id == eos_id:
+                    break
         
         # Decode to text (just the new tokens)
         output_text = self.tokenizer.decode(generated_ids[len(input_ids):])
@@ -238,7 +282,6 @@ class TextGenerator:
             total_time = time.time() - total_start_time
             new_tokens = len(generated_ids) - len(input_ids)
             
-            # Calculate separate metrics
             total_forward_time = sum(forward_times) if forward_times else 0
             total_other_time = sum(other_times) if other_times else 0
             avg_forward_time = total_forward_time / len(forward_times) if forward_times else 0
@@ -250,7 +293,6 @@ class TextGenerator:
                 "total_time_s": total_time,
                 "forward_times": forward_times,
                 "other_times": other_times,
-                # Aggregate metrics
                 "total_forward_time_s": total_forward_time,
                 "total_other_time_s": total_other_time,
                 "avg_forward_time_s": avg_forward_time,
@@ -259,46 +301,31 @@ class TextGenerator:
         
         return output_text, timing
 
-    def _generate_kv_cache(self, input_tensor, generated_ids, log_speed):
-        """KV cache generation helper using InferenceModel."""
-        # Import here to avoid circular import
-        from mini_llm.inference_model import InferenceModel
+    def _ensure_inference_model(self, reset: bool = False):
+        """Ensure inference model and state are initialized for KV cache.
         
-        # Check if we already have an inference model
+        Args:
+            reset: If True, create a fresh state (used for new prompts)
+        """
         if not hasattr(self, '_inference_model'):
-            # Create a new InferenceModel with the same weights
+            from mini_llm.inference_model import InferenceModel
+            
             self._inference_model = InferenceModel(
                 self.model.config,
                 dtype=self.model.dtype
             )
             self._inference_model.set_weights(self.model)
             
-            # Create generation state
             self._state = self._inference_model.create_generation_state(
                 batch_size=1,
                 max_length=self.max_context
             )
-        
-        # Convert input to int32 for InferenceModel
-        from mini_llm.backend import xp, asnumpy
-        # Ensure input_tensor is properly converted
-        if hasattr(input_tensor, 'get'):  # CuPy array
-            input_ids = xp.asarray(asnumpy(input_tensor)[0], dtype=xp.int32)[None, :]
-        else:  # NumPy array
-            input_ids = xp.asarray(input_tensor[0], dtype=xp.int32)[None, :]
-        
-        # If this is the first call (prompt), use prefill
-        if len(generated_ids) == len(input_ids[0]):
-            logits = self._inference_model.prefill(input_ids, self._state)
-        else:
-            # Decode one token at a time
-            next_id = generated_ids[-1]
-            token = xp.asarray([[next_id]], dtype=xp.int32)
-            logits = self._inference_model.decode_one(token, self._state)
-        
-        # logits should already be on the correct backend (CuPy or NumPy)
-        # Return as-is since sampling functions handle both backends via xp
-        return logits[None, :]
+        elif reset:
+            # Reset state for new prompt
+            self._state = self._inference_model.create_generation_state(
+                batch_size=1,
+                max_length=self.max_context
+            )
 
 
 def main():

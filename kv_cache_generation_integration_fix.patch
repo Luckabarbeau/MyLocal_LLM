@@ -1,0 +1,574 @@
+diff --git a/inference.py b/inference.py
+index 6036f0f..ea83360 100644
+--- a/inference.py
++++ b/inference.py
+@@ -38,7 +38,7 @@ from pathlib import Path
+ 
+ import numpy as np
+ 
+-from mini_llm.backend import xp
++from mini_llm.backend import xp, synchronize
+ from mini_llm.checkpoint import load_checkpoint
+ from mini_llm.config import ModelConfig
+ from mini_llm.model.decoder_lm import DecoderLanguageModel
+@@ -119,14 +119,73 @@ class TextGenerator:
+         self.model = model
+         self.tokenizer = tokenizer
+         self.max_context = max_context
++        self._inference_model = None
++        self._state = None
+ 
+     def _get_eos_id(self) -> int:
+         """Get EOS token ID from tokenizer or use default."""
++        if hasattr(self.tokenizer, "eos_token_id"):
++            eos_id = self.tokenizer.eos_token_id
++            if eos_id is not None:
++                return int(eos_id)
+         if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token:
+             return self.tokenizer.encode(self.tokenizer.eos_token)[0]
+-        # Default: 2 is commonly used as EOS
++        # Preserve the historical fallback used by this script.
+         return 2
+ 
++    def _ensure_kv_backend(self):
++        """Create the inference-only model and KV cache once, then reuse them."""
++        if self._inference_model is None:
++            self._inference_model = InferenceModel(
++                self.model.config,
++                dtype=self.model.dtype,
++            )
++            self._inference_model.set_weights(self.model)
++
++        if self._state is None or self._state.max_length != self.max_context:
++            self._state = self._inference_model.create_generation_state(
++                batch_size=1,
++                max_length=self.max_context,
++            )
++
++        # Reuse the allocation between prompts without clearing all K/V memory.
++        self._state.reset()
++        return self._inference_model, self._state
++
++    @staticmethod
++    def _time_gpu_call(fn, enabled: bool):
++        """Run fn and, when timing, include actual asynchronous GPU execution."""
++        if not enabled:
++            return fn(), 0.0
++        synchronize()
++        start = time.perf_counter()
++        result = fn()
++        synchronize()
++        return result, time.perf_counter() - start
++
++    @staticmethod
++    def _sample_next(
++        logits,
++        strategy: str,
++        temperature: float,
++        top_k: int | None,
++        top_p: float | None,
++    ) -> int:
++        """Sample one token ID from a 1-D vocabulary-logit vector."""
++        if strategy == "greedy":
++            return greedy_decode(logits)
++        if strategy == "temperature":
++            return temperature_sample(logits, temperature)
++        if strategy == "top-k":
++            if top_k is None:
++                raise ValueError("top_k must be provided for strategy='top-k'.")
++            return top_k_sample(logits, top_k, temperature)
++        if strategy == "top-p":
++            if top_p is None:
++                raise ValueError("top_p must be provided for strategy='top-p'.")
++            return top_p_sample(logits, top_p, temperature)
++        raise ValueError(f"Unknown strategy: {strategy}")
++
+     def generate(
+         self,
+         prompt: str,
+@@ -139,166 +198,150 @@ class TextGenerator:
+         log_speed: bool = False,
+         use_kv_cache: bool = True,
+     ) -> tuple[str, dict]:
+-        """
+-        Generate text from prompt.
+-        
+-        Args:
+-            prompt: Initial text prompt
+-            max_new_tokens: Maximum tokens to generate
+-            strategy: Decoding strategy ('greedy', 'temperature', 'top-k', 'top-p')
+-            temperature: Temperature for sampling (used if strategy supports it)
+-            top_k: Top-k parameter (used if strategy == 'top-k')
+-            top_p: Top-p parameter (used if strategy == 'top-p')
+-            seed: Random seed for reproducibility
+-            log_speed: If True, return timing information
+-            use_kv_cache: If True, use KV cache (faster)
+-            
+-        Returns:
+-            Tuple of (generated_text, timing_info)
+-        """
++        """Generate text from a prompt using reference or KV-cached inference."""
+         timing = {}
+-        
++
+         if seed is not None:
+             np.random.seed(seed)
+             xp.random.seed(seed)
+-        
+-        # Tokenize prompt
++
+         input_ids = self.tokenizer.encode(prompt)
+-        
+-        # Ensure we don't exceed context length
++        if not input_ids:
++            raise ValueError("Prompt encoded to zero tokens; provide a non-empty prompt.")
++
++        # Keep the newest prompt tokens if the prompt itself exceeds context.
+         if len(input_ids) > self.max_context:
+             input_ids = input_ids[-self.max_context:]
+-        
+-        # Generate tokens
++
+         generated_ids = list(input_ids)
+-        
+-        # Start timing
+-        if log_speed:
+-            total_start_time = time.time()
+-            forward_times = []
+-            other_times = []  # Time for sampling, decoding, etc.
+-        
+-        for _ in range(max_new_tokens):
+-            # Prepare input (last max_context tokens)
+-            context = generated_ids[-self.max_context:]
+-            input_tensor = xp.array([context], dtype=xp.uint16)
+-            
+-            # Forward pass with timing
+-            if log_speed:
+-                forward_start = time.time()
+-            
+-            if use_kv_cache:
+-                # KV cache implementation
+-                try:
+-                    logits = self._generate_kv_cache(input_tensor, generated_ids, log_speed)
+-                except Exception as e:
+-                    # Fall back to full prefix if KV cache fails
+-                    print(f"KV cache failed, falling back: {e}")
+-                    logits, _ = self.model.forward(input_tensor)
+-            else:
+-                # Full prefix forward
+-                logits, _ = self.model.forward(input_tensor)
+-            
+-            if log_speed:
+-                forward_end = time.time()
+-                forward_times.append(forward_end - forward_start)
+-            
+-            # Get logits for last position
+-            last_logits = logits[0, -1, :]
+-            
+-            # Sample next token (time this separately)
+-            if log_speed:
+-                sample_start = time.time()
+-            if strategy == "greedy":
+-                next_id = greedy_decode(last_logits)
+-            elif strategy == "temperature":
+-                next_id = temperature_sample(last_logits, temperature)
+-            elif strategy == "top-k":
+-                next_id = top_k_sample(last_logits, top_k, temperature)
+-            elif strategy == "top-p":
+-                next_id = top_p_sample(last_logits, top_p, temperature)
+-            else:
+-                raise ValueError(f"Unknown strategy: {strategy}")
++        eos_id = self._get_eos_id()
++
++        forward_times = []
++        other_times = []
++        prefill_time = 0.0
++        decode_times = []
++        total_start_time = time.perf_counter() if log_speed else 0.0
++
++        if max_new_tokens <= 0:
++            return "", {
++                "tokens_per_sec": 0.0,
++                "total_tokens": 0,
++                "total_time_s": 0.0,
++            } if log_speed else {}
++
++        if use_kv_cache:
++            # Critical KV-cache invariant:
++            #   * prefill the prompt exactly once
++            #   * thereafter pass exactly one newly sampled token to decode_one()
++            # Never rebuild and prefill the growing full prefix.
++            inference_model, state = self._ensure_kv_backend()
++            prompt_tensor = xp.asarray([input_ids], dtype=xp.int32)
++
++            logits, prefill_time = self._time_gpu_call(
++                lambda: inference_model.prefill(prompt_tensor, state),
++                log_speed,
++            )
+             if log_speed:
+-                sample_end = time.time()
+-                other_times.append(sample_end - sample_start)
+-            
+-            generated_ids.append(next_id)
+-            
+-            # Stop at EOS
+-            eos_id = self._get_eos_id()
+-            if next_id == eos_id:
+-                break
+-        
+-        # Decode to text (just the new tokens)
++                forward_times.append(prefill_time)
++
++            for step in range(max_new_tokens):
++                sample_start = time.perf_counter() if log_speed else 0.0
++                next_id = self._sample_next(
++                    logits[0],
++                    strategy,
++                    temperature,
++                    top_k,
++                    top_p,
++                )
++                if log_speed:
++                    # Sampling may itself launch CuPy work. Synchronize so that it
++                    # is not accidentally charged to the following model call.
++                    synchronize()
++                    other_times.append(time.perf_counter() - sample_start)
++
++                generated_ids.append(next_id)
++
++                if next_id == eos_id or step == max_new_tokens - 1:
++                    break
++
++                # The sampled token must be inserted into the KV cache before we
++                # can obtain logits for the token after it.
++                if not state.has_capacity(1):
++                    break
++
++                token = xp.asarray([[next_id]], dtype=xp.int32)
++                logits, decode_time = self._time_gpu_call(
++                    lambda token=token: inference_model.decode_one(token, state),
++                    log_speed,
++                )
++                if log_speed:
++                    decode_times.append(decode_time)
++                    forward_times.append(decode_time)
++        else:
++            # Slow numerical/reference implementation. This intentionally
++            # recomputes the active full prefix on every generated token.
++            for _ in range(max_new_tokens):
++                context = generated_ids[-self.max_context:]
++                input_tensor = xp.asarray([context], dtype=xp.uint16)
++
++                logits, forward_time = self._time_gpu_call(
++                    lambda input_tensor=input_tensor: self.model.forward(input_tensor)[0],
++                    log_speed,
++                )
++                if log_speed:
++                    forward_times.append(forward_time)
++
++                sample_start = time.perf_counter() if log_speed else 0.0
++                next_id = self._sample_next(
++                    logits[0, -1, :],
++                    strategy,
++                    temperature,
++                    top_k,
++                    top_p,
++                )
++                if log_speed:
++                    synchronize()
++                    other_times.append(time.perf_counter() - sample_start)
++
++                generated_ids.append(next_id)
++                if next_id == eos_id:
++                    break
++
+         output_text = self.tokenizer.decode(generated_ids[len(input_ids):])
+-        
+-        # Calculate timing info
++
+         if log_speed:
+-            total_time = time.time() - total_start_time
++            synchronize()
++            total_time = time.perf_counter() - total_start_time
+             new_tokens = len(generated_ids) - len(input_ids)
+-            
+-            # Calculate separate metrics
+-            total_forward_time = sum(forward_times) if forward_times else 0
+-            total_other_time = sum(other_times) if other_times else 0
+-            avg_forward_time = total_forward_time / len(forward_times) if forward_times else 0
+-            avg_other_time = total_other_time / len(other_times) if other_times else 0
+-            
++            total_forward_time = sum(forward_times)
++            total_other_time = sum(other_times)
++
+             timing = {
+-                "tokens_per_sec": new_tokens / total_time if total_time > 0 else 0,
++                "tokens_per_sec": new_tokens / total_time if total_time > 0 else 0.0,
+                 "total_tokens": new_tokens,
+                 "total_time_s": total_time,
+                 "forward_times": forward_times,
+                 "other_times": other_times,
+-                # Aggregate metrics
+                 "total_forward_time_s": total_forward_time,
+                 "total_other_time_s": total_other_time,
+-                "avg_forward_time_s": avg_forward_time,
+-                "avg_other_time_s": avg_other_time,
++                "avg_forward_time_s": (
++                    total_forward_time / len(forward_times) if forward_times else 0.0
++                ),
++                "avg_other_time_s": (
++                    total_other_time / len(other_times) if other_times else 0.0
++                ),
++                "prefill_time_s": prefill_time if use_kv_cache else 0.0,
++                "decode_times": decode_times,
++                "total_decode_time_s": sum(decode_times),
++                "avg_decode_time_s": (
++                    sum(decode_times) / len(decode_times) if decode_times else 0.0
++                ),
++                "kv_cache_length": (
++                    self._state.length if use_kv_cache and self._state is not None else 0
++                ),
+             }
+-        
+-        return output_text, timing
+ 
+-    def _generate_kv_cache(self, input_tensor, generated_ids, log_speed):
+-        """KV cache generation helper using InferenceModel."""
+-        # Import here to avoid circular import
+-        from mini_llm.inference_model import InferenceModel
+-        
+-        # Check if we already have an inference model
+-        if not hasattr(self, '_inference_model'):
+-            # Create a new InferenceModel with the same weights
+-            self._inference_model = InferenceModel(
+-                self.model.config,
+-                dtype=self.model.dtype
+-            )
+-            self._inference_model.set_weights(self.model)
+-            
+-            # Create generation state
+-            self._state = self._inference_model.create_generation_state(
+-                batch_size=1,
+-                max_length=self.max_context
+-            )
+-        
+-        # Convert input to int32 for InferenceModel
+-        from mini_llm.backend import xp, asnumpy
+-        # Ensure input_tensor is properly converted
+-        if hasattr(input_tensor, 'get'):  # CuPy array
+-            input_ids = xp.asarray(asnumpy(input_tensor)[0], dtype=xp.int32)[None, :]
+-        else:  # NumPy array
+-            input_ids = xp.asarray(input_tensor[0], dtype=xp.int32)[None, :]
+-        
+-        # If this is the first call (prompt), use prefill
+-        if len(generated_ids) == len(input_ids[0]):
+-            logits = self._inference_model.prefill(input_ids, self._state)
+-        else:
+-            # Decode one token at a time
+-            next_id = generated_ids[-1]
+-            token = xp.asarray([[next_id]], dtype=xp.int32)
+-            logits = self._inference_model.decode_one(token, self._state)
+-        
+-        # logits should already be on the correct backend (CuPy or NumPy)
+-        # Return as-is since sampling functions handle both backends via xp
+-        return logits[None, :]
++        return output_text, timing
+ 
+ 
+ def main():
+@@ -485,6 +528,16 @@ def main():
+                 print(f"\n--- Prompt Timing ---")
+                 print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
+                 print(f"Model Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
++                if args.backend == "kv-cache":
++                    print(f"  Prefill:           {timing.get('prefill_time_s', 0.0):.3f}s")
++                    decode_count = len(timing.get('decode_times', []))
++                    if decode_count:
++                        print(
++                            f"  Cached decode:     {timing.get('total_decode_time_s', 0.0):.3f}s "
++                            f"({timing.get('avg_decode_time_s', 0.0)*1000:.1f}ms/token, "
++                            f"{decode_count} calls)"
++                        )
++                    print(f"  KV cache length:   {timing.get('kv_cache_length', 0)} tokens")
+                 print(f"Other operations:   {total_other_time:.3f}s")
+                 
+             except KeyboardInterrupt:
+@@ -533,6 +586,16 @@ def main():
+         print(f"Prompt processing: {prompt_time:.3f}s")
+         print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
+         print(f"\nModel Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
++        if args.backend == "kv-cache":
++            print(f"  Prefill:           {timing.get('prefill_time_s', 0.0):.3f}s")
++            decode_count = len(timing.get('decode_times', []))
++            if decode_count:
++                print(
++                    f"  Cached decode:     {timing.get('total_decode_time_s', 0.0):.3f}s "
++                    f"({timing.get('avg_decode_time_s', 0.0)*1000:.1f}ms/token, "
++                    f"{decode_count} calls)"
++                )
++            print(f"  KV cache length:   {timing.get('kv_cache_length', 0)} tokens")
+         print(f"Other operations:   {total_other_time:.3f}s")
+         print("=" * 60)
+ 
+diff --git a/tests/test_inference_generator_kv_integration.py b/tests/test_inference_generator_kv_integration.py
+new file mode 100644
+index 0000000..b694f05
+--- /dev/null
++++ b/tests/test_inference_generator_kv_integration.py
+@@ -0,0 +1,156 @@
++"""Integration tests for TextGenerator's KV-cache control flow."""
++
++import numpy as np
++
++from inference import TextGenerator
++from mini_llm.backend import xp
++
++
++class _FakeTokenizer:
++    eos_token_id = 2
++
++    def encode(self, text):
++        # Stable three-token prompt; special-token handling is irrelevant here.
++        return [7, 8, 9]
++
++    def decode(self, ids):
++        return " ".join(str(int(i)) for i in ids)
++
++
++class _FakeState:
++    def __init__(self, max_length=32):
++        self.max_length = max_length
++        self.length = 0
++        self.batch_size = 1
++        self.reset_calls = 0
++
++    def reset(self):
++        self.length = 0
++        self.reset_calls += 1
++
++    def has_capacity(self, n_tokens=1):
++        return self.length + n_tokens <= self.max_length
++
++
++class _FakeInferenceModel:
++    def __init__(self, state):
++        self.state = state
++        self.prefill_calls = []
++        self.decode_calls = []
++
++    @staticmethod
++    def _logits(next_id):
++        logits = xp.full((1, 16), -100.0, dtype=xp.float32)
++        logits[0, next_id] = 100.0
++        return logits
++
++    def prefill(self, input_ids, state):
++        self.prefill_calls.append(np.asarray(input_ids).copy())
++        state.length += int(input_ids.shape[1])
++        return self._logits(3)
++
++    def decode_one(self, token, state):
++        self.decode_calls.append(np.asarray(token).copy())
++        assert token.shape == (1, 1)
++        state.length += 1
++        # Generate 4, 5, 6 after the first token 3.
++        return self._logits(3 + len(self.decode_calls))
++
++
++class _FakeTrainingModel:
++    class _Config:
++        pass
++
++    config = _Config()
++    dtype = "float32"
++
++    def __init__(self):
++        self.forward_calls = 0
++
++    def forward(self, input_ids):
++        self.forward_calls += 1
++        B, T = input_ids.shape
++        logits = xp.full((B, T, 16), -100.0, dtype=xp.float32)
++        logits[:, -1, 3] = 100.0
++        return logits, None
++
++
++def _make_generator():
++    training_model = _FakeTrainingModel()
++    generator = TextGenerator(training_model, _FakeTokenizer(), max_context=32)
++    state = _FakeState(max_length=32)
++    inference_model = _FakeInferenceModel(state)
++    generator._inference_model = inference_model
++    generator._state = state
++    return generator, training_model, inference_model, state
++
++
++def test_kv_generation_prefills_once_then_decodes_single_tokens():
++    generator, training_model, inference_model, state = _make_generator()
++
++    text, timing = generator.generate(
++        "prompt",
++        max_new_tokens=4,
++        strategy="greedy",
++        use_kv_cache=True,
++        log_speed=False,
++    )
++
++    assert text == "3 4 5 6"
++    assert len(inference_model.prefill_calls) == 1
++    assert inference_model.prefill_calls[0].shape == (1, 3)
++
++    # Four generated tokens require one prefill and only three decode calls:
++    # prefill -> logits for token 3
++    # decode(3) -> logits for token 4, etc.
++    assert len(inference_model.decode_calls) == 3
++    assert [int(call[0, 0]) for call in inference_model.decode_calls] == [3, 4, 5]
++    assert all(call.shape == (1, 1) for call in inference_model.decode_calls)
++
++    # The reference training model must never be called by the KV path.
++    assert training_model.forward_calls == 0
++
++    # Prompt length 3 + three tokens inserted by decode_one(). The final sampled
++    # token does not need a forward pass because generation ends immediately.
++    assert state.length == 6
++    assert state.reset_calls == 1
++
++
++def test_kv_state_is_reset_and_reused_between_generation_calls():
++    generator, _, inference_model, state = _make_generator()
++
++    generator.generate(
++        "first",
++        max_new_tokens=2,
++        strategy="greedy",
++        use_kv_cache=True,
++    )
++    first_state_identity = id(generator._state)
++
++    generator.generate(
++        "second",
++        max_new_tokens=2,
++        strategy="greedy",
++        use_kv_cache=True,
++    )
++
++    assert id(generator._state) == first_state_identity
++    assert state.reset_calls == 2
++    assert len(inference_model.prefill_calls) == 2
++    assert state.length == 4  # 3 prompt tokens + one decode insertion
++
++
++def test_reference_backend_still_uses_full_prefix_model_forward():
++    generator, training_model, inference_model, _ = _make_generator()
++
++    text, _ = generator.generate(
++        "prompt",
++        max_new_tokens=3,
++        strategy="greedy",
++        use_kv_cache=False,
++    )
++
++    assert text == "3 3 3"
++    assert training_model.forward_calls == 3
++    assert len(inference_model.prefill_calls) == 0
++    assert len(inference_model.decode_calls) == 0

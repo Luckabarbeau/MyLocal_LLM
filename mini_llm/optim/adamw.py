@@ -1,3 +1,8 @@
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 from ..backend import xp
 
 
@@ -71,6 +76,15 @@ class AdamW:
             # Get gradient and convert to float32 for computation
             g = p.grad.astype("float32", copy=False)
             
+            # Debug: check gradient is finite before processing
+            if np is not None:
+                g_cpu = g.get() if hasattr(g, "get") else g
+                if not np.all(np.isfinite(g_cpu)):
+                    raise FloatingPointError(
+                        f"Nonfinite gradient in {p.name or f'parameter_{i}'} "
+                        f"at step {self.step_index}"
+                    )
+            
             # Update FP32 moments (gradient is already scaled by trainer)
             self.m[i] *= self.beta1
             self.m[i] += (1.0 - self.beta1) * g
@@ -82,6 +96,16 @@ class AdamW:
             m_hat = self.m[i] / c1
             v_hat = self.v[i] / c2
             
+            # Debug: check moments are finite
+            if np is not None:
+                m_cpu = m_hat.get() if hasattr(m_hat, "get") else m_hat
+                v_cpu = v_hat.get() if hasattr(v_hat, "get") else v_hat
+                if not (np.all(np.isfinite(m_cpu)) and np.all(np.isfinite(v_cpu))):
+                    raise FloatingPointError(
+                        f"Nonfinite moment in {p.name or f'parameter_{i}'} "
+                        f"at step {self.step_index}"
+                    )
+            
             # Compute update in FP32
             # Weight decay is applied to master weights
             if p.decay and self.weight_decay != 0.0:
@@ -90,6 +114,15 @@ class AdamW:
             # Adam update on master weights
             update = eta * m_hat / (xp.sqrt(v_hat) + self.eps)
             self.master_weights[i] -= update
+            
+            # Debug: check master weights are finite after update
+            if np is not None:
+                w_cpu = self.master_weights[i].get() if hasattr(self.master_weights[i], "get") else self.master_weights[i]
+                if not np.all(np.isfinite(w_cpu)):
+                    raise FloatingPointError(
+                        f"Nonfinite master weight in {p.name or f'parameter_{i}'} "
+                        f"at step {self.step_index}"
+                    )
             
             # Copy updated master weights back to model parameter
             p.data[...] = self.master_weights[i].astype(p.data.dtype)

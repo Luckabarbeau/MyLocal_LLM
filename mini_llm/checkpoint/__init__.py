@@ -48,23 +48,29 @@ def save_checkpoint(
     
     # Save optimizer state if provided (convert CuPy to NumPy if needed)
     if optimizer_state is not None:
-        # Convert any CuPy/NumPy arrays in optimizer state to Python lists/floats
-        opt_state_np = {}
+        # Save optimizer state arrays directly as npy files instead of JSON lists
+        # This avoids corruption and memory issues with large arrays
+        opt_state_dir = path / "optimizer_state"
+        opt_state_dir.mkdir(exist_ok=True)
+        
         for key, value in optimizer_state.items():
             if isinstance(value, dict):
-                opt_state_np[key] = {}
+                key_dir = opt_state_dir / key
+                key_dir.mkdir(exist_ok=True)
                 for k, v in value.items():
                     if hasattr(v, '__array__'):
-                        # Convert numpy/cupy array to list for JSON
-                        opt_state_np[key][k] = _convert_to_numpy(v).tolist()
+                        arr_np = _convert_to_numpy(v)
+                        np.save(key_dir / f"{k}.npy", arr_np)
                     else:
-                        opt_state_np[key][k] = v
+                        # Save scalars/other values as JSON
+                        with open(key_dir / "scalars.json", "w") as f:
+                            json.dump({k: v}, f)
             elif hasattr(value, '__array__'):
-                opt_state_np[key] = _convert_to_numpy(value).tolist()
+                arr_np = _convert_to_numpy(value)
+                np.save(opt_state_dir / f"{key}.npy", arr_np)
             else:
-                opt_state_np[key] = value
-        with open(path / "optimizer_state.json", "w") as f:
-            json.dump(opt_state_np, f, indent=2)
+                with open(opt_state_dir / "scalars.json", "w") as f:
+                    json.dump({key: value}, f)
     
     # Save training state if provided
     if training_state is not None:
@@ -111,10 +117,48 @@ def load_checkpoint(
     # Load optimizer state (convert NumPy back to appropriate type if needed)
     optimizer_state = None
     if not skip_optimizer:
-        optimizer_path = path / "optimizer_state.json"
-        if optimizer_path.exists():
-            with open(optimizer_path, "r") as f:
-                optimizer_state = json.load(f)
+        optimizer_dir = path / "optimizer_state"
+        if optimizer_dir.exists():
+            optimizer_state = {}
+            
+            # Load step scalar from scalars.json
+            scalars_path = optimizer_dir / "scalars.json"
+            if scalars_path.exists():
+                with open(scalars_path, "r") as f:
+                    optimizer_state.update(json.load(f))
+            
+            # Load master weights (if they exist)
+            master_weights_path = optimizer_dir / "master_weights"
+            if master_weights_path.exists() and master_weights_path.is_dir():
+                optimizer_state["master_weights"] = {}
+                for npy_file in master_weights_path.glob("*.npy"):
+                    arr = np.load(npy_file)
+                    if BACKEND_NAME == "cupy":
+                        import cupy
+                        arr = cupy.asarray(arr)
+                    optimizer_state["master_weights"][npy_file.stem] = arr
+            
+            # Load moment arrays
+            m_path = optimizer_dir / "m"
+            v_path = optimizer_dir / "v"
+            
+            if m_path.exists() and m_path.is_dir():
+                optimizer_state["m"] = {}
+                for npy_file in m_path.glob("*.npy"):
+                    arr = np.load(npy_file)
+                    if BACKEND_NAME == "cupy":
+                        import cupy
+                        arr = cupy.asarray(arr)
+                    optimizer_state["m"][npy_file.stem] = arr
+            
+            if v_path.exists() and v_path.is_dir():
+                optimizer_state["v"] = {}
+                for npy_file in v_path.glob("*.npy"):
+                    arr = np.load(npy_file)
+                    if BACKEND_NAME == "cupy":
+                        import cupy
+                        arr = cupy.asarray(arr)
+                    optimizer_state["v"][npy_file.stem] = arr
     
     # Load training state
     training_state = None

@@ -15,7 +15,10 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 from mini_llm.backend import xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
@@ -24,8 +27,13 @@ from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
 from mini_llm.data.token_shards import load_token_shard, create_minibatch
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
-from mini_llm.optim.grad_clip import clip_grad_global_norm
+from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 class ExtendedTrainer:
@@ -63,6 +71,7 @@ class ExtendedTrainer:
         save_interval: int = 2000,
         loss_scale: float = 1.0,
         rng_seed: int = 42,
+        numerical_debug: bool = False,
     ):
         """
         Initialize the extended trainer.
@@ -86,6 +95,7 @@ class ExtendedTrainer:
             save_interval: Steps between checkpoint saves
             loss_scale: Static loss scale factor for mixed precision
             rng_seed: Seed for persistent RNGs
+            numerical_debug: Enable Inf/NaN checks at each tensor (slow, for debugging)
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -136,6 +146,9 @@ class ExtendedTrainer:
         # Validation state
         self.current_val_shard_idx = 0
         self.val_shards = {}
+        
+        # Numerical debugging
+        self.numerical_debug = numerical_debug
         
         # Logging setup
         self._setup_logging()
@@ -190,6 +203,23 @@ class ExtendedTrainer:
                     row.get("val_loss", ""),
                     row.get("steps_per_sec", ""),
                 ])
+    
+    def _check_finite(self, tensor, name: str):
+        """Check if tensor is finite and print warning if not."""
+        if self.numerical_debug:
+            try:
+                cpu_tensor = tensor.get() if hasattr(tensor, "get") else tensor
+                if np is not None and not np.all(np.isfinite(cpu_tensor)):
+                    max_abs = np.max(np.abs(cpu_tensor))
+                    is_finite = np.all(np.isfinite(cpu_tensor))
+                    print(
+                        f"\n[{name}] NONFINITE detected! "
+                        f"max_abs={max_abs:.4e}, isfinite={is_finite}"
+                    )
+                    return False
+            except Exception:
+                pass
+        return True
     
     def load_train_shard(self, path: str) -> np.ndarray:
         """Load a training shard into memory."""
@@ -296,6 +326,11 @@ class ExtendedTrainer:
             
             # Forward pass
             logits, cache = self.model.forward(inputs)
+            
+            # Numerical debug: check logits are finite
+            if not self._check_finite(logits, f"logits_step_{self.step}"):
+                raise ValueError(f"Nonfinite logits detected at step {self.step}!")
+            
             loss, loss_cache = self.model.compute_loss(logits, targets)
             losses.append(loss)  # loss is already a Python float from scalar()
             
@@ -328,9 +363,20 @@ class ExtendedTrainer:
                     p.grad[...] = p.grad / self.grad_accum_steps
         
         # Global gradient clipping - returns backend array norm, no sync
-        grad_norm, _ = clip_grad_global_norm(
+        # Now returns (norm_backend, scale, is_finite) tuple
+        grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
             self.model.parameters(), max_norm=self.grad_clip
         )
+        
+        if not is_finite:
+            # Gradient contains Inf/NaN - skip this update
+            self.optimizer.zero_grad()
+            print(
+                f"WARNING: Nonfinite gradient at step {self.step}; "
+                f"norm={_array_to_float(grad_norm_backend) if grad_norm_backend is not None else 'unknown'}; "
+                f"update skipped"
+            )
+            return avg_loss, float(_array_to_float(grad_norm_backend)) if grad_norm_backend is not None else 0.0
         
         # Update parameters (only once per accumulated batch)
         self.optimizer.step(lr=lr)
@@ -339,7 +385,7 @@ class ExtendedTrainer:
         self.step += 1
         
         # Sync grad_norm only at the end (necessary for logging)
-        return avg_loss, float(grad_norm)
+        return avg_loss, float(_array_to_float(grad_norm_backend))
     
     def save(self):
         """

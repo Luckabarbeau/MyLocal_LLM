@@ -187,6 +187,13 @@ def parse_args():
         help="Random seed",
     )
     
+    # Numerical debugging
+    parser.add_argument(
+        "--numerical-debug",
+        action="store_true",
+        help="Enable numerical stability monitoring (checks for Inf/NaN at each tensor)",
+    )
+    
     # Tokenizer configuration
     parser.add_argument(
         "--tokenizer-vocab-size",
@@ -387,13 +394,8 @@ def main():
             if p.name in loaded_params:
                 p.data[...] = loaded_params[p.name]
         
-        # Issue #14: Restore optimizer state
-        if optimizer_state is not None and "m" in optimizer_state:
-            for p in model.parameters():
-                if p.name in optimizer_state.get("m", {}):
-                    p.m[...] = optimizer_state["m"][p.name]
-                if p.name in optimizer_state.get("v", {}):
-                    p.v[...] = optimizer_state["v"][p.name]
+        # Store optimizer state for later restoration after trainer creation
+        stored_optimizer_state = optimizer_state
         
         start_step = training_state.get("step", 0) if training_state else 0
         
@@ -419,6 +421,7 @@ def main():
     else:
         # Create new model
         shard_dir = Path("./token_shards")
+        stored_optimizer_state = None
         
         if args.model == "micro":
             config = ModelConfig.micro_debug()
@@ -520,11 +523,41 @@ def main():
         val_steps=args.val_steps,
         save_interval=args.save_interval,
         loss_scale=1.0,  # Can increase for mixed precision
+        numerical_debug=args.numerical_debug,
     )
     
-    # Issue #12 & #14: Restore trainer state including RNGs and tokens_processed
+    # Issue #12: Restore trainer state including RNGs and tokens_processed
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
+    
+    # Issue #14: Restore optimizer state after trainer creation
+    if stored_optimizer_state is not None and "m" in stored_optimizer_state:
+        m_dict = stored_optimizer_state["m"]
+        v_dict = stored_optimizer_state.get("v", {})
+        
+        # Build a mapping from parameter name to optimizer index
+        param_to_idx = {p.name: i for i, p in enumerate(trainer.model.parameters())}
+        
+        restored_count = 0
+        for p in trainer.model.parameters():
+            if p.name in m_dict and p.name in v_dict:
+                idx = param_to_idx[p.name]
+                m_arr = xp.asarray(m_dict[p.name])
+                v_arr = xp.asarray(v_dict[p.name])
+                
+                if m_arr.shape == trainer.optimizer.m[idx].shape:
+                    trainer.optimizer.m[idx][...] = m_arr
+                    trainer.optimizer.v[idx][...] = v_arr
+                    restored_count += 1
+                else:
+                    print(f"WARNING: Shape mismatch for {p.name}: stored={m_arr.shape}, current={trainer.optimizer.m[idx].shape}")
+        
+        print(f"Restored optimizer state for {restored_count} parameters")
+        
+        # Check for missing parameters in optimizer state
+        missing = [p.name for p in trainer.model.parameters() if p.name not in m_dict]
+        if missing:
+            print(f"WARNING: {len(missing)} parameters not found in saved optimizer state: {missing[:5]}{'...' if len(missing) > 5 else ''}")
     
     # Issue #12: Restore RNG states after trainer creation
     if rng_states is not None:

@@ -270,7 +270,7 @@ class TestGradientClipping:
     
     def test_global_grad_norm_dtype(self):
         """Test that global grad norm uses float32."""
-        from mini_llm.optim.grad_clip import global_grad_norm
+        from mini_llm.optim.grad_clip import global_grad_norm, _array_to_float
         
         model = make_model()
         
@@ -278,9 +278,12 @@ class TestGradientClipping:
         for p in model.parameters():
             p.grad = np.ones_like(p.data, dtype=p.data.dtype)
         
-        # Compute norm
-        norm = global_grad_norm(model.parameters())
+        # Compute norm (now returns tuple: (backend_array, python_float))
+        norm_backend, norm_value = global_grad_norm(model.parameters())
         
-        # Norm should be a finite float
-        assert isinstance(norm, float)
-        assert np.isfinite(norm)
+        # Norm value should be a finite float
+        assert isinstance(norm_value, float)
+        assert np.isfinite(norm_value)
+        
+        # The backend array should be float32
+        assert norm_backend.dtype == np.float32

@@ -3,6 +3,7 @@
 from ..backend import xp
 from ..ops.router import Router
 from ..ops.experts import Experts
+from ..ops.routing_plan import RoutingPlan
 
 
 class MoE:
@@ -100,12 +101,10 @@ class MoE:
         weights, expert_indices, router_cache = self.router.forward(x)
         
         # Create routing plan once for all expert dispatch
-        batch_size, seq_len, _ = x.shape
         k = weights.shape[-1]
-        N = batch_size * seq_len
-        
-        from mini_llm.ops.routing_plan import RoutingPlan
-        routing_plan = RoutingPlan.from_router_outputs(expert_indices, weights, k, n_experts=self.n_experts)
+        routing_plan = RoutingPlan.from_router_outputs(
+            expert_indices, weights, k, n_experts=self.n_experts
+        )
         
         # Experts compute weighted combination
         y, experts_cache = self.experts.forward(x, weights, expert_indices, routing_plan)
@@ -118,117 +117,20 @@ class MoE:
         return y, cache
 
     def backward(self, dy, cache):
+        """Backward pass through experts and router.
+
+        Expert input/parameter gradients and the selected router-weight
+        gradients are produced in a single expert dispatch pass.
         """
-        Backward pass through the MoE block.
-        
-        Args:
-            dy: Gradient of loss w.r.t. output y, shape (B, T, d_model)
-            cache: Dictionary from forward pass containing intermediates
-            
-        Returns:
-            dx: Gradient of loss w.r.t. input x, shape (B, T, d_model)
-        """
-        # Get cached values
         router_cache = cache["router_cache"]
         experts_cache = cache["experts_cache"]
-        
-        # Backward through experts - this computes dx and parameter gradients for experts
-        dx = self.experts.backward(dy, experts_cache)
-        
-        # Backward through router to get router parameter gradients
-        
-        x = experts_cache["x"]
-        weights = experts_cache["weights"]
-        expert_indices = experts_cache["expert_indices"]
-        batch_size, seq_len, d_model = x.shape
-        k = weights.shape[-1]
-        N = batch_size * seq_len
-        
-        # Flatten for easier indexing
-        x_flat = x.reshape(N, d_model)
-        dy_flat = dy.reshape(N, d_model)
-        weights_flat = weights.reshape(N, k)
-        expert_indices_flat = expert_indices.reshape(N, k)
-        
-        # Get cached expert outputs from forward pass
-        expert_outputs = experts_cache.get("expert_outputs", {})
-        
-        # Use routing plan if available (from forward pass)
-        routing_plan = experts_cache.get("routing_plan")
-        
-        # For each (token, slot) pair, get expert output and compute dweights
-        # dweights[n,i] = dot(dy[n], expert_output[expert_idx[n,i], n])
-        
-        dweights_flat = xp.zeros((N, k))
-        
-        for exp_idx in range(self.n_experts):
-            # Get token indices from routing plan (or compute if not available)
-            if routing_plan is not None:
-                # Use routing plan - no mask reconstruction needed!
-                token_indices, slot_indices, expert_weights = routing_plan.get_expert_assignments(exp_idx)
-                
-                if len(token_indices) > 0:
-                    # Gather dy and weights
-                    expert_dy = dy_flat[token_indices]
-                    
-                    # Use cached expert outputs instead of recomputing
-                    if exp_idx in expert_outputs:
-                        cached_data = expert_outputs[exp_idx]
-                        cached_token_indices = cached_data["token_indices"]
-                        cached_outputs = cached_data["outputs"]
-                        
-                        # Create mapping from token index to output in cached array
-                        dweights_for_tokens = xp.zeros(len(token_indices))
-                        
-                        for i, tok_idx in enumerate(token_indices):
-                            pos = xp.where(cached_token_indices == tok_idx)[0]
-                            if len(pos) > 0:
-                                dweights_for_tokens[i] = xp.sum(expert_dy[i] * cached_outputs[pos[0]])
-                        
-                        xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
-            else:
-                # Fallback: reconstruct by finding tokens where expert was selected
-                expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
-                
-                if xp.any(expert_selected):
-                    # Get token indices and slot indices
-                    flat_mask = expert_selected.flatten()  # [N*k]
-                    all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
-                    all_slot_indices = xp.tile(xp.arange(k), N)  # [N*k]
-                    
-                    token_indices = all_token_indices[flat_mask]  # [n_assigned]
-                    slot_indices = all_slot_indices[flat_mask]  # [n_assigned]
-                    
-                    # Gather dy and weights
-                    expert_dy = dy_flat[token_indices]
-                    expert_weights = weights_flat.flatten()[flat_mask]  # [n_assigned]
-                    
-                    # Use cached expert outputs instead of recomputing
-                    if exp_idx in expert_outputs:
-                        cached_data = expert_outputs[exp_idx]
-                        cached_token_indices = cached_data["token_indices"]
-                        cached_outputs = cached_data["outputs"]
-                        
-                        dweights_for_tokens = xp.zeros(len(token_indices))
-                        
-                        for i, tok_idx in enumerate(token_indices):
-                            pos = xp.where(cached_token_indices == tok_idx)[0]
-                            if len(pos) > 0:
-                                dweights_for_tokens[i] = xp.sum(expert_dy[i] * cached_outputs[pos[0]])
-                        
-                        xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
-                    else:
-                        # Fallback: forward through expert
-                        expert_x = x_flat[token_indices]
-                        expert_out, _ = self.experts.experts[exp_idx].forward(expert_x)
-                        
-                        dweights_for_tokens = xp.sum(expert_dy * expert_out, axis=-1)
-                        xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
-        
-        dweights = dweights_flat.reshape(batch_size, seq_len, k)
-        
-        # Backward through router
+
+        # Reuse the routing plan, expert outputs, and activation caches from
+        # forward.  This avoids both expert recomputation and a second expert
+        # dispatch loop solely for dL/d(router weights).
+        dx_experts, dweights = self.experts.backward(
+            dy, experts_cache, return_dweights=True
+        )
+
         dx_router = self.router.backward(dweights, router_cache)
-        dx += dx_router  # Add router gradient to input gradient
-        
-        return dx
+        return dx_experts + dx_router

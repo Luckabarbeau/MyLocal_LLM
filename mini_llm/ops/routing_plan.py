@@ -1,152 +1,116 @@
 """Routing plan for Mixture of Experts.
 
-Creates a plan for token-to-expert assignments that can be reused
-during both forward and backward passes, avoiding redundant routing computation.
+Creates a plan for token-to-expert assignments that can be reused during
+forward and backward without rebuilding masks for every expert.
+
+The hot-path arrays stay on the selected backend.  Only the tiny per-expert
+assignment counts are copied to the host once when the plan is created so
+expert slices use ordinary Python integer offsets instead of GPU scalar
+indices (which would synchronize repeatedly under CuPy).
 """
 
-from ..backend import xp
+from ..backend import xp, asnumpy
 
 
 class RoutingPlan:
-    """
-    Pre-computed routing plan for MoE dispatch.
-    
-    Contains all information needed to efficiently dispatch tokens to experts
-    and collect results, without recomputing masks during backward.
-    
-    For N tokens and top_k = k, we have N*k assignments.
-    
-    Attributes:
-        order: Indices that would sort expert_ids
-        token_indices: Token IDs sorted by expert (for forward)
-        slot_indices: Slot IDs sorted by expert (for forward)
-        expert_indices: Expert IDs sorted (for forward)
-        weights: Weights sorted by expert (for forward)
-        expert_offsets: Start index for each expert in sorted arrays
-        expert_sizes: Number of assignments per expert
-        n_experts: Total number of experts
-        k: Top-k value
-        N: Total number of tokens (batch * seq_len)
-    """
+    """Pre-computed token-to-expert dispatch information."""
 
     def __init__(
         self,
-        token_indices: xp.ndarray,
-        slot_indices: xp.ndarray,
-        expert_indices: xp.ndarray,
-        weights: xp.ndarray,
-        order: xp.ndarray,
-        expert_offsets: xp.ndarray,
-        expert_sizes: xp.ndarray,
+        token_indices,
+        slot_indices,
+        expert_indices,
+        weights,
+        order,
+        expert_offsets,
+        expert_sizes,
         n_experts: int,
         k: int,
         N: int,
     ):
-        """
-        Initialize routing plan.
-        
-        Args:
-            token_indices: Token IDs sorted by expert, shape [N*k]
-            slot_indices: Slot IDs sorted by expert, shape [N*k]
-            expert_indices: Expert IDs sorted, shape [N*k]
-            weights: Weights sorted by expert, shape [N*k]
-            order: Indices that sort expert_ids
-            expert_offsets: Start index for each expert in sorted arrays
-            expert_sizes: Number of assignments per expert
-            n_experts: Total number of experts
-            k: Top-k value
-            N: Total number of tokens
-        """
         self.token_indices = token_indices
         self.slot_indices = slot_indices
         self.expert_indices = expert_indices
         self.weights = weights
         self.order = order
-        self.expert_offsets = expert_offsets
-        self.expert_sizes = expert_sizes
-        self.n_experts = n_experts
-        self.k = k
-        self.N = N
+
+        # Keep these on the host.  They contain only n_experts (+1) integers
+        # and are used for Python slicing in every expert dispatch.  Keeping
+        # them as backend scalars would force GPU->CPU synchronization every
+        # time get_expert_assignments() is called with CuPy.
+        self.expert_offsets = tuple(int(v) for v in expert_offsets)
+        self.expert_sizes = tuple(int(v) for v in expert_sizes)
+        self.n_experts = int(n_experts)
+        self.k = int(k)
+        self.N = int(N)
 
     @classmethod
-    def from_router_outputs(cls, expert_indices: xp.ndarray, weights: xp.ndarray, k: int, n_experts: int = None):
-        """
-        Create routing plan from router outputs.
-        
-        Args:
-            expert_indices: Expert indices from router, shape [B, T, k]
-            weights: Weights from router, shape [B, T, k]
-            k: Top-k value
-            n_experts: Total number of experts (computed if not provided)
-            
-        Returns:
-            RoutingPlan instance
+    def from_router_outputs(
+        cls,
+        expert_indices,
+        weights,
+        k: int,
+        n_experts: int = None,
+    ):
+        """Create a routing plan from router top-k outputs.
+
+        There are N*k assignments.  We sort the flattened assignments once by
+        expert id and retain the same order for token ids, top-k slot ids, and
+        routing weights.  The sorted arrays are then reused by both forward and
+        backward.
         """
         batch_size, seq_len, _ = expert_indices.shape
         N = batch_size * seq_len
-        
-        # Determine n_experts if not provided
+
         if n_experts is None:
-            n_experts = int(xp.max(expert_indices).item()) + 1
-        
-        # Flatten all arrays
-        expert_indices_flat = expert_indices.reshape(N, k)
-        weights_flat = weights.reshape(N, k)
-        
-        # Create token_ids and slot_ids arrays
-        # token_ids: [0, 0, ..., 1, 1, ..., N-1, N-1, ...] (k times each)
-        token_ids = xp.repeat(xp.arange(N), k)  # [N*k]
-        
-        # slot_ids: [0, 1, ..., k-1, 0, 1, ..., k-1, ...] (N times)
-        slot_ids = xp.tile(xp.arange(k), N)  # [N*k]
-        
-        # Flatten expert indices and weights
-        expert_ids_flat = expert_indices_flat.flatten()  # [N*k]
-        weights_flat_sorted = weights_flat.flatten()  # [N*k]
-        
-        # Sort by expert id to group assignments by expert
+            # Compatibility fallback.  Normal MoE code should always provide
+            # n_experts so this host synchronization is not needed.
+            n_experts = int(asnumpy(xp.max(expert_indices))) + 1
+
+        expert_ids_flat = expert_indices.reshape(-1)
+        weights_flat = weights.reshape(-1)
+
+        # Group assignments once.  The flattened assignment index already
+        # contains both token and top-k slot information:
+        #   token = assignment // k
+        #   slot  = assignment % k
+        # so avoid constructing repeat()/tile() arrays before the sort.
         order = xp.argsort(expert_ids_flat)
-        expert_sorted = expert_ids_flat[order]  # [N*k]
-        token_sorted = token_ids[order]  # [N*k]
-        slot_sorted = slot_ids[order]  # [N*k]
-        weights_sorted = weights_flat_sorted[order]  # [N*k]
-        
-        # Compute expert offsets (start index for each expert)
-        # For efficient lookup: given expert_id, where does its assignments start?
-        expert_offsets = xp.empty(n_experts + 1, dtype=xp.int32)
-        expert_offsets[0] = 0
-        
-        for exp_idx in range(n_experts):
-            # Count assignments for this expert
-            count = xp.sum(expert_sorted == exp_idx).item()
-            expert_offsets[exp_idx + 1] = expert_offsets[exp_idx] + count
-        
-        # Compute expert sizes (number of assignments per expert)
-        expert_sizes = expert_offsets[1:] - expert_offsets[:-1]
-        
+        expert_sorted = expert_ids_flat[order]
+        token_sorted = order // k
+        slot_sorted = order % k
+        weights_sorted = weights_flat[order]
+
+        # Compute all expert sizes in one backend operation, then perform ONE
+        # tiny host transfer.  The old implementation called .item() once per
+        # expert, causing repeated CuPy synchronization.
+        counts = xp.bincount(expert_ids_flat, minlength=n_experts)
+        counts_host = asnumpy(counts)
+
+        offsets = [0]
+        sizes = []
+        running = 0
+        for count in counts_host:
+            count_i = int(count)
+            sizes.append(count_i)
+            running += count_i
+            offsets.append(running)
+
         return cls(
             token_indices=token_sorted,
             slot_indices=slot_sorted,
             expert_indices=expert_sorted,
             weights=weights_sorted,
             order=order,
-            expert_offsets=expert_offsets,
-            expert_sizes=expert_sizes,
+            expert_offsets=offsets,
+            expert_sizes=sizes,
             n_experts=n_experts,
             k=k,
             N=N,
         )
 
-    def get_expert_assignments(self, expert_idx: int) -> tuple:
-        """
-        Get token, slot, and weight indices for a specific expert.
-        
-        Args:
-            expert_idx: Expert ID
-            
-        Returns:
-            Tuple of (token_indices, slot_indices, weights) for this expert
-        """
+    def get_expert_assignments(self, expert_idx: int):
+        """Return token ids, top-k slot ids, and weights for one expert."""
         start = self.expert_offsets[expert_idx]
         end = self.expert_offsets[expert_idx + 1]
         return (
@@ -156,21 +120,15 @@ class RoutingPlan:
         )
 
     def get_assignment_count(self, expert_idx: int) -> int:
-        """Get number of token assignments to a specific expert."""
-        return self.expert_sizes[expert_idx].item()
+        """Return the number of assignments routed to one expert."""
+        return self.expert_sizes[expert_idx]
 
 
-def create_routing_plan(expert_indices: xp.ndarray, weights: xp.ndarray, k: int, n_experts: int) -> RoutingPlan:
-    """
-    Convenience function to create a routing plan.
-    
-    Args:
-        expert_indices: Expert indices from router, shape [B, T, k]
-        weights: Weights from router, shape [B, T, k]
-        k: Top-k value
-        n_experts: Total number of experts
-        
-    Returns:
-        RoutingPlan instance
-    """
-    return RoutingPlan.from_router_outputs(expert_indices, weights, k)
+def create_routing_plan(expert_indices, weights, k: int, n_experts: int) -> RoutingPlan:
+    """Convenience wrapper preserving the explicit expert count."""
+    return RoutingPlan.from_router_outputs(
+        expert_indices,
+        weights,
+        k,
+        n_experts=n_experts,
+    )

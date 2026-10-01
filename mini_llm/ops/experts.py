@@ -129,12 +129,15 @@ class ExpertFFN:
         h = a * u
         y = h @ self.W_down.data
         
-        # Cache only the minimum needed: x, g, u (h can be reconstructed as silu(g) * u)
+        # Speed-oriented training cache.  Keeping a and h avoids recomputing
+        # SiLU(g) and a*u during backward.  The routed expert output y is
+        # cached once by Experts.forward() for the router-weight gradient.
         cache = {
             "x": x,
             "g": g,
             "u": u,
-            "y": y,
+            "a": a,
+            "h": h,
         }
         
         return y, cache
@@ -153,14 +156,11 @@ class ExpertFFN:
         x = cache["x"]
         g = cache["g"]
         u = cache["u"]
+        a = cache["a"]
+        h = cache["h"]
         
         dy_2d = dy.reshape(-1, dy.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
-        
-        # Reconstruct h from cached g and u: h = silu(g) * u
-        a = silu(g)
-        h = a * u
-        
         h_2d = h.reshape(-1, h.shape[-1])
         
         self.W_down.grad += h_2d.T @ dy_2d
@@ -308,9 +308,11 @@ class Experts:
                 }
                 expert_caches[exp_idx] = expert_cache
                 
-                # Weight and accumulate to output
+                # Weight and accumulate to output.  token_indices are unique
+                # within a single expert because top-k cannot select the same
+                # expert twice for one token, so atomics are unnecessary.
                 weighted_out = expert_weights[:, xp.newaxis] * expert_out
-                xp.add.at(y_flat, token_indices, weighted_out)
+                y_flat[token_indices] += weighted_out
         
         # Reshape: [N, D] -> [B, T, D]
         y = y_flat.reshape(batch_size, seq_len, d_model)
@@ -328,19 +330,22 @@ class Experts:
         
         return y, cache
 
-    def backward(self, dy, cache):
+    def backward(self, dy, cache, return_dweights=False):
         """
-        Backward pass through experts with true sparse token-to-expert dispatch.
-        
-        For each expert, gathers gradients from tokens that were routed to it,
-        computes gradients, and accumulates to input gradient.
-        
+        Backward pass through sparsely-routed experts.
+
+        The routing plan and expert outputs cached in forward are reused here.
+        When ``return_dweights`` is true, the router-weight gradient is
+        computed in this SAME expert loop, avoiding the second dispatch pass
+        that previously lived in ``MoE.backward``.
+
         Args:
-            dy: Gradient w.r.t. output, shape (B, T, d_model)
-            cache: Dictionary from forward pass
-            
+            dy: Gradient w.r.t. MoE output, shape (B, T, d_model).
+            cache: Dictionary returned by ``Experts.forward``.
+            return_dweights: Also return dL/d(selected routing weights).
+
         Returns:
-            dx: Gradient w.r.t. input, shape (B, T, d_model)
+            dx, or ``(dx, dweights)`` when ``return_dweights=True``.
         """
         x = cache["x"]
         weights = cache["weights"]
@@ -348,74 +353,82 @@ class Experts:
         batch_size, seq_len, d_model = x.shape
         N = batch_size * seq_len
         k = weights.shape[-1]
-        
-        # Flatten inputs
+
         dy_flat = dy.reshape(N, d_model)
         weights_flat = weights.reshape(N, k)
         expert_indices_flat = expert_indices.reshape(N, k)
-        
-        # Initialize gradient w.r.t. input
+
         dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
-        
-        # Get cached expert outputs and caches from forward pass
+        dweights_flat = (
+            xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
+        )
+
         expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
-        
-        # If routing plan not available (from forward pass)
         routing_plan = cache.get("routing_plan")
-        
-        # Determine n_experts from cache or use self.n_experts
-        expert_indices_cache = cache.get("expert_indices")
-        if routing_plan is None and expert_indices_cache is not None:
-            # Compute n_experts from expert_indices
-            n_exp_from_indices = int(xp.max(expert_indices_cache).item()) + 1
-        else:
-            n_exp_from_indices = self.n_experts
-        
-        # For each expert, gather tokens and accumulate gradients
+
+        # Fallback metadata is built lazily only for legacy caches.  The normal
+        # optimized path always receives a RoutingPlan from forward.
+        fallback_token_ids = None
+        fallback_slot_ids = None
+        fallback_weights = None
+
         for exp_idx in range(self.n_experts):
-            # Get token indices from routing plan (or compute if not available)
             if routing_plan is not None:
-                # Use routing plan - no mask reconstruction needed!
-                token_indices, slot_indices, expert_weights = routing_plan.get_expert_assignments(exp_idx)
-                # Check if this expert has any assignments
-                if len(token_indices) == 0:
+                token_indices, slot_indices, expert_weights = (
+                    routing_plan.get_expert_assignments(exp_idx)
+                )
+                if routing_plan.get_assignment_count(exp_idx) == 0:
                     continue
             else:
-                # Fallback: reconstruct by finding tokens where expert was selected
-                expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
-                if xp.any(expert_selected):
-                    flat_mask = expert_selected.flatten()  # [N*k]
-                    all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
-                    token_indices = all_token_indices[flat_mask]  # [n_assigned]
-                    all_weights = weights_flat.flatten()  # [N*k]
-                    expert_weights = all_weights[flat_mask]  # [n_assigned]
-                else:
-                    token_indices = xp.empty(0, dtype=xp.int32)
-                    expert_weights = xp.empty(0, dtype=weights.dtype)
-            
-            if len(token_indices) > 0:
-                # Gather dy and weight: [n_assigned, D]
-                expert_dy = dy_flat[token_indices] * expert_weights[:, xp.newaxis]
-                
-                # Use cached expert outputs and caches if available
-                if exp_idx in expert_outputs and exp_idx in expert_caches:
-                    # Reuse cached outputs - NO FORWARD CALL!
-                    expert_out = expert_outputs[exp_idx]["outputs"]
-                    expert_cache = expert_caches[exp_idx]
-                else:
-                    # Fallback: gather x and forward again (shouldn't happen with new cache)
-                    x_flat = x.reshape(N, d_model)
-                    expert_x = x_flat[token_indices]
-                    expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
-                
-                # Backward through this expert
-                expert_dx = self.experts[exp_idx].backward(expert_dy, expert_cache)
-                
-                # Accumulate to input gradient
-                xp.add.at(dx_flat, token_indices, expert_dx)
-        
-        # Reshape: [N, D] -> [B, T, D]
+                expert_selected = (expert_indices_flat == exp_idx)
+                if fallback_token_ids is None:
+                    fallback_token_ids = xp.repeat(xp.arange(N), k)
+                    fallback_slot_ids = xp.tile(xp.arange(k), N)
+                    fallback_weights = weights_flat.reshape(-1)
+
+                flat_mask = expert_selected.reshape(-1)
+                token_indices = fallback_token_ids[flat_mask]
+                slot_indices = fallback_slot_ids[flat_mask]
+                expert_weights = fallback_weights[flat_mask]
+                if len(token_indices) == 0:
+                    continue
+
+            # Raw dy is needed for dL/d(router weight).  The expert parameter
+            # gradient receives dy multiplied by the selected routing weight.
+            raw_expert_dy = dy_flat[token_indices]
+
+            if exp_idx in expert_outputs and exp_idx in expert_caches:
+                expert_out = expert_outputs[exp_idx]["outputs"]
+                expert_cache = expert_caches[exp_idx]
+            else:
+                # Legacy-cache fallback only.  New forward passes always cache
+                # both expert output and activation cache.
+                expert_x = x.reshape(N, d_model)[token_indices]
+                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+
+            if return_dweights:
+                # For y = sum_s w_s E_s(x):
+                #   dL/dw_s = dot(dL/dy, E_s(x)).
+                # The cached output order is exactly the routing-plan order for
+                # this expert, so no token search / xp.where is necessary.
+                dweight_values = xp.sum(
+                    raw_expert_dy * expert_out, axis=-1
+                )
+                dweights_flat[token_indices, slot_indices] = dweight_values
+
+            expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
+            expert_dx = self.experts[exp_idx].backward(
+                expert_dy, expert_cache
+            )
+
+            # top-k selection contains each expert at most once per token, so
+            # token_indices are unique within this expert.  The expert loop is
+            # serialized on the same stream; atomics are unnecessary here.
+            dx_flat[token_indices] += expert_dx
+
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
-        
+
+        if return_dweights:
+            return dx, dweights_flat.reshape(batch_size, seq_len, k)
         return dx

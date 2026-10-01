@@ -6,6 +6,7 @@ Two implementations:
 """
 
 from ..backend import xp
+from .routing_plan import RoutingPlan
 
 
 def silu(x):
@@ -117,7 +118,7 @@ class ExpertFFN:
             
         Returns:
             y: Output tensor of shape (B, T, d_model)
-            cache: Dictionary for backward pass
+            cache: Dictionary for backward pass (contains minimal intermediates)
         """
         # Increment forward call counter
         ExpertFFN._forward_call_count += 1
@@ -128,12 +129,12 @@ class ExpertFFN:
         h = a * u
         y = h @ self.W_down.data
         
+        # Cache only the minimum needed: x, g, u (h can be reconstructed as silu(g) * u)
         cache = {
             "x": x,
             "g": g,
             "u": u,
-            "a": a,
-            "h": h,
+            "y": y,
         }
         
         return y, cache
@@ -149,13 +150,18 @@ class ExpertFFN:
         Returns:
             dx: Gradient w.r.t. input, same shape as x
         """
-        x, g, u, a, h = (
-            cache["x"], cache["g"], cache["u"], cache["a"], cache["h"]
-        )
+        x = cache["x"]
+        g = cache["g"]
+        u = cache["u"]
         
         dy_2d = dy.reshape(-1, dy.shape[-1])
-        h_2d = h.reshape(-1, h.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
+        
+        # Reconstruct h from cached g and u: h = silu(g) * u
+        a = silu(g)
+        h = a * u
+        
+        h_2d = h.reshape(-1, h.shape[-1])
         
         self.W_down.grad += h_2d.T @ dy_2d
         
@@ -237,7 +243,7 @@ class Experts:
         # The counter is shared across all instances via class variable
         return ExpertFFN.get_forward_count()
 
-    def forward(self, x, weights, expert_indices):
+    def forward(self, x, weights, expert_indices, routing_plan: RoutingPlan = None, n_experts: int = None):
         """
         Forward pass through experts with true sparse token-to-expert dispatch.
         
@@ -248,6 +254,8 @@ class Experts:
             x: Input tensor of shape (B, T, d_model)
             weights: Expert weights from router, shape (B, T, k)
             expert_indices: Indices of selected experts, shape (B, T, k)
+            routing_plan: Pre-computed routing plan (optional, creates if not provided)
+            n_experts: Total number of experts (uses self.n_experts if not provided)
             
         Returns:
             y: Weighted combination of expert outputs, shape (B, T, d_model)
@@ -272,25 +280,20 @@ class Experts:
         expert_outputs = {}  # exp_idx -> {"outputs": [...], "token_indices": [...], "weights": [...]}
         expert_caches = {}   # exp_idx -> cache from expert.forward()
         
-        # Group assignments by expert entirely on GPU (no CPU transfers)
-        # For each expert, gather tokens and compute outputs
+        # Determine n_experts
+        if n_experts is None:
+            n_experts = self.n_experts
+        
+        # If routing plan not provided, create it
+        if routing_plan is None:
+            routing_plan = RoutingPlan.from_router_outputs(expert_indices, weights, k, n_experts=self.n_experts)
+        
+        # Group assignments by expert using the routing plan
         for exp_idx in range(self.n_experts):
-            # Find tokens where this expert was selected (at any slot)
-            expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
+            # Get token, slot, and weight indices for this expert from plan
+            token_indices, slot_indices, expert_weights = routing_plan.get_expert_assignments(exp_idx)
             
-            if xp.any(expert_selected):
-                # Get token indices and weights for this expert
-                # Flatten expert_selected to get boolean mask
-                flat_mask = expert_selected.flatten()  # [N*k]
-                
-                # Token indices where this expert was selected
-                all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
-                token_indices = all_token_indices[flat_mask]  # [n_assigned]
-                
-                # Weights for these assignments
-                all_weights = weights_flat.flatten()  # [N*k]
-                expert_weights = all_weights[flat_mask]  # [n_assigned]
-                
+            if len(token_indices) > 0:
                 # Gather tokens: [n_assigned, D]
                 expert_x = x_flat[token_indices]
                 
@@ -320,6 +323,7 @@ class Experts:
             "y": y,
             "expert_outputs": expert_outputs,  # For router gradient computation
             "expert_caches": expert_caches,    # For expert backward pass
+            "routing_plan": routing_plan,      # For backward pass
         }
         
         return y, cache
@@ -357,21 +361,40 @@ class Experts:
         expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
         
+        # If routing plan not available (from forward pass)
+        routing_plan = cache.get("routing_plan")
+        
+        # Determine n_experts from cache or use self.n_experts
+        expert_indices_cache = cache.get("expert_indices")
+        if routing_plan is None and expert_indices_cache is not None:
+            # Compute n_experts from expert_indices
+            n_exp_from_indices = int(xp.max(expert_indices_cache).item()) + 1
+        else:
+            n_exp_from_indices = self.n_experts
+        
         # For each expert, gather tokens and accumulate gradients
         for exp_idx in range(self.n_experts):
-            # Find tokens where this expert was selected
-            expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
+            # Get token indices from routing plan (or compute if not available)
+            if routing_plan is not None:
+                # Use routing plan - no mask reconstruction needed!
+                token_indices, slot_indices, expert_weights = routing_plan.get_expert_assignments(exp_idx)
+                # Check if this expert has any assignments
+                if len(token_indices) == 0:
+                    continue
+            else:
+                # Fallback: reconstruct by finding tokens where expert was selected
+                expert_selected = (expert_indices_flat == exp_idx)  # [N, k]
+                if xp.any(expert_selected):
+                    flat_mask = expert_selected.flatten()  # [N*k]
+                    all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
+                    token_indices = all_token_indices[flat_mask]  # [n_assigned]
+                    all_weights = weights_flat.flatten()  # [N*k]
+                    expert_weights = all_weights[flat_mask]  # [n_assigned]
+                else:
+                    token_indices = xp.empty(0, dtype=xp.int32)
+                    expert_weights = xp.empty(0, dtype=weights.dtype)
             
-            if xp.any(expert_selected):
-                # Get token indices and weights
-                flat_mask = expert_selected.flatten()  # [N*k]
-                all_token_indices = xp.repeat(xp.arange(N), k)  # [N*k]
-                token_indices = all_token_indices[flat_mask]  # [n_assigned]
-                
-                # Weights for these assignments
-                all_weights = weights_flat.flatten()  # [N*k]
-                expert_weights = all_weights[flat_mask]  # [n_assigned]
-                
+            if len(token_indices) > 0:
                 # Gather dy and weight: [n_assigned, D]
                 expert_dy = dy_flat[token_indices] * expert_weights[:, xp.newaxis]
                 

@@ -52,7 +52,7 @@ def parse_args():
     # Model selection
     parser.add_argument(
         "--model",
-        choices=["micro", "mini", "small", "medium"],
+        choices=["micro", "mini", "small", "medium","large"],
         default="mini",
         help="Model size configuration",
     )
@@ -358,7 +358,6 @@ def main():
     if args.resume_from:
         # Resume from checkpoint
         checkpoint_path = Path(args.resume_from)
-        
         # Load config
         config_path = checkpoint_path / "config.json"
         if config_path.exists():
@@ -373,9 +372,10 @@ def main():
                 config = ModelConfig.mini()
             elif args.model == "small":
                 config = ModelConfig.small()
-            else:
+            elif args.model == "medium":
                 config = ModelConfig.medium()
-        
+            else:
+                config = ModelConfig.large()
         print(f"Resuming from checkpoint: {checkpoint_path}")
         
         # Load model
@@ -429,8 +429,10 @@ def main():
             config = ModelConfig.mini()
         elif args.model == "small":
             config = ModelConfig.small()
-        else:
+        elif args.model == "medium":
             config = ModelConfig.medium()
+        else:
+            config = ModelConfig.large()
         
         # Load tokenizer to get actual vocab size (if existing shards exist)
         existing_tokenizer_path = shard_dir / "tokenizer.json"

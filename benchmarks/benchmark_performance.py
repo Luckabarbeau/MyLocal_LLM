@@ -281,6 +281,269 @@ def benchmark_training(
     return results
 
 
+def _sample_generated_token(
+    logits,
+    strategy: str = "greedy",
+    top_k: int = 40,
+    temperature: float = 0.8,
+) -> int:
+    """Sample one token using production-like host semantics.
+
+    The returned Python ``int`` intentionally introduces the same device->host
+    scalar dependency that the real generation loop has.  This helper is used
+    only by the end-to-end generation diagnostic, not by pure model timing.
+    """
+    flat_logits = logits.reshape(-1)
+
+    if strategy == "greedy":
+        token = xp.argmax(flat_logits)
+        return int(asnumpy(token).reshape(()))
+
+    if strategy != "top-k":
+        raise ValueError(f"Unsupported inference benchmark strategy: {strategy}")
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0 for top-k sampling")
+
+    vocab_size = int(flat_logits.shape[0])
+    k = max(1, min(int(top_k), vocab_size))
+
+    if k == vocab_size:
+        indices = xp.arange(vocab_size, dtype=xp.int32)
+    else:
+        kth = vocab_size - k
+        indices = xp.argpartition(flat_logits, kth)[kth:]
+
+    # Only the selected logits need FP32 softmax-like work.
+    top_logits = flat_logits[indices].astype(xp.float32, copy=True)
+    top_logits /= float(temperature)
+    top_logits -= xp.max(top_logits)
+    xp.exp(top_logits, out=top_logits)
+
+    cdf = xp.cumsum(top_logits)
+    draw = xp.random.random() * cdf[-1]
+    selected_slot = xp.searchsorted(cdf, draw, side="right")
+    token = indices[selected_slot]
+    return int(asnumpy(token).reshape(()))
+
+
+def benchmark_decode_position_scaling(
+    inference_model: InferenceModel,
+    max_length: int,
+    positions: list[int],
+    iterations: int = 5,
+    warmup_iterations: int = 1,
+) -> list[dict]:
+    """Measure one pure ``decode_one`` call at known KV-cache lengths.
+
+    Prefill is performed before the timed region.  The reported cache position
+    is the number of tokens already present in the KV cache when ``decode_one``
+    begins.  Sampling is deliberately excluded.
+    """
+    print("\n" + "-" * 70)
+    print("DECODE POSITION SCALING (MODEL ONLY)")
+    print("-" * 70)
+    print("  Prefill/setup is excluded from each timed decode.")
+    print("  Sampling is excluded; each decode consumes a fixed token id.")
+    print()
+    print(f"{'cache length':>12}  {'mean ms/token':>14}  {'std ms':>10}  {'tok/s':>10}")
+
+    fixed_token = xp.asarray([[4]], dtype=xp.int32)
+    results: list[dict] = []
+
+    for requested_position in positions:
+        position = int(requested_position)
+        if position < 1 or position >= max_length:
+            print(f"{position:>12}  {'SKIP':>14}  {'-':>10}  {'-':>10}")
+            continue
+
+        prompt = xp.random.randint(
+            0,
+            inference_model.vocab_size,
+            size=(1, position),
+            dtype=xp.int32,
+        )
+
+        for _ in range(max(0, warmup_iterations)):
+            state = inference_model.create_generation_state(batch_size=1, max_length=max_length)
+            inference_model.prefill(prompt, state)
+            synchronize()
+            inference_model.decode_one(fixed_token, state)
+            synchronize()
+
+        samples = []
+        for _ in range(max(1, iterations)):
+            state = inference_model.create_generation_state(batch_size=1, max_length=max_length)
+            inference_model.prefill(prompt, state)
+            synchronize()
+
+            t0 = time.perf_counter()
+            inference_model.decode_one(fixed_token, state)
+            synchronize()
+            samples.append(time.perf_counter() - t0)
+
+        arr = np.asarray(samples, dtype=np.float64)
+        mean_s = float(np.mean(arr))
+        std_s = float(np.std(arr))
+        tok_s = 1.0 / mean_s if mean_s > 0 else float("inf")
+        result = {
+            "cache_length": position,
+            "mean_seconds": mean_s,
+            "std_seconds": std_s,
+            "tokens_per_second": tok_s,
+        }
+        results.append(result)
+        print(f"{position:12d}  {mean_s * 1000:14.4f}  {std_s * 1000:10.4f}  {tok_s:10.1f}")
+
+    return results
+
+
+def benchmark_full_context_model_decode(
+    inference_model: InferenceModel,
+    max_length: int,
+    prompt_length: int = 4,
+    iterations: int = 3,
+    warmup_iterations: int = 1,
+) -> dict:
+    """Measure pure model decode while sweeping from a short prompt to max context.
+
+    The prompt is prefetched before timing.  A fixed token is repeatedly sent to
+    ``decode_one`` so sampling cannot hide model/KV-cache scaling.  This sweeps
+    cache lengths from ``prompt_length`` through ``max_length - 1``.
+    """
+    prompt_length = max(1, min(int(prompt_length), max_length - 1))
+    decode_calls = max_length - prompt_length
+    prompt = xp.random.randint(
+        0,
+        inference_model.vocab_size,
+        size=(1, prompt_length),
+        dtype=xp.int32,
+    )
+    fixed_token = xp.asarray([[4]], dtype=xp.int32)
+
+    def run_once() -> float:
+        state = inference_model.create_generation_state(batch_size=1, max_length=max_length)
+        inference_model.prefill(prompt, state)
+        synchronize()
+
+        t0 = time.perf_counter()
+        for _ in range(decode_calls):
+            inference_model.decode_one(fixed_token, state)
+        synchronize()
+        return time.perf_counter() - t0
+
+    for _ in range(max(0, warmup_iterations)):
+        run_once()
+
+    elapsed = np.asarray([run_once() for _ in range(max(1, iterations))], dtype=np.float64)
+    mean_s = float(np.mean(elapsed))
+    std_s = float(np.std(elapsed))
+    ms_per_token = (mean_s / decode_calls) * 1000.0
+    tok_s = decode_calls / mean_s
+
+    result = {
+        "prompt_length": prompt_length,
+        "decode_calls": decode_calls,
+        "mean_seconds": mean_s,
+        "std_seconds": std_s,
+        "ms_per_token": ms_per_token,
+        "tokens_per_second": tok_s,
+    }
+
+    print("\n" + "-" * 70)
+    print("FULL-CONTEXT MODEL-ONLY DECODE SWEEP")
+    print("-" * 70)
+    print(f"  Cache range: {prompt_length} -> {max_length - 1}")
+    print(f"  Decode calls: {decode_calls}")
+    print(f"  Mean total: {mean_s * 1000:.2f}ms")
+    print(f"  Mean decode: {ms_per_token:.4f}ms/token")
+    print(f"  Pure model decode: {tok_s:.1f} tokens/sec")
+
+    return result
+
+
+def benchmark_full_context_generation(
+    inference_model: InferenceModel,
+    max_length: int,
+    prompt_length: int = 4,
+    iterations: int = 3,
+    warmup_iterations: int = 1,
+    strategy: str = "greedy",
+    top_k: int = 40,
+    temperature: float = 0.8,
+) -> dict:
+    """Benchmark a production-like autoregressive loop to context capacity.
+
+    Prompt prefill is excluded from generation timing, matching ``inference.py``.
+    The first generated token is sampled from prefill logits.  Therefore a run
+    generating ``max_length - prompt_length`` tokens performs one fewer
+    ``decode_one`` calls, just like the production loop.
+    """
+    prompt_length = max(1, min(int(prompt_length), max_length - 1))
+    generated_tokens = max_length - prompt_length
+    decode_calls = max(0, generated_tokens - 1)
+    prompt = xp.random.randint(
+        0,
+        inference_model.vocab_size,
+        size=(1, prompt_length),
+        dtype=xp.int32,
+    )
+
+    def run_once() -> float:
+        state = inference_model.create_generation_state(batch_size=1, max_length=max_length)
+        logits = inference_model.prefill(prompt, state)
+        synchronize()
+
+        t0 = time.perf_counter()
+        for step in range(generated_tokens):
+            next_id = _sample_generated_token(
+                logits,
+                strategy=strategy,
+                top_k=top_k,
+                temperature=temperature,
+            )
+            if step == generated_tokens - 1:
+                break
+            next_token = xp.asarray([[next_id]], dtype=xp.int32)
+            logits = inference_model.decode_one(next_token, state)
+        synchronize()
+        return time.perf_counter() - t0
+
+    for _ in range(max(0, warmup_iterations)):
+        run_once()
+
+    elapsed = np.asarray([run_once() for _ in range(max(1, iterations))], dtype=np.float64)
+    mean_s = float(np.mean(elapsed))
+    std_s = float(np.std(elapsed))
+    ms_per_generated = (mean_s / generated_tokens) * 1000.0
+    tok_s = generated_tokens / mean_s
+
+    result = {
+        "prompt_length": prompt_length,
+        "generated_tokens": generated_tokens,
+        "decode_calls": decode_calls,
+        "strategy": strategy,
+        "top_k": int(top_k),
+        "temperature": float(temperature),
+        "mean_seconds": mean_s,
+        "std_seconds": std_s,
+        "ms_per_generated_token": ms_per_generated,
+        "generated_tokens_per_second": tok_s,
+    }
+
+    print("\n" + "-" * 70)
+    print("FULL-CONTEXT PRODUCTION-LIKE GENERATION")
+    print("-" * 70)
+    print(f"  Prompt length: {prompt_length}")
+    print(f"  Generated tokens: {generated_tokens}")
+    print(f"  decode_one calls: {decode_calls}")
+    print(f"  Sampling: {strategy}" + (f" (k={top_k}, T={temperature})" if strategy == "top-k" else ""))
+    print(f"  Mean total generation: {mean_s * 1000:.2f}ms")
+    print(f"  Mean generation: {ms_per_generated:.4f}ms/token")
+    print(f"  Generated-token throughput: {tok_s:.1f} tokens/sec")
+
+    return result
+
+
 def benchmark_inference(
     inference_model: InferenceModel,
     max_length: int = 512,
@@ -289,115 +552,86 @@ def benchmark_inference(
     iterations: int = 50,
     warmup_iterations: int = 10,
 ) -> dict:
-    """
-    Benchmark inference performance with fine-grained timing.
-    
-    Measures:
-        - prefill
-        - decode_one
-        - sampling
-        - decode ms/token
-        - tokens/sec
-    
-    Args:
-        inference_model: InferenceModel instance
-        max_length: Maximum sequence length
-        prompt_length: Length of prompt for prefill
-        max_new_tokens: Number of tokens to generate in decode phase
-        iterations: Number of iterations to benchmark
-        warmup_iterations: Number of warmup iterations before benchmarking
-        
-    Returns:
-        Dictionary with timing statistics
+    """Benchmark short-window inference with unambiguous throughput metrics.
+
+    This benchmark intentionally keeps the historical 64-token prefill + short
+    decode window, but it no longer counts prompt tokens as generated tokens.
+    It reports prompt-processing throughput, pure decode throughput, decode plus
+    sampling throughput, and request-level generated-token throughput separately.
     """
     print("\n" + "=" * 70)
     print("INFERENCE BENCHMARK")
     print("=" * 70)
-    
+
     batch_size = 1
-    
-    # Statistics containers
+    max_new_tokens = max(1, min(int(max_new_tokens), max_length - 1))
+    prompt_length = max(1, min(int(prompt_length), max_length - max_new_tokens))
+
     stats = {
         "prefill": [],
         "decode_one": [],
         "sampling": [],
     }
-    
-    # Create generation state
-    state = inference_model.create_generation_state(batch_size=batch_size, max_length=max_length)
-    
-    # Generate random input for benchmarking
-    np.random.seed(42)
-    prompt_ids = xp.random.randint(0, inference_model.vocab_size, size=(batch_size, prompt_length), dtype=xp.int32)
-    
-    # Limit prompt length to available context
-    actual_prompt_len = min(prompt_length, max_length - max_new_tokens - 1)
-    
+
+    prompt_ids = xp.random.randint(
+        0,
+        inference_model.vocab_size,
+        size=(batch_size, prompt_length),
+        dtype=xp.int32,
+    )
+    fixed_token = prompt_ids[:, :1]
+
     print(f"\nConfiguration:")
     print(f"  Model: {inference_model.d_model}d, {inference_model.n_layers} layers")
     print(f"  Vocab size: {inference_model.vocab_size}")
     print(f"  Context: {max_length}")
     print(f"  Prompt length: {prompt_length}")
-    print(f"  Max new tokens: {max_new_tokens}")
+    print(f"  Decode window: {max_new_tokens} tokens")
     print(f"  Backend: {BACKEND_NAME}")
     print(f"  dtype: {inference_model.dtype}")
     print(f"\nBenchmarking:")
     print(f"  Warmup iterations: {warmup_iterations}")
     print(f"  Benchmark iterations: {iterations}")
-    
-    # Warmup phase - don't measure these
+
     print("\nRunning warmup iterations...")
     for _ in range(warmup_iterations):
         warmup_state = inference_model.create_generation_state(batch_size=batch_size, max_length=max_length)
         inference_model.prefill(prompt_ids, warmup_state)
         synchronize()
         for _ in range(max_new_tokens):
-            logits = inference_model.decode_one(prompt_ids[:, :1], warmup_state)
+            logits = inference_model.decode_one(fixed_token, warmup_state)
             synchronize()
-            # Sampling (simple greedy decode for timing)
-            t0 = time.perf_counter()
-            next_id = xp.argmax(logits, axis=-1)
+            xp.argmax(logits, axis=-1)
             synchronize()
-            sampling_time = time.perf_counter() - t0
     print("Warmup complete. Starting benchmark...\n")
-    
-    # Benchmark phase
+
     for _ in range(iterations):
-        # Prefill timing
-        prefill_state = inference_model.create_generation_state(batch_size=batch_size, max_length=max_length)
-        
+        state = inference_model.create_generation_state(batch_size=batch_size, max_length=max_length)
+
         synchronize()
         t0 = time.perf_counter()
-        inference_model.prefill(prompt_ids, prefill_state)
+        inference_model.prefill(prompt_ids, state)
         synchronize()
         prefill_time = time.perf_counter() - t0
-        
-        # Decode timing
+
         decode_times = []
         sampling_times = []
-        
         for _ in range(max_new_tokens):
-            # Decode one token
             synchronize()
             t0 = time.perf_counter()
-            logits = inference_model.decode_one(prompt_ids[:, :1], prefill_state)
+            logits = inference_model.decode_one(fixed_token, state)
             synchronize()
-            decode_time = time.perf_counter() - t0
-            
-            # Sampling (greedy decode)
+            decode_times.append(time.perf_counter() - t0)
+
             t0 = time.perf_counter()
-            next_id = xp.argmax(logits, axis=-1)
+            xp.argmax(logits, axis=-1)
             synchronize()
-            sampling_time = time.perf_counter() - t0
-            
-            decode_times.append(decode_time)
-            sampling_times.append(sampling_time)
-        
+            sampling_times.append(time.perf_counter() - t0)
+
         stats["prefill"].append(prefill_time)
-        stats["decode_one"].append(np.mean(decode_times))
-        stats["sampling"].append(np.mean(sampling_times))
-    
-    # Compute statistics
+        stats["decode_one"].append(float(np.mean(decode_times)))
+        stats["sampling"].append(float(np.mean(sampling_times)))
+
     def compute_stats(values):
         arr = np.array(values)
         return {
@@ -406,51 +640,51 @@ def benchmark_inference(
             "min": float(np.min(arr)),
             "max": float(np.max(arr)),
         }
-    
+
     results = {k: compute_stats(v) for k, v in stats.items()}
-    
-    # Total decode time (sum of means times max_new_tokens)
-    total_decode_per_token = results["decode_one"]["mean"] + results["sampling"]["mean"]
-    total_decode_mean = total_decode_per_token * max_new_tokens
-    
-    # Compute overall metrics
-    total_prefill_mean = results["prefill"]["mean"]
-    total_time_mean = total_prefill_mean + total_decode_mean
-    total_tokens = prompt_length + max_new_tokens
-    tokens_per_sec = total_tokens / total_time_mean
-    
-    # Print results
+
+    decode_model_s = results["decode_one"]["mean"]
+    sampling_s = results["sampling"]["mean"]
+    decode_plus_sampling_s = decode_model_s + sampling_s
+    total_decode_s = decode_plus_sampling_s * max_new_tokens
+    prefill_s = results["prefill"]["mean"]
+    total_request_s = prefill_s + total_decode_s
+
+    results["metrics"] = {
+        "prefill_tokens_per_second": prompt_length / prefill_s,
+        "model_decode_tokens_per_second": 1.0 / decode_model_s,
+        "decode_plus_sampling_tokens_per_second": 1.0 / decode_plus_sampling_s,
+        "request_generated_tokens_per_second_including_prefill": max_new_tokens / total_request_s,
+        "decode_ms_per_token": decode_model_s * 1000.0,
+        "decode_plus_sampling_ms_per_token": decode_plus_sampling_s * 1000.0,
+    }
+
     print("\n" + "-" * 70)
     print("INFERENCE BENCHMARK RESULTS")
     print("-" * 70)
-    
-    print(f"\nPrefill:")
-    print(f"  Mean: {results['prefill']['mean']*1000:.2f}ms")
-    print(f"  Std:  {results['prefill']['std']*1000:.2f}ms")
-    print(f"  Min:  {results['prefill']['min']*1000:.2f}ms")
-    print(f"  Max:  {results['prefill']['max']*1000:.2f}ms")
-    
-    print(f"\nDecode one token:")
-    print(f"  Mean: {results['decode_one']['mean']*1000:.4f}ms")
-    print(f"  Std:  {results['decode_one']['std']*1000:.4f}ms")
-    print(f"  Min:  {results['decode_one']['min']*1000:.4f}ms")
-    print(f"  Max:  {results['decode_one']['max']*1000:.4f}ms")
-    
-    print(f"\nSampling (greedy decode):")
-    print(f"  Mean: {results['sampling']['mean']*1000:.4f}ms")
-    print(f"  Std:  {results['sampling']['std']*1000:.4f}ms")
-    print(f"  Min:  {results['sampling']['min']*1000:.4f}ms")
-    print(f"  Max:  {results['sampling']['max']*1000:.4f}ms")
-    
-    print(f"\nOverall decode (including prefill):")
-    print(f"  Total time: {total_time_mean*1000:.2f}ms")
-    print(f"  Decode ms/token: {(total_decode_mean/max_new_tokens)*1000:.4f}ms")
-    print(f"  Tokens/sec: {tokens_per_sec:.1f}")
-    
-    print("\n" + "=" * 70)
-    
-    return results
 
+    print(f"\nPrefill ({prompt_length} prompt tokens in parallel):")
+    print(f"  Mean: {prefill_s * 1000:.2f}ms")
+    print(f"  Prompt-processing throughput: {results['metrics']['prefill_tokens_per_second']:.1f} tokens/sec")
+
+    print(f"\nDecode one token (model only, cache ~{prompt_length}..{prompt_length + max_new_tokens}):")
+    print(f"  Mean: {decode_model_s * 1000:.4f}ms")
+    print(f"  Pure model decode: {results['metrics']['model_decode_tokens_per_second']:.1f} tokens/sec")
+
+    print(f"\nSampling (greedy argmax):")
+    print(f"  Mean: {sampling_s * 1000:.4f}ms")
+
+    print(f"\nAutoregressive decode + greedy sampling:")
+    print(f"  Mean: {decode_plus_sampling_s * 1000:.4f}ms/generated token")
+    print(f"  Generated-token throughput: {results['metrics']['decode_plus_sampling_tokens_per_second']:.1f} tokens/sec")
+
+    print(f"\nWhole request including prefill (generated tokens only in numerator):")
+    print(f"  Total mean: {total_request_s * 1000:.2f}ms")
+    print(f"  Generated-token throughput: {results['metrics']['request_generated_tokens_per_second_including_prefill']:.1f} tokens/sec")
+    print("  NOTE: prompt tokens are NOT counted as generated tokens.")
+
+    print("\n" + "=" * 70)
+    return results
 
 def main():
     parser = argparse.ArgumentParser(description="Performance Benchmark Suite")
@@ -466,6 +700,42 @@ def main():
                         help="Output file for JSON results")
     parser.add_argument("--dry-run", action="store_true",
                         help="Create dummy shard but don't run full benchmark")
+    parser.add_argument(
+        "--decode-scaling",
+        action="store_true",
+        help=(
+            "Run diagnostic decode scaling: fixed-position decode timings plus "
+            "full-context model-only and production-like generation sweeps"
+        ),
+    )
+    parser.add_argument(
+        "--decode-positions",
+        type=str,
+        default="32,64,128,256,384,500",
+        help="Comma-separated KV-cache lengths for --decode-scaling",
+    )
+    parser.add_argument(
+        "--position-iterations",
+        type=int,
+        default=5,
+        help="Measured iterations at each decode position",
+    )
+    parser.add_argument(
+        "--full-context-prompt-length",
+        type=int,
+        default=4,
+        help="Prompt length for the full-context decode/generation sweep",
+    )
+    parser.add_argument(
+        "--inference-strategy",
+        choices=["greedy", "top-k"],
+        default="top-k",
+        help="Sampling used by the production-like full-context generation diagnostic",
+    )
+    parser.add_argument("--top-k", type=int, default=40,
+                        help="Top-k value for --inference-strategy top-k")
+    parser.add_argument("--temperature", type=float, default=0.8,
+                        help="Temperature for --inference-strategy top-k")
     
     args = parser.parse_args()
     
@@ -561,6 +831,55 @@ def main():
                 iterations=args.iterations,
                 warmup_iterations=args.warmup,
             )
+
+            if args.decode_scaling:
+                try:
+                    decode_positions = [
+                        int(value.strip())
+                        for value in args.decode_positions.split(",")
+                        if value.strip()
+                    ]
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid --decode-positions value: {args.decode_positions!r}"
+                    ) from exc
+
+                # Keep only valid positions, preserving user order and removing duplicates.
+                seen_positions = set()
+                decode_positions = [
+                    pos for pos in decode_positions
+                    if 1 <= pos < config.context_length
+                    and not (pos in seen_positions or seen_positions.add(pos))
+                ]
+
+                position_results = benchmark_decode_position_scaling(
+                    inference_model=inference_model,
+                    max_length=config.context_length,
+                    positions=decode_positions,
+                    iterations=args.position_iterations,
+                    warmup_iterations=min(args.warmup, 2),
+                )
+                full_model_results = benchmark_full_context_model_decode(
+                    inference_model=inference_model,
+                    max_length=config.context_length,
+                    prompt_length=args.full_context_prompt_length,
+                    iterations=max(1, min(args.position_iterations, 5)),
+                    warmup_iterations=1,
+                )
+                full_generation_results = benchmark_full_context_generation(
+                    inference_model=inference_model,
+                    max_length=config.context_length,
+                    prompt_length=args.full_context_prompt_length,
+                    iterations=max(1, min(args.position_iterations, 5)),
+                    warmup_iterations=1,
+                    strategy=args.inference_strategy,
+                    top_k=args.top_k,
+                    temperature=args.temperature,
+                )
+
+                inference_results["decode_position_scaling"] = position_results
+                inference_results["full_context_model_decode"] = full_model_results
+                inference_results["full_context_generation"] = full_generation_results
         
         # Output JSON if requested
         if args.output:

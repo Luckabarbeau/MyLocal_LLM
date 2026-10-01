@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, BACKEND_NAME, synchronize
 from mini_llm.checkpoint import load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
@@ -70,21 +70,57 @@ def temperature_sample(logits: np.ndarray, temperature: float = 1.0) -> int:
 
 
 def top_k_sample(logits, k: int, temperature: float = 1.0) -> int:
-    """Sample from top-k tokens."""
-    probs = softmax(logits, temperature)
-    
-    # Zero out all but top-k
-    indices = xp.argsort(probs)[-k:]
-    mask = xp.zeros_like(probs)
-    mask[indices] = 1.0
-    
-    masked_probs = probs * mask
-    masked_probs = masked_probs / xp.sum(masked_probs)
-    
-    # Sample from masked distribution
-    cumprobs = xp.cumsum(masked_probs)
-    r = xp.random.random()
-    return int(xp.searchsorted(cumprobs, r))
+    """Sample from the top-k logits without a full-vocabulary softmax/sort.
+
+    Softmax is monotonic, so the top-k probabilities are exactly the top-k
+    logits.  Select those logits in O(V) with ``argpartition`` and perform the
+    expensive exp/cumsum work only on the k retained values.
+
+    This intentionally returns a Python ``int`` because the current generation
+    loop performs EOS handling and builds a Python token list.  Consequently
+    there is still one GPU->CPU synchronization per generated token, but no
+    full-vocabulary sort, mask, normalization, or cumulative sum.
+    """
+    if k is None:
+        raise ValueError("top_k must be provided for top-k sampling")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be > 0 for top-k sampling")
+
+    # The generation path supplies a single [vocab] vector.  Flattening keeps
+    # the helper robust to an accidental [1, vocab] input without making a
+    # copy.
+    logits = logits.reshape(-1)
+    vocab_size = int(logits.shape[0])
+    k = max(1, min(int(k), vocab_size))
+
+    if k == vocab_size:
+        indices = xp.arange(vocab_size, dtype=xp.int32)
+    else:
+        # We do not need the top-k entries sorted; sampling only requires the
+        # corresponding weights.  argpartition avoids the previous O(V log V)
+        # full argsort.
+        partition = vocab_size - k
+        indices = xp.argpartition(logits, partition)[partition:]
+
+    # Advanced indexing already creates a compact k-element array.  Convert
+    # that small array to FP32 and do all probability work there.
+    top_logits = logits[indices].astype(xp.float32, copy=False)
+    if temperature != 1.0:
+        top_logits /= xp.float32(temperature)
+
+    # Stable unnormalised softmax weights.  Explicit normalisation is not
+    # required for inverse-CDF sampling: drawing on [0, sum(weights)) is
+    # exactly equivalent and removes another divide.
+    top_logits -= xp.max(top_logits)
+    xp.exp(top_logits, out=top_logits)
+    cdf = xp.cumsum(top_logits)
+
+    r = xp.asarray(xp.random.random(), dtype=xp.float32) * cdf[-1]
+    selected_slot = xp.searchsorted(cdf, r)
+    selected_id = indices[selected_slot]
+
+    # Exactly one device->host scalar transfer remains in this implementation.
+    return int(selected_id)
 
 
 def top_p_sample(logits: np.ndarray, p: float, temperature: float = 1.0) -> int:
@@ -170,10 +206,14 @@ class TextGenerator:
             input_ids = input_ids[-self.max_context:]
         
         generated_ids = list(input_ids)
+        eos_id = self._get_eos_id()
         
-        # Start timing
+        # Start timing.  Synchronize only at the outer boundary so total
+        # throughput reflects completed GPU work without adding a new barrier
+        # between decode and sampling on every token.
         if log_speed:
-            total_start_time = time.time()
+            synchronize()
+            total_start_time = time.perf_counter()
             forward_times = []
             other_times = []
         
@@ -187,17 +227,17 @@ class TextGenerator:
             input_tensor = xp.asarray(input_tensor, dtype=xp.int32)
             
             if log_speed:
-                forward_start = time.time()
+                forward_start = time.perf_counter()
             logits = self._inference_model.prefill(input_tensor, self._state)
             if log_speed:
-                forward_end = time.time()
+                forward_end = time.perf_counter()
                 forward_times.append(forward_end - forward_start)
             
             # 2. AUTOREGRESSIVE DECODE for each new token
             for step in range(max_new_tokens):
                 # Get logits for last position and sample
                 if log_speed:
-                    sample_start = time.time()
+                    sample_start = time.perf_counter()
                 
                 last_logits = logits[0]  # [vocab]
                 
@@ -213,13 +253,12 @@ class TextGenerator:
                     raise ValueError(f"Unknown strategy: {strategy}")
                 
                 if log_speed:
-                    sample_end = time.time()
+                    sample_end = time.perf_counter()
                     other_times.append(sample_end - sample_start)
                 
                 generated_ids.append(next_id)
                 
                 # Stop at EOS
-                eos_id = self._get_eos_id()
                 if next_id == eos_id:
                     break
                 
@@ -229,13 +268,13 @@ class TextGenerator:
                 
                 # Decode one token
                 if log_speed:
-                    forward_start = time.time()
+                    forward_start = time.perf_counter()
                 
                 next_tensor = xp.array([[next_id]], dtype=xp.int32)
                 logits = self._inference_model.decode_one(next_tensor, self._state)
                 
                 if log_speed:
-                    forward_end = time.time()
+                    forward_end = time.perf_counter()
                     forward_times.append(forward_end - forward_start)
         else:
             # Full prefix forward (no KV cache)
@@ -245,12 +284,12 @@ class TextGenerator:
                 input_tensor = xp.array([context], dtype=xp.uint16)
                 
                 if log_speed:
-                    forward_start = time.time()
+                    forward_start = time.perf_counter()
                 
                 logits, _ = self.model.forward(input_tensor)
                 
                 if log_speed:
-                    forward_end = time.time()
+                    forward_end = time.perf_counter()
                     forward_times.append(forward_end - forward_start)
                 
                 # Get logits for last position and sample
@@ -270,7 +309,6 @@ class TextGenerator:
                 generated_ids.append(next_id)
                 
                 # Stop at EOS
-                eos_id = self._get_eos_id()
                 if next_id == eos_id:
                     break
         
@@ -279,7 +317,8 @@ class TextGenerator:
         
         # Calculate timing info
         if log_speed:
-            total_time = time.time() - total_start_time
+            synchronize()
+            total_time = time.perf_counter() - total_start_time
             new_tokens = len(generated_ids) - len(input_ids)
             
             total_forward_time = sum(forward_times) if forward_times else 0
@@ -297,6 +336,7 @@ class TextGenerator:
                 "total_other_time_s": total_other_time,
                 "avg_forward_time_s": avg_forward_time,
                 "avg_other_time_s": avg_other_time,
+                "breakdown_is_async_approx": BACKEND_NAME == "cupy",
             }
         
         return output_text, timing
@@ -511,8 +551,12 @@ def main():
                 # Log timing
                 print(f"\n--- Prompt Timing ---")
                 print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
-                print(f"Model Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
-                print(f"Other operations:   {total_other_time:.3f}s")
+                if timing.get("breakdown_is_async_approx", False):
+                    print(f"Forward host-enqueue timing: {total_forward_time:.3f}s (CUDA async; diagnostic only)")
+                    print(f"Sampling/host timing:        {total_other_time:.3f}s (may include waiting on prior GPU work)")
+                else:
+                    print(f"Model Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
+                    print(f"Other operations:   {total_other_time:.3f}s")
                 
             except KeyboardInterrupt:
                 print("\nInterrupted.")
@@ -559,8 +603,12 @@ def main():
         print(f"Model loading: {load_time:.3f}s")
         print(f"Prompt processing: {prompt_time:.3f}s")
         print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
-        print(f"\nModel Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
-        print(f"Other operations:   {total_other_time:.3f}s")
+        if timing.get("breakdown_is_async_approx", False):
+            print(f"\nForward host-enqueue timing: {total_forward_time:.3f}s (CUDA async; diagnostic only)")
+            print(f"Sampling/host timing:        {total_other_time:.3f}s (may include waiting on prior GPU work)")
+        else:
+            print(f"\nModel Forward Pass: {total_forward_time:.3f}s ({timing['avg_forward_time_s']*1000:.1f}ms/token)")
+            print(f"Other operations:   {total_other_time:.3f}s")
         print("=" * 60)
 
 

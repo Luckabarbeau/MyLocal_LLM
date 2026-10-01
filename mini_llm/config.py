@@ -69,7 +69,7 @@ class ModelConfig:
     def micro_debug(cls):
         """Micro model: ~500K params, for quick debugging."""
         return cls(
-            tokenizer_vocab_size=256,
+            tokenizer_vocab_size=8192*2,
             context_length=32,
             n_layers=2,
             d_model=32,
@@ -85,7 +85,7 @@ class ModelConfig:
     def mini(cls):
         """Mini model: ~12M params, good for initial experiments."""
         return cls(
-            tokenizer_vocab_size=8192,
+            tokenizer_vocab_size=8192*2,
             context_length=512,
             n_layers=8,
             d_model=256,
@@ -101,7 +101,7 @@ class ModelConfig:
     def small(cls):
         """Small model: ~53M params (current default)."""
         return cls(
-            tokenizer_vocab_size=8192,
+            tokenizer_vocab_size=8192*2,
             context_length=512,
             n_layers=8,
             d_model=384,
@@ -122,6 +122,21 @@ class ModelConfig:
             n_layers=8,
             d_model=512,
             n_q_heads=8,
+            n_kv_heads=2,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=1_536,
+        )
+    @classmethod
+    def large(cls):
+        """Large model: ~120M params."""
+        return cls(
+            tokenizer_vocab_size=8192*2,
+            context_length=1024,
+            n_layers=16,
+            d_model=1024,
+            n_q_heads=16,
             n_kv_heads=2,
             d_head=64,
             n_experts=6,

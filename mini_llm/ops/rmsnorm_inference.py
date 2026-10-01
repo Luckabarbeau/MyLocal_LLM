@@ -9,7 +9,7 @@ FP32 copies of the activation tensor during autoregressive inference.
 import os
 import numpy as _np
 
-from mini_llm.backend import xp, BACKEND_NAME
+from mini_llm.backend import xp, BACKEND_NAME, is_low_precision_dtype
 
 
 _FUSED_FP16_RMSNORM_KERNEL = None
@@ -174,8 +174,9 @@ class RMSNormInference:
         """Portable/reference implementation used outside the fused FP16 path."""
         input_dtype = x.dtype
 
-        if input_dtype == "float16":
-            # Correctness-first fallback: retain the original implementation.
+        if is_low_precision_dtype(input_dtype):
+            # Low-precision storage, FP32 reduction/normalization. This covers
+            # both FP16 and BF16; only FP16 has a fused inference kernel today.
             x_f32 = x.astype("float32", copy=False)
             mean_sq = xp.mean(x_f32 * x_f32, axis=-1, keepdims=True)
             inv_rms = 1.0 / xp.sqrt(mean_sq + self.eps)

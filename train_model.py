@@ -34,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, validate_bfloat16_backend
 from mini_llm.config import ModelConfig
 from mini_llm.data.parquet_reader import CosmopediaParquetReader
 from mini_llm.data.token_shards import TokenShardGenerator, load_token_shard
@@ -55,6 +55,15 @@ def parse_args():
         choices=["micro", "mini", "small", "medium","large"],
         default="mini",
         help="Model size configuration",
+    )
+    parser.add_argument(
+        "--precision",
+        choices=["float16", "bf16-mixed", "float32"],
+        default="float16",
+        help=(
+            "Training precision policy. bf16-mixed uses BF16 parameters/GEMMs "
+            "with FP32 residuals, reductions, gradients, and optimizer state."
+        ),
     )
     
     # Data configuration
@@ -336,11 +345,20 @@ def main():
     # Set random seed
     np.random.seed(args.seed)
     xp.random.seed(args.seed)
+
+    if args.precision == "bf16-mixed":
+        validate_bfloat16_backend()
+        model_dtype = "bfloat16"
+    elif args.precision == "float16":
+        model_dtype = "float16"
+    else:
+        model_dtype = "float32"
     
     print("=" * 60)
     print("Extended Training Configuration")
     print("=" * 60)
     print(f"Model: {args.model}")
+    print(f"Precision: {args.precision}")
     print(f"Dataset: {args.dataset_path}")
     print(f"Parquet shards: {args.num_parquet_shards}")
     print(f"Context length: {args.context_length}")
@@ -379,7 +397,8 @@ def main():
         print(f"Resuming from checkpoint: {checkpoint_path}")
         
         # Load model
-        model = setup_model(config, dtype="float16")
+        config = dataclasses.replace(config, dtype=model_dtype)
+        model = setup_model(config, dtype=model_dtype)
         
         # Load checkpoint
         from mini_llm.checkpoint import load_checkpoint
@@ -444,11 +463,11 @@ def main():
                 tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
             
             # Update config vocab size before creating model
-            import dataclasses
             config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
             print(f"Tokenizer vocab size: {len(tokenizer)}")
         
-        model = setup_model(config, dtype="float16")
+        config = dataclasses.replace(config, dtype=model_dtype)
+        model = setup_model(config, dtype=model_dtype)
         start_step = 0
         tokens_processed = 0
         rng_states = None
@@ -502,7 +521,6 @@ def main():
                 tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
             
             # Update config vocab size using dataclasses.replace for frozen dataclass
-            import dataclasses
             config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
             print(f"Tokenizer vocab size: {len(tokenizer)}")
     

@@ -482,7 +482,7 @@ def main():
     import time as time_mod
     load_start = time_mod.time()
     
-    model = DecoderLanguageModel(config, rng_seed=42, dtype="float16")
+    model = DecoderLanguageModel(config, rng_seed=42, dtype=config.dtype)
     
     # Load checkpoint (skip optimizer state for inference - it's 12GB and not needed)
     param_names = [p.name for p in model.parameters()]

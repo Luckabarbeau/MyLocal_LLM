@@ -1,4 +1,4 @@
-from ..backend import xp
+from ..backend import xp, is_low_precision_dtype
 from ..init import ones_parameter
 
 
@@ -8,7 +8,7 @@ class RMSNorm:
     
     y = gamma * x / sqrt(mean(x^2) + eps)
     
-    For float16 inputs, performs numerically sensitive operations in float32
+    For low-precision inputs, performs numerically sensitive operations in float32
     to avoid underflow/overflow issues while maintaining memory efficiency.
     """
 
@@ -23,14 +23,14 @@ class RMSNorm:
         """
         Forward pass with mixed precision support.
         
-        For float16 inputs:
+        For low-precision inputs:
         - Perform numerically sensitive reductions in float32
         - Keep element-wise operations in float16 for speed
         - Return output in original dtype
         """
         input_dtype = x.dtype
         
-        if input_dtype == "float16":
+        if is_low_precision_dtype(input_dtype):
             # Convert to float32 only for the numerically sensitive computation
             x_f32 = x.astype("float32", copy=False)
             
@@ -54,7 +54,7 @@ class RMSNorm:
                 "original_dtype": input_dtype,
             }
             
-            # Convert output back to float16
+            # Convert output back to the original compute dtype
             return y_f32.astype(input_dtype), cache
         else:
             # Float32 path - standard computation
@@ -63,7 +63,12 @@ class RMSNorm:
             x_hat = x * inv_rms
             y = x_hat * self.gamma.data
             
-            cache = {"x": x, "x_hat": x_hat, "inv_rms": inv_rms}
+            cache = {
+                "x": x,
+                "x_hat": x_hat,
+                "inv_rms": inv_rms,
+                "original_dtype": input_dtype,
+            }
             
             return y, cache
 
@@ -71,13 +76,18 @@ class RMSNorm:
         """
         Backward pass with mixed precision support.
         
-        For float16 inputs:
+        For low-precision inputs:
         - Perform reductions in float32
         - Return gradient in original dtype
         """
-        input_dtype = cache.get("original_dtype", dy.dtype)
+        # The backward path must be selected from the dtype used in forward,
+        # not from dy.dtype.  In mixed precision a FP32 RMSNorm input can
+        # legitimately receive a BF16 gradient from the following projection.
+        # Inferring from dy would then select the low-precision cache layout
+        # even though forward cached {x, x_hat, inv_rms}.
+        input_dtype = cache["original_dtype"]
         
-        if input_dtype == "float16":
+        if is_low_precision_dtype(input_dtype):
             # Get cached FP32 values
             x_f32 = cache["x_f32"]
             x_hat_f32 = cache["x_hat_f32"]

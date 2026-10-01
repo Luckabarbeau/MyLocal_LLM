@@ -89,3 +89,18 @@ def test_cross_entropy_fp16_backward_preserves_tiny_non_target_gradients():
     # Softmax cross-entropy gradients should sum to approximately zero per row.
     row_sums = grad_np[:, 0, :].sum(axis=-1)
     np.testing.assert_allclose(row_sums, 0.0, atol=2e-10)
+
+
+def test_bfloat16_cross_entropy_keeps_fp32_gradient():
+    """BF16 loss uses the same FP32 stable workspace/gradient policy as FP16."""
+    import ml_dtypes
+    from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
+
+    logits = xp.zeros((2, 4, 16), dtype=ml_dtypes.bfloat16)
+    targets = xp.zeros((2, 4), dtype="int64")
+    loss, cache = cross_entropy_forward(logits, targets)
+    grad = cross_entropy_backward(cache)
+
+    assert grad.dtype == xp.dtype("float32")
+    assert bool(xp.all(xp.isfinite(grad)))
+    assert loss > 0.0

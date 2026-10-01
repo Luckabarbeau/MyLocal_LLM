@@ -2,7 +2,7 @@
 
 import numpy as _np
 
-from mini_llm.backend import xp, BACKEND_NAME
+from mini_llm.backend import xp, BACKEND_NAME, is_bfloat16_dtype, is_low_precision_dtype
 from mini_llm.ops.rope import get_rope_cos_sin
 
 
@@ -129,26 +129,31 @@ class GQAAttentionInference:
         b, t_query, _, _ = q.shape
         t_key = k_native.shape[2]
 
+        bf16_attention = is_bfloat16_dtype(q.dtype)
+
         if t_query == 1:
-            # Decode fast path.  With one query position the grouped query can
-            # be viewed directly as [B,Hkv,G,D], so avoid singleton 5-D
-            # broadcasted matmuls in the latency-critical token loop.
+            # Decode fast path. CuPy's N-D BF16 matmul currently fails, so
+            # promote only the batched attention products to FP32.
             q_decode = q[:, 0, :, :].reshape(
                 b, self.n_kv_heads, self.group_size, self.d_head
             )
+            q_scores = q_decode.astype(xp.float32, copy=False) if bf16_attention else q_decode
+            k_scores = k_native.astype(xp.float32, copy=False) if bf16_attention else k_native
             scores_decode = xp.matmul(
-                q_decode * self.scale,
-                k_native.swapaxes(-2, -1),
+                q_scores * self.scale,
+                k_scores.swapaxes(-2, -1),
             )  # [B,Hkv,G,Tk]
             scores = scores_decode.reshape(
                 b, self.n_q_heads, 1, t_key
             )
         else:
             q_grouped = self._group_queries(q)  # [B,Hkv,G,Tq,D]
-            q_scaled = q_grouped * self.scale
+            q_scores = q_grouped.astype(xp.float32, copy=False) if bf16_attention else q_grouped
+            k_scores = k_native.astype(xp.float32, copy=False) if bf16_attention else k_native
+            q_scaled = q_scores * self.scale
             scores_grouped = xp.matmul(
                 q_scaled,
-                k_native[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+                k_scores[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
             )                                  # [B,Hkv,G,Tq,Tk]
             scores = scores_grouped.reshape(
                 b, self.n_q_heads, t_query, t_key
@@ -163,28 +168,36 @@ class GQAAttentionInference:
         scores_f32 -= xp.max(scores_f32, axis=-1, keepdims=True)
         probs = xp.exp(scores_f32)
         probs /= xp.sum(probs, axis=-1, keepdims=True)
-        probs = probs.astype(self.dtype, copy=False)
 
+        # Keep CuPy's unsupported N-D BF16 matmul out of P@V as well.
+        # The result is cast back to the branch compute dtype before the large
+        # output projection GEMM.
         if t_query == 1:
             probs_decode = probs.reshape(
                 b, self.n_kv_heads, self.group_size, t_key
             )
+            v_compute = v_native.astype(xp.float32, copy=False) if bf16_attention else v_native
+            probs_compute = probs_decode if bf16_attention else probs_decode.astype(self.dtype, copy=False)
             context_decode = xp.matmul(
-                probs_decode,
-                v_native,
+                probs_compute,
+                v_compute,
             )  # [B,Hkv,G,D]
-            return context_decode.reshape(
+            context = context_decode.reshape(
                 b, 1, self.n_q_heads, self.d_head
             )
+            return context.astype(q.dtype, copy=False) if bf16_attention else context
 
         probs_grouped = probs.reshape(
             b, self.n_kv_heads, self.group_size, t_query, t_key
         )
+        v_compute = v_native.astype(xp.float32, copy=False) if bf16_attention else v_native
+        probs_compute = probs_grouped if bf16_attention else probs_grouped.astype(self.dtype, copy=False)
         context_grouped = xp.matmul(
-            probs_grouped,
-            v_native[:, :, xp.newaxis, :, :],
+            probs_compute,
+            v_compute[:, :, xp.newaxis, :, :],
         )
-        return self._ungroup_queries(context_grouped)
+        context = self._ungroup_queries(context_grouped)
+        return context.astype(q.dtype, copy=False) if bf16_attention else context
 
     def prefill(self, x, k_cache, v_cache, start_pos, return_all=False):
         """Prefill the cache for a prompt and run causal attention."""
@@ -201,7 +214,9 @@ class GQAAttentionInference:
             x = xp.asarray(x)
 
         _, _, _, Wo = self._weight_data()
-        qkv = x @ self.Wqkv
+        qkv = (x.reshape(-1, self.d_model) @ self.Wqkv).reshape(
+            b, t_prompt, -1
+        )
         q_end = self._q_width
         k_end = q_end + self._kv_width
         q_pre = qkv[..., :q_end].reshape(
@@ -235,7 +250,9 @@ class GQAAttentionInference:
         merged = context.reshape(
             b, t_prompt, self.n_q_heads * self.d_head
         )
-        y = merged @ Wo
+        y = (merged.reshape(-1, self.d_model) @ Wo).reshape(
+            b, t_prompt, self.d_model
+        )
         return y if return_all else y[:, -1, :]
 
     def decode_one(self, x, k_cache, v_cache, start_pos):
@@ -248,7 +265,9 @@ class GQAAttentionInference:
             x = xp.asarray(x)
 
         _, _, _, Wo = self._weight_data()
-        qkv = x @ self.Wqkv
+        qkv = (x.reshape(-1, self.d_model) @ self.Wqkv).reshape(
+            b, 1, -1
+        )
         q_end = self._q_width
         k_end = q_end + self._kv_width
         q_pre = qkv[..., :q_end].reshape(
@@ -275,5 +294,7 @@ class GQAAttentionInference:
             causal_mask=None,
         )
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
-        y = merged @ Wo
+        y = (merged.reshape(-1, self.d_model) @ Wo).reshape(
+            b, 1, self.d_model
+        )
         return y[:, -1, :]

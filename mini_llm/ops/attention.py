@@ -1,26 +1,19 @@
-from ..backend import xp
+from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
 
 
 def softmax_forward(x, axis=-1, logit_multiplier=1.0):
-    """Stable softmax, optionally restoring a pre-scaled logit magnitude.
+    """Stable softmax with FP32 reductions for low-precision logits.
 
-    ``logit_multiplier`` is applied only after subtracting the row maximum.
-    This is algebraically equivalent to softmax(logit_multiplier * x), while
-    avoiding positive overflow because the shifted values are never > 0.
+    Attention score GEMMs stay FP16/BF16, while max/subtract/exp/sum/divide
+    execute in FP32.  ``logit_multiplier`` restores the FP16 score pre-scale
+    only after max subtraction, so positive overflow cannot occur.
     """
-    x_max = xp.max(x, axis=axis, keepdims=True)
-    shifted = x - x_max
+    work = x.astype("float32", copy=False) if is_low_precision_dtype(x.dtype) else x
+    x_max = xp.max(work, axis=axis, keepdims=True)
+    shifted = work - x_max
     if logit_multiplier != 1.0:
-        # After max subtraction all finite logits are <= 0.  When restoring
-        # a large pre-scale factor in FP16, extremely negative values may
-        # overflow to -inf.  That is harmless for softmax mathematically, but
-        # it emits a runtime warning.  Saturate only those already-negligible
-        # tails before rescaling so the product stays representable.
-        if shifted.dtype == xp.float16:
-            lower = -float(xp.finfo(xp.float16).max) / float(logit_multiplier)
-            shifted = xp.maximum(shifted, lower)
         shifted = shifted * logit_multiplier
     e = xp.exp(shifted)
     return e / xp.sum(e, axis=axis, keepdims=True)
@@ -114,13 +107,16 @@ class GQAAttention:
         if d_model != self.d_model:
             raise ValueError("input final dimension != d_model.")
 
-        q_pre = (x @ self.Wq.data).reshape(
+        # Keep projection GEMMs strictly 2-D. CuPy 14 supports BF16 2-D GEMM
+        # efficiently, but its generic N-D @ 2-D path currently fails on BF16.
+        x2 = x.reshape(-1, self.d_model)
+        q_pre = (x2 @ self.Wq.data).reshape(
             b, t, self.n_q_heads, self.d_head
         )
-        k_pre = (x @ self.Wk.data).reshape(
+        k_pre = (x2 @ self.Wk.data).reshape(
             b, t, self.n_kv_heads, self.d_head
         )
-        v = (x @ self.Wv.data).reshape(
+        v = (x2 @ self.Wv.data).reshape(
             b, t, self.n_kv_heads, self.d_head
         )
 
@@ -145,10 +141,23 @@ class GQAAttention:
         # roundoff.  Backward continues to use ds/dQ for the original s, so no
         # gradient rescaling is required below.
         score_prescale = 1.0 / 32.0 if q_grouped.dtype == xp.float16 else 1.0
-        q_scaled = q_grouped * (self.scale * score_prescale)
+
+        # CuPy 14's generic batched matmul does not currently accept BF16
+        # (dtype code 'E'). For BF16 training, run only the comparatively small
+        # attention batched products in FP32. The large projection/MoE GEMMs
+        # remain BF16 tensor-core GEMMs, while this path is both robust and
+        # numerically stronger.
+        bf16_attention = is_bfloat16_dtype(q_grouped.dtype)
+        if bf16_attention:
+            q_scaled = q_grouped.astype("float32") * self.scale
+            k_mat = k_heads.astype("float32")
+        else:
+            q_scaled = q_grouped * (self.scale * score_prescale)
+            k_mat = k_heads
+
         scores_grouped = xp.matmul(
             q_scaled,
-            k_heads[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+            k_mat[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
         )                                               # [B,Hkv,G,T,T]
         scores = scores_grouped.reshape(b, self.n_q_heads, t, t)
 
@@ -160,16 +169,32 @@ class GQAAttention:
             logit_multiplier=(1.0 / score_prescale),
         )
 
-        probs_grouped = probs.reshape(
+        # Softmax is FP32 for low-precision inputs. Cast probabilities back to
+        # the branch compute dtype only for the tensor-core P@V GEMM.
+        if bf16_attention:
+            probs_compute = probs
+            v_mat = v_heads.astype("float32")
+        else:
+            probs_compute = (
+                probs.astype(q_grouped.dtype, copy=False)
+                if is_low_precision_dtype(q_grouped.dtype) else probs
+            )
+            v_mat = v_heads
+        probs_grouped_compute = probs_compute.reshape(
             b, self.n_kv_heads, self.group_size, t, t
         )
         context_grouped = xp.matmul(
-            probs_grouped,
-            v_heads[:, :, xp.newaxis, :, :],
+            probs_grouped_compute,
+            v_mat[:, :, xp.newaxis, :, :],
         )                                               # [B,Hkv,G,T,Dh]
         context = self._ungroup_queries(context_grouped)
         merged = context.reshape(b, t, self.n_q_heads * self.d_head)
-        y = merged @ self.Wo.data
+        merged_compute = (
+            merged.astype(x.dtype, copy=False) if bf16_attention else merged
+        )
+        y = (
+            merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
+        ).reshape(b, t, self.d_model)
 
         if not return_cache:
             return y
@@ -195,7 +220,8 @@ class GQAAttention:
             merged.reshape(-1, merged.shape[-1]).T
             @ dy.reshape(-1, dy.shape[-1])
         )
-        dmerged = dy @ self.Wo.data.T
+        dy2 = dy.reshape(-1, dy.shape[-1])
+        dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
         dcontext = dmerged.reshape(
             b, t, self.n_q_heads, self.d_head
         )
@@ -204,19 +230,31 @@ class GQAAttention:
         dcontext_grouped = self._group_queries(dcontext)
         k_heads = k.transpose(0, 2, 1, 3)              # [B,Hkv,T,D]
         v_heads = v.transpose(0, 2, 1, 3)
-        probs_grouped = probs.reshape(
+        bf16_attention = is_bfloat16_dtype(q_grouped.dtype)
+        if bf16_attention:
+            probs_compute = probs
+            dcontext_mat = dcontext_grouped.astype("float32")
+            v_mat = v_heads.astype("float32")
+        else:
+            probs_compute = (
+                probs.astype(q_grouped.dtype, copy=False)
+                if is_low_precision_dtype(q_grouped.dtype) else probs
+            )
+            dcontext_mat = dcontext_grouped
+            v_mat = v_heads
+        probs_grouped_compute = probs_compute.reshape(
             b, self.n_kv_heads, self.group_size, t, t
         )
 
         dprobs_grouped = xp.matmul(
-            dcontext_grouped,
-            v_heads[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+            dcontext_mat,
+            v_mat[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
         )                                               # [B,Hkv,G,T,T]
 
         # V is shared by all query heads in a group; sum group contributions.
         dv_heads = xp.matmul(
-            probs_grouped.swapaxes(-2, -1),
-            dcontext_grouped,
+            probs_grouped_compute.swapaxes(-2, -1),
+            dcontext_mat,
         ).sum(axis=2)                                   # [B,Hkv,T,D]
 
         dprobs = dprobs_grouped.reshape(
@@ -226,16 +264,27 @@ class GQAAttention:
         dscores_grouped = dscores.reshape(
             b, self.n_kv_heads, self.group_size, t, t
         )
+        if bf16_attention:
+            dscores_compute = dscores_grouped.astype("float32", copy=False)
+            k_grad_mat = k_heads.astype("float32")
+            q_grad_mat = q_grouped.astype("float32")
+        else:
+            dscores_compute = (
+                dscores_grouped.astype(q_grouped.dtype, copy=False)
+                if is_low_precision_dtype(q_grouped.dtype) else dscores_grouped
+            )
+            k_grad_mat = k_heads
+            q_grad_mat = q_grouped
 
         dq_grouped = xp.matmul(
-            dscores_grouped,
-            k_heads[:, :, xp.newaxis, :, :],
+            dscores_compute,
+            k_grad_mat[:, :, xp.newaxis, :, :],
         ) * self.scale
 
-        # K is also shared by every query head in the group.
+        # K is also shared by every query head in a group.
         dk_heads = xp.matmul(
-            dscores_grouped.swapaxes(-2, -1),
-            q_grouped * self.scale,
+            dscores_compute.swapaxes(-2, -1),
+            q_grad_mat * self.scale,
         ).sum(axis=2)
 
         dq = self._ungroup_queries(dq_grouped)
@@ -249,13 +298,19 @@ class GQAAttention:
         dq2 = dq_pre.reshape(-1, self.n_q_heads * self.d_head)
         dk2 = dk_pre.reshape(-1, self.n_kv_heads * self.d_head)
         dv2 = dv.reshape(-1, self.n_kv_heads * self.d_head)
+        if bf16_attention:
+            dq2 = dq2.astype(x.dtype, copy=False)
+            dk2 = dk2.astype(x.dtype, copy=False)
+            dv2 = dv2.astype(x.dtype, copy=False)
 
         self.Wq.grad += x2.T @ dq2
         self.Wk.grad += x2.T @ dk2
         self.Wv.grad += x2.T @ dv2
 
-        return (
-            dq_pre.reshape(b, t, -1) @ self.Wq.data.T
-            + dk_pre.reshape(b, t, -1) @ self.Wk.data.T
-            + dv.reshape(b, t, -1) @ self.Wv.data.T
+        # Projection backwards are also strict 2-D GEMMs for BF16 compatibility.
+        dx2 = (
+            dq2 @ self.Wq.data.T
+            + dk2 @ self.Wk.data.T
+            + dv2 @ self.Wv.data.T
         )
+        return dx2.reshape(b, t, self.d_model)

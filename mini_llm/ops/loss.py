@@ -1,4 +1,4 @@
-from ..backend import xp, scalar
+from ..backend import xp, scalar, is_low_precision_dtype
 
 
 def cross_entropy_forward(logits, targets):
@@ -6,14 +6,14 @@ def cross_entropy_forward(logits, targets):
     Cross entropy loss with mixed precision support.
     
     Performs log-sum-exp in float32 for numerical stability,
-    especially important for float16 inputs where underflow is common.
+    especially important for FP16/BF16 inputs where underflow is common.
     """
     vocab = logits.shape[-1]
     flat_logits = logits.reshape(-1, vocab)
     flat_targets = targets.reshape(-1)
     n = flat_logits.shape[0]
 
-    if logits.dtype == "float16":
+    if is_low_precision_dtype(logits.dtype):
         # One FP32 workspace for the complete stable softmax/loss path.
         # Converting FP16 -> FP32 necessarily allocates once; after that we
         # reuse the same array in-place instead of materializing separate
@@ -75,7 +75,7 @@ def cross_entropy_backward(cache):
     probs_f32 = cache.get("probs_f32", None)
     
     if probs_f32 is not None:
-        # Float16-logit path: keep the gradient in FP32. Casting the softmax
+        # Low-precision-logit path: keep the gradient in FP32. Casting the softmax
         # probabilities to FP16 before the 1/N normalization can underflow
         # small non-target gradients to zero for realistic token counts.
         # Make a copy because backward modifies the cached probabilities.

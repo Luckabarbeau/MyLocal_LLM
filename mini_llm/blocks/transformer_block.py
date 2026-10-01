@@ -1,6 +1,6 @@
 """Dense Transformer block with residual streams."""
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype
 from mini_llm.ops.attention import GQAAttention
 from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.router import Router
@@ -46,8 +46,8 @@ class TransformerBlock:
         self.d_ff = d_ff
         self.n_experts = n_experts
         self.top_k = top_k
-        self.compute_dtype = xp.dtype(dtype)
-        self.use_fp32_residual = self.compute_dtype == xp.dtype("float16")
+        self.compute_dtype = resolve_dtype(dtype)
+        self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
         
         # First RMSNorm (input to attention)
         self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1", dtype=dtype)
@@ -107,10 +107,10 @@ class TransformerBlock:
             y: Output tensor of shape (B, T, d_model)
             cache: Dictionary containing intermediate values for backward pass
         """
-        # Keep the residual stream in FP32 for FP16 training.  The residual
+        # Keep the residual stream in FP32 for low-precision training.  The residual
         # additions are cheap element-wise operations, but they can overflow
         # FP16 even when both branch operands are individually finite.  The
-        # expensive attention / MoE kernels still receive FP16 inputs below,
+        # expensive attention / MoE kernels still receive low-precision inputs below,
         # so tensor-core GEMM throughput is preserved.
         if self.use_fp32_residual:
             x = x.astype("float32", copy=False)
@@ -190,7 +190,7 @@ class TransformerBlock:
         norm2_cache = cache["norm2_cache"]
         moe_cache = cache["moe_cache"]
         
-        # FP16 models keep residual-gradient accumulation in FP32 as well.
+        # Low-precision models keep residual-gradient accumulation in FP32 as well.
         # Cast only branch gradients to the compute dtype before the expensive
         # attention / MoE backward kernels, then promote their outputs before
         # adding them back to the residual gradient.

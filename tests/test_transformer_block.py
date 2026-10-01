@@ -171,3 +171,42 @@ def test_fp16_residual_addition_uses_fp32_accumulator():
     assert y.dtype == xp.dtype("float32")
     assert bool(xp.all(xp.isfinite(y)))
     np.testing.assert_allclose(np.asarray(y), 80000.0, rtol=0.0, atol=32.0)
+
+
+def test_bfloat16_residual_stream_uses_fp32():
+    """BF16 compute branches retain an FP32 residual stream."""
+    import ml_dtypes
+
+    class IdentityNorm:
+        def forward(self, x):
+            return x, {"dtype": x.dtype}
+
+        def backward(self, dy, cache):
+            return dy
+
+    class ZeroBranch:
+        def __init__(self):
+            self.seen_dtype = None
+
+        def forward(self, x):
+            self.seen_dtype = x.dtype
+            return xp.zeros(x.shape, dtype=ml_dtypes.bfloat16), {}
+
+        def backward(self, dy, cache):
+            return xp.zeros(dy.shape, dtype=ml_dtypes.bfloat16)
+
+    block = TransformerBlock.__new__(TransformerBlock)
+    block.compute_dtype = ml_dtypes.bfloat16
+    block.use_fp32_residual = True
+    block.norm1 = IdentityNorm()
+    block.norm2 = IdentityNorm()
+    block.attention = ZeroBranch()
+    block.moe = ZeroBranch()
+
+    x = xp.ones((1, 2, 4), dtype=ml_dtypes.bfloat16)
+    y, _ = block.forward(x)
+
+    assert str(block.attention.seen_dtype) == "bfloat16"
+    assert str(block.moe.seen_dtype) == "bfloat16"
+    assert y.dtype == xp.dtype("float32")
+    assert bool(xp.all(xp.isfinite(y)))

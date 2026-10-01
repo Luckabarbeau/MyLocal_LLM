@@ -1,6 +1,6 @@
 """Decoder-only language model built from Transformer blocks."""
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloat16_dtype
 from mini_llm.config import ModelConfig
 from mini_llm.blocks.transformer_block import TransformerBlock
 from mini_llm.ops.embedding import Embedding
@@ -30,7 +30,7 @@ class DecoderLanguageModel:
             dtype: Data type (overrides config if provided)
         """
         self.config = config
-        self.dtype = dtype if dtype is not None else config.dtype
+        self.dtype = resolve_dtype(dtype if dtype is not None else config.dtype)
         
         # Random stream for initialization
         from mini_llm.backend import RandomStream
@@ -133,7 +133,7 @@ class DecoderLanguageModel:
 
         output_proj_input = (
             x.astype(self.dtype, copy=False)
-            if self.dtype == "float16" else x
+            if is_low_precision_dtype(self.dtype) else x
         )
         
         # Output projection - maps d_model -> vocab_size
@@ -195,8 +195,15 @@ class DecoderLanguageModel:
         token_ids = cache["token_ids"]
         block_caches = cache["block_caches"]
         
-        # Backward through output projection
-        dx = self.output_proj.backward(d_logits, cache["output_proj_cache"])
+        # BF16 has FP32-like exponent range, so the FP32 cross-entropy gradient
+        # can safely be cast back to BF16 for the large vocabulary GEMMs. FP16
+        # keeps the FP32 loss gradient because its tiny non-target components
+        # can underflow before accumulation.
+        d_logits_compute = (
+            d_logits.astype(self.dtype, copy=False)
+            if is_bfloat16_dtype(self.dtype) else d_logits
+        )
+        dx = self.output_proj.backward(d_logits_compute, cache["output_proj_cache"])
         
         # Backward through final RMSNorm
         dx = self.final_norm.backward(dx, cache["final_norm_cache"])

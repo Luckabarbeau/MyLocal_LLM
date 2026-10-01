@@ -108,6 +108,21 @@ def load_checkpoint(
         name = npy_file.stem
         if param_names is None or name in param_names:
             arr = np.load(npy_file)
+            # NumPy serializes ml_dtypes.bfloat16 as a 2-byte void dtype
+            # (|V2). Recover the BF16 interpretation before transferring to
+            # CuPy; otherwise CuPy sees UnstructuredVoid<2> and cannot use the
+            # values in arithmetic or assignments. Model parameters are never
+            # intentionally stored as raw void arrays, so |V2 is unambiguous
+            # here.
+            if arr.dtype.kind == "V" and arr.dtype.itemsize == 2:
+                try:
+                    import ml_dtypes
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "Checkpoint contains BF16 parameters but ml-dtypes is "
+                        "not installed. Install it with: python -m pip install ml-dtypes"
+                    ) from exc
+                arr = arr.view(ml_dtypes.bfloat16)
             # Convert to CuPy array if using CuPy backend
             if BACKEND_NAME == "cupy":
                 import cupy

@@ -75,6 +75,16 @@ class MoE:
         self.router.zero_grad()
         self.experts.zero_grad()
 
+    def reset_forward_count(self):
+        """Reset forward call counters for router and experts."""
+        # Reset experts forward counts
+        if hasattr(self.experts, 'reset_forward_count'):
+            self.experts.reset_forward_count()
+
+    def get_expert_forward_count(self):
+        """Get the number of expert forward calls."""
+        return self.experts.get_forward_count()
+
     def forward(self, x):
         """
         Forward pass through the MoE block.
@@ -118,9 +128,7 @@ class MoE:
         dx = self.experts.backward(dy, experts_cache)
         
         # Backward through router to get router parameter gradients
-        # We need dweights = expert_output weighted by dy
-        # Since we don't cache expert outputs in the sparse implementation,
-        # we recompute them from the caches.
+        # We now reuse expert outputs from the forward pass instead of recomputing them.
         
         x = experts_cache["x"]
         weights = experts_cache["weights"]
@@ -134,6 +142,9 @@ class MoE:
         dy_flat = dy.reshape(N, d_model)
         weights_flat = weights.reshape(N, k)
         expert_indices_flat = expert_indices.reshape(N, k)
+        
+        # Get cached expert outputs from forward pass
+        expert_outputs = experts_cache.get("expert_outputs", {})
         
         # For each (token, slot) pair, get expert output and compute dweights
         # dweights[n,i] = dot(dy[n], expert_output[expert_idx[n,i], n])
@@ -153,23 +164,40 @@ class MoE:
                 token_indices = all_token_indices[flat_mask]  # [n_assigned]
                 slot_indices = all_slot_indices[flat_mask]  # [n_assigned]
                 
-                # Gather x for these tokens
-                expert_x = x_flat[token_indices]
-                
-                # Forward through this expert to get outputs
-                expert_out, _ = self.experts.experts[exp_idx].forward(expert_x)
-                
                 # Gather dy and weights
                 expert_dy = dy_flat[token_indices]
                 expert_weights = weights_flat.flatten()[flat_mask]  # [n_assigned]
                 
-                # dweights[n,i] = dot(dy[n], expert_output)
-                # Sum over d_model dimension
-                dweights_for_tokens = xp.sum(expert_dy * expert_out, axis=-1)  # [n_assigned]
-                
-                # Accumulate to dweights_flat
-                # DO NOT multiply by expert_weights - that would be incorrect
-                xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
+                # Use cached expert outputs instead of recomputing
+                if exp_idx in expert_outputs:
+                    # Reuse cached outputs - NO FORWARD CALL!
+                    cached_data = expert_outputs[exp_idx]
+                    cached_token_indices = cached_data["token_indices"]
+                    cached_outputs = cached_data["outputs"]
+                    
+                    # Create mapping from token index to output in cached array
+                    # We need to match token_indices with cached_token_indices
+                    dweights_for_tokens = xp.zeros(len(token_indices))
+                    
+                    for i, tok_idx in enumerate(token_indices):
+                        # Find position of tok_idx in cached_token_indices
+                        pos = xp.where(cached_token_indices == tok_idx)[0]
+                        if len(pos) > 0:
+                            dweights_for_tokens[i] = xp.sum(expert_dy[i] * cached_outputs[pos[0]])
+                    
+                    # Accumulate to dweights_flat
+                    xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
+                else:
+                    # Fallback: forward through expert (shouldn't happen with new cache)
+                    expert_x = x_flat[token_indices]
+                    expert_out, _ = self.experts.experts[exp_idx].forward(expert_x)
+                    
+                    # dweights[n,i] = dot(dy[n], expert_output)
+                    # Sum over d_model dimension
+                    dweights_for_tokens = xp.sum(expert_dy * expert_out, axis=-1)  # [n_assigned]
+                    
+                    # Accumulate to dweights_flat
+                    xp.add.at(dweights_flat, (token_indices, slot_indices), dweights_for_tokens)
         
         dweights = dweights_flat.reshape(batch_size, seq_len, k)
         

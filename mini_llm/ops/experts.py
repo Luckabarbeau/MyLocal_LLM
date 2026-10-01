@@ -90,6 +90,18 @@ class ExpertFFN:
         self.W_up.zero_grad()
         self.W_down.zero_grad()
 
+    @classmethod
+    def reset_forward_count(cls):
+        """Reset the forward call counter."""
+        cls._forward_call_count = 0
+
+    @classmethod
+    def get_forward_count(cls):
+        """Get the total number of forward calls since last reset."""
+        return cls._forward_call_count
+
+    _forward_call_count = 0  # Class-level counter for profiling
+
     def forward(self, x):
         """
         Forward pass through the expert.
@@ -107,6 +119,9 @@ class ExpertFFN:
             y: Output tensor of shape (B, T, d_model)
             cache: Dictionary for backward pass
         """
+        # Increment forward call counter
+        ExpertFFN._forward_call_count += 1
+        
         g = x @ self.W_gate.data
         u = x @ self.W_up.data
         a = silu(g)
@@ -212,6 +227,16 @@ class Experts:
         for expert in self.experts:
             expert.zero_grad()
 
+    def reset_forward_count(self):
+        """Reset forward call counters for all experts."""
+        for expert in self.experts:
+            ExpertFFN.reset_forward_count()
+
+    def get_forward_count(self):
+        """Get the total number of forward calls from all experts."""
+        # The counter is shared across all instances via class variable
+        return ExpertFFN.get_forward_count()
+
     def forward(self, x, weights, expert_indices):
         """
         Forward pass through experts with true sparse token-to-expert dispatch.
@@ -243,6 +268,10 @@ class Experts:
         # Prepare output: [N, D]
         y_flat = xp.zeros((N, d_model), dtype=x.dtype)
         
+        # Cache for expert outputs and caches (to avoid recomputation in backward)
+        expert_outputs = {}  # exp_idx -> {"outputs": [...], "token_indices": [...], "weights": [...]}
+        expert_caches = {}   # exp_idx -> cache from expert.forward()
+        
         # Group assignments by expert entirely on GPU (no CPU transfers)
         # For each expert, gather tokens and compute outputs
         for exp_idx in range(self.n_experts):
@@ -268,6 +297,14 @@ class Experts:
                 # Forward through this expert
                 expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
                 
+                # Cache the outputs and cache for later use in backward
+                expert_outputs[exp_idx] = {
+                    "outputs": expert_out,
+                    "token_indices": token_indices,
+                    "weights": expert_weights,
+                }
+                expert_caches[exp_idx] = expert_cache
+                
                 # Weight and accumulate to output
                 weighted_out = expert_weights[:, xp.newaxis] * expert_out
                 xp.add.at(y_flat, token_indices, weighted_out)
@@ -275,12 +312,14 @@ class Experts:
         # Reshape: [N, D] -> [B, T, D]
         y = y_flat.reshape(batch_size, seq_len, d_model)
         
-        # Store cache for backward
+        # Store cache for backward - includes expert outputs to avoid recomputation
         cache = {
             "x": x,
             "weights": weights,
             "expert_indices": expert_indices,
             "y": y,
+            "expert_outputs": expert_outputs,  # For router gradient computation
+            "expert_caches": expert_caches,    # For expert backward pass
         }
         
         return y, cache
@@ -314,6 +353,10 @@ class Experts:
         # Initialize gradient w.r.t. input
         dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
         
+        # Get cached expert outputs and caches from forward pass
+        expert_outputs = cache.get("expert_outputs", {})
+        expert_caches = cache.get("expert_caches", {})
+        
         # For each expert, gather tokens and accumulate gradients
         for exp_idx in range(self.n_experts):
             # Find tokens where this expert was selected
@@ -332,12 +375,18 @@ class Experts:
                 # Gather dy and weight: [n_assigned, D]
                 expert_dy = dy_flat[token_indices] * expert_weights[:, xp.newaxis]
                 
-                # Gather x for forward
-                x_flat = x.reshape(N, d_model)
-                expert_x = x_flat[token_indices]
+                # Use cached expert outputs and caches if available
+                if exp_idx in expert_outputs and exp_idx in expert_caches:
+                    # Reuse cached outputs - NO FORWARD CALL!
+                    expert_out = expert_outputs[exp_idx]["outputs"]
+                    expert_cache = expert_caches[exp_idx]
+                else:
+                    # Fallback: gather x and forward again (shouldn't happen with new cache)
+                    x_flat = x.reshape(N, d_model)
+                    expert_x = x_flat[token_indices]
+                    expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
                 
-                # Forward then backward through this expert
-                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+                # Backward through this expert
                 expert_dx = self.experts[exp_idx].backward(expert_dy, expert_cache)
                 
                 # Accumulate to input gradient

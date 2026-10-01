@@ -46,6 +46,8 @@ class TransformerBlock:
         self.d_ff = d_ff
         self.n_experts = n_experts
         self.top_k = top_k
+        self.compute_dtype = xp.dtype(dtype)
+        self.use_fp32_residual = self.compute_dtype == xp.dtype("float16")
         
         # First RMSNorm (input to attention)
         self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1", dtype=dtype)
@@ -94,7 +96,7 @@ class TransformerBlock:
         for p in self.parameters():
             p.zero_grad()
     
-    def forward(self, x):
+    def forward(self, x, finite_trace=None, layer_idx=None):
         """
         Forward pass through the Transformer block.
         
@@ -105,21 +107,62 @@ class TransformerBlock:
             y: Output tensor of shape (B, T, d_model)
             cache: Dictionary containing intermediate values for backward pass
         """
+        # Keep the residual stream in FP32 for FP16 training.  The residual
+        # additions are cheap element-wise operations, but they can overflow
+        # FP16 even when both branch operands are individually finite.  The
+        # expensive attention / MoE kernels still receive FP16 inputs below,
+        # so tensor-core GEMM throughput is preserved.
+        if self.use_fp32_residual:
+            x = x.astype("float32", copy=False)
+
         # First residual branch: attention
         residual1 = x
         
-        # Norm → Attention → residual
+        # Norm → Attention → residual. RMSNorm follows the residual dtype; cast
+        # only its normalized output back to the compute dtype before GEMMs.
         norm1_out, norm1_cache = self.norm1.forward(x)
-        attn_out, attn_cache = self.attention.forward(norm1_out)
-        x = residual1 + attn_out
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.norm1", xp.all(xp.isfinite(norm1_out))))
+
+        norm1_compute = (
+            norm1_out.astype(self.compute_dtype, copy=False)
+            if self.use_fp32_residual else norm1_out
+        )
+        attn_out, attn_cache = self.attention.forward(norm1_compute)
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
+
+        attn_residual = (
+            attn_out.astype("float32", copy=False)
+            if self.use_fp32_residual else attn_out
+        )
+        x = residual1 + attn_residual
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.post_attention_residual", xp.all(xp.isfinite(x))))
         
         # Second residual branch: MoE
         residual2 = x
         
-        # Norm → MoE → residual
+        # Norm → MoE → residual. As above, only the branch compute is FP16.
         norm2_out, norm2_cache = self.norm2.forward(x)
-        moe_out, moe_cache = self.moe.forward(norm2_out)
-        y = residual2 + moe_out
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.norm2", xp.all(xp.isfinite(norm2_out))))
+
+        norm2_compute = (
+            norm2_out.astype(self.compute_dtype, copy=False)
+            if self.use_fp32_residual else norm2_out
+        )
+        moe_out, moe_cache = self.moe.forward(norm2_compute)
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.moe", xp.all(xp.isfinite(moe_out))))
+
+        moe_residual = (
+            moe_out.astype("float32", copy=False)
+            if self.use_fp32_residual else moe_out
+        )
+        y = residual2 + moe_residual
+        if finite_trace is not None:
+            finite_trace.append((f"block{layer_idx}.output", xp.all(xp.isfinite(y))))
         
         cache = {
             "residual1": residual1,
@@ -147,33 +190,51 @@ class TransformerBlock:
         norm2_cache = cache["norm2_cache"]
         moe_cache = cache["moe_cache"]
         
+        # FP16 models keep residual-gradient accumulation in FP32 as well.
+        # Cast only branch gradients to the compute dtype before the expensive
+        # attention / MoE backward kernels, then promote their outputs before
+        # adding them back to the residual gradient.
+        if self.use_fp32_residual:
+            dy = dy.astype("float32", copy=False)
+
         # Backward through second residual: y = residual2 + moe_out
-        # The gradient flows through both paths: direct (x1) and through MoE
-        dmoe_out = dy  # Gradient w.r.t. moe_out
-        dresidual2 = dy  # Gradient w.r.t. residual2 (which is x1)
+        dresidual2 = dy
+        dmoe_out = (
+            dy.astype(self.compute_dtype, copy=False)
+            if self.use_fp32_residual else dy
+        )
         
         # Backward through MoE
         dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
+        if self.use_fp32_residual:
+            dnorm2_out = dnorm2_out.astype("float32", copy=False)
         
         # Backward through second RMSNorm - this gives gradient through FFN path
         dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)
+        if self.use_fp32_residual:
+            dx_norm2_through_ffn = dx_norm2_through_ffn.astype("float32", copy=False)
         
         # Total gradient through first residual is sum of direct and FFN paths
-        # Since x1 = residual2 + ffn_out, the gradient w.r.t. x1 is dy (from direct path)
-        # Plus the gradient from the FFN path
         dx_norm2 = dresidual2 + dx_norm2_through_ffn
         
         # Backward through first residual: x = residual1 + attn_out
-        dattn_out = dx_norm2  # Gradient flows through addition
         dresidual1 = dx_norm2
+        dattn_out = (
+            dx_norm2.astype(self.compute_dtype, copy=False)
+            if self.use_fp32_residual else dx_norm2
+        )
         
         # Backward through attention
         dnorm1_out = self.attention.backward(dattn_out, cache["attn_cache"])
+        if self.use_fp32_residual:
+            dnorm1_out = dnorm1_out.astype("float32", copy=False)
         
         # Backward through first RMSNorm
         dx_norm1 = self.norm1.backward(dnorm1_out, cache["norm1_cache"])
+        if self.use_fp32_residual:
+            dx_norm1 = dx_norm1.astype("float32", copy=False)
         
-        # Combine gradients for residual1 and norm1
+        # Combine gradients for residual1 and norm1 in the residual dtype.
         dx = dresidual1 + dx_norm1
         
         return dx

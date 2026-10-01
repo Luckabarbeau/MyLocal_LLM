@@ -43,7 +43,7 @@ def cross_entropy_forward(logits, targets):
             "n": n,
         }
 
-        return scalar(loss_f32.astype(logits.dtype)), cache
+        return scalar(loss_f32), cache
     else:
         # Float32 path - standard computation
         max_logit = xp.max(flat_logits, axis=-1, keepdims=True)
@@ -67,13 +67,19 @@ def cross_entropy_backward(cache):
     """
     Backward pass for cross entropy loss.
     
-    Returns gradient in the same dtype as logits.
+    For FP16 logits, returns the loss gradient in FP32. Keeping dL/dlogits
+    in FP32 is important because the 1/N cross-entropy scaling can push many
+    non-target components below the representable FP16 range before loss
+    scaling is applied by the trainer.
     """
     probs_f32 = cache.get("probs_f32", None)
     
     if probs_f32 is not None:
-        # Float16 path - compute in float32, then cast
-        probs = probs_f32.astype("float16", copy=False)
+        # Float16-logit path: keep the gradient in FP32. Casting the softmax
+        # probabilities to FP16 before the 1/N normalization can underflow
+        # small non-target gradients to zero for realistic token counts.
+        # Make a copy because backward modifies the cached probabilities.
+        probs = probs_f32.copy()
     else:
         probs = cache["probs"].copy()
     

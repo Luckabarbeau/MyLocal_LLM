@@ -69,3 +69,40 @@ def test_attention_wq_backward_direction():
     an = float(xp.sum(analytic*v))
     rel = abs(fd-an)/(abs(fd)+abs(an)+1e-12)
     assert rel < 2e-6
+
+
+def test_fp16_attention_prescaling_avoids_score_overflow():
+    """FP16 QK^T remains finite even when the unscaled score would overflow."""
+    rng = RandomStream(20)
+    attn = GQAAttention(
+        d_model=8, n_q_heads=2, n_kv_heads=1, d_head=4,
+        input_std=0.01, output_std=0.01, rng=rng, dtype="float16"
+    )
+
+    # q_pre and k_pre remain finite (~800), but the original FP16 score path
+    # would form O(1e6) logits and overflow before softmax.
+    attn.Wq.data[...] = xp.asarray(1.0, dtype="float16")
+    attn.Wk.data[...] = xp.asarray(1.0, dtype="float16")
+    attn.Wv.data[...] = xp.asarray(1e-3, dtype="float16")
+    attn.Wo.data[...] = xp.asarray(1e-3, dtype="float16")
+    x = xp.full((1, 4, 8), 100.0, dtype="float16")
+
+    y, cache = attn.forward(x)
+
+    assert bool(xp.all(xp.isfinite(cache["probs"])))
+    assert bool(xp.all(xp.isfinite(y)))
+    row_sums = xp.sum(cache["probs"].astype("float32"), axis=-1)
+    assert bool(xp.all(xp.abs(row_sums - 1.0) < 2e-3))
+
+
+def test_scaled_softmax_matches_direct_softmax_in_safe_range():
+    """Pre-scaled logits preserve the original softmax temperature."""
+    from mini_llm.ops.attention import softmax_forward
+
+    x = xp.asarray(
+        [[[-1.5, 0.2, 1.1, 2.0], [0.3, -0.7, 0.1, 1.4]]],
+        dtype="float32",
+    )
+    direct = softmax_forward(x, axis=-1)
+    scaled = softmax_forward(x / 32.0, axis=-1, logit_multiplier=32.0)
+    assert bool(xp.all(xp.abs(direct - scaled) < 1e-6))

@@ -42,12 +42,14 @@ def test_cross_entropy_fp16_workspace_matches_reference():
     expected_grad = probs
     expected_grad[np.arange(len(t)), t] -= 1.0
     expected_grad /= len(t)
-    expected_grad = expected_grad.reshape(logits_np.shape).astype(np.float16)
+    expected_grad = expected_grad.reshape(logits_np.shape).astype(np.float32)
 
-    # The public FP16 loss intentionally returns an FP16-rounded scalar.
-    assert abs(loss - float(np.float16(expected_loss))) < 1e-3
+    # Loss and dL/dlogits stay in FP32 even when model logits are FP16.
+    # This avoids throwing away information before dynamic/static loss scaling.
+    assert abs(loss - float(expected_loss)) < 1e-5
+    assert grad.dtype == xp.float32
     np.testing.assert_allclose(
-        np.asarray(grad), expected_grad, rtol=2e-3, atol=2e-4
+        np.asarray(grad), expected_grad, rtol=2e-5, atol=2e-7
     )
 
 
@@ -59,3 +61,31 @@ def test_cross_entropy_fp16_cache_reuses_single_probability_workspace():
     assert cache["probs_f32"].dtype == "float32"
     assert "shifted" not in cache
     assert "exp_logits" not in cache
+
+
+def test_cross_entropy_fp16_backward_preserves_tiny_non_target_gradients():
+    # Match the production microbatch scale: 8 * 512 = 4096 tokens. With a
+    # 16k vocabulary, typical non-target CE gradients are ~1.5e-8, which
+    # underflow if dL/dlogits is cast to FP16 before trainer loss scaling.
+    n = 4096
+    vocab = 16384
+    logits = xp.asarray(np.zeros((n, 1, vocab), dtype=np.float16))
+    targets = xp.asarray(np.zeros((n, 1), dtype=np.int64))
+
+    _, cache = cross_entropy_forward(logits, targets)
+    grad = cross_entropy_backward(cache)
+
+    grad_np = np.asarray(grad)
+    assert grad.dtype == xp.float32
+    assert np.isfinite(grad_np).all()
+
+    # A representative non-target gradient must survive and remain positive.
+    expected_non_target = 1.0 / (vocab * n)
+    assert grad_np[0, 0, 1] > 0.0
+    np.testing.assert_allclose(
+        grad_np[0, 0, 1], expected_non_target, rtol=2e-5, atol=1e-12
+    )
+
+    # Softmax cross-entropy gradients should sum to approximately zero per row.
+    row_sums = grad_np[:, 0, :].sum(axis=-1)
+    np.testing.assert_allclose(row_sums, 0.0, atol=2e-10)

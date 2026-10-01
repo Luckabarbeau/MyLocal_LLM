@@ -100,7 +100,7 @@ class DecoderLanguageModel:
         for p in self.parameters():
             p.zero_grad()
     
-    def forward(self, token_ids):
+    def forward(self, token_ids, finite_trace=None):
         """
         Forward pass through the model.
         
@@ -115,22 +115,35 @@ class DecoderLanguageModel:
         
         # Embed tokens - unpack output and cache
         x, embed_cache = self.embedding.forward(token_ids)
+        if finite_trace is not None:
+            finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
         
         # Pass through transformer blocks - collect caches
         block_caches = []
         for i, block in enumerate(self.blocks):
-            x, cache = block.forward(x)
+            x, cache = block.forward(x, finite_trace=finite_trace, layer_idx=i)
             block_caches.append(cache)
         
-        # Final normalization - unpack output and cache
+        # Final normalization - unpack output and cache.  FP16 models keep the
+        # transformer residual stream in FP32, but the large output projection
+        # remains on the fast FP16 GEMM path.
         x, final_norm_cache = self.final_norm.forward(x)
+        if finite_trace is not None:
+            finite_trace.append(("final_norm", xp.all(xp.isfinite(x))))
+
+        output_proj_input = (
+            x.astype(self.dtype, copy=False)
+            if self.dtype == "float16" else x
+        )
         
         # Output projection - maps d_model -> vocab_size
-        logits, output_proj_cache = self.output_proj.forward(x)
+        logits, output_proj_cache = self.output_proj.forward(output_proj_input)
+        if finite_trace is not None:
+            finite_trace.append(("logits", xp.all(xp.isfinite(logits))))
         
         cache = {
             "token_ids": token_ids,
-            "embedding_input": x,  # Input to logits (after final norm)
+            "embedding_input": output_proj_input,  # Input to logits projection
             "embed_cache": embed_cache,
             "final_norm_cache": final_norm_cache,
             "output_proj_cache": output_proj_cache,

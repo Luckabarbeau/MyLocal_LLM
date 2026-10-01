@@ -10,6 +10,7 @@ This module provides production-ready training infrastructure including:
 - Deterministic validation
 """
 
+import os
 import csv
 import time
 from collections import OrderedDict
@@ -158,6 +159,13 @@ class ExtendedTrainer:
         
         # Numerical debugging
         self.numerical_debug = numerical_debug
+
+        # Lightweight forward finite tracing.  Unlike numerical_debug this
+        # keeps all stage checks on the GPU and only synchronizes if the final
+        # logits are non-finite.  Enable for a narrow optimizer-step window via
+        # MINI_LLM_FINITE_TRACE_START / MINI_LLM_FINITE_TRACE_END.
+        self.finite_trace_start = int(os.environ.get("MINI_LLM_FINITE_TRACE_START", "-1"))
+        self.finite_trace_end = int(os.environ.get("MINI_LLM_FINITE_TRACE_END", str(self.finite_trace_start)))
         
         # Logging setup
         self._setup_logging()
@@ -355,8 +363,31 @@ class ExtendedTrainer:
             # Get batch
             inputs, targets = self.get_train_batch()
             
-            # Forward pass
-            logits, cache = self.model.forward(inputs)
+            # Forward pass.  Optional lightweight finite tracing records
+            # asynchronous GPU reductions at key layer boundaries.  There is
+            # only a host synchronization when the final logits are bad.
+            trace_active = (
+                self.finite_trace_start >= 0
+                and self.finite_trace_start <= self.step <= self.finite_trace_end
+            )
+            finite_trace = [] if trace_active else None
+            logits, cache = self.model.forward(inputs, finite_trace=finite_trace)
+
+            if finite_trace is not None:
+                final_ok = bool(finite_trace[-1][1].item())
+                if not final_ok:
+                    print(f"\nFINITE TRACE FAILURE at optimizer step {self.step}, accumulation microstep {accum_step}")
+                    first_bad = None
+                    for label, ok_backend in finite_trace:
+                        ok = bool(ok_backend.item())
+                        state = "OK" if ok else "NONFINITE"
+                        print(f"  {label}: {state}")
+                        if first_bad is None and not ok:
+                            first_bad = label
+                    raise ValueError(
+                        f"Nonfinite forward tensor at step {self.step}, "
+                        f"microstep {accum_step}; first bad stage: {first_bad}"
+                    )
             
             # Numerical debug: check logits are finite
             if not self._check_finite(logits, f"logits_step_{self.step}"):

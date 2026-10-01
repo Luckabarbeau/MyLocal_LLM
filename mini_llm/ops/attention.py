@@ -3,9 +3,26 @@ from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
 
 
-def softmax_forward(x, axis=-1):
+def softmax_forward(x, axis=-1, logit_multiplier=1.0):
+    """Stable softmax, optionally restoring a pre-scaled logit magnitude.
+
+    ``logit_multiplier`` is applied only after subtracting the row maximum.
+    This is algebraically equivalent to softmax(logit_multiplier * x), while
+    avoiding positive overflow because the shifted values are never > 0.
+    """
     x_max = xp.max(x, axis=axis, keepdims=True)
-    e = xp.exp(x - x_max)
+    shifted = x - x_max
+    if logit_multiplier != 1.0:
+        # After max subtraction all finite logits are <= 0.  When restoring
+        # a large pre-scale factor in FP16, extremely negative values may
+        # overflow to -inf.  That is harmless for softmax mathematically, but
+        # it emits a runtime warning.  Saturate only those already-negligible
+        # tails before rescaling so the product stays representable.
+        if shifted.dtype == xp.float16:
+            lower = -float(xp.finfo(xp.float16).max) / float(logit_multiplier)
+            shifted = xp.maximum(shifted, lower)
+        shifted = shifted * logit_multiplier
+    e = xp.exp(shifted)
     return e / xp.sum(e, axis=axis, keepdims=True)
 
 
@@ -115,10 +132,20 @@ class GQAAttention:
         k_heads = k.transpose(0, 2, 1, 3)             # [B,Hkv,T,Dh]
         v_heads = v.transpose(0, 2, 1, 3)             # [B,Hkv,T,Dh]
 
-        # Scale Q before the dot product.  This is mathematically equivalent
-        # to scaling the much larger [B,Hq,T,T] score tensor afterwards, but
-        # touches far fewer values and lowers FP16 accumulation magnitude.
-        q_scaled = q_grouped * self.scale
+        # Scale Q before the dot product.  For FP16, additionally pre-scale
+        # the attention logits before the GEMM.  This keeps the expensive QK^T
+        # matmul on the fast FP16 tensor-core path while increasing its overflow
+        # headroom by 32x.  The exact attention temperature is restored inside
+        # the stable softmax *after* subtracting the row maximum, where all
+        # values are non-positive and therefore cannot overflow to +Inf.
+        #
+        # Algebraically, for s = scale * QK^T and r = 32:
+        #   softmax(s) = softmax(r * (s/r))
+        # and subtracting max(s/r) before multiplying by r is exact up to FP16
+        # roundoff.  Backward continues to use ds/dQ for the original s, so no
+        # gradient rescaling is required below.
+        score_prescale = 1.0 / 32.0 if q_grouped.dtype == xp.float16 else 1.0
+        q_scaled = q_grouped * (self.scale * score_prescale)
         scores_grouped = xp.matmul(
             q_scaled,
             k_heads[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
@@ -127,7 +154,11 @@ class GQAAttention:
 
         causal = self._get_causal_mask(t)
         scores_masked = xp.where(causal[None, None, :, :], -xp.inf, scores)
-        probs = softmax_forward(scores_masked, axis=-1)
+        probs = softmax_forward(
+            scores_masked,
+            axis=-1,
+            logit_multiplier=(1.0 / score_prescale),
+        )
 
         probs_grouped = probs.reshape(
             b, self.n_kv_heads, self.group_size, t, t

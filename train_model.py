@@ -534,6 +534,10 @@ def main():
     
     # Issue #14: Restore optimizer state after trainer creation
     if stored_optimizer_state is not None and "m" in stored_optimizer_state:
+        trainer.optimizer.step_index = int(
+            stored_optimizer_state.get("step", start_step)
+        )
+    
         m_dict = stored_optimizer_state["m"]
         v_dict = stored_optimizer_state.get("v", {})
         

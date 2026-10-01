@@ -128,3 +128,46 @@ def test_transformer_block_parameter_backward():
     param.data[...] = original_data
     
     assert rel < 2e-5, f"Parameter backward direction check failed: fd={fd}, an={an}, rel={rel}"
+
+
+def test_fp16_residual_addition_uses_fp32_accumulator():
+    """Finite FP16 branches must not overflow during residual addition."""
+
+    class IdentityNorm:
+        def forward(self, x):
+            return x, {"dtype": x.dtype}
+
+        def backward(self, dy, cache):
+            return dy
+
+    class ConstantBranch:
+        def __init__(self, value):
+            self.value = value
+            self.seen_dtype = None
+
+        def forward(self, x):
+            self.seen_dtype = x.dtype
+            out = xp.full(x.shape, self.value, dtype="float16")
+            return out, {}
+
+        def backward(self, dy, cache):
+            return xp.zeros(dy.shape, dtype="float16")
+
+    block = TransformerBlock.__new__(TransformerBlock)
+    block.compute_dtype = xp.dtype("float16")
+    block.use_fp32_residual = True
+    block.norm1 = IdentityNorm()
+    block.norm2 = IdentityNorm()
+    block.attention = ConstantBranch(0.0)
+    block.moe = ConstantBranch(40000.0)
+
+    # Both residual2 and moe_out are individually finite in FP16, but their
+    # mathematical sum (80000) exceeds the FP16 maximum (65504).
+    x = xp.full((1, 1, 4), 40000.0, dtype="float16")
+    y, _ = block.forward(x)
+
+    assert block.attention.seen_dtype == xp.dtype("float16")
+    assert block.moe.seen_dtype == xp.dtype("float16")
+    assert y.dtype == xp.dtype("float32")
+    assert bool(xp.all(xp.isfinite(y)))
+    np.testing.assert_allclose(np.asarray(y), 80000.0, rtol=0.0, atol=32.0)

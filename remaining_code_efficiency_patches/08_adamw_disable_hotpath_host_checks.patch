@@ -1,0 +1,106 @@
+diff --git a/mini_llm/optim/adamw.py b/mini_llm/optim/adamw.py
+index 50a2173..40bc65c 100644
+--- a/mini_llm/optim/adamw.py
++++ b/mini_llm/optim/adamw.py
+@@ -22,7 +22,7 @@ class AdamW:
+     
+     def __init__(
+         self, parameters, lr=3e-4, beta1=0.9, beta2=0.95,
+-        eps=1e-8, weight_decay=0.1
++        eps=1e-8, weight_decay=0.1, numerical_debug=False
+     ):
+         """
+         Initialize AdamW optimizer.
+@@ -34,6 +34,9 @@ class AdamW:
+             beta2: Second moment decay rate  
+             eps: Small constant for numerical stability
+             weight_decay: Weight decay coefficient
++            numerical_debug: Enable expensive per-parameter finite checks.
++                This copies arrays to host and must remain disabled during
++                normal performance-sensitive training.
+         """
+         self.parameters = list(parameters)
+         self.lr = float(lr)
+@@ -41,6 +44,7 @@ class AdamW:
+         self.beta2 = float(beta2)
+         self.eps = float(eps)
+         self.weight_decay = float(weight_decay)
++        self.numerical_debug = bool(numerical_debug)
+         self.step_index = 0
+         
+         # FP32 master weights and moments (even for float16 parameters)
+@@ -76,8 +80,10 @@ class AdamW:
+             # Get gradient and convert to float32 for computation
+             g = p.grad.astype("float32", copy=False)
+             
+-            # Debug: check gradient is finite before processing
+-            if np is not None:
++            # Optional deep numerical debugging.  These checks copy full
++            # parameter arrays to the host and synchronize the GPU, so they
++            # must never run in the normal training hot path.
++            if self.numerical_debug and np is not None:
+                 g_cpu = g.get() if hasattr(g, "get") else g
+                 if not np.all(np.isfinite(g_cpu)):
+                     raise FloatingPointError(
+@@ -96,8 +102,8 @@ class AdamW:
+             m_hat = self.m[i] / c1
+             v_hat = self.v[i] / c2
+             
+-            # Debug: check moments are finite
+-            if np is not None:
++            # Optional deep numerical debugging (expensive host sync/copy).
++            if self.numerical_debug and np is not None:
+                 m_cpu = m_hat.get() if hasattr(m_hat, "get") else m_hat
+                 v_cpu = v_hat.get() if hasattr(v_hat, "get") else v_hat
+                 if not (np.all(np.isfinite(m_cpu)) and np.all(np.isfinite(v_cpu))):
+@@ -115,8 +121,8 @@ class AdamW:
+             update = eta * m_hat / (xp.sqrt(v_hat) + self.eps)
+             self.master_weights[i] -= update
+             
+-            # Debug: check master weights are finite after update
+-            if np is not None:
++            # Optional deep numerical debugging (expensive host sync/copy).
++            if self.numerical_debug and np is not None:
+                 w_cpu = self.master_weights[i].get() if hasattr(self.master_weights[i], "get") else self.master_weights[i]
+                 if not np.all(np.isfinite(w_cpu)):
+                     raise FloatingPointError(
+diff --git a/mini_llm/train_extended.py b/mini_llm/train_extended.py
+index acbb365..caf49be 100644
+--- a/mini_llm/train_extended.py
++++ b/mini_llm/train_extended.py
+@@ -120,6 +120,7 @@ class ExtendedTrainer:
+             model.parameters(),
+             lr=peak_lr,
+             weight_decay=weight_decay,
++            numerical_debug=numerical_debug,
+         )
+         
+         # Learning rate schedule
+diff --git a/tests/test_adamw_mixed_precision.py b/tests/test_adamw_mixed_precision.py
+index f2a0591..22ccfac 100644
+--- a/tests/test_adamw_mixed_precision.py
++++ b/tests/test_adamw_mixed_precision.py
+@@ -195,3 +195,23 @@ class TestAdamWFP32:
+ 
+ if __name__ == "__main__":
+     pytest.main([__file__, "-v"])
++
++
++def test_adamw_numerical_debug_defaults_off():
++    p = Parameter(
++        data=xp.asarray([[1.0]], dtype="float32"),
++        name="debug_flag_param",
++        decay=True,
++    )
++    optimizer = AdamW([p], lr=1e-3)
++    assert optimizer.numerical_debug is False
++
++
++def test_adamw_numerical_debug_can_be_enabled():
++    p = Parameter(
++        data=xp.asarray([[1.0]], dtype="float32"),
++        name="debug_flag_param",
++        decay=True,
++    )
++    optimizer = AdamW([p], lr=1e-3, numerical_debug=True)
++    assert optimizer.numerical_debug is True

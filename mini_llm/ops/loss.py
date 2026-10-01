@@ -14,32 +14,35 @@ def cross_entropy_forward(logits, targets):
     n = flat_logits.shape[0]
 
     if logits.dtype == "float16":
-        # Convert to float32 for numerically stable computation
-        logits_f32 = flat_logits.astype("float32", copy=False)
-        
-        # Log-sum-exp trick (stable in float32)
-        max_logit = xp.max(logits_f32, axis=-1, keepdims=True)
-        shifted = logits_f32 - max_logit
-        exp_logits = xp.exp(shifted)
-        logsumexp = max_logit.squeeze() + xp.log(xp.sum(exp_logits, axis=-1))
-        
-        # Get target logits
+        # One FP32 workspace for the complete stable softmax/loss path.
+        # Converting FP16 -> FP32 necessarily allocates once; after that we
+        # reuse the same array in-place instead of materializing separate
+        # shifted, exp_logits, and probs_f32 arrays (each can be hundreds of
+        # MiB at production batch/vocab sizes).
+        work = flat_logits.astype("float32", copy=True)
+
         rows = xp.arange(n)
-        target_logits = logits_f32[rows, flat_targets]
-        
-        # Loss in float32
-        loss_f32 = xp.mean(logsumexp - target_logits)
-        
-        # Compute probabilities for backward (in float32)
-        probs_f32 = exp_logits / xp.sum(exp_logits, axis=-1, keepdims=True)
-        
+        max_logit = xp.max(work, axis=-1, keepdims=True)
+        work -= max_logit
+
+        # Save only the target shifted logits before overwriting work with exp.
+        # loss_i = log(sum_j exp(z_j-max_z)) - (z_target-max_z)
+        target_shifted = work[rows, flat_targets].copy()
+
+        xp.exp(work, out=work)
+        normalizer = xp.sum(work, axis=-1, keepdims=True)
+        loss_f32 = xp.mean(xp.log(normalizer[:, 0]) - target_shifted)
+
+        # Reuse work as the FP32 probability cache needed by backward.
+        xp.divide(work, normalizer, out=work)
+
         cache = {
-            "probs_f32": probs_f32,
+            "probs_f32": work,
             "targets": flat_targets,
             "original_shape": logits.shape,
             "n": n,
         }
-        
+
         return scalar(loss_f32.astype(logits.dtype)), cache
     else:
         # Float32 path - standard computation

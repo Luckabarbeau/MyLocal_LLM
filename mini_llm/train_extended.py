@@ -120,6 +120,7 @@ class ExtendedTrainer:
             model.parameters(),
             lr=peak_lr,
             weight_decay=weight_decay,
+            numerical_debug=numerical_debug,
         )
         
         # Learning rate schedule

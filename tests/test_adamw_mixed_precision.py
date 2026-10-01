@@ -195,3 +195,23 @@ class TestAdamWFP32:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_adamw_numerical_debug_defaults_off():
+    p = Parameter(
+        data=xp.asarray([[1.0]], dtype="float32"),
+        name="debug_flag_param",
+        decay=True,
+    )
+    optimizer = AdamW([p], lr=1e-3)
+    assert optimizer.numerical_debug is False
+
+
+def test_adamw_numerical_debug_can_be_enabled():
+    p = Parameter(
+        data=xp.asarray([[1.0]], dtype="float32"),
+        name="debug_flag_param",
+        decay=True,
+    )
+    optimizer = AdamW([p], lr=1e-3, numerical_debug=True)
+    assert optimizer.numerical_debug is True

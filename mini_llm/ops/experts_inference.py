@@ -1,7 +1,7 @@
 """Experts for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp, asnumpy
+from mini_llm.backend import xp
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
 
@@ -77,7 +77,10 @@ class ExpertsInference:
         self.d_ff = d_ff
         self.n_experts = n_experts
         
-        # Create inference experts
+        # Create inference experts.  The sparse objects remain the prefill
+        # implementation/reference path; decode additionally uses persistent
+        # stacked weights so all experts can be evaluated in batched matmuls
+        # without any GPU->CPU expert-id synchronization.
         self.experts = []
         for i in range(n_experts):
             expert = ExpertFFNInference(
@@ -87,10 +90,24 @@ class ExpertsInference:
             )
             self.experts.append(expert)
 
+        self.W_gate_stack = None
+        self.W_up_stack = None
+        self.W_down_stack = None
+
     def set_weights(self, experts):
-        """Set weights from training Experts."""
+        """Set weights and build persistent stacked decode matrices once."""
         for i in range(self.n_experts):
             self.experts[i].set_weights(experts.experts[i])
+
+        self.W_gate_stack = xp.stack(
+            [expert.W_gate for expert in self.experts], axis=0
+        )
+        self.W_up_stack = xp.stack(
+            [expert.W_up for expert in self.experts], axis=0
+        )
+        self.W_down_stack = xp.stack(
+            [expert.W_down for expert in self.experts], axis=0
+        )
 
     def forward(self, x, weights, expert_indices):
         """Sparse inference dispatch with a special single-token decode path.
@@ -109,13 +126,27 @@ class ExpertsInference:
         y_flat = xp.zeros((N, d_model), dtype=x.dtype)
 
         if N == 1:
-            # One tiny synchronization replaces n_experts xp.any() checks.
-            # The selected ids are just k small integers (k=2 in the medium
-            # model), while all expert math remains on the device.
-            selected_experts = asnumpy(expert_indices.reshape(-1))
-            for slot, exp_idx in enumerate(selected_experts):
-                expert_out = self.experts[int(exp_idx)].forward(x_flat)
-                y_flat += weights_flat[0, slot] * expert_out
+            # GPU-only decode experiment: evaluate all experts together rather
+            # than synchronizing selected expert ids to Python.  This performs
+            # more arithmetic than sparse top-k, but converts many tiny dynamic
+            # operations into three regular batched matmuls.  Benchmark on the
+            # target GPU before keeping this path.
+            x_experts = x_flat[xp.newaxis, :, :]  # [1,1,D]
+            g = xp.matmul(x_experts, self.W_gate_stack)  # [E,1,Dff]
+            u = xp.matmul(x_experts, self.W_up_stack)    # [E,1,Dff]
+            h = silu(g) * u
+            all_outputs = xp.matmul(
+                h, self.W_down_stack
+            )  # [E,1,D]
+
+            selected = all_outputs[
+                expert_indices.reshape(-1), 0, :
+            ]  # [k,D], GPU gather only after expert computation
+            combined = xp.sum(
+                selected * weights_flat[0, :, xp.newaxis],
+                axis=0,
+            )
+            y_flat[0, :] = combined
             return y_flat.reshape(batch_size, seq_len, d_model)
 
         # Prompt/prefill path: group assignments once instead of performing

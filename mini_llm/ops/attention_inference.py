@@ -6,6 +6,20 @@ from mini_llm.backend import xp, BACKEND_NAME
 from mini_llm.ops.rope import get_rope_cos_sin
 
 
+_CAUSAL_ALLOW_MASK_CACHE = {}
+
+
+def _get_causal_allow_mask(length):
+    """Return cached lower-triangular allow mask [length,length]."""
+    length = int(length)
+    mask = _CAUSAL_ALLOW_MASK_CACHE.get(length)
+    if mask is None:
+        pos = xp.arange(length, dtype=xp.int32)
+        mask = pos[None, :] <= pos[:, None]
+        _CAUSAL_ALLOW_MASK_CACHE[length] = mask
+    return mask
+
+
 class GQAAttentionInference:
     """Grouped-query attention for autoregressive inference with KV cache.
 
@@ -36,6 +50,9 @@ class GQAAttentionInference:
         self.Wk = None
         self.Wv = None
         self.Wo = None
+        self.Wqkv = None
+        self._q_width = n_q_heads * d_head
+        self._kv_width = n_kv_heads * d_head
 
         self._rope_capacity = 0
         self._rope_cos = None
@@ -44,11 +61,18 @@ class GQAAttentionInference:
             self.ensure_rope_capacity(max_context)
 
     def set_weights(self, Wq, Wk, Wv, Wo):
-        """Set attention weights (shared with the training model)."""
+        """Set weights and build one persistent inference QKV matrix."""
         self.Wq = xp.asarray(Wq) if BACKEND_NAME == "cupy" else Wq
         self.Wk = xp.asarray(Wk) if BACKEND_NAME == "cupy" else Wk
         self.Wv = xp.asarray(Wv) if BACKEND_NAME == "cupy" else Wv
         self.Wo = xp.asarray(Wo) if BACKEND_NAME == "cupy" else Wo
+
+        # Inference repeatedly multiplies the same hidden state by Q, K and V.
+        # Pack the weights once at model construction/load time so prefill and
+        # especially decode issue one GEMM instead of three tiny GEMMs.
+        self.Wqkv = xp.concatenate(
+            (self.Wq, self.Wk, self.Wv), axis=1
+        )
 
     def ensure_rope_capacity(self, length):
         """Ensure absolute-position RoPE tables exist through ``length``."""
@@ -91,27 +115,44 @@ class GQAAttentionInference:
         cos = self._rope_cos[:, int(start_pos):end_pos, :, :]
         sin = self._rope_sin[:, int(start_pos):end_pos, :, :]
 
-        x0 = x[..., 0::2]
+        # q_pre/k_pre are inference temporaries and are never reused after
+        # RoPE. Rotate them in place to avoid allocating a second full tensor.
+        # Preserve the even lanes because they are needed when writing odds.
+        x0 = x[..., 0::2].copy()
         x1 = x[..., 1::2]
-        y = xp.empty_like(x)
-        y[..., 0::2] = x0 * cos - x1 * sin
-        y[..., 1::2] = x0 * sin + x1 * cos
-        return y
+        x[..., 0::2] = x0 * cos - x1 * sin
+        x[..., 1::2] = x0 * sin + x1 * cos
+        return x
 
     def _attention(self, q, k_native, v_native, causal_mask=None):
         """Attend with native Hkv K/V tensors; never physically repeat them."""
         b, t_query, _, _ = q.shape
         t_key = k_native.shape[2]
 
-        q_grouped = self._group_queries(q)  # [B,Hkv,G,Tq,D]
-        q_scaled = q_grouped * self.scale
-        scores_grouped = xp.matmul(
-            q_scaled,
-            k_native[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
-        )                                  # [B,Hkv,G,Tq,Tk]
-        scores = scores_grouped.reshape(
-            b, self.n_q_heads, t_query, t_key
-        )
+        if t_query == 1:
+            # Decode fast path.  With one query position the grouped query can
+            # be viewed directly as [B,Hkv,G,D], so avoid singleton 5-D
+            # broadcasted matmuls in the latency-critical token loop.
+            q_decode = q[:, 0, :, :].reshape(
+                b, self.n_kv_heads, self.group_size, self.d_head
+            )
+            scores_decode = xp.matmul(
+                q_decode * self.scale,
+                k_native.swapaxes(-2, -1),
+            )  # [B,Hkv,G,Tk]
+            scores = scores_decode.reshape(
+                b, self.n_q_heads, 1, t_key
+            )
+        else:
+            q_grouped = self._group_queries(q)  # [B,Hkv,G,Tq,D]
+            q_scaled = q_grouped * self.scale
+            scores_grouped = xp.matmul(
+                q_scaled,
+                k_native[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+            )                                  # [B,Hkv,G,Tq,Tk]
+            scores = scores_grouped.reshape(
+                b, self.n_q_heads, t_query, t_key
+            )
 
         if causal_mask is not None:
             scores = xp.where(
@@ -123,6 +164,18 @@ class GQAAttentionInference:
         probs = xp.exp(scores_f32)
         probs /= xp.sum(probs, axis=-1, keepdims=True)
         probs = probs.astype(self.dtype, copy=False)
+
+        if t_query == 1:
+            probs_decode = probs.reshape(
+                b, self.n_kv_heads, self.group_size, t_key
+            )
+            context_decode = xp.matmul(
+                probs_decode,
+                v_native,
+            )  # [B,Hkv,G,D]
+            return context_decode.reshape(
+                b, 1, self.n_q_heads, self.d_head
+            )
 
         probs_grouped = probs.reshape(
             b, self.n_kv_heads, self.group_size, t_query, t_key
@@ -147,14 +200,17 @@ class GQAAttentionInference:
         if BACKEND_NAME == "cupy" and isinstance(x, _np.ndarray):
             x = xp.asarray(x)
 
-        Wq, Wk, Wv, Wo = self._weight_data()
-        q_pre = (x @ Wq).reshape(
+        _, _, _, Wo = self._weight_data()
+        qkv = x @ self.Wqkv
+        q_end = self._q_width
+        k_end = q_end + self._kv_width
+        q_pre = qkv[..., :q_end].reshape(
             b, t_prompt, self.n_q_heads, self.d_head
         )
-        k_pre = (x @ Wk).reshape(
+        k_pre = qkv[..., q_end:k_end].reshape(
             b, t_prompt, self.n_kv_heads, self.d_head
         )
-        v = (x @ Wv).reshape(
+        v = qkv[..., k_end:].reshape(
             b, t_prompt, self.n_kv_heads, self.d_head
         )
 
@@ -168,13 +224,12 @@ class GQAAttentionInference:
         k_all = k_cache[:, :, :end_pos, :]
         v_all = v_cache[:, :, :end_pos, :]
 
-        # Query absolute positions are contiguous; build only the small boolean
-        # mask needed for prefill. decode_one needs no causal mask.
-        q_positions = xp.arange(
-            int(start_pos), end_pos, dtype=xp.int32
-        )[:, None]
-        k_positions = xp.arange(end_pos, dtype=xp.int32)[None, :]
-        causal_mask = k_positions <= q_positions
+        # Reuse a shared absolute-position causal mask rather than rebuilding
+        # arange/comparison tensors for every layer during prompt prefill.
+        # Rows are the absolute query positions [start_pos:end_pos], columns
+        # are keys [0:end_pos]. decode_one still needs no causal mask.
+        causal_full = _get_causal_allow_mask(cache_capacity)
+        causal_mask = causal_full[int(start_pos):end_pos, :end_pos]
 
         context = self._attention(q, k_all, v_all, causal_mask=causal_mask)
         merged = context.reshape(
@@ -192,14 +247,17 @@ class GQAAttentionInference:
         if BACKEND_NAME == "cupy" and isinstance(x, _np.ndarray):
             x = xp.asarray(x)
 
-        Wq, Wk, Wv, Wo = self._weight_data()
-        q_pre = (x @ Wq).reshape(
+        _, _, _, Wo = self._weight_data()
+        qkv = x @ self.Wqkv
+        q_end = self._q_width
+        k_end = q_end + self._kv_width
+        q_pre = qkv[..., :q_end].reshape(
             b, 1, self.n_q_heads, self.d_head
         )
-        k_pre = (x @ Wk).reshape(
+        k_pre = qkv[..., q_end:k_end].reshape(
             b, 1, self.n_kv_heads, self.d_head
         )
-        v = (x @ Wv).reshape(
+        v = qkv[..., k_end:].reshape(
             b, 1, self.n_kv_heads, self.d_head
         )
 

@@ -8,8 +8,14 @@ from mini_llm.backend import xp
 
 
 def sigmoid_stable(x):
-    """Stable sigmoid using tanh, preserving the input array dtype."""
-    return 0.5 * (1.0 + xp.tanh(0.5 * x))
+    """Fast branch-free sigmoid for NumPy/CuPy hot paths.
+
+    For very negative FP16 inputs ``exp(-x)`` may overflow to ``inf``; the
+    reciprocal still evaluates to the correct limiting value 0.  This avoids
+    boolean gather/scatter and lets us benchmark exp versus the current tanh
+    formulation on the target GPU.
+    """
+    return 1.0 / (1.0 + xp.exp(-x))
 
 
 def silu(x):

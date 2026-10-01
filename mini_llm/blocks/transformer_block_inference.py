@@ -27,7 +27,8 @@ class TransformerBlockInference:
         d_ff: int,
         n_experts: int,
         top_k: int,
-        dtype: str = "float32"
+        dtype: str = "float32",
+        max_context: int = None
     ):
         """
         Initialize inference Transformer block.
@@ -60,7 +61,8 @@ class TransformerBlockInference:
             n_q_heads=n_q_heads,
             n_kv_heads=n_kv_heads,
             d_head=d_head,
-            dtype=dtype
+            dtype=dtype,
+            max_context=max_context
         )
         
         # MoE (weights shared with training)

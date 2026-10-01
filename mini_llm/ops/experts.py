@@ -9,38 +9,7 @@ from ..backend import xp
 from .routing_plan import RoutingPlan
 
 
-def silu(x):
-    """SiLU activation: x * sigmoid(x).
-    
-    Numerically stable implementation. Uses different formulations based on
-    input value to avoid overflow/underflow:
-    - For x >= 0: x / (1 + exp(-x))
-    - For x < 0: x * exp(x) / (1 + exp(x))
-    """
-    # Numerically stable SiLU implementation
-    pos_mask = x >= 0
-    neg_mask = ~pos_mask
-    
-    result = xp.zeros_like(x)
-    
-    # For x >= 0: x / (1 + exp(-x))
-    pos_x = x[pos_mask]
-    if pos_x.size > 0:
-        result[pos_mask] = pos_x / (1.0 + xp.exp(-pos_x))
-    
-    # For x < 0: x * exp(x) / (1 + exp(x))
-    neg_x = x[neg_mask]
-    if neg_x.size > 0:
-        exp_neg_x = xp.exp(neg_x)
-        result[neg_mask] = neg_x * exp_neg_x / (1.0 + exp_neg_x)
-    
-    return result
-
-
-def silu_prime(x):
-    """Derivative of SiLU: sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))."""
-    s = 1.0 / (1.0 + xp.exp(-x))
-    return s + x * s * (1.0 - s)
+from .silu import silu, silu_prime
 
 
 class ExpertFFN:

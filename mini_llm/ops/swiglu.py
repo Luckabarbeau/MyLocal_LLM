@@ -2,17 +2,7 @@ from ..backend import xp
 from ..init import matrix_parameter
 
 
-def sigmoid(x):
-    return 1.0 / (1.0 + xp.exp(-x))
-
-
-def silu(x):
-    return x * sigmoid(x)
-
-
-def silu_prime(x):
-    s = sigmoid(x)
-    return s + x * s * (1.0 - s)
+from .silu import silu, silu_prime
 
 
 class SwiGLU:

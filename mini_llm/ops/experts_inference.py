@@ -1,7 +1,8 @@
 """Experts for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, asnumpy
+from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
 
 
@@ -92,47 +93,44 @@ class ExpertsInference:
             self.experts[i].set_weights(experts.experts[i])
 
     def forward(self, x, weights, expert_indices):
-        """
-        Forward pass through experts with sparse token-to-expert dispatch.
-        
-        Args:
-            x: Input [B, T, D]
-            weights: Expert weights [B, T, k]
-            expert_indices: Expert indices [B, T, k]
-            
-        Returns:
-            y: Output [B, T, D]
+        """Sparse inference dispatch with a special single-token decode path.
+
+        Decode avoids the old ``for every expert -> xp.any(mask)`` pattern,
+        which forced up to ``n_experts`` device/host synchronizations per
+        layer.  Only the two selected expert ids are copied to the host once.
+        Prefill reuses the same grouped RoutingPlan used by training.
         """
         batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
         N = batch_size * seq_len
-        
-        # Flatten inputs
+
         x_flat = x.reshape(N, d_model)
         weights_flat = weights.reshape(N, k)
-        expert_indices_flat = expert_indices.reshape(N, k)
-        
-        # Prepare output
         y_flat = xp.zeros((N, d_model), dtype=x.dtype)
-        
-        # Group by expert
+
+        if N == 1:
+            # One tiny synchronization replaces n_experts xp.any() checks.
+            # The selected ids are just k small integers (k=2 in the medium
+            # model), while all expert math remains on the device.
+            selected_experts = asnumpy(expert_indices.reshape(-1))
+            for slot, exp_idx in enumerate(selected_experts):
+                expert_out = self.experts[int(exp_idx)].forward(x_flat)
+                y_flat += weights_flat[0, slot] * expert_out
+            return y_flat.reshape(batch_size, seq_len, d_model)
+
+        # Prompt/prefill path: group assignments once instead of performing
+        # one device-synchronizing xp.any() check for every expert.
+        routing_plan = RoutingPlan.from_router_outputs(
+            expert_indices, weights, k, n_experts=self.n_experts
+        )
         for exp_idx in range(self.n_experts):
-            expert_selected = (expert_indices_flat == exp_idx)
-            
-            if xp.any(expert_selected):
-                flat_mask = expert_selected.flatten()
-                all_token_indices = xp.repeat(xp.arange(N), k)
-                token_indices = all_token_indices[flat_mask]
-                
-                all_weights = weights_flat.flatten()
-                expert_weights = all_weights[flat_mask]
-                
-                expert_x = x_flat[token_indices]
-                expert_out = self.experts[exp_idx].forward(expert_x)
-                
-                weighted_out = expert_weights[:, xp.newaxis] * expert_out
-                xp.add.at(y_flat, token_indices, weighted_out)
-        
-        y = y_flat.reshape(batch_size, seq_len, d_model)
-        
-        return y
+            if routing_plan.get_assignment_count(exp_idx) == 0:
+                continue
+
+            token_indices, _, expert_weights = (
+                routing_plan.get_expert_assignments(exp_idx)
+            )
+            expert_out = self.experts[exp_idx].forward(x_flat[token_indices])
+            y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
+
+        return y_flat.reshape(batch_size, seq_len, d_model)

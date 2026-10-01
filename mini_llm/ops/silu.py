@@ -1,27 +1,23 @@
-"""SiLU activation for inference (no cache needed)."""
+"""SiLU activation helpers shared by training and inference.
 
+The implementation is branch-free and numerically stable.  The tanh form
+avoids the boolean gather/scatter path that is especially expensive with CuPy.
+"""
 
 from mini_llm.backend import xp
 
 
+def sigmoid_stable(x):
+    """Stable sigmoid using tanh, preserving the input array dtype."""
+    return 0.5 * (1.0 + xp.tanh(0.5 * x))
+
+
 def silu(x):
-    """
-    SiLU activation: x * sigmoid(x).
-    
-    Numerically stable implementation.
-    """
-    pos_mask = x >= 0
-    neg_mask = ~pos_mask
-    
-    result = xp.zeros_like(x)
-    
-    pos_x = x[pos_mask]
-    if pos_x.size > 0:
-        result[pos_mask] = pos_x / (1.0 + xp.exp(-pos_x))
-    
-    neg_x = x[neg_mask]
-    if neg_x.size > 0:
-        exp_neg_x = xp.exp(neg_x)
-        result[neg_mask] = neg_x * exp_neg_x / (1.0 + exp_neg_x)
-    
-    return result
+    """SiLU(x) = x * sigmoid(x), without data-dependent indexing."""
+    return x * sigmoid_stable(x)
+
+
+def silu_prime(x):
+    """Derivative of SiLU using the same stable sigmoid formulation."""
+    s = sigmoid_stable(x)
+    return s + x * s * (1.0 - s)

@@ -1,23 +1,53 @@
 from ..backend import xp
 
 
-def _rope_cos_sin(seq_len, d_head, base, dtype):
+# Shared cache across all attention layers.  A fixed-length training run uses
+# one table for every layer; inference can also reuse the same cached table.
+_ROPE_TABLE_CACHE = {}
+
+
+def clear_rope_cache():
+    """Clear shared RoPE tables (mainly useful for tests/backend changes)."""
+    _ROPE_TABLE_CACHE.clear()
+
+
+def get_rope_cos_sin(seq_len, d_head, base, dtype):
+    """Return cached RoPE cos/sin tables for positions ``[0, seq_len)``.
+
+    Returned shapes are ``[1, seq_len, 1, d_head/2]`` so they broadcast with
+    training tensors shaped ``[B,T,H,D]`` and can be sliced by inference.
+    """
     if d_head % 2 != 0:
         raise ValueError("RoPE requires an even d_head.")
-    i = xp.arange(0, d_head, 2, dtype="float32")
+
+    # dtype can be a string, numpy dtype or cupy dtype.  str(dtype) gives a
+    # stable cache key without moving any device data to the host.
+    key = (int(seq_len), int(d_head), float(base), str(dtype))
+    cached = _ROPE_TABLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    i = xp.arange(0, d_head, 2, dtype=xp.float32)
     inv_freq = 1.0 / (float(base) ** (i / float(d_head)))
-    positions = xp.arange(seq_len, dtype="float32")
+    positions = xp.arange(seq_len, dtype=xp.float32)
     theta = positions[:, None] * inv_freq[None, :]
-    cos = xp.cos(theta).astype(dtype)
-    sin = xp.sin(theta).astype(dtype)
-    return cos[None, :, None, :], sin[None, :, None, :]
+    cos = xp.cos(theta).astype(dtype, copy=False)[None, :, None, :]
+    sin = xp.sin(theta).astype(dtype, copy=False)[None, :, None, :]
+
+    _ROPE_TABLE_CACHE[key] = (cos, sin)
+    return cos, sin
+
+
+def _rope_cos_sin(seq_len, d_head, base, dtype):
+    """Backward-compatible private alias."""
+    return get_rope_cos_sin(seq_len, d_head, base, dtype)
 
 
 def rope_forward(x, base=10_000.0):
     if x.ndim != 4:
         raise ValueError("rope_forward expects [B,T,H,D].")
     _, t, _, d = x.shape
-    cos, sin = _rope_cos_sin(t, d, base, x.dtype)
+    cos, sin = get_rope_cos_sin(t, d, base, x.dtype)
 
     x0, x1 = x[..., 0::2], x[..., 1::2]
     y = xp.empty_like(x)

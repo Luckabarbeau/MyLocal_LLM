@@ -69,7 +69,8 @@ class InferenceModel:
                 d_ff=config.d_ff,
                 n_experts=config.n_experts,
                 top_k=config.top_k,
-                dtype=self.dtype
+                dtype=self.dtype,
+                max_context=config.context_length
             )
             self.blocks.append(block)
         
@@ -102,6 +103,11 @@ class InferenceModel:
         )
         
         v_cache = xp.empty_like(k_cache)
+
+        # RoPE tables are shared through the module-level cache, so the first
+        # block may create/grow the table and subsequent blocks reuse it.
+        for block in self.blocks:
+            block.attention.ensure_rope_capacity(max_length)
         
         return GenerationState(
             k_cache=k_cache,

@@ -1,6 +1,6 @@
 from ..backend import xp
 from ..init import matrix_parameter
-from .rope import rope_forward, rope_backward
+from .rope import rope_forward, rope_backward, clear_rope_cache
 
 
 def softmax_forward(x, axis=-1):
@@ -15,25 +15,15 @@ def softmax_backward(dp, p, axis=-1):
 
 
 class GQAAttention:
-    """
-    Explicit grouped-query causal self-attention.
+    """Explicit grouped-query causal self-attention.
 
-    X       [B,T,D]
-    Wq      [D,Hq*Dh]
-    Wk/Wv   [D,Hkv*Dh]
-    Wo      [Hq*Dh,D]
-    Q       [B,T,Hq,Dh]
-    K,V     [B,T,Hkv,Dh]
-    scores  [B,Hq,T,T]
-    
-    Caching is used to avoid redundant allocations:
-    - Causal mask is cached by max sequence length
-    - RoPE cos/sin tables are cached by sequence length, d_head, and base
+    K/V stay in their native ``n_kv_heads`` representation.  Query heads are
+    viewed as ``[n_kv_heads, group_size]`` and batched matmul broadcasts the
+    shared K/V heads across each query group.  This avoids physically repeating
+    K/V tensors in forward and their gradients in backward.
     """
 
-    # Class-level caches for shared resources
     _causal_mask_cache = {}
-    _rope_cache = {}  # (seq_len, d_head, rope_base, dtype) -> (cos, sin)
 
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
@@ -76,33 +66,29 @@ class GQAAttention:
 
     @classmethod
     def clear_caches(cls):
-        """Clear all class-level caches."""
         cls._causal_mask_cache.clear()
-        cls._rope_cache.clear()
+        clear_rope_cache()
 
-    def _expand_kv(self, x):
-        return xp.repeat(x, self.group_size, axis=2)
-
-    def _collapse_kv_grad(self, dx_exp):
-        b, t, _, d = dx_exp.shape
-        return dx_exp.reshape(
+    def _group_queries(self, q):
+        """[B,T,Hq,D] -> [B,Hkv,G,T,D] as a view+transpose."""
+        b, t, _, d = q.shape
+        return q.reshape(
             b, t, self.n_kv_heads, self.group_size, d
-        ).sum(axis=3)
+        ).transpose(0, 2, 3, 1, 4)
+
+    def _ungroup_queries(self, q_grouped):
+        """[B,Hkv,G,T,D] -> [B,T,Hq,D]."""
+        b, _, _, t, d = q_grouped.shape
+        return q_grouped.transpose(0, 3, 1, 2, 4).reshape(
+            b, t, self.n_q_heads, d
+        )
 
     def _get_causal_mask(self, t):
-        """Get or create cached causal mask for sequence length t."""
         if t not in self._causal_mask_cache:
-            self._causal_mask_cache[t] = xp.triu(xp.ones((t, t), dtype=bool), k=1)
+            self._causal_mask_cache[t] = xp.triu(
+                xp.ones((t, t), dtype=bool), k=1
+            )
         return self._causal_mask_cache[t]
-
-    def _get_rope_tables(self, t):
-        """Get or create cached RoPE tables for sequence length t."""
-        key = (t, self.d_head, self.rope_base, self.dtype)
-        if key not in self._rope_cache:
-            # We'll compute on-the-fly but cache the result
-            # For now, just return None to indicate no caching
-            pass
-        return self._rope_cache.get(key)
 
     def forward(self, x, return_cache=True):
         if x.ndim != 3:
@@ -111,58 +97,119 @@ class GQAAttention:
         if d_model != self.d_model:
             raise ValueError("input final dimension != d_model.")
 
-        q_pre = (x @ self.Wq.data).reshape(b, t, self.n_q_heads, self.d_head)
-        k_pre = (x @ self.Wk.data).reshape(b, t, self.n_kv_heads, self.d_head)
-        v = (x @ self.Wv.data).reshape(b, t, self.n_kv_heads, self.d_head)
+        q_pre = (x @ self.Wq.data).reshape(
+            b, t, self.n_q_heads, self.d_head
+        )
+        k_pre = (x @ self.Wk.data).reshape(
+            b, t, self.n_kv_heads, self.d_head
+        )
+        v = (x @ self.Wv.data).reshape(
+            b, t, self.n_kv_heads, self.d_head
+        )
 
         q, q_rope_cache = rope_forward(q_pre, self.rope_base)
         k, k_rope_cache = rope_forward(k_pre, self.rope_base)
 
-        # Expand K/V for GQA - this is simple and correct
-        k_exp = self._expand_kv(k)
-        v_exp = self._expand_kv(v)
+        # Native GQA representation -- no xp.repeat(K/V).
+        q_grouped = self._group_queries(q)             # [B,Hkv,G,T,Dh]
+        k_heads = k.transpose(0, 2, 1, 3)             # [B,Hkv,T,Dh]
+        v_heads = v.transpose(0, 2, 1, 3)             # [B,Hkv,T,Dh]
 
-        scores = xp.einsum("bthd,bshd->bhts", q, k_exp) * self.scale
+        # Scale Q before the dot product.  This is mathematically equivalent
+        # to scaling the much larger [B,Hq,T,T] score tensor afterwards, but
+        # touches far fewer values and lowers FP16 accumulation magnitude.
+        q_scaled = q_grouped * self.scale
+        scores_grouped = xp.matmul(
+            q_scaled,
+            k_heads[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+        )                                               # [B,Hkv,G,T,T]
+        scores = scores_grouped.reshape(b, self.n_q_heads, t, t)
+
         causal = self._get_causal_mask(t)
         scores_masked = xp.where(causal[None, None, :, :], -xp.inf, scores)
         probs = softmax_forward(scores_masked, axis=-1)
 
-        context = xp.einsum("bhts,bshd->bthd", probs, v_exp)
+        probs_grouped = probs.reshape(
+            b, self.n_kv_heads, self.group_size, t, t
+        )
+        context_grouped = xp.matmul(
+            probs_grouped,
+            v_heads[:, :, xp.newaxis, :, :],
+        )                                               # [B,Hkv,G,T,Dh]
+        context = self._ungroup_queries(context_grouped)
         merged = context.reshape(b, t, self.n_q_heads * self.d_head)
         y = merged @ self.Wo.data
 
         if not return_cache:
             return y
 
-        # Cache only data needed for backward - removed redundant scores caches
         return y, {
             "x": x,
-            "q_pre": q_pre, "k_pre": k_pre, "v": v,
-            "q": q, "k": k, "k_exp": k_exp, "v_exp": v_exp,
-            "probs": probs, "context": context, "merged": merged,
-            "q_rope_cache": q_rope_cache, "k_rope_cache": k_rope_cache,
+            "q": q,
+            "k": k,
+            "v": v,
+            "probs": probs,
+            "merged": merged,
+            "q_rope_cache": q_rope_cache,
+            "k_rope_cache": k_rope_cache,
         }
 
     def backward(self, dy, cache):
         x = cache["x"]
-        q, k_exp, v_exp = cache["q"], cache["k_exp"], cache["v_exp"]
+        q, k, v = cache["q"], cache["k"], cache["v"]
         probs, merged = cache["probs"], cache["merged"]
         b, t, _ = x.shape
 
-        self.Wo.grad += merged.reshape(-1, merged.shape[-1]).T @ dy.reshape(-1, dy.shape[-1])
+        self.Wo.grad += (
+            merged.reshape(-1, merged.shape[-1]).T
+            @ dy.reshape(-1, dy.shape[-1])
+        )
         dmerged = dy @ self.Wo.data.T
-        dcontext = dmerged.reshape(b, t, self.n_q_heads, self.d_head)
+        dcontext = dmerged.reshape(
+            b, t, self.n_q_heads, self.d_head
+        )
 
-        dprobs = xp.einsum("bthd,bshd->bhts", dcontext, v_exp)
-        dv_exp = xp.einsum("bhts,bthd->bshd", probs, dcontext)
+        q_grouped = self._group_queries(q)              # [B,Hkv,G,T,D]
+        dcontext_grouped = self._group_queries(dcontext)
+        k_heads = k.transpose(0, 2, 1, 3)              # [B,Hkv,T,D]
+        v_heads = v.transpose(0, 2, 1, 3)
+        probs_grouped = probs.reshape(
+            b, self.n_kv_heads, self.group_size, t, t
+        )
 
+        dprobs_grouped = xp.matmul(
+            dcontext_grouped,
+            v_heads[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
+        )                                               # [B,Hkv,G,T,T]
+
+        # V is shared by all query heads in a group; sum group contributions.
+        dv_heads = xp.matmul(
+            probs_grouped.swapaxes(-2, -1),
+            dcontext_grouped,
+        ).sum(axis=2)                                   # [B,Hkv,T,D]
+
+        dprobs = dprobs_grouped.reshape(
+            b, self.n_q_heads, t, t
+        )
         dscores = softmax_backward(dprobs, probs, axis=-1)
+        dscores_grouped = dscores.reshape(
+            b, self.n_kv_heads, self.group_size, t, t
+        )
 
-        dq = xp.einsum("bhts,bshd->bthd", dscores, k_exp) * self.scale
-        dk_exp = xp.einsum("bhts,bthd->bshd", dscores, q) * self.scale
+        dq_grouped = xp.matmul(
+            dscores_grouped,
+            k_heads[:, :, xp.newaxis, :, :],
+        ) * self.scale
 
-        dk = self._collapse_kv_grad(dk_exp)
-        dv = self._collapse_kv_grad(dv_exp)
+        # K is also shared by every query head in the group.
+        dk_heads = xp.matmul(
+            dscores_grouped.swapaxes(-2, -1),
+            q_grouped * self.scale,
+        ).sum(axis=2)
+
+        dq = self._ungroup_queries(dq_grouped)
+        dk = dk_heads.transpose(0, 2, 1, 3)
+        dv = dv_heads.transpose(0, 2, 1, 3)
 
         dq_pre = rope_backward(dq, cache["q_rope_cache"])
         dk_pre = rope_backward(dk, cache["k_rope_cache"])

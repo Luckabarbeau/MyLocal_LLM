@@ -382,6 +382,48 @@ def generate_token_shards(
     return generator.generate_shards(max_shards=max_shards)
 
 
+def map_token_shard(
+    shard_path: str,
+    seq_length: Optional[int] = None,
+) -> np.memmap:
+    """Memory-map packed or legacy token shards without a full RAM copy.
+
+    When a legacy rectangular row is shorter than ``seq_length + 1``, map
+    only its token payload as a flat stream.  This supports existing
+    context-512 shards at training context 512+ while excluding the header.
+    """
+    path = Path(shard_path)
+    file_size = path.stat().st_size
+    itemsize = np.dtype(np.uint16).itemsize
+
+    if file_size >= 16:
+        with open(path, "rb") as f:
+            header = f.read(16)
+
+        num_docs = int.from_bytes(header[0:8], byteorder="little")
+        context_len = int.from_bytes(header[8:16], byteorder="little")
+        expected_data_size = num_docs * context_len * itemsize
+        is_legacy = (
+            num_docs > 0
+            and context_len > 0
+            and expected_data_size == file_size - 16
+        )
+
+        if is_legacy:
+            required = None if seq_length is None else int(seq_length) + 1
+            if required is not None and context_len < required:
+                return np.memmap(
+                    path, dtype=np.uint16, mode="r", offset=16,
+                    shape=(num_docs * context_len,),
+                )
+
+            return np.memmap(
+                path, dtype=np.uint16, mode="r", offset=16,
+                shape=(num_docs, context_len),
+            )
+
+    return np.memmap(path, dtype=np.uint16, mode="r")
+
 def load_token_shard(shard_path: str) -> np.ndarray:
     """
     Load a token shard from binary file.

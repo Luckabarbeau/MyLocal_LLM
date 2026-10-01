@@ -72,9 +72,13 @@ class AdamW:
         self.step_index += 1
         eta = self.lr if lr is None else float(lr)
         
-        # Bias correction terms
+        # Bias correction terms. Fold them into scalar coefficients so Adam
+        # does not materialize full-sized m_hat and v_hat arrays.
         c1 = 1.0 - self.beta1 ** self.step_index
         c2 = 1.0 - self.beta2 ** self.step_index
+        sqrt_c2 = c2 ** 0.5
+        step_size = eta * sqrt_c2 / c1
+        eps_scaled = self.eps * sqrt_c2
         
         for i, p in enumerate(self.parameters):
             # Get gradient and convert to float32 for computation
@@ -98,27 +102,30 @@ class AdamW:
             self.v[i] *= self.beta2
             self.v[i] += (1.0 - self.beta2) * (g * g)
             
-            # Bias-corrected moments (in FP32)
-            m_hat = self.m[i] / c1
-            v_hat = self.v[i] / c2
-            
             # Optional deep numerical debugging (expensive host sync/copy).
+            # Checking the uncorrected moments is sufficient because bias
+            # correction only multiplies them by finite scalar coefficients.
             if self.numerical_debug and np is not None:
-                m_cpu = m_hat.get() if hasattr(m_hat, "get") else m_hat
-                v_cpu = v_hat.get() if hasattr(v_hat, "get") else v_hat
+                m_cpu = self.m[i].get() if hasattr(self.m[i], "get") else self.m[i]
+                v_cpu = self.v[i].get() if hasattr(self.v[i], "get") else self.v[i]
                 if not (np.all(np.isfinite(m_cpu)) and np.all(np.isfinite(v_cpu))):
                     raise FloatingPointError(
                         f"Nonfinite moment in {p.name or f'parameter_{i}'} "
                         f"at step {self.step_index}"
                     )
             
-            # Compute update in FP32
-            # Weight decay is applied to master weights
+            # Mathematically identical Adam update using one full-sized
+            # scratch array instead of m_hat + v_hat + update:
+            # eta*(m/c1)/(sqrt(v/c2)+eps)
+            # = eta*sqrt(c2)/c1 * m/(sqrt(v)+eps*sqrt(c2)).
+            update = xp.sqrt(self.v[i])
+            update += eps_scaled
+            xp.divide(self.m[i], update, out=update)
+            update *= step_size
+
             if p.decay and self.weight_decay != 0.0:
                 self.master_weights[i] *= (1.0 - eta * self.weight_decay)
-            
-            # Adam update on master weights
-            update = eta * m_hat / (xp.sqrt(v_hat) + self.eps)
+
             self.master_weights[i] -= update
             
             # Optional deep numerical debugging (expensive host sync/copy).

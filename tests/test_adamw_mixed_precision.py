@@ -215,3 +215,40 @@ def test_adamw_numerical_debug_can_be_enabled():
     )
     optimizer = AdamW([p], lr=1e-3, numerical_debug=True)
     assert optimizer.numerical_debug is True
+
+
+def test_optimized_adam_update_matches_reference_formula():
+    p = Parameter(
+        data=xp.asarray([[0.25, -0.75], [1.5, -2.0]], dtype="float32"),
+        name="reference_formula", decay=True,
+    )
+    opt = AdamW(
+        [p], lr=2e-3, beta1=0.9, beta2=0.95,
+        eps=1e-8, weight_decay=0.1,
+    )
+
+    ref_w = np.array([[0.25, -0.75], [1.5, -2.0]], dtype=np.float32)
+    ref_m = np.zeros_like(ref_w)
+    ref_v = np.zeros_like(ref_w)
+    beta1, beta2 = 0.9, 0.95
+    lr, wd, eps = 2e-3, 0.1, 1e-8
+    grads = [
+        np.array([[0.2, -0.1], [0.05, 0.4]], dtype=np.float32),
+        np.array([[-0.3, 0.2], [0.15, -0.25]], dtype=np.float32),
+        np.array([[0.1, 0.1], [-0.2, 0.3]], dtype=np.float32),
+    ]
+
+    for step, grad in enumerate(grads, start=1):
+        p.grad[...] = xp.asarray(grad)
+        opt.step()
+
+        ref_m = beta1 * ref_m + (1.0 - beta1) * grad
+        ref_v = beta2 * ref_v + (1.0 - beta2) * (grad * grad)
+        m_hat = ref_m / (1.0 - beta1 ** step)
+        v_hat = ref_v / (1.0 - beta2 ** step)
+        ref_w *= (1.0 - lr * wd)
+        ref_w -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+        np.testing.assert_allclose(
+            np.asarray(opt.master_weights[0]), ref_w, rtol=2e-6, atol=2e-7
+        )

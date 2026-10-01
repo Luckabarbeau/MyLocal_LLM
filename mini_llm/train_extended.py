@@ -12,6 +12,7 @@ This module provides production-ready training infrastructure including:
 
 import csv
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -24,7 +25,7 @@ from mini_llm.backend import xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
-from mini_llm.data.token_shards import load_token_shard, create_minibatch
+from mini_llm.data.token_shards import map_token_shard, create_minibatch
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
@@ -72,6 +73,7 @@ class ExtendedTrainer:
         loss_scale: float = 1.0,
         rng_seed: int = 42,
         numerical_debug: bool = False,
+        shard_cache_size: int = 2,
     ):
         """
         Initialize the extended trainer.
@@ -96,6 +98,8 @@ class ExtendedTrainer:
             loss_scale: Static loss scale factor for mixed precision
             rng_seed: Seed for persistent RNGs
             numerical_debug: Enable Inf/NaN checks at each tensor (slow, for debugging)
+            shard_cache_size: Maximum number of train and validation shard
+                memmaps retained by the trainer.
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -110,6 +114,7 @@ class ExtendedTrainer:
         self.val_interval = val_interval
         self.val_steps = val_steps
         self.save_interval = save_interval
+        self.shard_cache_size = max(1, int(shard_cache_size))
         
         # Effective batch size
         self.effective_batch_size = batch_size * grad_accum_steps
@@ -134,7 +139,10 @@ class ExtendedTrainer:
         self.step = 0
         self.tokens_processed = 0  # New: track cumulative tokens
         self.total_steps = total_steps
-        self.shards = {}  # Cache for shard data
+        # Bounded LRU caches of read-only memmaps.  The previous dictionary
+        # retained every shard encountered, eventually holding the whole token
+        # dataset in process memory.
+        self.shards = OrderedDict()
         self.current_train_shard_idx = 0
         
         # Issue #12: Persistent RNGs (one for train, one for val)
@@ -146,7 +154,7 @@ class ExtendedTrainer:
         
         # Validation state
         self.current_val_shard_idx = 0
-        self.val_shards = {}
+        self.val_shards = OrderedDict()
         
         # Numerical debugging
         self.numerical_debug = numerical_debug
@@ -223,12 +231,34 @@ class ExtendedTrainer:
         return True
     
     def load_train_shard(self, path: str) -> np.ndarray:
-        """Load a training shard into memory."""
-        return load_token_shard(path)
-    
+        """Memory-map a training shard instead of copying the full file."""
+        return map_token_shard(path, seq_length=self.seq_length)
+
     def load_val_shard(self, path: str) -> np.ndarray:
-        """Load a validation shard into memory."""
-        return load_token_shard(path)
+        """Memory-map a validation shard instead of copying the full file."""
+        return map_token_shard(path, seq_length=self.seq_length)
+
+    @staticmethod
+    def _close_mapped_shard(shard):
+        """Release an mmap eagerly when evicting it from the small LRU."""
+        mmap_obj = getattr(shard, "_mmap", None)
+        if mmap_obj is not None:
+            mmap_obj.close()
+
+    def _get_cached_shard(self, cache, shard_idx, paths, loader):
+        if shard_idx in cache:
+            shard = cache.pop(shard_idx)
+            cache[shard_idx] = shard
+            return shard
+
+        shard = loader(str(paths[shard_idx]))
+        cache[shard_idx] = shard
+
+        while len(cache) > self.shard_cache_size:
+            _, evicted = cache.popitem(last=False)
+            self._close_mapped_shard(evicted)
+
+        return shard
     
     def get_train_batch(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -236,12 +266,12 @@ class ExtendedTrainer:
         
         Uses persistent RNG for reproducibility (Issue #12).
         """
-        if self.current_train_shard_idx not in self.shards:
-            self.shards[self.current_train_shard_idx] = self.load_train_shard(
-                str(self.train_shard_paths[self.current_train_shard_idx])
-            )
-        
-        shard_data = self.shards[self.current_train_shard_idx]
+        shard_data = self._get_cached_shard(
+            self.shards,
+            self.current_train_shard_idx,
+            self.train_shard_paths,
+            self.load_train_shard,
+        )
         inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.train_rng)
         
         # Cycle through shards
@@ -258,12 +288,12 @@ class ExtendedTrainer:
         
         Uses deterministic validation block selection (Issue #13).
         """
-        if self.current_val_shard_idx not in self.val_shards:
-            self.val_shards[self.current_val_shard_idx] = self.load_val_shard(
-                str(self.val_shard_paths[self.current_val_shard_idx])
-            )
-        
-        shard_data = self.val_shards[self.current_val_shard_idx]
+        shard_data = self._get_cached_shard(
+            self.val_shards,
+            self.current_val_shard_idx,
+            self.val_shard_paths,
+            self.load_val_shard,
+        )
         inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.val_rng)
         
         # Cycle through shards

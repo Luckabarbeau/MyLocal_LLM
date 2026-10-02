@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,14 @@ class ContextRouterConfig:
     selection_strategy: str = "topk"
     num_queries: int = 1
 
+    # How selected routing probabilities influence exact retrieved-token
+    # attention.  ``logit_bias`` adds beta*log(p+eps) to every token from the
+    # corresponding selected block.  ``none`` keeps selection discrete and is
+    # useful as an ablation/auxiliary-loss-only mode.
+    router_weight_mode: str = "logit_bias"
+    router_weight_scale: float = 1.0
+    router_weight_eps: float = 1e-8
+
     def __post_init__(self):
         positive_ints = {
             "history_block_size": self.history_block_size,
@@ -194,3 +203,14 @@ class ContextRouterConfig:
             raise ValueError(
                 "only selection_strategy='topk' is currently implemented"
             )
+        if self.router_weight_mode not in {"none", "logit_bias"}:
+            raise ValueError(
+                "router_weight_mode must be 'none' or 'logit_bias'"
+            )
+        if not math.isfinite(float(self.router_weight_scale)):
+            raise ValueError("router_weight_scale must be finite")
+        if (
+            not math.isfinite(float(self.router_weight_eps))
+            or self.router_weight_eps <= 0
+        ):
+            raise ValueError("router_weight_eps must be positive and finite")

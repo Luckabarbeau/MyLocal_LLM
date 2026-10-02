@@ -6,6 +6,7 @@ from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.router import Router
 from mini_llm.ops.experts import Experts
 from mini_llm.blocks.moe_block import MoE
+from mini_llm.performance_profiler import performance_scope
 
 
 class TransformerBlock:
@@ -122,7 +123,8 @@ class TransformerBlock:
         
         # Norm → Attention → residual. RMSNorm follows the residual dtype; cast
         # only its normalized output back to the compute dtype before GEMMs.
-        norm1_out, norm1_cache = self.norm1.forward(x)
+        with performance_scope("block.norm1.forward"):
+            norm1_out, norm1_cache = self.norm1.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.norm1", xp.all(xp.isfinite(norm1_out))))
 
@@ -131,9 +133,11 @@ class TransformerBlock:
             if self.use_fp32_residual else norm1_out
         )
         if return_cache:
-            attn_out, attn_cache = self.attention.forward(norm1_compute)
+            with performance_scope("block.attention.forward"):
+                attn_out, attn_cache = self.attention.forward(norm1_compute)
         else:
-            attn_out = self.attention.forward(norm1_compute, return_cache=False)
+            with performance_scope("block.attention.forward"):
+                attn_out = self.attention.forward(norm1_compute, return_cache=False)
             attn_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
@@ -150,7 +154,8 @@ class TransformerBlock:
         residual2 = x
         
         # Norm → MoE → residual. As above, only the branch compute is FP16.
-        norm2_out, norm2_cache = self.norm2.forward(x)
+        with performance_scope("block.norm2.forward"):
+            norm2_out, norm2_cache = self.norm2.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.norm2", xp.all(xp.isfinite(norm2_out))))
 
@@ -159,9 +164,11 @@ class TransformerBlock:
             if self.use_fp32_residual else norm2_out
         )
         if return_cache:
-            moe_out, moe_cache = self.moe.forward(norm2_compute)
+            with performance_scope("block.moe.forward"):
+                moe_out, moe_cache = self.moe.forward(norm2_compute)
         else:
-            moe_out = self.moe.forward(norm2_compute, return_cache=False)
+            with performance_scope("block.moe.forward"):
+                moe_out = self.moe.forward(norm2_compute, return_cache=False)
             moe_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.moe", xp.all(xp.isfinite(moe_out))))
@@ -218,12 +225,14 @@ class TransformerBlock:
         )
         
         # Backward through MoE
-        dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
+        with performance_scope("block.moe.backward"):
+            dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
         if self.use_fp32_residual:
             dnorm2_out = dnorm2_out.astype("float32", copy=False)
         
         # Backward through second RMSNorm - this gives gradient through FFN path
-        dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)
+        with performance_scope("block.norm2.backward"):
+            dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)
         if self.use_fp32_residual:
             dx_norm2_through_ffn = dx_norm2_through_ffn.astype("float32", copy=False)
         
@@ -238,12 +247,14 @@ class TransformerBlock:
         )
         
         # Backward through attention
-        dnorm1_out = self.attention.backward(dattn_out, cache["attn_cache"])
+        with performance_scope("block.attention.backward"):
+            dnorm1_out = self.attention.backward(dattn_out, cache["attn_cache"])
         if self.use_fp32_residual:
             dnorm1_out = dnorm1_out.astype("float32", copy=False)
         
         # Backward through first RMSNorm
-        dx_norm1 = self.norm1.backward(dnorm1_out, cache["norm1_cache"])
+        with performance_scope("block.norm1.backward"):
+            dx_norm1 = self.norm1.backward(dnorm1_out, cache["norm1_cache"])
         if self.use_fp32_residual:
             dx_norm1 = dx_norm1.astype("float32", copy=False)
         

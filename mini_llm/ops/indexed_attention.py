@@ -14,6 +14,7 @@ from .attention_selection import KeySelectionPlan
 
 
 _DEFAULT_QUERY_CHUNK_SIZE = 128
+_DEFAULT_DILATED_QUERY_CHUNK_SIZE = 1024
 
 
 def _resolve_query_chunk_size(query_length, query_chunk_size=None):
@@ -32,6 +33,27 @@ def _resolve_query_chunk_size(query_length, query_chunk_size=None):
         raw = os.environ.get("MINI_LLM_INDEXED_ATTN_QUERY_CHUNK")
         query_chunk_size = (
             _DEFAULT_QUERY_CHUNK_SIZE if raw is None else int(raw)
+        )
+    query_chunk_size = int(query_chunk_size)
+    if query_chunk_size <= 0:
+        raise ValueError("query_chunk_size must be positive")
+    return min(int(query_length), query_chunk_size)
+
+
+
+
+def _resolve_dilated_query_chunk_size(query_length, query_chunk_size=None):
+    """Resolve the reduced-sequence chunk size for specialized dilation.
+
+    Dilated attention is evaluated independently for each residue class, so
+    ``query_length`` here is the length of one downsampled phase rather than
+    the original token sequence.  A much larger chunk than generic indexed
+    attention is therefore both memory-safe and important for GPU occupancy.
+    """
+    if query_chunk_size is None:
+        raw = os.environ.get("MINI_LLM_DILATED_ATTN_QUERY_CHUNK")
+        query_chunk_size = (
+            _DEFAULT_DILATED_QUERY_CHUNK_SIZE if raw is None else int(raw)
         )
     query_chunk_size = int(query_chunk_size)
     if query_chunk_size <= 0:
@@ -381,3 +403,1257 @@ def indexed_attention_backward(dcontext, cache):
     dq = dq_heads.transpose(0, 2, 1, 3)
     return dq, dk, dv, dlogit_bias
 
+
+
+# ---------------------------------------------------------------------------
+# Specialized contiguous local-window attention
+# ---------------------------------------------------------------------------
+
+def _normalize_kv_head_mapping(kv_head_indices, n_q_heads, n_kv_heads):
+    """Return both device and tiny host forms of a Q->KV head mapping.
+
+    The host tuple is used only to reduce query-head K/V gradients back into
+    native GQA heads.  Mixed attention passes a Python tuple, so the GPU hot
+    path never synchronizes merely to inspect this tiny mapping.
+    """
+    if kv_head_indices is None:
+        if n_q_heads % n_kv_heads != 0:
+            raise ValueError(
+                "n_q_heads must be divisible by n_kv_heads when "
+                "kv_head_indices is not supplied"
+            )
+        group_size = n_q_heads // n_kv_heads
+        host = tuple(i // group_size for i in range(n_q_heads))
+    elif isinstance(kv_head_indices, (tuple, list)):
+        host = tuple(int(i) for i in kv_head_indices)
+    else:
+        # Direct public callers may still provide an ndarray.  This fallback is
+        # intentionally outside the mixed-attention hot path.
+        from ..backend import asnumpy
+        host = tuple(int(i) for i in asnumpy(kv_head_indices).reshape(-1))
+
+    if len(host) != n_q_heads:
+        raise ValueError("kv_head_indices must have shape (n_q_heads,)")
+    if any(i < 0 or i >= n_kv_heads for i in host):
+        raise ValueError("kv_head_indices contains an invalid KV head")
+    return xp.asarray(host, dtype=xp.int64), host
+
+
+def local_window_attention_forward(
+    q,
+    k,
+    v,
+    window,
+    kv_head_indices=None,
+    scale=None,
+    return_cache=True,
+    query_chunk_size=None,
+):
+    """Specialized causal sliding-window attention over contiguous K/V spans.
+
+    Unlike :func:`indexed_attention_forward`, this kernel never constructs a
+    per-query ``[Q,K,D]`` gather.  A query chunk ``[q0:q1]`` attends to one
+    contiguous K/V span ``[max(0,q0-window+1):q1]`` and applies a small causal
+    band mask inside the resulting ``[Q,K]`` score matrix.  Backward can then
+    accumulate native K/V gradients into contiguous slices with GEMMs instead
+    of scatter-add.
+
+    This is mathematically identical to ``build_local_causal_plan`` followed
+    by generic indexed attention, but is much better matched to GPU memory and
+    BLAS execution.
+    """
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
+    if k.shape != v.shape:
+        raise ValueError("k and v must have identical shapes")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    k_batch, key_length, n_kv_heads, k_d_head = k.shape
+    if k_batch != batch or k_d_head != d_head or key_length != query_length:
+        raise ValueError("local self-attention requires matching q/k sequence shapes")
+
+    window = int(window)
+    if window <= 0:
+        raise ValueError("window must be positive")
+    window = min(window, key_length)
+    if scale is None:
+        scale = 1.0 / math.sqrt(d_head)
+    scale = float(scale)
+    query_chunk_size = _resolve_query_chunk_size(query_length, query_chunk_size)
+
+    kv_map, kv_map_host = _normalize_kv_head_mapping(
+        kv_head_indices, n_q_heads, n_kv_heads
+    )
+    q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,T,D]
+    bf16_attention = is_bfloat16_dtype(q.dtype)
+    context_dtype = xp.float32 if bf16_attention else q.dtype
+    context_heads = xp.empty(
+        (batch, n_q_heads, query_length, d_head), dtype=context_dtype
+    )
+    score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
+    chunk_caches = [] if return_cache else None
+
+    for q_start, q_end in _query_chunks(query_length, query_chunk_size):
+        key_start = max(0, q_start - window + 1)
+        key_end = q_end
+        q_chunk = q_heads[:, :, q_start:q_end, :]
+
+        # Select the native GQA head once for the entire contiguous token span;
+        # this is [B,Hq,K,D], not [B,Hq,Q,K,D].
+        k_span = xp.take(k[:, key_start:key_end, :, :], kv_map, axis=2)
+        k_heads = k_span.transpose(0, 2, 1, 3)
+        if bf16_attention:
+            q_score = q_chunk.astype("float32") * scale
+            k_score = k_heads.astype("float32")
+        else:
+            q_score = q_chunk * (scale * score_prescale)
+            k_score = k_heads
+
+        scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+
+        q_positions = xp.arange(q_start, q_end, dtype=xp.int64)[:, None]
+        k_positions = xp.arange(key_start, key_end, dtype=xp.int64)[None, :]
+        valid = (
+            (k_positions <= q_positions)
+            & (k_positions >= (q_positions - window + 1))
+        )[None, None, :, :]
+        probs_chunk = _masked_softmax_forward(
+            scores, valid, logit_multiplier=(1.0 / score_prescale)
+        )
+
+        del scores, k_score, k_heads, k_span
+
+        v_span = xp.take(v[:, key_start:key_end, :, :], kv_map, axis=2)
+        v_heads = v_span.transpose(0, 2, 1, 3)
+        if bf16_attention:
+            probs_compute = probs_chunk
+            v_compute = v_heads.astype("float32")
+        else:
+            probs_compute = (
+                probs_chunk.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_chunk
+            )
+            v_compute = v_heads
+        context_heads[:, :, q_start:q_end, :] = xp.matmul(
+            probs_compute, v_compute
+        )
+
+        if return_cache:
+            chunk_caches.append(
+                (q_start, q_end, key_start, key_end, probs_chunk, valid)
+            )
+
+    context = context_heads.transpose(0, 2, 1, 3)
+    if not return_cache:
+        return context
+
+    return context, {
+        "q": q,
+        "k": k,
+        "v": v,
+        "window": window,
+        "scale": scale,
+        "bf16_attention": bf16_attention,
+        "kv_head_indices": kv_map,
+        "kv_head_indices_host": kv_map_host,
+        "chunks": chunk_caches,
+        "query_chunk_size": query_chunk_size,
+    }
+
+
+def local_window_attention_backward(dcontext, cache):
+    """Backward for :func:`local_window_attention_forward`.
+
+    K/V gradients are formed by matrix multiplication and accumulated into
+    contiguous token slices.  This removes the generic indexed kernel's
+    expensive per-query outer products and ``add.at`` scatters.
+    """
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    if dcontext.shape != q.shape:
+        raise ValueError("dcontext must have the same shape as q/context")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    n_kv_heads = k.shape[2]
+    scale = cache["scale"]
+    bf16_attention = cache["bf16_attention"]
+    kv_map = cache["kv_head_indices"]
+    kv_map_host = cache["kv_head_indices_host"]
+
+    q_heads = q.transpose(0, 2, 1, 3)
+    dcontext_heads = dcontext.transpose(0, 2, 1, 3)
+    grad_dtype = xp.float32 if bf16_attention else q.dtype
+    dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
+    dk = xp.zeros(k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.shape, dtype=grad_dtype)
+
+    # Resolve the tiny static GQA reduction groups once per backward call.
+    q_heads_for_kv = [
+        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
+        for kvh in range(n_kv_heads)
+    ]
+
+    for q_start, q_end, key_start, key_end, probs_chunk, valid in cache["chunks"]:
+        q_chunk = q_heads[:, :, q_start:q_end, :]
+        dcontext_chunk = dcontext_heads[:, :, q_start:q_end, :]
+
+        v_span = xp.take(v[:, key_start:key_end, :, :], kv_map, axis=2)
+        v_heads = v_span.transpose(0, 2, 1, 3)
+        if bf16_attention:
+            dcontext_compute = dcontext_chunk.astype("float32")
+            q_compute = q_chunk.astype("float32")
+            v_compute = v_heads.astype("float32")
+            probs_compute = probs_chunk
+        else:
+            dcontext_compute = dcontext_chunk
+            q_compute = q_chunk
+            v_compute = v_heads
+            probs_compute = (
+                probs_chunk.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_chunk
+            )
+
+        dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
+        dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+        dscores = _softmax_backward(dprobs, probs_chunk)
+        dscores = xp.where(valid, dscores, 0.0)
+        dscores_compute = (
+            dscores.astype("float32", copy=False)
+            if bf16_attention
+            else (
+                dscores.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else dscores
+            )
+        )
+
+        k_span = xp.take(k[:, key_start:key_end, :, :], kv_map, axis=2)
+        k_heads = k_span.transpose(0, 2, 1, 3)
+        k_compute = k_heads.astype("float32") if bf16_attention else k_heads
+
+        dq_heads[:, :, q_start:q_end, :] = (
+            xp.matmul(dscores_compute, k_compute) * scale
+        )
+        dk_heads = (
+            xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+        )
+
+        # Query heads may share native GQA K/V heads.  Reduce those few heads
+        # explicitly, then update one contiguous [token] slice per KV head.
+        for kvh, head_group in enumerate(q_heads_for_kv):
+            if not head_group:
+                continue
+            if len(head_group) == 1:
+                dk_native = dk_heads[:, head_group[0], :, :]
+                dv_native = dv_heads[:, head_group[0], :, :]
+            else:
+                dk_native = xp.sum(dk_heads[:, head_group, :, :], axis=1)
+                dv_native = xp.sum(dv_heads[:, head_group, :, :], axis=1)
+            dk[:, key_start:key_end, kvh, :] += dk_native.astype(
+                grad_dtype, copy=False
+            )
+            dv[:, key_start:key_end, kvh, :] += dv_native.astype(
+                grad_dtype, copy=False
+            )
+
+    return dq_heads.transpose(0, 2, 1, 3), dk, dv
+
+
+def dilated_attention_forward(
+    q,
+    k,
+    v,
+    window,
+    dilation,
+    offset=0,
+    kv_head_indices=None,
+    scale=None,
+    return_cache=True,
+    query_chunk_size=None,
+):
+    """Specialized exact fixed-phase dilated causal attention.
+
+    The generic indexed implementation treats every selected token as an
+    arbitrary gather.  Fixed dilation has much more structure: queries can be
+    split by ``t % dilation`` and each phase attends to a contiguous causal
+    window in a downsampled K/V sequence.  This implementation exploits that
+    structure while preserving exactly the visibility of
+    :func:`build_dilated_causal_plan`.
+
+    For a query ``t = r + m*d`` the visible keys live in residue
+    ``(r-offset) mod d``.  In reduced coordinates they form an ordinary
+    trailing window ending at ``m`` or ``m-1`` depending on whether the phase
+    crosses the sequence origin.
+    """
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
+    if k.shape != v.shape:
+        raise ValueError("k and v must have identical shapes")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    k_batch, key_length, n_kv_heads, k_d_head = k.shape
+    if k_batch != batch or k_d_head != d_head or key_length != query_length:
+        raise ValueError("dilated self-attention requires matching q/k sequence shapes")
+
+    window = int(window)
+    dilation = int(dilation)
+    offset = int(offset)
+    if window <= 0:
+        raise ValueError("window must be positive")
+    if dilation <= 0:
+        raise ValueError("dilation must be positive")
+    if offset < 0 or offset >= dilation:
+        raise ValueError("offset must satisfy 0 <= offset < dilation")
+    if offset >= window:
+        raise ValueError("offset must be smaller than window")
+    key_slots = ((window - 1 - offset) // dilation) + 1
+
+    if scale is None:
+        scale = 1.0 / math.sqrt(d_head)
+    scale = float(scale)
+
+    kv_map, kv_map_host = _normalize_kv_head_mapping(
+        kv_head_indices, n_q_heads, n_kv_heads
+    )
+    q_heads = q.transpose(0, 2, 1, 3)
+    bf16_attention = is_bfloat16_dtype(q.dtype)
+    context_dtype = xp.float32 if bf16_attention else q.dtype
+    context_heads = xp.zeros(
+        (batch, n_q_heads, query_length, d_head), dtype=context_dtype
+    )
+    score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
+    chunk_caches = [] if return_cache else None
+
+    for query_residue in range(dilation):
+        # Empty residue classes occur when dilation exceeds sequence length.
+        phase_length = (query_length - 1 - query_residue) // dilation + 1
+        if phase_length <= 0:
+            continue
+        key_residue = (query_residue - offset) % dilation
+        key_phase_length = (key_length - 1 - key_residue) // dilation + 1
+        if key_phase_length <= 0:
+            continue
+
+        # If r < offset, t-offset lies in the previous reduced-sequence cell.
+        alignment_shift = 0 if query_residue >= offset else -1
+        phase_chunk = _resolve_dilated_query_chunk_size(
+            phase_length, query_chunk_size
+        )
+
+        for phase_start, phase_end in _query_chunks(phase_length, phase_chunk):
+            max_key_end = phase_end + alignment_shift
+            key_end = min(key_phase_length, max(0, max_key_end))
+            key_start = max(
+                0, phase_start + alignment_shift - key_slots + 1
+            )
+
+            q_token_slice = slice(
+                query_residue + phase_start * dilation,
+                query_residue + phase_end * dilation,
+                dilation,
+            )
+            q_chunk = q_heads[:, :, q_token_slice, :]
+
+            if key_end <= key_start:
+                # No historical token exists yet for this phase (possible for
+                # non-zero offsets at the very beginning of a sequence).
+                if return_cache:
+                    chunk_caches.append(
+                        (
+                            query_residue,
+                            phase_start,
+                            phase_end,
+                            key_residue,
+                            key_start,
+                            key_end,
+                            None,
+                            None,
+                            alignment_shift,
+                        )
+                    )
+                continue
+
+            key_token_slice = slice(
+                key_residue + key_start * dilation,
+                key_residue + key_end * dilation,
+                dilation,
+            )
+            k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
+            k_heads = k_span.transpose(0, 2, 1, 3)
+            if bf16_attention:
+                q_score = q_chunk.astype("float32") * scale
+                k_score = k_heads.astype("float32")
+            else:
+                q_score = q_chunk * (scale * score_prescale)
+                k_score = k_heads
+
+            scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+            q_indices = xp.arange(phase_start, phase_end, dtype=xp.int64)[:, None]
+            k_indices = xp.arange(key_start, key_end, dtype=xp.int64)[None, :]
+            max_keys = q_indices + alignment_shift
+            valid = (
+                (k_indices <= max_keys)
+                & (k_indices >= (max_keys - key_slots + 1))
+            )[None, None, :, :]
+            probs_chunk = _masked_softmax_forward(
+                scores, valid, logit_multiplier=(1.0 / score_prescale)
+            )
+            del scores, k_score, k_heads, k_span
+
+            v_span = xp.take(v[:, key_token_slice, :, :], kv_map, axis=2)
+            v_heads = v_span.transpose(0, 2, 1, 3)
+            if bf16_attention:
+                probs_compute = probs_chunk
+                v_compute = v_heads.astype("float32")
+            else:
+                probs_compute = (
+                    probs_chunk.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else probs_chunk
+                )
+                v_compute = v_heads
+            context_heads[:, :, q_token_slice, :] = xp.matmul(
+                probs_compute, v_compute
+            )
+
+            if return_cache:
+                chunk_caches.append(
+                    (
+                        query_residue,
+                        phase_start,
+                        phase_end,
+                        key_residue,
+                        key_start,
+                        key_end,
+                        probs_chunk,
+                        valid,
+                        alignment_shift,
+                    )
+                )
+
+    context = context_heads.transpose(0, 2, 1, 3)
+    if not return_cache:
+        return context
+    return context, {
+        "q": q,
+        "k": k,
+        "v": v,
+        "window": window,
+        "dilation": dilation,
+        "offset": offset,
+        "key_slots": key_slots,
+        "scale": scale,
+        "bf16_attention": bf16_attention,
+        "kv_head_indices": kv_map,
+        "kv_head_indices_host": kv_map_host,
+        "chunks": chunk_caches,
+        "query_chunk_size": query_chunk_size,
+    }
+
+
+def dilated_attention_backward(dcontext, cache):
+    """Backward for :func:`dilated_attention_forward`."""
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    if dcontext.shape != q.shape:
+        raise ValueError("dcontext must have the same shape as q/context")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    n_kv_heads = k.shape[2]
+    dilation = cache["dilation"]
+    scale = cache["scale"]
+    bf16_attention = cache["bf16_attention"]
+    kv_map = cache["kv_head_indices"]
+    kv_map_host = cache["kv_head_indices_host"]
+
+    q_heads = q.transpose(0, 2, 1, 3)
+    dcontext_heads = dcontext.transpose(0, 2, 1, 3)
+    grad_dtype = xp.float32 if bf16_attention else q.dtype
+    dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
+    dk = xp.zeros(k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.shape, dtype=grad_dtype)
+    q_heads_for_kv = [
+        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
+        for kvh in range(n_kv_heads)
+    ]
+
+    for (
+        query_residue,
+        phase_start,
+        phase_end,
+        key_residue,
+        key_start,
+        key_end,
+        probs_chunk,
+        valid,
+        alignment_shift,
+    ) in cache["chunks"]:
+        if probs_chunk is None:
+            continue
+        q_token_slice = slice(
+            query_residue + phase_start * dilation,
+            query_residue + phase_end * dilation,
+            dilation,
+        )
+        key_token_slice = slice(
+            key_residue + key_start * dilation,
+            key_residue + key_end * dilation,
+            dilation,
+        )
+        q_chunk = q_heads[:, :, q_token_slice, :]
+        dcontext_chunk = dcontext_heads[:, :, q_token_slice, :]
+
+        v_span = xp.take(v[:, key_token_slice, :, :], kv_map, axis=2)
+        v_heads = v_span.transpose(0, 2, 1, 3)
+        if bf16_attention:
+            dcontext_compute = dcontext_chunk.astype("float32")
+            q_compute = q_chunk.astype("float32")
+            v_compute = v_heads.astype("float32")
+            probs_compute = probs_chunk
+        else:
+            dcontext_compute = dcontext_chunk
+            q_compute = q_chunk
+            v_compute = v_heads
+            probs_compute = (
+                probs_chunk.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_chunk
+            )
+
+        dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
+        dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+        dscores = _softmax_backward(dprobs, probs_chunk)
+        dscores = xp.where(valid, dscores, 0.0)
+        dscores_compute = (
+            dscores.astype("float32", copy=False)
+            if bf16_attention
+            else (
+                dscores.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else dscores
+            )
+        )
+
+        k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
+        k_heads = k_span.transpose(0, 2, 1, 3)
+        k_compute = k_heads.astype("float32") if bf16_attention else k_heads
+        dq_heads[:, :, q_token_slice, :] = (
+            xp.matmul(dscores_compute, k_compute) * scale
+        )
+        dk_heads = (
+            xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+        )
+
+        for kvh, head_group in enumerate(q_heads_for_kv):
+            if not head_group:
+                continue
+            if len(head_group) == 1:
+                dk_native = dk_heads[:, head_group[0], :, :]
+                dv_native = dv_heads[:, head_group[0], :, :]
+            else:
+                dk_native = xp.sum(dk_heads[:, head_group, :, :], axis=1)
+                dv_native = xp.sum(dv_heads[:, head_group, :, :], axis=1)
+            dk[:, key_token_slice, kvh, :] += dk_native.astype(
+                grad_dtype, copy=False
+            )
+            dv[:, key_token_slice, kvh, :] += dv_native.astype(
+                grad_dtype, copy=False
+            )
+
+    return dq_heads.transpose(0, 2, 1, 3), dk, dv
+
+
+def global_sparse_attention_forward(
+    q,
+    k,
+    v,
+    stride,
+    offset=0,
+    include_current=True,
+    kv_head_indices=None,
+    scale=None,
+    return_cache=True,
+):
+    """Specialized fixed-anchor whole-prefix sparse attention.
+
+    Global anchors are absolute positions ``offset + n * stride``.  Every query
+    sees anchors at or before its own position and, when ``include_current`` is
+    true, also sees its current exact token whenever that token is not already
+    an anchor.  Unlike the generic indexed path, anchor K/V tensors are gathered
+    only once per head group and reused by all queries.
+    """
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
+    if k.shape != v.shape:
+        raise ValueError("k and v must have identical shapes")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    k_batch, key_length, n_kv_heads, k_d_head = k.shape
+    if k_batch != batch or k_d_head != d_head or key_length != query_length:
+        raise ValueError("global sparse self-attention requires matching q/k sequence shapes")
+
+    stride = int(stride)
+    offset = int(offset)
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+    if offset < 0 or offset >= stride:
+        raise ValueError("offset must satisfy 0 <= offset < stride")
+    if not isinstance(include_current, (bool, xp.bool_)):
+        raise TypeError("include_current must be a bool")
+
+    if scale is None:
+        scale = 1.0 / math.sqrt(d_head)
+    scale = float(scale)
+    kv_map, kv_map_host = _normalize_kv_head_mapping(
+        kv_head_indices, n_q_heads, n_kv_heads
+    )
+
+    # stride=1, offset=0 is ordinary full causal attention.  Reuse the already
+    # optimized contiguous local kernel instead of materializing a full anchor
+    # implementation here.
+    if stride == 1:
+        if offset != 0:
+            raise ValueError("stride=1 requires offset=0")
+        if return_cache:
+            context, local_cache = local_window_attention_forward(
+                q,
+                k,
+                v,
+                key_length,
+                kv_head_indices=kv_map_host,
+                scale=scale,
+                return_cache=True,
+            )
+            return context, {"fallback_local": local_cache}
+        return local_window_attention_forward(
+            q,
+            k,
+            v,
+            key_length,
+            kv_head_indices=kv_map_host,
+            scale=scale,
+            return_cache=False,
+        )
+
+    q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,T,D]
+    bf16_attention = is_bfloat16_dtype(q.dtype)
+    context_dtype = xp.float32 if bf16_attention else q.dtype
+    score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
+
+    anchors = xp.arange(offset, key_length, stride, dtype=xp.int64)
+    n_anchors = int(anchors.shape[0])
+    add_current = bool(include_current)
+    n_slots = n_anchors + int(add_current)
+
+    if n_slots == 0:
+        context = xp.zeros(q.shape, dtype=context_dtype)
+        if not return_cache:
+            return context
+        return context, {
+            "q": q,
+            "k": k,
+            "v": v,
+            "stride": stride,
+            "offset": offset,
+            "include_current": include_current,
+            "anchors": anchors,
+            "probs": None,
+            "valid": None,
+            "scale": scale,
+            "bf16_attention": bf16_attention,
+            "kv_head_indices": kv_map,
+            "kv_head_indices_host": kv_map_host,
+        }
+
+    if bf16_attention:
+        q_score = q_heads.astype("float32") * scale
+    else:
+        q_score = q_heads * (scale * score_prescale)
+
+    score_parts = []
+    if n_anchors:
+        k_anchor = xp.take(k[:, offset:key_length:stride, :, :], kv_map, axis=2)
+        k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+        k_score = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
+        score_parts.append(xp.matmul(q_score, k_score.swapaxes(-1, -2)))
+    else:
+        k_anchor_heads = None
+
+    current_k_heads = None
+    if add_current:
+        current_k = xp.take(k, kv_map, axis=2)
+        current_k_heads = current_k.transpose(0, 2, 1, 3)
+        current_k_score = (
+            current_k_heads.astype("float32") if bf16_attention else current_k_heads
+        )
+        current_scores = xp.sum(q_score * current_k_score, axis=-1, keepdims=True)
+        score_parts.append(current_scores)
+
+    scores = score_parts[0] if len(score_parts) == 1 else xp.concatenate(score_parts, axis=-1)
+
+    queries = xp.arange(query_length, dtype=xp.int64)[:, None]
+    valid_parts = []
+    if n_anchors:
+        anchor_valid = anchors[None, :] <= queries
+        valid_parts.append(anchor_valid)
+    if add_current:
+        positions = xp.arange(query_length, dtype=xp.int64)
+        on_phase = (positions >= offset) & (((positions - offset) % stride) == 0)
+        current_valid = (~on_phase)[:, None]
+        valid_parts.append(current_valid)
+    valid_2d = valid_parts[0] if len(valid_parts) == 1 else xp.concatenate(valid_parts, axis=1)
+    valid = valid_2d[None, None, :, :]
+
+    probs = _masked_softmax_forward(
+        scores, valid, logit_multiplier=(1.0 / score_prescale)
+    )
+    del scores
+
+    context_heads = xp.zeros(
+        (batch, n_q_heads, query_length, d_head), dtype=context_dtype
+    )
+    slot = 0
+    if n_anchors:
+        probs_anchor = probs[..., :n_anchors]
+        v_anchor = xp.take(v[:, offset:key_length:stride, :, :], kv_map, axis=2)
+        v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
+        v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
+        probs_compute = (
+            probs_anchor
+            if bf16_attention
+            else (
+                probs_anchor.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_anchor
+            )
+        )
+        context_heads += xp.matmul(probs_compute, v_compute)
+        slot = n_anchors
+
+    if add_current:
+        probs_current = probs[..., slot]
+        current_v = xp.take(v, kv_map, axis=2)
+        current_v_heads = current_v.transpose(0, 2, 1, 3)
+        current_v_compute = (
+            current_v_heads.astype("float32") if bf16_attention else current_v_heads
+        )
+        probs_current_compute = (
+            probs_current
+            if bf16_attention
+            else (
+                probs_current.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_current
+            )
+        )
+        context_heads += probs_current_compute[..., None] * current_v_compute
+
+    context = context_heads.transpose(0, 2, 1, 3)
+    if not return_cache:
+        return context
+
+    return context, {
+        "q": q,
+        "k": k,
+        "v": v,
+        "stride": stride,
+        "offset": offset,
+        "include_current": include_current,
+        "anchors": anchors,
+        "probs": probs,
+        "valid": valid,
+        "scale": scale,
+        "bf16_attention": bf16_attention,
+        "kv_head_indices": kv_map,
+        "kv_head_indices_host": kv_map_host,
+    }
+
+
+def global_sparse_attention_backward(dcontext, cache):
+    """Backward for :func:`global_sparse_attention_forward`."""
+    if "fallback_local" in cache:
+        return local_window_attention_backward(dcontext, cache["fallback_local"])
+
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    if dcontext.shape != q.shape:
+        raise ValueError("dcontext must have the same shape as q/context")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    n_kv_heads = k.shape[2]
+    stride = cache["stride"]
+    offset = cache["offset"]
+    include_current = cache["include_current"]
+    anchors = cache["anchors"]
+    probs = cache["probs"]
+    valid = cache["valid"]
+    scale = cache["scale"]
+    bf16_attention = cache["bf16_attention"]
+    kv_map = cache["kv_head_indices"]
+    kv_map_host = cache["kv_head_indices_host"]
+
+    grad_dtype = xp.float32 if bf16_attention else q.dtype
+    dq = xp.zeros(q.shape, dtype=grad_dtype)
+    dk = xp.zeros(k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.shape, dtype=grad_dtype)
+    if probs is None:
+        return dq, dk, dv
+
+    q_heads = q.transpose(0, 2, 1, 3)
+    dcontext_heads = dcontext.transpose(0, 2, 1, 3)
+    q_compute = q_heads.astype("float32") if bf16_attention else q_heads
+    dcontext_compute = (
+        dcontext_heads.astype("float32") if bf16_attention else dcontext_heads
+    )
+    n_anchors = int(anchors.shape[0])
+    add_current = bool(include_current)
+
+    dprobs_parts = []
+    v_anchor_heads = None
+    if n_anchors:
+        v_anchor = xp.take(v[:, offset:v.shape[1]:stride, :, :], kv_map, axis=2)
+        v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
+        v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
+        dprobs_parts.append(xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2)))
+    current_v_heads = None
+    if add_current:
+        current_v = xp.take(v, kv_map, axis=2)
+        current_v_heads = current_v.transpose(0, 2, 1, 3)
+        current_v_compute = (
+            current_v_heads.astype("float32") if bf16_attention else current_v_heads
+        )
+        dprobs_parts.append(
+            xp.sum(dcontext_compute * current_v_compute, axis=-1, keepdims=True)
+        )
+    dprobs = dprobs_parts[0] if len(dprobs_parts) == 1 else xp.concatenate(dprobs_parts, axis=-1)
+    dscores = _softmax_backward(dprobs, probs)
+    dscores = xp.where(valid, dscores, 0.0)
+    dscores_compute = (
+        dscores.astype("float32", copy=False)
+        if bf16_attention
+        else (
+            dscores.astype(q.dtype, copy=False)
+            if is_low_precision_dtype(q.dtype)
+            else dscores
+        )
+    )
+
+    dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
+    dk_anchor_heads = None
+    dv_anchor_heads = None
+    slot = 0
+    if n_anchors:
+        ds_anchor = dscores_compute[..., :n_anchors]
+        k_anchor = xp.take(k[:, offset:k.shape[1]:stride, :, :], kv_map, axis=2)
+        k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+        k_compute = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
+        dq_heads += xp.matmul(ds_anchor, k_compute) * scale
+        dk_anchor_heads = xp.matmul(ds_anchor.swapaxes(-1, -2), q_compute) * scale
+
+        probs_anchor = probs[..., :n_anchors]
+        probs_compute = (
+            probs_anchor
+            if bf16_attention
+            else (
+                probs_anchor.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_anchor
+            )
+        )
+        dv_anchor_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+        slot = n_anchors
+
+    dk_current_heads = None
+    dv_current_heads = None
+    if add_current:
+        ds_current = dscores_compute[..., slot]
+        current_k = xp.take(k, kv_map, axis=2)
+        current_k_heads = current_k.transpose(0, 2, 1, 3)
+        current_k_compute = (
+            current_k_heads.astype("float32") if bf16_attention else current_k_heads
+        )
+        dq_heads += ds_current[..., None] * current_k_compute * scale
+        dk_current_heads = ds_current[..., None] * q_compute * scale
+
+        probs_current = probs[..., slot]
+        probs_current_compute = (
+            probs_current
+            if bf16_attention
+            else (
+                probs_current.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_current
+            )
+        )
+        dv_current_heads = probs_current_compute[..., None] * dcontext_compute
+
+    q_heads_for_kv = [
+        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
+        for kvh in range(n_kv_heads)
+    ]
+    for kvh, head_group in enumerate(q_heads_for_kv):
+        if not head_group:
+            continue
+        if n_anchors:
+            if len(head_group) == 1:
+                dk_native = dk_anchor_heads[:, head_group[0], :, :]
+                dv_native = dv_anchor_heads[:, head_group[0], :, :]
+            else:
+                dk_native = xp.sum(dk_anchor_heads[:, head_group, :, :], axis=1)
+                dv_native = xp.sum(dv_anchor_heads[:, head_group, :, :], axis=1)
+            dk[:, offset:k.shape[1]:stride, kvh, :] += dk_native.astype(
+                grad_dtype, copy=False
+            )
+            dv[:, offset:v.shape[1]:stride, kvh, :] += dv_native.astype(
+                grad_dtype, copy=False
+            )
+
+        if add_current:
+            if len(head_group) == 1:
+                dk_native = dk_current_heads[:, head_group[0], :, :]
+                dv_native = dv_current_heads[:, head_group[0], :, :]
+            else:
+                dk_native = xp.sum(dk_current_heads[:, head_group, :, :], axis=1)
+                dv_native = xp.sum(dv_current_heads[:, head_group, :, :], axis=1)
+            dk[:, :, kvh, :] += dk_native.astype(grad_dtype, copy=False)
+            dv[:, :, kvh, :] += dv_native.astype(grad_dtype, copy=False)
+
+    dq = dq_heads.transpose(0, 2, 1, 3)
+    return dq, dk, dv
+
+# ---------------------------------------------------------------------------
+# Specialized block-retrieval attention
+# ---------------------------------------------------------------------------
+
+def block_retrieval_attention_forward(
+    q,
+    k,
+    v,
+    selected_blocks,
+    selected_weights,
+    route_starts,
+    block_size,
+    routing_stride,
+    kv_head_indices=None,
+    scale=None,
+    weight_mode="logit_bias",
+    weight_scale=1.0,
+    weight_eps=1e-8,
+    return_cache=True,
+):
+    """Exact attention over router-selected contiguous history blocks.
+
+    One router decision controls ``routing_stride`` consecutive query tokens.
+    The generic indexed kernel expands the same selected K/V tokens once per
+    query, producing a temporary ``[B,H,Q,K,D]`` gather.  Retrieval is block
+    structured, so we instead gather each selected block once per route/head:
+
+        selected K/V: [B,R,H,Kblocks*block_size,D]
+        routed Q:     [B,R,H,routing_stride,D]
+
+    and evaluate all routes as one batched matrix multiplication.  The result
+    is mathematically identical to ``build_*_block_retrieval_plan`` followed by
+    :func:`indexed_attention_forward` for router-produced valid selections.
+    """
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
+    if k.shape != v.shape:
+        raise ValueError("k and v must have identical shapes")
+    if selected_blocks.shape != selected_weights.shape:
+        raise ValueError("selected_blocks and selected_weights must have the same shape")
+    if selected_blocks.ndim != 4:
+        raise ValueError("selected tensors must have shape (B,R,Hrouter,Kblocks)")
+    if route_starts.ndim != 1:
+        raise ValueError("route_starts must be one-dimensional")
+
+    batch, query_length, n_q_heads, d_head = q.shape
+    k_batch, key_length, n_kv_heads, k_d_head = k.shape
+    if k_batch != batch or key_length != query_length or k_d_head != d_head:
+        raise ValueError("block retrieval self-attention requires matching q/k sequence shapes")
+
+    r_batch, n_routes, n_router_heads, n_selected = selected_blocks.shape
+    if r_batch != batch or int(route_starts.shape[0]) != n_routes:
+        raise ValueError("selected route dimensions must match batch/route_starts")
+    if n_router_heads not in {1, n_q_heads}:
+        raise ValueError("router head dimension must be 1 or equal n_q_heads")
+
+    block_size = int(block_size)
+    routing_stride = int(routing_stride)
+    if block_size <= 0 or routing_stride <= 0:
+        raise ValueError("block_size and routing_stride must be positive")
+    if weight_mode not in {"logit_bias", "none"}:
+        raise ValueError("weight_mode must be 'logit_bias' or 'none'")
+    weight_scale = float(weight_scale)
+    weight_eps = float(weight_eps)
+    if weight_eps <= 0 or not math.isfinite(weight_eps):
+        raise ValueError("weight_eps must be positive and finite")
+    if not math.isfinite(weight_scale):
+        raise ValueError("weight_scale must be finite")
+
+    if scale is None:
+        scale = 1.0 / math.sqrt(d_head)
+    scale = float(scale)
+    kv_map, kv_map_host = _normalize_kv_head_mapping(
+        kv_head_indices, n_q_heads, n_kv_heads
+    )
+    bf16_attention = is_bfloat16_dtype(q.dtype)
+    context_dtype = xp.float32 if bf16_attention else q.dtype
+    context = xp.zeros(q.shape, dtype=context_dtype)
+
+    if n_routes == 0:
+        if not return_cache:
+            return context
+        return context, {
+            "q": q,
+            "k": k,
+            "v": v,
+            "selected_blocks": selected_blocks,
+            "selected_weights": selected_weights,
+            "route_starts": route_starts,
+            "block_size": block_size,
+            "routing_stride": routing_stride,
+            "kv_head_indices": kv_map,
+            "kv_head_indices_host": kv_map_host,
+            "scale": scale,
+            "bf16_attention": bf16_attention,
+            "weight_mode": weight_mode,
+            "weight_scale": weight_scale,
+            "weight_eps": weight_eps,
+            "probs": None,
+            "query_positions": xp.zeros((0, routing_stride), dtype=xp.int64),
+            "query_valid": xp.zeros((0, routing_stride), dtype=bool),
+            "key_indices": xp.zeros((batch, 0, n_q_heads, n_selected * block_size), dtype=xp.int64),
+            "router_had_shared_head": n_router_heads == 1,
+        }
+
+    if n_router_heads == 1 and n_q_heads != 1:
+        selected_for_heads = xp.broadcast_to(
+            selected_blocks, (batch, n_routes, n_q_heads, n_selected)
+        )
+        weights_for_heads = xp.broadcast_to(
+            selected_weights, (batch, n_routes, n_q_heads, n_selected)
+        )
+    else:
+        selected_for_heads = selected_blocks
+        weights_for_heads = selected_weights
+
+    # Route query positions are disjoint by construction.  The final route may
+    # be shorter than routing_stride for arbitrary sequence lengths, so retain
+    # an explicit validity mask while keeping a regular batched shape.
+    query_offsets = xp.arange(routing_stride, dtype=xp.int64)[None, :]
+    query_positions_raw = route_starts[:, None] + query_offsets
+    query_valid = query_positions_raw < query_length
+    query_positions = xp.minimum(query_positions_raw, max(query_length - 1, 0))
+
+    q_routes = q[:, query_positions, :, :].transpose(0, 1, 3, 2, 4)
+    # q[:, positions] -> [B,R,S,H,D]; transpose -> [B,R,H,S,D]
+
+    block_offsets = xp.arange(block_size, dtype=xp.int64)
+    key_indices = (
+        selected_for_heads[..., None] * block_size
+        + block_offsets[None, None, None, None, :]
+    ).reshape(batch, n_routes, n_q_heads, n_selected * block_size)
+
+    batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
+    kv_ids = kv_map[None, None, :, None]
+    k_selected = k[batch_ids, key_indices, kv_ids, :]
+
+    if bf16_attention:
+        q_score = q_routes.astype("float32") * scale
+        k_score = k_selected.astype("float32")
+    else:
+        q_score = q_routes * scale
+        k_score = k_selected
+    scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+
+    if weight_mode == "logit_bias":
+        weights_work = (
+            weights_for_heads.astype("float32", copy=False)
+            if is_low_precision_dtype(weights_for_heads.dtype)
+            else weights_for_heads
+        )
+        block_bias = weight_scale * xp.log(weights_work + weight_eps)
+        token_bias = xp.repeat(block_bias, block_size, axis=-1)
+        scores = scores + token_bias[..., None, :]
+
+    valid_scores = query_valid[None, :, None, :, None]
+    probs = _masked_softmax_forward(scores, valid_scores)
+    del scores, q_score, k_score, k_selected
+
+    v_selected = v[batch_ids, key_indices, kv_ids, :]
+    if bf16_attention:
+        v_compute = v_selected.astype("float32")
+        probs_compute = probs
+    else:
+        v_compute = v_selected
+        probs_compute = (
+            probs.astype(q.dtype, copy=False)
+            if is_low_precision_dtype(q.dtype)
+            else probs
+        )
+    context_routes = xp.matmul(probs_compute, v_compute)
+    # [B,R,H,S,D] -> [B,R,S,H,D]
+    context_route_tokens = context_routes.transpose(0, 1, 3, 2, 4)
+    flat_valid = query_valid.reshape(-1)
+    flat_positions = query_positions.reshape(-1)[flat_valid]
+    flat_context = context_route_tokens.reshape(
+        batch, n_routes * routing_stride, n_q_heads, d_head
+    )[:, flat_valid, :, :]
+    context[:, flat_positions, :, :] = flat_context
+
+    if not return_cache:
+        return context
+
+    return context, {
+        "q": q,
+        "k": k,
+        "v": v,
+        "selected_blocks": selected_blocks,
+        "selected_weights": selected_weights,
+        "route_starts": route_starts,
+        "block_size": block_size,
+        "routing_stride": routing_stride,
+        "kv_head_indices": kv_map,
+        "kv_head_indices_host": kv_map_host,
+        "scale": scale,
+        "bf16_attention": bf16_attention,
+        "weight_mode": weight_mode,
+        "weight_scale": weight_scale,
+        "weight_eps": weight_eps,
+        "probs": probs,
+        "query_positions": query_positions,
+        "query_valid": query_valid,
+        "key_indices": key_indices,
+        "router_had_shared_head": n_router_heads == 1,
+    }
+
+
+def block_retrieval_attention_backward(dcontext, cache):
+    """Backward for :func:`block_retrieval_attention_forward`.
+
+    K/V gradients are first reduced over all query tokens controlled by a route
+    using GEMMs.  Only the much smaller route-level ``[B,R,H,K,D]`` results are
+    scatter-added back to native historical K/V positions.  This removes the
+    generic kernel's query-repeated K/V scatter volume.
+
+    Returns ``dq, dk, dv, dweights``.  ``dweights`` has the same shape as the
+    router's selected weight tensor and is zero for ``weight_mode='none'``.
+    """
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    if dcontext.shape != q.shape:
+        raise ValueError("dcontext must have the same shape as q/context")
+
+    selected_weights = cache["selected_weights"]
+    batch, n_routes, n_router_heads, n_selected = selected_weights.shape
+    _, query_length, n_q_heads, d_head = q.shape
+    n_kv_heads = k.shape[2]
+    block_size = int(cache["block_size"])
+    routing_stride = int(cache["routing_stride"])
+    bf16_attention = cache["bf16_attention"]
+    scale = cache["scale"]
+    kv_map = cache["kv_head_indices"]
+    key_indices = cache["key_indices"]
+    query_positions = cache["query_positions"]
+    query_valid = cache["query_valid"]
+    probs = cache["probs"]
+
+    grad_dtype = xp.float32 if bf16_attention else q.dtype
+    dq = xp.zeros(q.shape, dtype=grad_dtype)
+    dk = xp.zeros(k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.shape, dtype=grad_dtype)
+    dweights = xp.zeros(selected_weights.shape, dtype=grad_dtype)
+    if n_routes == 0:
+        return dq, dk, dv, dweights
+
+    dcontext_routes = dcontext[:, query_positions, :, :].transpose(0, 1, 3, 2, 4)
+    q_routes = q[:, query_positions, :, :].transpose(0, 1, 3, 2, 4)
+    valid_q = query_valid[None, :, None, :, None]
+    dcontext_routes = xp.where(valid_q, dcontext_routes, 0.0)
+    q_routes = xp.where(valid_q, q_routes, 0.0)
+
+    batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
+    kv_ids = kv_map[None, None, :, None]
+    v_selected = v[batch_ids, key_indices, kv_ids, :]
+
+    if bf16_attention:
+        dcontext_compute = dcontext_routes.astype("float32")
+        q_compute = q_routes.astype("float32")
+        v_compute = v_selected.astype("float32")
+        probs_compute = probs
+    else:
+        dcontext_compute = dcontext_routes
+        q_compute = q_routes
+        v_compute = v_selected
+        probs_compute = (
+            probs.astype(q.dtype, copy=False)
+            if is_low_precision_dtype(q.dtype)
+            else probs
+        )
+
+    dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
+    dv_selected = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+    dscores = _softmax_backward(dprobs, probs)
+    dscores = xp.where(valid_q, dscores, 0.0)
+    dscores_compute = (
+        dscores.astype("float32", copy=False)
+        if bf16_attention
+        else (
+            dscores.astype(q.dtype, copy=False)
+            if is_low_precision_dtype(q.dtype)
+            else dscores
+        )
+    )
+
+    k_selected = k[batch_ids, key_indices, kv_ids, :]
+    k_compute = k_selected.astype("float32") if bf16_attention else k_selected
+    dq_routes = xp.matmul(dscores_compute, k_compute) * scale
+    dk_selected = xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+
+    # Routes own disjoint query ranges, so Q gradients can be assigned without
+    # a scatter-add.  Invalid padded positions from a short final route are
+    # filtered before assignment.
+    dq_route_tokens = dq_routes.transpose(0, 1, 3, 2, 4).reshape(
+        batch, n_routes * routing_stride, n_q_heads, d_head
+    )
+    flat_valid = query_valid.reshape(-1)
+    flat_positions = query_positions.reshape(-1)[flat_valid]
+    dq[:, flat_positions, :, :] = dq_route_tokens[:, flat_valid, :, :]
+
+    # K/V may be selected by several routes or query heads, so accumulation is
+    # genuinely irregular.  Crucially, the query dimension has already been
+    # reduced by GEMM: scatter volume is [B,R,H,K,D], not [B,H,Q,K,D].
+    scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
+    scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
+    xp.add.at(
+        dk,
+        (scatter_batch, key_indices, scatter_kv),
+        dk_selected.astype(grad_dtype, copy=False),
+    )
+    xp.add.at(
+        dv,
+        (scatter_batch, key_indices, scatter_kv),
+        dv_selected.astype(grad_dtype, copy=False),
+    )
+
+    if cache["weight_mode"] == "logit_bias":
+        # One block logit prior is shared by all exact tokens in that block and
+        # every query token governed by the route.  Sum those score gradients
+        # before applying d(alpha*log(w+eps))/dw.
+        dbias_heads = dscores.reshape(
+            batch,
+            n_routes,
+            n_q_heads,
+            routing_stride,
+            n_selected,
+            block_size,
+        ).sum(axis=(3, 5))
+        if n_router_heads == 1 and n_q_heads != 1:
+            dbias_router = xp.sum(dbias_heads, axis=2, keepdims=True)
+        else:
+            dbias_router = dbias_heads
+        weights_work = selected_weights.astype(dbias_router.dtype, copy=False)
+        dweights = dbias_router * (
+            cache["weight_scale"] / (weights_work + cache["weight_eps"])
+        )
+        dweights = dweights.astype(grad_dtype, copy=False)
+
+    return dq, dk, dv, dweights

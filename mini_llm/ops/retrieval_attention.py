@@ -12,14 +12,12 @@ fixed during the local backward pass, matching the explicit MoE-router
 convention used elsewhere in the repository.
 """
 
-from ..backend import xp
-from .attention_selection import (
-    build_block_retrieval_plan,
-    build_weighted_block_retrieval_plan,
-    weighted_block_retrieval_bias_backward,
-)
+from ..performance_profiler import performance_scope
 from .context_router import ContextRouter
-from .indexed_attention import indexed_attention_forward, indexed_attention_backward
+from .indexed_attention import (
+    block_retrieval_attention_forward,
+    block_retrieval_attention_backward,
+)
 
 
 class ContextRetrievalAttention:
@@ -91,54 +89,54 @@ class ContextRetrievalAttention:
                 "retrieval query heads"
             )
 
-        weights, selected, route_starts, router_cache = self.router.forward(
-            router_input
-        )
+        with performance_scope("retrieval.router.forward"):
+            weights, selected, route_starts, router_cache = self.router.forward(
+                router_input
+            )
 
-        if self.config.router_weight_mode == "logit_bias":
-            plan, plan_cache = build_weighted_block_retrieval_plan(
-                selected,
-                weights,
-                route_starts,
-                seq_len=q.shape[1],
-                block_size=self.config.history_block_size,
-                routing_stride=self.config.routing_stride,
-                exclude_recent_tokens=self.config.exclude_recent_tokens,
-                weight_scale=self.config.router_weight_scale,
-                weight_eps=self.config.router_weight_eps,
-            )
-        elif self.config.router_weight_mode == "none":
-            plan = build_block_retrieval_plan(
-                selected,
-                route_starts,
-                seq_len=q.shape[1],
-                block_size=self.config.history_block_size,
-                routing_stride=self.config.routing_stride,
-                exclude_recent_tokens=self.config.exclude_recent_tokens,
-            )
-            plan_cache = None
-        else:  # Config validation should make this unreachable.
-            raise ValueError("unsupported router_weight_mode")
+        # Retrieval is block structured: one route controls routing_stride
+        # consecutive queries and reopens a handful of contiguous history
+        # blocks.  Execute that structure directly instead of expanding a
+        # per-query KeySelectionPlan and repeatedly gathering the same K/V.
+        with performance_scope("retrieval.plan.forward"):
+            # Kept as a profiler region for continuity.  The specialized
+            # kernel constructs only route-level token indices internally.
+            pass
 
-        if return_cache:
-            context, attention_cache = indexed_attention_forward(
-                q,
-                k,
-                v,
-                plan,
-                kv_head_indices=kv_head_indices,
-                return_cache=True,
-            )
-        else:
-            context = indexed_attention_forward(
-                q,
-                k,
-                v,
-                plan,
-                kv_head_indices=kv_head_indices,
-                return_cache=False,
-            )
-            attention_cache = None
+        with performance_scope("retrieval.block_attention.forward"):
+            if return_cache:
+                context, attention_cache = block_retrieval_attention_forward(
+                    q,
+                    k,
+                    v,
+                    selected,
+                    weights,
+                    route_starts,
+                    block_size=self.config.history_block_size,
+                    routing_stride=self.config.routing_stride,
+                    kv_head_indices=kv_head_indices,
+                    weight_mode=self.config.router_weight_mode,
+                    weight_scale=self.config.router_weight_scale,
+                    weight_eps=self.config.router_weight_eps,
+                    return_cache=True,
+                )
+            else:
+                context = block_retrieval_attention_forward(
+                    q,
+                    k,
+                    v,
+                    selected,
+                    weights,
+                    route_starts,
+                    block_size=self.config.history_block_size,
+                    routing_stride=self.config.routing_stride,
+                    kv_head_indices=kv_head_indices,
+                    weight_mode=self.config.router_weight_mode,
+                    weight_scale=self.config.router_weight_scale,
+                    weight_eps=self.config.router_weight_eps,
+                    return_cache=False,
+                )
+                attention_cache = None
 
         routing = {
             "weights": weights,
@@ -151,7 +149,6 @@ class ContextRetrievalAttention:
         cache = {
             "router_cache": router_cache,
             "attention_cache": attention_cache,
-            "plan_cache": plan_cache,
             "weights_shape": weights.shape,
         }
         return context, routing, cache
@@ -167,25 +164,21 @@ class ContextRetrievalAttention:
         the Q/K/V projection path because both originate from the same layer
         hidden state there.
         """
-        dq, dk, dv, dlogit_bias = indexed_attention_backward(
-            dcontext, cache["attention_cache"]
-        )
-
-        if self.config.router_weight_mode == "logit_bias":
-            if dlogit_bias is None:
-                raise RuntimeError("weighted retrieval expected a logit-bias gradient")
-            dweights = weighted_block_retrieval_bias_backward(
-                dlogit_bias, cache["plan_cache"]
+        with performance_scope("retrieval.block_attention.backward"):
+            dq, dk, dv, dweights = block_retrieval_attention_backward(
+                dcontext, cache["attention_cache"]
             )
-        else:
-            # With discrete selection only, the LM objective has no local
-            # differentiable path through Top-K identities.  Auxiliary score
-            # losses can still train the router through dscores_extra.
-            dweights = xp.zeros(cache["weights_shape"], dtype=dcontext.dtype)
 
-        drouter_input = self.router.backward(
-            dweights,
-            cache["router_cache"],
-            dscores_extra=dscores_extra,
-        )
+        with performance_scope("retrieval.plan.backward"):
+            # The specialized block kernel already reduces the repeated
+            # per-token logit-bias gradient back to selected router weights.
+            # This profiler scope remains for continuity with earlier traces.
+            pass
+
+        with performance_scope("retrieval.router.backward"):
+            drouter_input = self.router.backward(
+                dweights,
+                cache["router_cache"],
+                dscores_extra=dscores_extra,
+            )
         return drouter_input, dq, dk, dv

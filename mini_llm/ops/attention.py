@@ -2,12 +2,20 @@ from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
 from .attention_selection import (
-    build_dilated_causal_plan,
-    build_global_sparse_causal_plan,
     build_local_causal_plan,
 )
-from .indexed_attention import indexed_attention_forward, indexed_attention_backward
+from .indexed_attention import (
+    indexed_attention_forward,
+    indexed_attention_backward,
+    local_window_attention_forward,
+    local_window_attention_backward,
+    dilated_attention_forward,
+    dilated_attention_backward,
+    global_sparse_attention_forward,
+    global_sparse_attention_backward,
+)
 from .retrieval_attention import ContextRetrievalAttention
+from ..performance_profiler import performance_scope
 from ..config import (
     AttentionLayerConfig,
     DenseAttentionConfig,
@@ -242,97 +250,202 @@ class GQAAttention:
         for group in self._static_head_groups:
             head_indices = group["head_indices"]
             q_subset = q[:, :, head_indices, :]
-            if group["kind"] == "dense":
-                plan = build_local_causal_plan(b, t, t)
-            elif group["kind"] == "local":
-                plan = build_local_causal_plan(b, t, group["window"])
-            elif group["kind"] == "dilated":
-                plan = build_dilated_causal_plan(
-                    b,
-                    t,
-                    group["window"],
-                    group["dilation"],
-                    group["offset"],
-                )
-            elif group["kind"] == "global_sparse":
-                plan = build_global_sparse_causal_plan(
-                    b,
-                    t,
-                    group["stride"],
-                    group["offset"],
-                    group["include_current"],
-                )
-            else:
-                raise RuntimeError(
-                    f"unsupported static attention kind: {group['kind']!r}"
-                )
-            kv_head_indices = xp.asarray(
-                head_indices, dtype=xp.int64
-            ) // self.group_size
-            if return_cache:
-                subset, subset_cache = indexed_attention_forward(
-                    q_subset,
-                    k,
-                    v,
-                    plan,
-                    kv_head_indices=kv_head_indices,
-                    scale=self.scale,
-                    return_cache=True,
-                )
-                group_caches.append(
-                    {
-                        "kind": "indexed",
-                        "head_indices": head_indices,
-                        "cache": subset_cache,
-                    }
-                )
-            else:
-                subset = indexed_attention_forward(
-                    q_subset,
-                    k,
-                    v,
-                    plan,
-                    kv_head_indices=kv_head_indices,
-                    scale=self.scale,
-                    return_cache=False,
-                )
-            context[:, :, head_indices, :] = subset
+            topology_kind = group["kind"]
+            with performance_scope(f"attention.{topology_kind}.forward"):
+                with performance_scope(f"attention.{topology_kind}.plan.forward"):
+                    if topology_kind == "dense":
+                        plan = build_local_causal_plan(b, t, t)
+                    elif topology_kind == "local":
+                        # The specialized contiguous local kernel derives its
+                        # band mask directly from query/key ranges and does not
+                        # need a per-token KeySelectionPlan.
+                        plan = None
+                    elif topology_kind == "dilated":
+                        # Fixed dilation is executed by a specialized phase
+                        # kernel; no per-token indexed plan is needed.
+                        plan = None
+                    elif topology_kind == "global_sparse":
+                        # Fixed global anchors are executed by a specialized
+                        # kernel that gathers each anchor K/V only once.
+                        plan = None
+                    else:
+                        raise RuntimeError(
+                            f"unsupported static attention kind: {topology_kind!r}"
+                        )
+                    kv_head_indices = xp.asarray(
+                        head_indices, dtype=xp.int64
+                    ) // self.group_size
+                with performance_scope(f"attention.{topology_kind}.kernel.forward"):
+                    if topology_kind == "local":
+                        kv_mapping = tuple(
+                            index // self.group_size for index in head_indices
+                        )
+                        if return_cache:
+                            subset, subset_cache = local_window_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["window"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=True,
+                            )
+                            group_caches.append(
+                                {
+                                    "kind": "local_window",
+                                    "topology_kind": topology_kind,
+                                    "head_indices": head_indices,
+                                    "cache": subset_cache,
+                                }
+                            )
+                        else:
+                            subset = local_window_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["window"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=False,
+                            )
+                    elif topology_kind == "dilated":
+                        kv_mapping = tuple(
+                            index // self.group_size for index in head_indices
+                        )
+                        if return_cache:
+                            subset, subset_cache = dilated_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["window"],
+                                group["dilation"],
+                                group["offset"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=True,
+                            )
+                            group_caches.append(
+                                {
+                                    "kind": "dilated_window",
+                                    "topology_kind": topology_kind,
+                                    "head_indices": head_indices,
+                                    "cache": subset_cache,
+                                }
+                            )
+                        else:
+                            subset = dilated_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["window"],
+                                group["dilation"],
+                                group["offset"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=False,
+                            )
+                    elif topology_kind == "global_sparse":
+                        kv_mapping = tuple(
+                            index // self.group_size for index in head_indices
+                        )
+                        if return_cache:
+                            subset, subset_cache = global_sparse_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["stride"],
+                                group["offset"],
+                                group["include_current"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=True,
+                            )
+                            group_caches.append(
+                                {
+                                    "kind": "global_sparse",
+                                    "topology_kind": topology_kind,
+                                    "head_indices": head_indices,
+                                    "cache": subset_cache,
+                                }
+                            )
+                        else:
+                            subset = global_sparse_attention_forward(
+                                q_subset,
+                                k,
+                                v,
+                                group["stride"],
+                                group["offset"],
+                                group["include_current"],
+                                kv_head_indices=kv_mapping,
+                                scale=self.scale,
+                                return_cache=False,
+                            )
+                    elif return_cache:
+                        subset, subset_cache = indexed_attention_forward(
+                            q_subset,
+                            k,
+                            v,
+                            plan,
+                            kv_head_indices=kv_head_indices,
+                            scale=self.scale,
+                            return_cache=True,
+                        )
+                        group_caches.append(
+                            {
+                                "kind": "indexed",
+                                "topology_kind": topology_kind,
+                                "head_indices": head_indices,
+                                "cache": subset_cache,
+                            }
+                        )
+                    else:
+                        subset = indexed_attention_forward(
+                            q_subset,
+                            k,
+                            v,
+                            plan,
+                            kv_head_indices=kv_head_indices,
+                            scale=self.scale,
+                            return_cache=False,
+                        )
+                    context[:, :, head_indices, :] = subset
 
         for group in self._retrieval_groups:
             head_indices = group["head_indices"]
             q_subset = q[:, :, head_indices, :]
-            kv_head_indices = xp.asarray(
-                head_indices, dtype=xp.int64
-            ) // self.group_size
-            if return_cache:
-                subset, group_routing, subset_cache = group["module"].forward(
-                    x,
-                    q_subset,
-                    k,
-                    v,
-                    kv_head_indices=kv_head_indices,
-                    return_cache=True,
-                )
-                group_caches.append(
-                    {
-                        "kind": "retrieval",
-                        "name": group["name"],
-                        "head_indices": head_indices,
-                        "module": group["module"],
-                        "cache": subset_cache,
-                    }
-                )
-            else:
-                subset, group_routing = group["module"].forward(
-                    x,
-                    q_subset,
-                    k,
-                    v,
-                    kv_head_indices=kv_head_indices,
-                    return_cache=False,
-                )
-            context[:, :, head_indices, :] = subset
-            routing[group["name"]] = group_routing
+            kv_head_indices = tuple(
+                index // self.group_size for index in head_indices
+            )
+            with performance_scope("attention.retrieval.forward"):
+                if return_cache:
+                    subset, group_routing, subset_cache = group["module"].forward(
+                        x,
+                        q_subset,
+                        k,
+                        v,
+                        kv_head_indices=kv_head_indices,
+                        return_cache=True,
+                    )
+                    group_caches.append(
+                        {
+                            "kind": "retrieval",
+                            "name": group["name"],
+                            "head_indices": head_indices,
+                            "module": group["module"],
+                            "cache": subset_cache,
+                        }
+                    )
+                else:
+                    subset, group_routing = group["module"].forward(
+                        x,
+                        q_subset,
+                        k,
+                        v,
+                        kv_head_indices=kv_head_indices,
+                        return_cache=False,
+                    )
+                context[:, :, head_indices, :] = subset
+                routing[group["name"]] = group_routing
 
         return context, group_caches, routing
 
@@ -347,15 +460,32 @@ class GQAAttention:
         for group_cache in cache["pattern_caches"]:
             head_indices = group_cache["head_indices"]
             dsubset = dcontext[:, :, head_indices, :]
-            if group_cache["kind"] == "indexed":
-                dq_sub, dk_sub, dv_sub, _ = indexed_attention_backward(
-                    dsubset, group_cache["cache"]
-                )
+            if group_cache["kind"] in {"indexed", "local_window", "dilated_window", "global_sparse"}:
+                topology_kind = group_cache.get("topology_kind", "indexed")
+                with performance_scope(f"attention.{topology_kind}.backward"):
+                    with performance_scope(f"attention.{topology_kind}.kernel.backward"):
+                        if group_cache["kind"] == "local_window":
+                            dq_sub, dk_sub, dv_sub = local_window_attention_backward(
+                                dsubset, group_cache["cache"]
+                            )
+                        elif group_cache["kind"] == "dilated_window":
+                            dq_sub, dk_sub, dv_sub = dilated_attention_backward(
+                                dsubset, group_cache["cache"]
+                            )
+                        elif group_cache["kind"] == "global_sparse":
+                            dq_sub, dk_sub, dv_sub = global_sparse_attention_backward(
+                                dsubset, group_cache["cache"]
+                            )
+                        else:
+                            dq_sub, dk_sub, dv_sub, _ = indexed_attention_backward(
+                                dsubset, group_cache["cache"]
+                            )
             else:
-                drouter, dq_sub, dk_sub, dv_sub = group_cache["module"].backward(
-                    dsubset, group_cache["cache"]
-                )
-                drouter_input += drouter.astype(grad_dtype, copy=False)
+                with performance_scope("attention.retrieval.backward"):
+                    drouter, dq_sub, dk_sub, dv_sub = group_cache["module"].backward(
+                        dsubset, group_cache["cache"]
+                    )
+                    drouter_input += drouter.astype(grad_dtype, copy=False)
 
             dq[:, :, head_indices, :] += dq_sub.astype(grad_dtype, copy=False)
             dk += dk_sub.astype(grad_dtype, copy=False)
@@ -398,18 +528,20 @@ class GQAAttention:
         # Keep projection GEMMs strictly 2-D. CuPy 14 supports BF16 2-D GEMM
         # efficiently, but its generic N-D @ 2-D path currently fails on BF16.
         x2 = x.reshape(-1, self.d_model)
-        q_pre = (x2 @ self.Wq.data).reshape(
-            b, t, self.n_q_heads, self.d_head
-        )
-        k_pre = (x2 @ self.Wk.data).reshape(
-            b, t, self.n_kv_heads, self.d_head
-        )
-        v = (x2 @ self.Wv.data).reshape(
-            b, t, self.n_kv_heads, self.d_head
-        )
+        with performance_scope("attention.qkv_projection.forward"):
+            q_pre = (x2 @ self.Wq.data).reshape(
+                b, t, self.n_q_heads, self.d_head
+            )
+            k_pre = (x2 @ self.Wk.data).reshape(
+                b, t, self.n_kv_heads, self.d_head
+            )
+            v = (x2 @ self.Wv.data).reshape(
+                b, t, self.n_kv_heads, self.d_head
+            )
 
-        q, q_rope_cache = rope_forward(q_pre, self.rope_base)
-        k, k_rope_cache = rope_forward(k_pre, self.rope_base)
+        with performance_scope("attention.rope.forward"):
+            q, q_rope_cache = rope_forward(q_pre, self.rope_base)
+            k, k_rope_cache = rope_forward(k_pre, self.rope_base)
 
         if self.attention_config is not None:
             context, pattern_caches, routing = self._mixed_context_forward(
@@ -420,9 +552,10 @@ class GQAAttention:
                 merged.astype(x.dtype, copy=False)
                 if is_bfloat16_dtype(q.dtype) else merged
             )
-            y = (
-                merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
-            ).reshape(b, t, self.d_model)
+            with performance_scope("attention.output_projection.forward"):
+                y = (
+                    merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
+                ).reshape(b, t, self.d_model)
             if not return_cache:
                 return y
             return y, {
@@ -507,9 +640,10 @@ class GQAAttention:
         merged_compute = (
             merged.astype(x.dtype, copy=False) if bf16_attention else merged
         )
-        y = (
-            merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
-        ).reshape(b, t, self.d_model)
+        with performance_scope("attention.output_projection.forward"):
+            y = (
+                merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
+            ).reshape(b, t, self.d_model)
 
         if not return_cache:
             return y
@@ -531,12 +665,13 @@ class GQAAttention:
         merged = cache["merged"]
         b, t, _ = x.shape
 
-        self.Wo.grad += (
-            merged.reshape(-1, merged.shape[-1]).T
-            @ dy.reshape(-1, dy.shape[-1])
-        )
-        dy2 = dy.reshape(-1, dy.shape[-1])
-        dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
+        with performance_scope("attention.output_projection.backward"):
+            self.Wo.grad += (
+                merged.reshape(-1, merged.shape[-1]).T
+                @ dy.reshape(-1, dy.shape[-1])
+            )
+            dy2 = dy.reshape(-1, dy.shape[-1])
+            dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
         dcontext = dmerged.reshape(
             b, t, self.n_q_heads, self.d_head
         )
@@ -545,7 +680,8 @@ class GQAAttention:
             dq, dk, dv, drouter_input = self._mixed_context_backward(
                 dcontext, cache
             )
-            dx = self._projection_backward(x, dq, dk, dv, cache)
+            with performance_scope("attention.qkv_projection.backward"):
+                dx = self._projection_backward(x, dq, dk, dv, cache)
             return dx + drouter_input.astype(dx.dtype, copy=False)
 
         probs = cache["probs"]
@@ -614,4 +750,5 @@ class GQAAttention:
         dk = dk_heads.transpose(0, 2, 1, 3)
         dv = dv_heads.transpose(0, 2, 1, 3)
 
-        return self._projection_backward(x, dq, dk, dv, cache)
+        with performance_scope("attention.qkv_projection.backward"):
+            return self._projection_backward(x, dq, dk, dv, cache)

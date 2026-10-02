@@ -31,6 +31,12 @@ from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
+from mini_llm.backend import synchronize
+from mini_llm.performance_profiler import (
+    configure_performance_profiler,
+    performance_report,
+    performance_scope,
+)
 
 try:
     import numpy as np
@@ -78,6 +84,7 @@ class ExtendedTrainer:
         train_source_shards: Optional[Mapping[str, List[str]]] = None,
         val_source_shards: Optional[Mapping[str, List[str]]] = None,
         source_weights: Optional[Mapping[str, float]] = None,
+        profile_steps: int = 0,
     ):
         """
         Initialize the extended trainer.
@@ -111,6 +118,9 @@ class ExtendedTrainer:
             source_weights: Sampling probabilities for mixed-corpus training.
                 Weights are normalized internally and are independent of the
                 number or physical size of shards in each source.
+            profile_steps: Number of optimizer steps to run with synchronized
+                coarse performance profiling. Profiling is intentionally
+                intrusive and should normally be limited to 1-3 steps.
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -137,6 +147,8 @@ class ExtendedTrainer:
         self.val_interval = val_interval
         self.val_steps = val_steps
         self.save_interval = save_interval
+        self.profile_steps = max(0, int(profile_steps))
+        self._profiled_steps = 0
         self.shard_cache_size = max(1, int(shard_cache_size))
         if self.train_source_shards is not None:
             # Keep at least the current shard for each corpus mapped.  Memmaps
@@ -496,6 +508,13 @@ class ExtendedTrainer:
         Returns:
             Tuple of (loss, grad_norm)
         """
+        profile_active = self._profiled_steps < self.profile_steps
+        configure_performance_profiler(profile_active, reset=profile_active)
+        profile_wall_start = None
+        if profile_active:
+            synchronize()
+            profile_wall_start = time.perf_counter()
+
         # Accumulate gradients over multiple steps
         # Use Python floats for loss accumulation (minimal overhead)
         # The main optimization is avoiding host-device sync during gradient computation
@@ -507,7 +526,8 @@ class ExtendedTrainer:
             self.optimizer.lr = lr
             
             # Get batch
-            inputs, targets = self.get_train_batch()
+            with performance_scope("train.data_batch"):
+                inputs, targets = self.get_train_batch()
             
             # Forward pass.  Optional lightweight finite tracing records
             # asynchronous GPU reductions at key layer boundaries.  There is
@@ -517,7 +537,8 @@ class ExtendedTrainer:
                 and self.finite_trace_start <= self.step <= self.finite_trace_end
             )
             finite_trace = [] if trace_active else None
-            logits, cache = self.model.forward(inputs, finite_trace=finite_trace)
+            with performance_scope("train.model_forward"):
+                logits, cache = self.model.forward(inputs, finite_trace=finite_trace)
 
             if finite_trace is not None:
                 final_ok = bool(finite_trace[-1][1].item())
@@ -539,7 +560,8 @@ class ExtendedTrainer:
             if not self._check_finite(logits, f"logits_step_{self.step}"):
                 raise ValueError(f"Nonfinite logits detected at step {self.step}!")
             
-            loss, loss_cache = self.model.compute_loss(logits, targets)
+            with performance_scope("train.loss_forward"):
+                loss, loss_cache = self.model.compute_loss(logits, targets)
             losses.append(loss)  # loss is already a Python float from scalar()
             
             # Check for NaN (this will sync once per step, acceptable)
@@ -547,13 +569,15 @@ class ExtendedTrainer:
                 raise ValueError(f"NaN loss detected at step {self.step}!")
             
             # Backward pass - apply loss scaling to d_logits before backward
-            d_logits = self.model.backward_loss(loss_cache)
+            with performance_scope("train.loss_backward"):
+                d_logits = self.model.backward_loss(loss_cache)
             
             # Scale the gradient by loss_scale for mixed precision (trainer owns it)
             if self.loss_scale != 1.0:
                 d_logits = d_logits * self.loss_scale
             
-            self.model.backward(d_logits, cache)
+            with performance_scope("train.model_backward"):
+                self.model.backward(d_logits, cache)
         
         # Average loss - only sync once at the end
         avg_loss = float(sum(losses) / self.grad_accum_steps)
@@ -572,9 +596,10 @@ class ExtendedTrainer:
         
         # Global gradient clipping - returns backend array norm, no sync
         # Now returns (norm_backend, scale, is_finite) tuple
-        grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
-            self.model.parameters(), max_norm=self.grad_clip
-        )
+        with performance_scope("train.grad_clip"):
+            grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
+                self.model.parameters(), max_norm=self.grad_clip
+            )
         
         if not is_finite:
             # Gradient contains Inf/NaN - skip this update
@@ -587,10 +612,30 @@ class ExtendedTrainer:
             return avg_loss, float(_array_to_float(grad_norm_backend)) if grad_norm_backend is not None else 0.0
         
         # Update parameters (only once per accumulated batch)
-        self.optimizer.step(lr=lr)
-        self.optimizer.zero_grad()
+        with performance_scope("train.optimizer_step"):
+            self.optimizer.step(lr=lr)
+        with performance_scope("train.zero_grad"):
+            self.optimizer.zero_grad()
         
         self.step += 1
+
+        if profile_active:
+            synchronize()
+            elapsed = time.perf_counter() - profile_wall_start
+            tokens = self.batch_size * self.seq_length * self.grad_accum_steps
+            print()
+            print(
+                performance_report(
+                    title=f"Performance profile: optimizer step {self.step}"
+                )
+            )
+            print(
+                f"Profiled optimizer-step wall time: {elapsed:.3f}s; "
+                f"effective throughput: {tokens / max(elapsed, 1e-12):,.0f} tokens/s"
+            )
+            print()
+            self._profiled_steps += 1
+            configure_performance_profiler(False)
         
         # Sync grad_norm only at the end (necessary for logging)
         return avg_loss, float(_array_to_float(grad_norm_backend))

@@ -225,6 +225,15 @@ def parse_args():
         action="store_true",
         help="Enable numerical stability monitoring (checks for Inf/NaN at each tensor)",
     )
+    parser.add_argument(
+        "--profile-steps",
+        type=int,
+        default=0,
+        help=(
+            "Profile the first N executed optimizer steps with synchronized "
+            "coarse GPU timings (default: 0/off). Use 1-3 for diagnosis."
+        ),
+    )
     
     # Tokenizer configuration
     parser.add_argument(
@@ -552,6 +561,8 @@ def main():
     print(f"Training steps: {args.total_steps}")
     print(f"Learning rate: {args.peak_lr}")
     print(f"Warmup: {args.warmup_steps} steps")
+    if args.profile_steps:
+        print(f"Performance profiling: first {args.profile_steps} optimizer step(s)")
     print()
 
     model = setup_model(config, dtype=model_dtype)
@@ -649,6 +660,7 @@ def main():
         save_interval=args.save_interval,
         loss_scale=1.0,
         numerical_debug=args.numerical_debug,
+        profile_steps=args.profile_steps,
         train_source_shards=train_source_shards,
         val_source_shards=val_source_shards,
         source_weights=source_weights,

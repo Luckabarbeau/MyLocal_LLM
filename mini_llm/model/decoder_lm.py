@@ -7,6 +7,7 @@ from mini_llm.ops.embedding import Embedding
 from mini_llm.ops.linear import Linear
 from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 from mini_llm.ops.rmsnorm import RMSNorm
+from mini_llm.performance_profiler import performance_scope
 
 
 class DecoderLanguageModel:
@@ -120,7 +121,8 @@ class DecoderLanguageModel:
         B, T = token_ids.shape
         
         # Embed tokens - unpack output and cache
-        x, embed_cache = self.embedding.forward(token_ids)
+        with performance_scope("model.embedding.forward"):
+            x, embed_cache = self.embedding.forward(token_ids)
         if finite_trace is not None:
             finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
         
@@ -130,19 +132,22 @@ class DecoderLanguageModel:
         block_caches = [] if return_cache else None
         for i, block in enumerate(self.blocks):
             if return_cache:
-                x, cache = block.forward(
-                    x, finite_trace=finite_trace, layer_idx=i
-                )
+                with performance_scope(f"model.layer{i}.forward"):
+                    x, cache = block.forward(
+                        x, finite_trace=finite_trace, layer_idx=i
+                    )
                 block_caches.append(cache)
             else:
-                x = block.forward(
-                    x, finite_trace=finite_trace, layer_idx=i, return_cache=False
-                )
+                with performance_scope(f"model.layer{i}.forward"):
+                    x = block.forward(
+                        x, finite_trace=finite_trace, layer_idx=i, return_cache=False
+                    )
         
         # Final normalization - unpack output and cache.  FP16 models keep the
         # transformer residual stream in FP32, but the large output projection
         # remains on the fast FP16 GEMM path.
-        x, final_norm_cache = self.final_norm.forward(x)
+        with performance_scope("model.final_norm.forward"):
+            x, final_norm_cache = self.final_norm.forward(x)
         if finite_trace is not None:
             finite_trace.append(("final_norm", xp.all(xp.isfinite(x))))
 
@@ -152,7 +157,8 @@ class DecoderLanguageModel:
         )
         
         # Output projection - maps d_model -> vocab_size
-        logits, output_proj_cache = self.output_proj.forward(output_proj_input)
+        with performance_scope("model.output_projection.forward"):
+            logits, output_proj_cache = self.output_proj.forward(output_proj_input)
         if finite_trace is not None:
             finite_trace.append(("logits", xp.all(xp.isfinite(logits))))
         
@@ -224,16 +230,23 @@ class DecoderLanguageModel:
             d_logits.astype(self.dtype, copy=False)
             if is_bfloat16_dtype(self.dtype) else d_logits
         )
-        dx = self.output_proj.backward(d_logits_compute, cache["output_proj_cache"])
+        with performance_scope("model.output_projection.backward"):
+            dx = self.output_proj.backward(d_logits_compute, cache["output_proj_cache"])
         
         # Backward through final RMSNorm
-        dx = self.final_norm.backward(dx, cache["final_norm_cache"])
+        with performance_scope("model.final_norm.backward"):
+            dx = self.final_norm.backward(dx, cache["final_norm_cache"])
         
         # Backward through transformer blocks (in reverse order)
-        for block, block_cache in zip(reversed(self.blocks), reversed(block_caches)):
-            dx = block.backward(dx, block_cache)
+        for layer_idx, (block, block_cache) in enumerate(
+            zip(reversed(self.blocks), reversed(block_caches))
+        ):
+            original_idx = len(self.blocks) - 1 - layer_idx
+            with performance_scope(f"model.layer{original_idx}.backward"):
+                dx = block.backward(dx, block_cache)
         
         # Backward through embedding - this computes the gradient for W_E
-        self.embedding.backward(dx, cache["embed_cache"])
+        with performance_scope("model.embedding.backward"):
+            self.embedding.backward(dx, cache["embed_cache"])
         
 

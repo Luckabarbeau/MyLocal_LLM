@@ -202,3 +202,28 @@ def test_experts_forward_without_cache_matches_cached_forward():
     )
 
     assert xp.allclose(y_forward_only, y_cached, rtol=1e-12, atol=1e-12)
+
+
+def test_expert_ffn_training_cache_recomputes_elementwise_intermediates():
+    rng = RandomStream(23)
+    expert = ExpertFFN(
+        d_model=4,
+        d_ff=8,
+        input_std=0.1,
+        output_std=0.05,
+        rng=rng,
+        dtype="float64",
+    )
+    x = xp.asarray(np.random.default_rng(24).normal(size=(5, 4)), dtype="float64")
+
+    y, cache = expert.forward(x)
+
+    assert set(cache) == {"x", "g", "u"}
+    assert "a" not in cache
+    assert "h" not in cache
+
+    dy = xp.asarray(np.random.default_rng(25).normal(size=y.shape), dtype="float64")
+    expert.zero_grad()
+    dx = expert.backward(dy, cache)
+    assert dx.shape == x.shape
+    assert xp.all(xp.isfinite(dx))

@@ -91,8 +91,8 @@ def test_cross_entropy_fp16_backward_preserves_tiny_non_target_gradients():
     np.testing.assert_allclose(row_sums, 0.0, atol=2e-10)
 
 
-def test_bfloat16_cross_entropy_keeps_fp32_gradient():
-    """BF16 loss uses the same FP32 stable workspace/gradient policy as FP16."""
+def test_bfloat16_cross_entropy_uses_compact_bf16_cache_and_gradient():
+    """BF16 keeps stable FP32 math but stores full-vocab state in BF16."""
     import ml_dtypes
     from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 
@@ -101,6 +101,27 @@ def test_bfloat16_cross_entropy_keeps_fp32_gradient():
     loss, cache = cross_entropy_forward(logits, targets)
     grad = cross_entropy_backward(cache)
 
-    assert grad.dtype == xp.dtype("float32")
+    assert "probs_bf16" not in cache  # backward consumes/reuses the cache buffer
+    assert str(np.dtype(grad.dtype)).lower() == "bfloat16"
     assert bool(xp.all(xp.isfinite(grad)))
     assert loss > 0.0
+
+    grad_f32 = np.asarray(grad, dtype=np.float32)
+    expected_target = (1.0 / 16.0 - 1.0) / 8.0
+    expected_other = (1.0 / 16.0) / 8.0
+    np.testing.assert_allclose(grad_f32[0, 0, 0], expected_target, rtol=1e-2, atol=1e-4)
+    np.testing.assert_allclose(grad_f32[0, 0, 1], expected_other, rtol=1e-2, atol=1e-4)
+
+
+def test_bfloat16_cross_entropy_cache_is_half_fp32_size_before_backward():
+    import ml_dtypes
+
+    logits = xp.zeros((4, 8, 257), dtype=ml_dtypes.bfloat16)
+    targets = xp.zeros((4, 8), dtype="int64")
+    _, cache = cross_entropy_forward(logits, targets)
+
+    assert "probs_bf16" in cache
+    probs = cache["probs_bf16"]
+    assert str(np.dtype(probs.dtype)).lower() == "bfloat16"
+    assert probs.nbytes == logits.size * 2
+    assert probs.nbytes * 2 == logits.size * 4

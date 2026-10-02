@@ -14,6 +14,7 @@ from .attention_selection import KeySelectionPlan
 
 
 _DEFAULT_QUERY_CHUNK_SIZE = 128
+_DEFAULT_LOCAL_QUERY_CHUNK_SIZE = 512
 _DEFAULT_DILATED_QUERY_CHUNK_SIZE = 1024
 
 
@@ -40,6 +41,28 @@ def _resolve_query_chunk_size(query_length, query_chunk_size=None):
     return min(int(query_length), query_chunk_size)
 
 
+
+
+
+
+def _resolve_local_query_chunk_size(query_length, query_chunk_size=None):
+    """Resolve the query chunk size for specialized local attention.
+
+    The contiguous local kernel does not materialize per-query ``[Q,K,D]``
+    gathers, so it can safely use a substantially larger chunk than generic
+    indexed attention.  Larger chunks reduce Python/CUDA launch overhead and
+    expose larger regular GEMMs.  Keep a separate runtime override because
+    the best value depends on context/window size and available VRAM.
+    """
+    if query_chunk_size is None:
+        raw = os.environ.get("MINI_LLM_LOCAL_ATTN_QUERY_CHUNK")
+        query_chunk_size = (
+            _DEFAULT_LOCAL_QUERY_CHUNK_SIZE if raw is None else int(raw)
+        )
+    query_chunk_size = int(query_chunk_size)
+    if query_chunk_size <= 0:
+        raise ValueError("query_chunk_size must be positive")
+    return min(int(query_length), query_chunk_size)
 
 
 def _resolve_dilated_query_chunk_size(query_length, query_chunk_size=None):
@@ -91,6 +114,25 @@ def _masked_softmax_forward(scores, valid_mask, logit_multiplier=1.0):
 def _softmax_backward(dprobs, probs):
     correction = xp.sum(dprobs * probs, axis=-1, keepdims=True)
     return probs * (dprobs - correction)
+
+
+def _cache_probs_for_backward(probs, source_dtype):
+    """Store BF16 attention probabilities compactly after FP32 compute.
+
+    Softmax itself stays FP32.  Only the persistent backward cache is reduced
+    to BF16, whose FP32-like exponent range avoids the underflow concern that
+    makes the same transformation unsafe for FP16.
+    """
+    if is_bfloat16_dtype(source_dtype):
+        return probs.astype(source_dtype)
+    return probs
+
+
+def _restore_cached_probs(probs, bf16_attention):
+    """Promote compact BF16 probability caches only for active backward work."""
+    if bf16_attention and probs is not None:
+        return probs.astype("float32")
+    return probs
 
 
 def _default_kv_head_indices(n_q_heads, n_kv_heads):
@@ -449,18 +491,13 @@ def local_window_attention_forward(
     return_cache=True,
     query_chunk_size=None,
 ):
-    """Specialized causal sliding-window attention over contiguous K/V spans.
+    """Specialized causal sliding-window attention with native GQA sharing.
 
-    Unlike :func:`indexed_attention_forward`, this kernel never constructs a
-    per-query ``[Q,K,D]`` gather.  A query chunk ``[q0:q1]`` attends to one
-    contiguous K/V span ``[max(0,q0-window+1):q1]`` and applies a small causal
-    band mask inside the resulting ``[Q,K]`` score matrix.  Backward can then
-    accumulate native K/V gradients into contiguous slices with GEMMs instead
-    of scatter-add.
-
-    This is mathematically identical to ``build_local_causal_plan`` followed
-    by generic indexed attention, but is much better matched to GPU memory and
-    BLAS execution.
+    Query heads are grouped by their native KV head.  Each contiguous K/V
+    span is therefore loaded and converted only once per KV group and CUDA
+    matmul broadcasting shares it across all corresponding query heads.  This
+    preserves the memory/computation advantage of GQA instead of physically
+    repeating the same K/V tensor for every query head.
     """
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
@@ -479,9 +516,11 @@ def local_window_attention_forward(
     if scale is None:
         scale = 1.0 / math.sqrt(d_head)
     scale = float(scale)
-    query_chunk_size = _resolve_query_chunk_size(query_length, query_chunk_size)
+    query_chunk_size = _resolve_local_query_chunk_size(
+        query_length, query_chunk_size
+    )
 
-    kv_map, kv_map_host = _normalize_kv_head_mapping(
+    _kv_map, kv_map_host = _normalize_kv_head_mapping(
         kv_head_indices, n_q_heads, n_kv_heads
     )
     q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,T,D]
@@ -491,25 +530,23 @@ def local_window_attention_forward(
         (batch, n_q_heads, query_length, d_head), dtype=context_dtype
     )
     score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
+
+    # Local heads can be an arbitrary subset of the model's query heads, so
+    # form the small static local-head -> native-KV groups once.
+    q_heads_for_kv = [
+        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
+        for kvh in range(n_kv_heads)
+    ]
+    active_groups = tuple(
+        (kvh, head_group)
+        for kvh, head_group in enumerate(q_heads_for_kv)
+        if head_group
+    )
     chunk_caches = [] if return_cache else None
 
     for q_start, q_end in _query_chunks(query_length, query_chunk_size):
         key_start = max(0, q_start - window + 1)
         key_end = q_end
-        q_chunk = q_heads[:, :, q_start:q_end, :]
-
-        # Select the native GQA head once for the entire contiguous token span;
-        # this is [B,Hq,K,D], not [B,Hq,Q,K,D].
-        k_span = xp.take(k[:, key_start:key_end, :, :], kv_map, axis=2)
-        k_heads = k_span.transpose(0, 2, 1, 3)
-        if bf16_attention:
-            q_score = q_chunk.astype("float32") * scale
-            k_score = k_heads.astype("float32")
-        else:
-            q_score = q_chunk * (scale * score_prescale)
-            k_score = k_heads
-
-        scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
 
         q_positions = xp.arange(q_start, q_end, dtype=xp.int64)[:, None]
         k_positions = xp.arange(key_start, key_end, dtype=xp.int64)[None, :]
@@ -517,31 +554,48 @@ def local_window_attention_forward(
             (k_positions <= q_positions)
             & (k_positions >= (q_positions - window + 1))
         )[None, None, :, :]
-        probs_chunk = _masked_softmax_forward(
-            scores, valid, logit_multiplier=(1.0 / score_prescale)
-        )
+        group_probs = [] if return_cache else None
 
-        del scores, k_score, k_heads, k_span
+        for kvh, head_group in active_groups:
+            q_chunk = q_heads[:, head_group, q_start:q_end, :]
+            # Keep the native K/V head exactly once.  The singleton head axis
+            # broadcasts across all query heads in this GQA group.
+            k_native = k[:, key_start:key_end, kvh, :][:, None, :, :]
+            if bf16_attention:
+                q_score = q_chunk.astype("float32") * scale
+                k_score = k_native.astype("float32")
+            else:
+                q_score = q_chunk * (scale * score_prescale)
+                k_score = k_native
 
-        v_span = xp.take(v[:, key_start:key_end, :, :], kv_map, axis=2)
-        v_heads = v_span.transpose(0, 2, 1, 3)
-        if bf16_attention:
-            probs_compute = probs_chunk
-            v_compute = v_heads.astype("float32")
-        else:
-            probs_compute = (
-                probs_chunk.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_chunk
+            scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+            probs_chunk = _masked_softmax_forward(
+                scores, valid, logit_multiplier=(1.0 / score_prescale)
             )
-            v_compute = v_heads
-        context_heads[:, :, q_start:q_end, :] = xp.matmul(
-            probs_compute, v_compute
-        )
+            del scores, k_score
+
+            v_native = v[:, key_start:key_end, kvh, :][:, None, :, :]
+            if bf16_attention:
+                v_compute = v_native.astype("float32")
+                probs_compute = probs_chunk
+            else:
+                v_compute = v_native
+                probs_compute = (
+                    probs_chunk.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else probs_chunk
+                )
+            context_heads[:, head_group, q_start:q_end, :] = xp.matmul(
+                probs_compute, v_compute
+            )
+            if return_cache:
+                group_probs.append(
+                    (kvh, head_group, _cache_probs_for_backward(probs_chunk, q.dtype))
+                )
 
         if return_cache:
             chunk_caches.append(
-                (q_start, q_end, key_start, key_end, probs_chunk, valid)
+                (q_start, q_end, key_start, key_end, valid, tuple(group_probs))
             )
 
     context = context_heads.transpose(0, 2, 1, 3)
@@ -555,30 +609,28 @@ def local_window_attention_forward(
         "window": window,
         "scale": scale,
         "bf16_attention": bf16_attention,
-        "kv_head_indices": kv_map,
         "kv_head_indices_host": kv_map_host,
+        "active_groups": active_groups,
         "chunks": chunk_caches,
         "query_chunk_size": query_chunk_size,
     }
 
 
 def local_window_attention_backward(dcontext, cache):
-    """Backward for :func:`local_window_attention_forward`.
+    """Backward for GQA-aware contiguous local attention.
 
-    K/V gradients are formed by matrix multiplication and accumulated into
-    contiguous token slices.  This removes the generic indexed kernel's
-    expensive per-query outer products and ``add.at`` scatters.
+    Native K/V tensors are never repeated per query head.  Each GQA query
+    group produces one route-local K/V gradient via batched GEMMs, then the
+    group dimension is reduced before updating the native K/V slice.
     """
     q, k, v = cache["q"], cache["k"], cache["v"]
     if dcontext.shape != q.shape:
         raise ValueError("dcontext must have the same shape as q/context")
 
     batch, query_length, n_q_heads, d_head = q.shape
-    n_kv_heads = k.shape[2]
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
-    kv_map = cache["kv_head_indices"]
-    kv_map_host = cache["kv_head_indices_host"]
+    active_groups = cache["active_groups"]
 
     q_heads = q.transpose(0, 2, 1, 3)
     dcontext_heads = dcontext.transpose(0, 2, 1, 3)
@@ -587,69 +639,65 @@ def local_window_attention_backward(dcontext, cache):
     dk = xp.zeros(k.shape, dtype=grad_dtype)
     dv = xp.zeros(v.shape, dtype=grad_dtype)
 
-    # Resolve the tiny static GQA reduction groups once per backward call.
-    q_heads_for_kv = [
-        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
-        for kvh in range(n_kv_heads)
-    ]
+    for q_start, q_end, key_start, key_end, valid, group_probs in cache["chunks"]:
+        # ``group_probs`` mirrors ``active_groups`` and stores only the
+        # probabilities required for backward.
+        for (kvh, head_group), (cached_kvh, cached_heads, probs_chunk) in zip(
+            active_groups, group_probs
+        ):
+            if kvh != cached_kvh or head_group != cached_heads:
+                raise RuntimeError("local attention GQA cache is inconsistent")
 
-    for q_start, q_end, key_start, key_end, probs_chunk, valid in cache["chunks"]:
-        q_chunk = q_heads[:, :, q_start:q_end, :]
-        dcontext_chunk = dcontext_heads[:, :, q_start:q_end, :]
+            q_chunk = q_heads[:, head_group, q_start:q_end, :]
+            dcontext_chunk = dcontext_heads[:, head_group, q_start:q_end, :]
+            k_native = k[:, key_start:key_end, kvh, :][:, None, :, :]
+            v_native = v[:, key_start:key_end, kvh, :][:, None, :, :]
 
-        v_span = xp.take(v[:, key_start:key_end, :, :], kv_map, axis=2)
-        v_heads = v_span.transpose(0, 2, 1, 3)
-        if bf16_attention:
-            dcontext_compute = dcontext_chunk.astype("float32")
-            q_compute = q_chunk.astype("float32")
-            v_compute = v_heads.astype("float32")
-            probs_compute = probs_chunk
-        else:
-            dcontext_compute = dcontext_chunk
-            q_compute = q_chunk
-            v_compute = v_heads
-            probs_compute = (
-                probs_chunk.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_chunk
-            )
-
-        dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
-        dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-        dscores = _softmax_backward(dprobs, probs_chunk)
-        dscores = xp.where(valid, dscores, 0.0)
-        dscores_compute = (
-            dscores.astype("float32", copy=False)
-            if bf16_attention
-            else (
-                dscores.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else dscores
-            )
-        )
-
-        k_span = xp.take(k[:, key_start:key_end, :, :], kv_map, axis=2)
-        k_heads = k_span.transpose(0, 2, 1, 3)
-        k_compute = k_heads.astype("float32") if bf16_attention else k_heads
-
-        dq_heads[:, :, q_start:q_end, :] = (
-            xp.matmul(dscores_compute, k_compute) * scale
-        )
-        dk_heads = (
-            xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
-        )
-
-        # Query heads may share native GQA K/V heads.  Reduce those few heads
-        # explicitly, then update one contiguous [token] slice per KV head.
-        for kvh, head_group in enumerate(q_heads_for_kv):
-            if not head_group:
-                continue
-            if len(head_group) == 1:
-                dk_native = dk_heads[:, head_group[0], :, :]
-                dv_native = dv_heads[:, head_group[0], :, :]
+            if bf16_attention:
+                dcontext_compute = dcontext_chunk.astype("float32")
+                q_compute = q_chunk.astype("float32")
+                k_compute = k_native.astype("float32")
+                v_compute = v_native.astype("float32")
+                probs_compute = probs_chunk
             else:
-                dk_native = xp.sum(dk_heads[:, head_group, :, :], axis=1)
-                dv_native = xp.sum(dv_heads[:, head_group, :, :], axis=1)
+                dcontext_compute = dcontext_chunk
+                q_compute = q_chunk
+                k_compute = k_native
+                v_compute = v_native
+                probs_compute = (
+                    probs_chunk.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else probs_chunk
+                )
+
+            dprobs = xp.matmul(
+                dcontext_compute, v_compute.swapaxes(-1, -2)
+            )
+            dv_group = xp.matmul(
+                probs_compute.swapaxes(-1, -2), dcontext_compute
+            )
+            dscores = _softmax_backward(dprobs, probs_compute)
+            dscores = xp.where(valid, dscores, 0.0)
+            dscores_compute = (
+                dscores.astype("float32", copy=False)
+                if bf16_attention
+                else (
+                    dscores.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else dscores
+                )
+            )
+
+            dq_heads[:, head_group, q_start:q_end, :] = (
+                xp.matmul(dscores_compute, k_compute) * scale
+            )
+            dk_group = (
+                xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+            )
+
+            # The K/V head is shared by all query heads in the group.
+            dk_native = xp.sum(dk_group, axis=1)
+            dv_native = xp.sum(dv_group, axis=1)
             dk[:, key_start:key_end, kvh, :] += dk_native.astype(
                 grad_dtype, copy=False
             )
@@ -826,7 +874,7 @@ def dilated_attention_forward(
                         key_residue,
                         key_start,
                         key_end,
-                        probs_chunk,
+                        _cache_probs_for_backward(probs_chunk, q.dtype),
                         valid,
                         alignment_shift,
                     )
@@ -909,7 +957,7 @@ def dilated_attention_backward(dcontext, cache):
             dcontext_compute = dcontext_chunk.astype("float32")
             q_compute = q_chunk.astype("float32")
             v_compute = v_heads.astype("float32")
-            probs_compute = probs_chunk
+            probs_compute = _restore_cached_probs(probs_chunk, True)
         else:
             dcontext_compute = dcontext_chunk
             q_compute = q_chunk
@@ -922,7 +970,7 @@ def dilated_attention_backward(dcontext, cache):
 
         dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
         dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-        dscores = _softmax_backward(dprobs, probs_chunk)
+        dscores = _softmax_backward(dprobs, probs_compute)
         dscores = xp.where(valid, dscores, 0.0)
         dscores_compute = (
             dscores.astype("float32", copy=False)
@@ -1160,7 +1208,7 @@ def global_sparse_attention_forward(
         "offset": offset,
         "include_current": include_current,
         "anchors": anchors,
-        "probs": probs,
+        "probs": _cache_probs_for_backward(probs, q.dtype),
         "valid": valid,
         "scale": scale,
         "bf16_attention": bf16_attention,
@@ -1188,6 +1236,7 @@ def global_sparse_attention_backward(dcontext, cache):
     valid = cache["valid"]
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
+    probs_f32 = _restore_cached_probs(probs, bf16_attention)
     kv_map = cache["kv_head_indices"]
     kv_map_host = cache["kv_head_indices_host"]
 
@@ -1225,7 +1274,7 @@ def global_sparse_attention_backward(dcontext, cache):
             xp.sum(dcontext_compute * current_v_compute, axis=-1, keepdims=True)
         )
     dprobs = dprobs_parts[0] if len(dprobs_parts) == 1 else xp.concatenate(dprobs_parts, axis=-1)
-    dscores = _softmax_backward(dprobs, probs)
+    dscores = _softmax_backward(dprobs, probs_f32)
     dscores = xp.where(valid, dscores, 0.0)
     dscores_compute = (
         dscores.astype("float32", copy=False)
@@ -1249,7 +1298,7 @@ def global_sparse_attention_backward(dcontext, cache):
         dq_heads += xp.matmul(ds_anchor, k_compute) * scale
         dk_anchor_heads = xp.matmul(ds_anchor.swapaxes(-1, -2), q_compute) * scale
 
-        probs_anchor = probs[..., :n_anchors]
+        probs_anchor = probs_f32[..., :n_anchors]
         probs_compute = (
             probs_anchor
             if bf16_attention
@@ -1274,7 +1323,7 @@ def global_sparse_attention_backward(dcontext, cache):
         dq_heads += ds_current[..., None] * current_k_compute * scale
         dk_current_heads = ds_current[..., None] * q_compute * scale
 
-        probs_current = probs[..., slot]
+        probs_current = probs_f32[..., slot]
         probs_current_compute = (
             probs_current
             if bf16_attention
@@ -1519,7 +1568,7 @@ def block_retrieval_attention_forward(
         "weight_mode": weight_mode,
         "weight_scale": weight_scale,
         "weight_eps": weight_eps,
-        "probs": probs,
+        "probs": _cache_probs_for_backward(probs, q.dtype),
         "query_positions": query_positions,
         "query_valid": query_valid,
         "key_indices": key_indices,
@@ -1555,6 +1604,7 @@ def block_retrieval_attention_backward(dcontext, cache):
     query_positions = cache["query_positions"]
     query_valid = cache["query_valid"]
     probs = cache["probs"]
+    probs_f32 = _restore_cached_probs(probs, bf16_attention)
 
     grad_dtype = xp.float32 if bf16_attention else q.dtype
     dq = xp.zeros(q.shape, dtype=grad_dtype)
@@ -1578,7 +1628,7 @@ def block_retrieval_attention_backward(dcontext, cache):
         dcontext_compute = dcontext_routes.astype("float32")
         q_compute = q_routes.astype("float32")
         v_compute = v_selected.astype("float32")
-        probs_compute = probs
+        probs_compute = probs_f32
     else:
         dcontext_compute = dcontext_routes
         q_compute = q_routes
@@ -1591,7 +1641,7 @@ def block_retrieval_attention_backward(dcontext, cache):
 
     dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
     dv_selected = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-    dscores = _softmax_backward(dprobs, probs)
+    dscores = _softmax_backward(dprobs, probs_f32)
     dscores = xp.where(valid_q, dscores, 0.0)
     dscores_compute = (
         dscores.astype("float32", copy=False)

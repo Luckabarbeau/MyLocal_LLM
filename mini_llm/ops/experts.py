@@ -101,15 +101,15 @@ class ExpertFFN:
         if not return_cache:
             return y
 
-        # Speed-oriented training cache.  Keeping a and h avoids recomputing
-        # SiLU(g) and a*u during backward.  The routed expert output y is
-        # cached once by Experts.forward() for the router-weight gradient.
+        # Memory-oriented training cache.  ``a = SiLU(g)`` and
+        # ``h = a * u`` are cheap elementwise intermediates and are therefore
+        # recomputed in backward rather than retained for every routed token.
+        # At long context this removes two d_ff-sized BF16 activation caches
+        # per expert assignment without adding any extra GEMM work.
         cache = {
             "x": x,
             "g": g,
             "u": u,
-            "a": a,
-            "h": h,
         }
         
         return y, cache
@@ -128,9 +128,11 @@ class ExpertFFN:
         x = cache["x"]
         g = cache["g"]
         u = cache["u"]
-        a = cache["a"]
-        h = cache["h"]
-        
+        # Recompute the two cheap elementwise forward intermediates instead
+        # of retaining them in the long-lived training cache.
+        a = silu(g)
+        h = a * u
+
         dy_2d = dy.reshape(-1, dy.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
         h_2d = h.reshape(-1, h.shape[-1])

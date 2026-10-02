@@ -86,7 +86,7 @@ class MoE:
         """Get the number of expert forward calls."""
         return self.experts.get_forward_count()
 
-    def forward(self, x):
+    def forward(self, x, return_cache=True):
         """
         Forward pass through the MoE block.
         
@@ -107,14 +107,19 @@ class MoE:
         )
         
         # Experts compute weighted combination
-        y, experts_cache = self.experts.forward(x, weights, expert_indices, routing_plan)
-        
-        cache = {
-            "router_cache": router_cache,
-            "experts_cache": experts_cache,
-        }
-        
-        return y, cache
+        if return_cache:
+            y, experts_cache = self.experts.forward(
+                x, weights, expert_indices, routing_plan
+            )
+            cache = {
+                "router_cache": router_cache,
+                "experts_cache": experts_cache,
+            }
+            return y, cache
+
+        return self.experts.forward(
+            x, weights, expert_indices, routing_plan, return_cache=False
+        )
 
     def backward(self, dy, cache):
         """Backward pass through experts and router.

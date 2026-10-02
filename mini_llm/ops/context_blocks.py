@@ -144,7 +144,10 @@ class HistoryBlockPooler:
         if dpooled.shape != (batch, n_blocks, d_model):
             raise ValueError("dpooled has incompatible shape")
 
-        dx = xp.zeros(x_shape, dtype=dpooled.dtype)
+        grad_dtype = (
+            "float32" if is_low_precision_dtype(dpooled.dtype) else dpooled.dtype
+        )
+        dx = xp.zeros(x_shape, dtype=grad_dtype)
         usable = n_blocks * self.block_size
         if n_blocks == 0:
             return dx
@@ -242,8 +245,11 @@ def scatter_full_resolution_blocks(dgathered, cache):
     if dgathered.shape != expected:
         raise ValueError(f"dgathered shape {dgathered.shape} != expected {expected}")
 
-    dx = xp.zeros(x_shape, dtype=dgathered.dtype)
-    values = dgathered.reshape(batch, -1, width)
+    grad_dtype = (
+        "float32" if is_low_precision_dtype(dgathered.dtype) else dgathered.dtype
+    )
+    dx = xp.zeros(x_shape, dtype=grad_dtype)
+    values = dgathered.reshape(batch, -1, width).astype(grad_dtype, copy=False)
     batch_ids = xp.broadcast_to(xp.arange(batch)[:, None], flat_tokens.shape)
     xp.add.at(dx, (batch_ids, flat_tokens), values)
     return dx

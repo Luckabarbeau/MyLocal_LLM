@@ -163,3 +163,19 @@ def test_decoder_lm_output_proj_gradients():
     
     # Verify gradient is non-zero (at least one element should be non-trivial)
     assert xp.any(out_proj_param.grad != 0), "Output proj gradients should not be all zeros"
+
+
+def test_decoder_lm_forward_without_cache_matches_training_forward():
+    """Forward-only inference must match the ordinary cached forward exactly."""
+    model = make_model()
+    config = model.config
+    token_ids = xp.asarray(
+        np.random.default_rng(19).integers(0, config.vocab_size, size=(1, 6)),
+        dtype="int64",
+    )
+
+    logits_cached, _ = model.forward(token_ids)
+    logits_forward_only = model.forward(token_ids, return_cache=False)
+
+    assert logits_forward_only.shape == logits_cached.shape
+    assert xp.allclose(logits_forward_only, logits_cached, rtol=1e-12, atol=1e-12)

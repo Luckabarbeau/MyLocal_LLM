@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 
 from mini_llm.backend import xp, BACKEND_NAME, synchronize
+from mini_llm.ops.attention import GQAAttention
 from mini_llm.checkpoint import load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
@@ -294,7 +295,9 @@ class TextGenerator:
                 if log_speed:
                     forward_start = time.perf_counter()
                 
-                logits, _ = self.model.forward(input_tensor)
+                # Reference inference intentionally recomputes the full prefix,
+                # but it must not retain training/backward activations.
+                logits = self.model.forward(input_tensor, return_cache=False)
                 
                 if log_speed:
                     forward_end = time.perf_counter()
@@ -315,6 +318,17 @@ class TextGenerator:
                     raise ValueError(f"Unknown strategy: {strategy}")
                 
                 generated_ids.append(next_id)
+
+                # Full-prefix reference decoding visits a new sequence length
+                # every step.  Drop the large logits/prefix tensors and clear
+                # length-dependent attention/RoPE caches before the next pass.
+                # CuPy's pool otherwise keeps many differently-sized blocks
+                # reserved, eventually exhausting VRAM during long generation.
+                del last_logits, logits, input_tensor
+                GQAAttention.clear_caches()
+                if BACKEND_NAME == "cupy":
+                    xp.get_default_memory_pool().free_all_blocks()
+                    xp.get_default_pinned_memory_pool().free_all_blocks()
                 
                 # Stop at EOS
                 if next_id == eos_id:

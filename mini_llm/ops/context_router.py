@@ -175,7 +175,10 @@ class CausalQueryPooler:
         if dpooled.shape != (batch, n_routes, d_model):
             raise ValueError("dpooled has incompatible shape")
 
-        dx = xp.zeros(x_shape, dtype=dpooled.dtype)
+        grad_dtype = (
+            "float32" if is_low_precision_dtype(dpooled.dtype) else dpooled.dtype
+        )
+        dx = xp.zeros(x_shape, dtype=grad_dtype)
         if n_routes == 0:
             return dx
 
@@ -186,7 +189,11 @@ class CausalQueryPooler:
             token_ids = xp.broadcast_to(
                 (route_starts - 1)[None, :], (batch, n_routes)
             )
-            xp.add.at(dx, (batch_ids, token_ids), dpooled)
+            xp.add.at(
+                dx,
+                (batch_ids, token_ids),
+                dpooled.astype(grad_dtype, copy=False),
+            )
             return dx
 
         indices = cache["indices"]
@@ -226,7 +233,11 @@ class CausalQueryPooler:
         ).reshape(batch, -1)
         values = dwindow.reshape(batch, -1, d_model)
         batch_ids = xp.broadcast_to(xp.arange(batch)[:, None], flat_indices.shape)
-        xp.add.at(dx, (batch_ids, flat_indices), values)
+        xp.add.at(
+            dx,
+            (batch_ids, flat_indices),
+            values.astype(grad_dtype, copy=False),
+        )
         return dx
 
 
@@ -333,7 +344,20 @@ class ContextRouter:
             batch, n_routes * self.num_queries, self.router_dim
         )
         history_t = xp.swapaxes(history_proj, 1, 2)
-        scores = (query_3d @ history_t).reshape(
+
+        # CuPy's generic N-D matmul path does not currently understand BF16
+        # (ml_dtypes dtype code ``E``), even though its 2-D BF16 GEMM path is
+        # supported.  Router score tensors are tiny compared with attention
+        # activations, so perform this batched query/history product in FP32
+        # for *all* low-precision model dtypes.  This also keeps Top-K logits
+        # numerically stable and matches the existing MoE routing convention.
+        if is_low_precision_dtype(query_3d.dtype):
+            query_score = query_3d.astype("float32", copy=False)
+            history_score_t = history_t.astype("float32", copy=False)
+        else:
+            query_score = query_3d
+            history_score_t = history_t
+        scores = xp.matmul(query_score, history_score_t).reshape(
             batch, n_routes, self.num_queries, n_blocks
         ) / math.sqrt(self.router_dim)
 

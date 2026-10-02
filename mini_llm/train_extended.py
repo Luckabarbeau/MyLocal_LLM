@@ -685,22 +685,25 @@ class ExtendedTrainer:
             loss, grad_norm = self.train_step()
             losses.append(loss)
             
-            # Validation check (Issue #17: use step % interval, not step + 1)
-            if (self.step + 1) % self.val_interval == 0:
+            # train_step() increments self.step after a successful optimizer
+            # update.  Therefore self.step is already the completed 1-based
+            # optimizer-step count here; adding one would make every periodic
+            # action fire one update early.
+            if self.step % self.val_interval == 0:
                 val_loss = self.compute_val_loss()
                 print(f"  Validation loss: {val_loss:.4f}")
             else:
                 val_loss = None
             
-            # Logging (Issue #17: use step % interval, not step + 1)
-            if (self.step + 1) % log_interval == 0:
+            # Log using the completed optimizer-step count.
+            if self.step % log_interval == 0:
                 avg_loss = np.mean(losses[-log_interval:])
                 elapsed = time.time() - start_time
-                steps_per_sec = (self.step - start_step + 1) / elapsed
+                steps_per_sec = (self.step - start_step) / elapsed
                 lr = self.optimizer.lr
                 
                 print(
-                    f"Step {self.step + 1}/{num_steps + start_step}: "
+                    f"Step {self.step}/{num_steps + start_step}: "
                     f"loss={avg_loss:.4f}, "
                     f"lr={lr:.6f}, "
                     f"grad_norm={grad_norm:.4f}, "
@@ -709,7 +712,7 @@ class ExtendedTrainer:
                 
                 # Log to CSV
                 self._log({
-                    "step": self.step + 1,
+                    "step": self.step,
                     "train_loss": avg_loss,
                     "lr": lr,
                     "grad_norm": grad_norm,
@@ -717,8 +720,8 @@ class ExtendedTrainer:
                     "steps_per_sec": steps_per_sec,
                 })
             
-            # Checkpoint save (Issue #17: use step % interval, not step + 1)
-            if (self.step + 1) % self.save_interval == 0:
+            # Save using the completed optimizer-step count.
+            if self.step % self.save_interval == 0:
                 self.save()
         
         print(f"\nTraining complete!")

@@ -98,7 +98,7 @@ class TransformerBlock:
         for p in self.parameters():
             p.zero_grad()
     
-    def forward(self, x, finite_trace=None, layer_idx=None):
+    def forward(self, x, finite_trace=None, layer_idx=None, return_cache=True):
         """
         Forward pass through the Transformer block.
         
@@ -130,7 +130,11 @@ class TransformerBlock:
             norm1_out.astype(self.compute_dtype, copy=False)
             if self.use_fp32_residual else norm1_out
         )
-        attn_out, attn_cache = self.attention.forward(norm1_compute)
+        if return_cache:
+            attn_out, attn_cache = self.attention.forward(norm1_compute)
+        else:
+            attn_out = self.attention.forward(norm1_compute, return_cache=False)
+            attn_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
 
@@ -154,7 +158,11 @@ class TransformerBlock:
             norm2_out.astype(self.compute_dtype, copy=False)
             if self.use_fp32_residual else norm2_out
         )
-        moe_out, moe_cache = self.moe.forward(norm2_compute)
+        if return_cache:
+            moe_out, moe_cache = self.moe.forward(norm2_compute)
+        else:
+            moe_out = self.moe.forward(norm2_compute, return_cache=False)
+            moe_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.moe", xp.all(xp.isfinite(moe_out))))
 
@@ -166,6 +174,9 @@ class TransformerBlock:
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.output", xp.all(xp.isfinite(y))))
         
+        if not return_cache:
+            return y
+
         cache = {
             "residual1": residual1,
             "norm1_cache": norm1_cache,

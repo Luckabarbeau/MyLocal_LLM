@@ -173,3 +173,46 @@ def test_context_router_accepts_auxiliary_full_score_gradient():
     assert xp.any(dx != 0)
     assert xp.any(router.W_query.grad != 0)
     assert xp.any(router.W_history.grad != 0)
+
+
+def test_context_router_low_precision_scores_are_promoted_to_float32():
+    # The context router uses a batched query/history product. CuPy's generic
+    # N-D matmul does not support BF16, so low-precision router scores must be
+    # computed/stored in FP32 even though selected routing weights are returned
+    # in the model compute dtype.
+    try:
+        import ml_dtypes
+    except ImportError:
+        return
+
+    cfg = _small_config()
+    router = ContextRouter(3, cfg, RandomStream(60), input_std=0.1, dtype="bfloat16")
+    x = xp.asarray(
+        np.random.default_rng(61).normal(size=(1, 24, 3)),
+        dtype=ml_dtypes.bfloat16,
+    )
+    weights, _, _, cache = router.forward(x)
+
+    assert str(np.dtype(cache["scores"].dtype)).lower() == "float32"
+    assert str(np.dtype(weights.dtype)).lower() == "bfloat16"
+
+
+def test_causal_query_pooler_bfloat16_backward_accumulates_in_float32():
+    try:
+        import ml_dtypes
+    except ImportError:
+        return
+
+    pooler = CausalQueryPooler(
+        3, 4, strategy="learned", rng=RandomStream(70), dtype="bfloat16"
+    )
+    x = xp.asarray(
+        np.random.default_rng(71).normal(size=(1, 12, 3)),
+        dtype=ml_dtypes.bfloat16,
+    )
+    starts = xp.asarray([4, 8], dtype=xp.int64)
+    pooled, cache = pooler.forward(x, starts)
+    dx = pooler.backward(xp.ones_like(pooled), cache)
+
+    assert str(np.dtype(dx.dtype)).lower() == "float32"
+    assert np.all(np.isfinite(np.asarray(dx)))

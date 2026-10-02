@@ -213,3 +213,59 @@ def test_manual_block_retrieval_plan_drives_full_resolution_attention():
     assert bool(xp.all(xp.isfinite(dq)))
     assert bool(xp.all(xp.isfinite(dk)))
     assert bool(xp.all(xp.isfinite(dv)))
+
+
+def test_indexed_attention_query_chunking_matches_single_chunk_forward_backward():
+    rng = np.random.default_rng(106)
+    batch, seq_len, n_q_heads, n_kv_heads, d_head = 1, 11, 4, 2, 5
+    q = xp.asarray(rng.normal(size=(batch, seq_len, n_q_heads, d_head)), dtype="float64")
+    k = xp.asarray(rng.normal(size=(batch, seq_len, n_kv_heads, d_head)), dtype="float64")
+    v = xp.asarray(rng.normal(size=(batch, seq_len, n_kv_heads, d_head)), dtype="float64")
+    plan = _causal_full_plan(batch=batch, n_heads=n_q_heads, seq_len=seq_len)
+    kv_map = xp.asarray([0, 0, 1, 1], dtype=xp.int64)
+    coeff = xp.asarray(rng.normal(size=q.shape), dtype="float64")
+
+    out_chunked, cache_chunked = indexed_attention_forward(
+        q,
+        k,
+        v,
+        plan,
+        kv_head_indices=kv_map,
+        query_chunk_size=3,
+    )
+    out_single, cache_single = indexed_attention_forward(
+        q,
+        k,
+        v,
+        plan,
+        kv_head_indices=kv_map,
+        query_chunk_size=seq_len,
+    )
+    np.testing.assert_allclose(
+        np.asarray(out_chunked), np.asarray(out_single), rtol=2e-12, atol=2e-12
+    )
+
+    grads_chunked = indexed_attention_backward(coeff, cache_chunked)
+    grads_single = indexed_attention_backward(coeff, cache_single)
+    for chunked, single in zip(grads_chunked[:3], grads_single[:3]):
+        np.testing.assert_allclose(
+            np.asarray(chunked), np.asarray(single), rtol=2e-12, atol=2e-12
+        )
+
+
+def test_indexed_attention_forward_without_cache_matches_cached_forward():
+    rng = np.random.default_rng(1234)
+    q = xp.asarray(rng.normal(size=(1, 9, 2, 4)), dtype="float64")
+    k = xp.asarray(rng.normal(size=(1, 9, 1, 4)), dtype="float64")
+    v = xp.asarray(rng.normal(size=(1, 9, 1, 4)), dtype="float64")
+    plan = _causal_full_plan(1, 1, 9)
+    kv_heads = xp.asarray([0, 0], dtype=xp.int64)
+
+    cached, _ = indexed_attention_forward(
+        q, k, v, plan, kv_head_indices=kv_heads, return_cache=True
+    )
+    forward_only = indexed_attention_forward(
+        q, k, v, plan, kv_head_indices=kv_heads, return_cache=False
+    )
+
+    assert xp.allclose(forward_only, cached, rtol=1e-12, atol=1e-12)

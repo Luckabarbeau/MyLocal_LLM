@@ -79,3 +79,25 @@ def test_gather_and_scatter_add_with_repeated_blocks():
     # Block 2 appears once in the first route and twice in the second route.
     expected[:, 6:9, :] += 3
     np.testing.assert_array_equal(np.asarray(dx), expected)
+
+
+def test_bfloat16_block_backward_and_scatter_accumulate_in_float32():
+    try:
+        import ml_dtypes
+    except ImportError:
+        return
+
+    x = xp.asarray(
+        np.random.default_rng(80).normal(size=(1, 8, 3)),
+        dtype=ml_dtypes.bfloat16,
+    )
+    pooler = HistoryBlockPooler(3, 4, strategy="mean")
+    pooled, pool_cache = pooler.forward(x)
+    dx_pool = pooler.backward(xp.ones_like(pooled), pool_cache)
+    assert str(np.dtype(dx_pool.dtype)).lower() == "float32"
+
+    selected = xp.asarray([[[0, 1]]], dtype=xp.int64)
+    gathered, gather_cache = gather_full_resolution_blocks(x, selected, block_size=4)
+    dx_gather = scatter_full_resolution_blocks(xp.ones_like(gathered), gather_cache)
+    assert str(np.dtype(dx_gather.dtype)).lower() == "float32"
+    np.testing.assert_allclose(np.asarray(dx_gather), 1.0, rtol=0, atol=0)

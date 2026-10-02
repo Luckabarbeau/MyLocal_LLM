@@ -183,3 +183,22 @@ def test_experts_multiple_selections():
     
     # All outputs should be from expert 0
     assert y.shape == x.shape
+
+
+def test_experts_forward_without_cache_matches_cached_forward():
+    experts = make_experts()
+    x = xp.asarray(np.random.default_rng(22).normal(size=(1, 4, 4)), dtype="float64")
+    weights = xp.asarray(
+        [[[0.7, 0.3], [0.4, 0.6], [0.8, 0.2], [0.5, 0.5]]],
+        dtype="float64",
+    )
+    expert_indices = xp.asarray(
+        [[[0, 1], [1, 2], [2, 0], [0, 2]]], dtype=xp.int64
+    )
+
+    y_cached, _ = experts.forward(x, weights, expert_indices)
+    y_forward_only = experts.forward(
+        x, weights, expert_indices, return_cache=False
+    )
+
+    assert xp.allclose(y_forward_only, y_cached, rtol=1e-12, atol=1e-12)

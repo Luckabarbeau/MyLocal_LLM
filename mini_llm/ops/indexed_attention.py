@@ -7,9 +7,41 @@ patterns equally; only the key-visibility provider changes.
 """
 
 import math
+import os
 
 from ..backend import xp, is_bfloat16_dtype, is_low_precision_dtype
 from .attention_selection import KeySelectionPlan
+
+
+_DEFAULT_QUERY_CHUNK_SIZE = 128
+
+
+def _resolve_query_chunk_size(query_length, query_chunk_size=None):
+    """Resolve bounded query chunking for the indexed attention hot path.
+
+    ``KeySelectionPlan`` can expose thousands of keys per query. Gathering all
+    selected K/V vectors for a full long sequence would create a
+    ``[B,H,T,K,D]`` tensor, which is far larger than the actual attention
+    probability matrix. Chunking only the query axis keeps the mathematical
+    result unchanged while bounding those transient gather/product buffers.
+
+    The environment override is intentionally a runtime knob so GPU-memory
+    experiments do not require changing model/checkpoint configuration.
+    """
+    if query_chunk_size is None:
+        raw = os.environ.get("MINI_LLM_INDEXED_ATTN_QUERY_CHUNK")
+        query_chunk_size = (
+            _DEFAULT_QUERY_CHUNK_SIZE if raw is None else int(raw)
+        )
+    query_chunk_size = int(query_chunk_size)
+    if query_chunk_size <= 0:
+        raise ValueError("query_chunk_size must be positive")
+    return min(int(query_length), query_chunk_size)
+
+
+def _query_chunks(query_length, query_chunk_size):
+    for start in range(0, int(query_length), int(query_chunk_size)):
+        yield start, min(start + int(query_chunk_size), int(query_length))
 
 
 def _masked_softmax_forward(scores, valid_mask, logit_multiplier=1.0):
@@ -57,8 +89,16 @@ def indexed_attention_forward(
     kv_head_indices=None,
     scale=None,
     return_cache=True,
+    query_chunk_size=None,
 ):
     """Attend over exact selected keys while retaining native GQA K/V storage.
+
+    The query dimension is evaluated in bounded chunks.  This is essential for
+    long sparse contexts: materializing all selected K/V vectors at once would
+    require ``O(B * Hq * Tq * Kvisible * Dh)`` temporary memory even though
+    the persistent attention probabilities only require
+    ``O(B * Hq * Tq * Kvisible)``.  Chunking changes neither the selected keys
+    nor the softmax mathematics.
 
     Args:
         q: ``(B,Tq,Hq,Dh)`` query tensor, normally after RoPE.
@@ -68,6 +108,9 @@ def indexed_attention_forward(
             source KV head.  This is important for heterogeneous subsets of
             query heads; when omitted, standard contiguous GQA grouping is used.
         scale: Optional score scale.  Defaults to ``1/sqrt(Dh)``.
+        query_chunk_size: Maximum number of query positions processed at once.
+            Defaults to 128 and can be overridden at runtime with
+            ``MINI_LLM_INDEXED_ATTN_QUERY_CHUNK``.
 
     Returns:
         context: ``(B,Tq,Hq,Dh)``.
@@ -112,50 +155,86 @@ def indexed_attention_forward(
     else:
         logit_bias = plan.logit_bias
 
-    q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,Tq,Dh]
-    batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
-    kv_ids = kv_head_indices[None, :, None, None]
-    k_selected = k[batch_ids, key_indices, kv_ids, :]
-    v_selected = v[batch_ids, key_indices, kv_ids, :]
-
     if scale is None:
         scale = 1.0 / math.sqrt(d_head)
     scale = float(scale)
-
-    # Match the dense attention numerical policy.  FP16 pre-scales the score
-    # product to avoid overflow; BF16 indexed products use FP32 because CuPy's
-    # generic BF16 batched operations are not consistently supported.
-    score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
-    bf16_attention = is_bfloat16_dtype(q.dtype)
-    if bf16_attention:
-        q_score = q_heads.astype("float32") * scale
-        k_score = k_selected.astype("float32")
-    else:
-        q_score = q_heads * (scale * score_prescale)
-        k_score = k_selected
-
-    scores = xp.sum(q_score[..., None, :] * k_score, axis=-1)
-    if logit_bias is not None:
-        # ``scores`` is pre-scaled only on FP16.  Bias must be pre-scaled by
-        # the same amount because softmax restores the original temperature.
-        scores = scores + logit_bias.astype(scores.dtype, copy=False) * score_prescale
-
-    probs = _masked_softmax_forward(
-        scores, valid_mask, logit_multiplier=(1.0 / score_prescale)
+    query_chunk_size = _resolve_query_chunk_size(
+        query_length, query_chunk_size
     )
 
-    if bf16_attention:
-        probs_compute = probs
-        v_compute = v_selected.astype("float32")
-    else:
-        probs_compute = (
-            probs.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else probs
-        )
-        v_compute = v_selected
+    q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,Tq,Dh]
+    batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
+    kv_ids = kv_head_indices[None, :, None, None]
 
-    context_heads = xp.sum(probs_compute[..., None] * v_compute, axis=-2)
+    # Match the dense attention numerical policy. FP16 pre-scales the score
+    # product to avoid overflow; BF16 indexed products run in FP32 because
+    # generic CuPy BF16 batched operations are not consistently supported.
+    score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
+    bf16_attention = is_bfloat16_dtype(q.dtype)
+    probs_dtype = (
+        xp.float32 if is_low_precision_dtype(q.dtype) else q.dtype
+    )
+    context_dtype = xp.float32 if bf16_attention else q.dtype
+    probs = (
+        xp.empty(key_indices.shape, dtype=probs_dtype) if return_cache else None
+    )
+    context_heads = xp.empty(
+        (batch, n_q_heads, query_length, d_head), dtype=context_dtype
+    )
+
+    for q_start, q_end in _query_chunks(query_length, query_chunk_size):
+        chunk_indices = key_indices[:, :, q_start:q_end, :]
+        chunk_valid = valid_mask[:, :, q_start:q_end, :]
+        q_chunk = q_heads[:, :, q_start:q_end, :]
+
+        # Gather only this query chunk.  For the 4k medium preset this changes
+        # the largest local-head BF16 gather from [1,4,4096,1024,64] to
+        # [1,4,chunk,1024,64].
+        k_selected = k[batch_ids, chunk_indices, kv_ids, :]
+        if bf16_attention:
+            q_score = q_chunk.astype("float32") * scale
+            k_score = k_selected.astype("float32")
+        else:
+            q_score = q_chunk * (scale * score_prescale)
+            k_score = k_selected
+
+        # Batched [1,D] @ [D,K] avoids materializing the old
+        # q[...,None,:] * k_selected [B,H,Q,K,D] product.
+        scores = xp.matmul(
+            q_score[..., None, :], k_score.swapaxes(-1, -2)
+        )[..., 0, :]
+        if logit_bias is not None:
+            chunk_bias = logit_bias[:, :, q_start:q_end, :]
+            scores = scores + (
+                chunk_bias.astype(scores.dtype, copy=False) * score_prescale
+            )
+
+        probs_chunk = _masked_softmax_forward(
+            scores, chunk_valid, logit_multiplier=(1.0 / score_prescale)
+        )
+        if return_cache:
+            probs[:, :, q_start:q_end, :] = probs_chunk
+
+        # K is no longer needed for the forward chunk. Release references before
+        # gathering V so peak memory is bounded by one selected-value tensor.
+        del scores, k_score, k_selected
+
+        v_selected = v[batch_ids, chunk_indices, kv_ids, :]
+        if bf16_attention:
+            probs_compute = probs_chunk
+            v_compute = v_selected.astype("float32")
+        else:
+            probs_compute = (
+                probs_chunk.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_chunk
+            )
+            v_compute = v_selected
+
+        context_heads[:, :, q_start:q_end, :] = xp.matmul(
+            probs_compute[..., None, :], v_compute
+        )[..., 0, :]
+
     context = context_heads.transpose(0, 2, 1, 3)
 
     if not return_cache:
@@ -172,21 +251,23 @@ def indexed_attention_forward(
         "scale": scale,
         "bf16_attention": bf16_attention,
         "has_logit_bias": logit_bias is not None,
+        "query_chunk_size": query_chunk_size,
     }
     return context, cache
 
-
 def indexed_attention_backward(dcontext, cache):
-    """Explicit backward for :func:`indexed_attention_forward`.
+    """Explicit chunked backward for :func:`indexed_attention_forward`.
 
     Repeated token selections and shared GQA K/V heads are accumulated with
-    scatter-add, so overlapping/manual retrieval plans are handled correctly.
+    scatter-add.  As in forward, selected K/V tensors are reconstructed only
+    for a bounded query chunk so backward does not recreate a full
+    ``[B,H,T,K,D]`` temporary.
 
     Returns:
         ``dq, dk, dv, dlogit_bias``.  ``dlogit_bias`` is ``None`` when no bias
-        was supplied in the forward plan.  It has the *expanded* per-query-head
-        shape used by the kernel; callers that broadcast one bias across heads
-        should sum that gradient over the broadcasted head dimension.
+        was supplied in forward.  It has the expanded per-query-head shape used
+        by the kernel; callers that broadcast one bias across heads should sum
+        that gradient over the broadcasted head dimension.
     """
     q, k, v = cache["q"], cache["k"], cache["v"]
     key_indices = cache["key_indices"]
@@ -195,6 +276,9 @@ def indexed_attention_backward(dcontext, cache):
     probs = cache["probs"]
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
+    query_chunk_size = cache.get(
+        "query_chunk_size", _resolve_query_chunk_size(q.shape[1])
+    )
 
     if dcontext.shape != q.shape:
         raise ValueError("dcontext must have the same shape as q/context")
@@ -205,56 +289,95 @@ def indexed_attention_backward(dcontext, cache):
 
     batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
     kv_ids = kv_head_indices[None, :, None, None]
-    k_selected = k[batch_ids, key_indices, kv_ids, :]
-    v_selected = v[batch_ids, key_indices, kv_ids, :]
+    grad_dtype = xp.float32 if bf16_attention else q.dtype
+    dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
+    dk = xp.zeros(k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.shape, dtype=grad_dtype)
+    dlogit_bias = (
+        xp.zeros(probs.shape, dtype=probs.dtype)
+        if cache["has_logit_bias"]
+        else None
+    )
 
-    if bf16_attention:
-        dcontext_compute = dcontext_heads.astype("float32")
-        q_compute = q_heads.astype("float32")
-        k_compute = k_selected.astype("float32")
-        v_compute = v_selected.astype("float32")
-        probs_compute = probs
-    else:
-        dcontext_compute = dcontext_heads
-        q_compute = q_heads
-        k_compute = k_selected
-        v_compute = v_selected
-        probs_compute = (
-            probs.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else probs
+    for q_start, q_end in _query_chunks(query_length, query_chunk_size):
+        chunk_indices = key_indices[:, :, q_start:q_end, :]
+        chunk_valid = valid_mask[:, :, q_start:q_end, :]
+        probs_chunk = probs[:, :, q_start:q_end, :]
+        q_chunk = q_heads[:, :, q_start:q_end, :]
+        dcontext_chunk = dcontext_heads[:, :, q_start:q_end, :]
+
+        if bf16_attention:
+            dcontext_compute = dcontext_chunk.astype("float32")
+            q_compute = q_chunk.astype("float32")
+            probs_compute = probs_chunk
+        else:
+            dcontext_compute = dcontext_chunk
+            q_compute = q_chunk
+            probs_compute = (
+                probs_chunk.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs_chunk
+            )
+
+        # V branch: dP and dV. Gather and release V before K is gathered so the
+        # two largest selected-value buffers do not coexist.
+        v_selected = v[batch_ids, chunk_indices, kv_ids, :]
+        v_compute = (
+            v_selected.astype("float32") if bf16_attention else v_selected
+        )
+        dprobs = xp.matmul(
+            dcontext_compute[..., None, :], v_compute.swapaxes(-1, -2)
+        )[..., 0, :]
+        dv_selected = (
+            probs_compute[..., None] * dcontext_compute[..., None, :]
         )
 
-    dprobs = xp.sum(dcontext_compute[..., None, :] * v_compute, axis=-1)
-    dv_selected = probs_compute[..., None] * dcontext_compute[..., None, :]
+        scatter_batch = xp.broadcast_to(batch_ids, chunk_indices.shape)
+        scatter_kv = xp.broadcast_to(kv_ids, chunk_indices.shape)
+        xp.add.at(
+            dv,
+            (scatter_batch, chunk_indices, scatter_kv),
+            dv_selected.astype(grad_dtype, copy=False),
+        )
+        del v_compute, v_selected, dv_selected
 
-    # probs is zero at every invalid key, hence the softmax Jacobian also gives
-    # exactly zero score gradient there (including completely empty rows).
-    dscores = _softmax_backward(dprobs, probs)
-    dscores = xp.where(valid_mask, dscores, 0.0)
+        # probs is zero at every invalid key, so the softmax Jacobian gives an
+        # exactly zero score gradient there (including completely empty rows).
+        dscores = _softmax_backward(dprobs, probs_chunk)
+        dscores = xp.where(chunk_valid, dscores, 0.0)
+        if dlogit_bias is not None:
+            dlogit_bias[:, :, q_start:q_end, :] = dscores
 
-    if bf16_attention:
-        dscores_compute = dscores.astype("float32", copy=False)
-    else:
         dscores_compute = (
-            dscores.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else dscores
+            dscores.astype("float32", copy=False)
+            if bf16_attention
+            else (
+                dscores.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else dscores
+            )
         )
 
-    dq_heads = xp.sum(
-        dscores_compute[..., None] * k_compute, axis=-2
-    ) * scale
-    dk_selected = dscores_compute[..., None] * q_compute[..., None, :] * scale
-
-    # Scatter selected K/V gradients back to native [B,Tk,Hkv,Dh] storage.
-    dk = xp.zeros(k.shape, dtype=dk_selected.dtype)
-    dv = xp.zeros(v.shape, dtype=dv_selected.dtype)
-    scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
-    scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
-    xp.add.at(dk, (scatter_batch, key_indices, scatter_kv), dk_selected)
-    xp.add.at(dv, (scatter_batch, key_indices, scatter_kv), dv_selected)
+        # K/Q branch.  The Q gradient is another batched [1,K] @ [K,D]
+        # product; only dK requires an explicit outer-product tensor, and that
+        # tensor is bounded by the query chunk.
+        k_selected = k[batch_ids, chunk_indices, kv_ids, :]
+        k_compute = (
+            k_selected.astype("float32") if bf16_attention else k_selected
+        )
+        dq_heads[:, :, q_start:q_end, :] = (
+            xp.matmul(dscores_compute[..., None, :], k_compute)[..., 0, :]
+            * scale
+        )
+        dk_selected = (
+            dscores_compute[..., None] * q_compute[..., None, :] * scale
+        )
+        xp.add.at(
+            dk,
+            (scatter_batch, chunk_indices, scatter_kv),
+            dk_selected.astype(grad_dtype, copy=False),
+        )
 
     dq = dq_heads.transpose(0, 2, 1, 3)
-    dlogit_bias = dscores if cache["has_logit_bias"] else None
     return dq, dk, dv, dlogit_bias
+

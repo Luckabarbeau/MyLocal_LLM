@@ -72,7 +72,7 @@ class ExpertFFN:
 
     _forward_call_count = 0  # Class-level counter for profiling
 
-    def forward(self, x):
+    def forward(self, x, return_cache=True):
         """
         Forward pass through the expert.
         
@@ -98,6 +98,9 @@ class ExpertFFN:
         h = a * u
         y = h @ self.W_down.data
         
+        if not return_cache:
+            return y
+
         # Speed-oriented training cache.  Keeping a and h avoids recomputing
         # SiLU(g) and a*u during backward.  The routed expert output y is
         # cached once by Experts.forward() for the router-weight gradient.
@@ -212,7 +215,7 @@ class Experts:
         # The counter is shared across all instances via class variable
         return ExpertFFN.get_forward_count()
 
-    def forward(self, x, weights, expert_indices, routing_plan: RoutingPlan = None, n_experts: int = None):
+    def forward(self, x, weights, expert_indices, routing_plan: RoutingPlan = None, n_experts: int = None, return_cache=True):
         """
         Forward pass through experts with true sparse token-to-expert dispatch.
         
@@ -266,16 +269,20 @@ class Experts:
                 # Gather tokens: [n_assigned, D]
                 expert_x = x_flat[token_indices]
                 
-                # Forward through this expert
-                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
-                
-                # Cache the outputs and cache for later use in backward
-                expert_outputs[exp_idx] = {
-                    "outputs": expert_out,
-                    "token_indices": token_indices,
-                    "weights": expert_weights,
-                }
-                expert_caches[exp_idx] = expert_cache
+                # Forward through this expert.  Reference inference does not
+                # retain activations or routed outputs needed only by backward.
+                if return_cache:
+                    expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+                    expert_outputs[exp_idx] = {
+                        "outputs": expert_out,
+                        "token_indices": token_indices,
+                        "weights": expert_weights,
+                    }
+                    expert_caches[exp_idx] = expert_cache
+                else:
+                    expert_out = self.experts[exp_idx].forward(
+                        expert_x, return_cache=False
+                    )
                 
                 # Weight and accumulate to output.  token_indices are unique
                 # within a single expert because top-k cannot select the same
@@ -286,6 +293,9 @@ class Experts:
         # Reshape: [N, D] -> [B, T, D]
         y = y_flat.reshape(batch_size, seq_len, d_model)
         
+        if not return_cache:
+            return y
+
         # Store cache for backward - includes expert outputs to avoid recomputation
         cache = {
             "x": x,

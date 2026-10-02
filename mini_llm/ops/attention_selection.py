@@ -330,7 +330,13 @@ def weighted_block_retrieval_bias_backward(dlogit_bias, cache):
         token_has_route[None, None, :, None], contributions, 0.0
     )
 
-    dweights = xp.zeros(weights.shape, dtype=contributions.dtype)
+    scatter_dtype = (
+        "float32"
+        if is_low_precision_dtype(contributions.dtype)
+        else contributions.dtype
+    )
+    dweights = xp.zeros(weights.shape, dtype=scatter_dtype)
+    contributions = contributions.astype(scatter_dtype, copy=False)
     if n_routes:
         b_ids = xp.broadcast_to(
             xp.arange(batch, dtype=xp.int64)[:, None, None, None],

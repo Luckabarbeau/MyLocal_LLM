@@ -375,3 +375,66 @@ class TestExtendedTrainerMixedSources:
             assert trainer.source_weights["a"] == pytest.approx(0.7)
             assert trainer.source_weights["b"] == pytest.approx(0.3)
             assert trainer.shard_cache_size >= 2
+
+class TestExtendedTrainerStepAccounting:
+    """Regression tests for completed optimizer-step numbering."""
+
+    def test_train_uses_completed_step_for_logging_validation_and_save(self, capsys):
+        model = make_model()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            train_shard = root / "train_shard_00000.bin"
+            val_shard = root / "val_shard_00000.bin"
+            create_dummy_shard(train_shard, num_tokens=1024)
+            create_dummy_shard(val_shard, num_tokens=1024)
+            log_file = root / "train.csv"
+
+            trainer = ExtendedTrainer(
+                model=model,
+                train_shard_paths=[str(train_shard)],
+                val_shard_paths=[str(val_shard)],
+                batch_size=1,
+                seq_length=16,
+                total_steps=10,
+                warmup_steps=2,
+                log_file=str(log_file),
+                val_interval=5,
+                val_steps=1,
+                save_interval=10,
+                rng_seed=42,
+            )
+
+            validation_steps = []
+            save_steps = []
+
+            def fake_train_step():
+                trainer.step += 1
+                trainer.optimizer.lr = 1.0e-4
+                return float(trainer.step), 1.0
+
+            def fake_compute_val_loss():
+                validation_steps.append(trainer.step)
+                return 1.25
+
+            def fake_save():
+                save_steps.append(trainer.step)
+
+            trainer.train_step = fake_train_step
+            trainer.compute_val_loss = fake_compute_val_loss
+            trainer.save = fake_save
+
+            losses = trainer.train(num_steps=10, log_interval=1)
+
+            assert len(losses) == 10
+            assert trainer.step == 10
+            assert validation_steps == [5, 10]
+            assert save_steps == [10]
+
+            output = capsys.readouterr().out
+            assert "Step 10/10" in output
+            assert "Step 11/10" not in output
+
+            rows = log_file.read_text().strip().splitlines()
+            logged_steps = [int(row.split(",", 1)[0]) for row in rows[1:]]
+            assert logged_steps == list(range(1, 11))

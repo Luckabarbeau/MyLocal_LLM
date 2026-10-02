@@ -196,3 +196,13 @@ def test_moe_parameters_count():
     # Experts: 3 experts * 3 parameters each (W_gate, W_up, W_down) = 9
     # Total: 2 + 9 = 11
     assert len(params) == 11, f"Expected 11 parameters, got {len(params)}"
+
+
+def test_moe_forward_without_cache_matches_cached_forward():
+    moe = make_moe()
+    x = xp.asarray(np.random.default_rng(21).normal(size=(1, 5, 4)), dtype="float64")
+
+    y_cached, _ = moe.forward(x)
+    y_forward_only = moe.forward(x, return_cache=False)
+
+    assert xp.allclose(y_forward_only, y_cached, rtol=1e-12, atol=1e-12)

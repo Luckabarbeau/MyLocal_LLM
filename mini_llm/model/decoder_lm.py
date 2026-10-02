@@ -106,7 +106,7 @@ class DecoderLanguageModel:
         for p in self.parameters():
             p.zero_grad()
     
-    def forward(self, token_ids, finite_trace=None):
+    def forward(self, token_ids, finite_trace=None, return_cache=True):
         """
         Forward pass through the model.
         
@@ -124,11 +124,20 @@ class DecoderLanguageModel:
         if finite_trace is not None:
             finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
         
-        # Pass through transformer blocks - collect caches
-        block_caches = []
+        # Pass through transformer blocks.  Reference inference can disable
+        # backward caches so long full-prefix generation does not retain the
+        # training activations for every layer.
+        block_caches = [] if return_cache else None
         for i, block in enumerate(self.blocks):
-            x, cache = block.forward(x, finite_trace=finite_trace, layer_idx=i)
-            block_caches.append(cache)
+            if return_cache:
+                x, cache = block.forward(
+                    x, finite_trace=finite_trace, layer_idx=i
+                )
+                block_caches.append(cache)
+            else:
+                x = block.forward(
+                    x, finite_trace=finite_trace, layer_idx=i, return_cache=False
+                )
         
         # Final normalization - unpack output and cache.  FP16 models keep the
         # transformer residual stream in FP32, but the large output projection
@@ -147,6 +156,9 @@ class DecoderLanguageModel:
         if finite_trace is not None:
             finite_trace.append(("logits", xp.all(xp.isfinite(logits))))
         
+        if not return_cache:
+            return logits
+
         cache = {
             "token_ids": token_ids,
             "embedding_input": output_proj_input,  # Input to logits projection

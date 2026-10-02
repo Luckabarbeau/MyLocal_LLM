@@ -352,3 +352,36 @@ def weighted_block_retrieval_bias_backward(dlogit_bias, cache):
     if cache["router_had_head_axis"]:
         return dweights
     return dweights[:, :, 0, :]
+
+
+def build_local_causal_plan(batch_size, seq_len, window):
+    """Build a shared exact causal sliding-window key plan.
+
+    The plan has one topology head and is broadcast across whichever query-head
+    subset consumes it. Query token ``t`` may see
+    ``max(0, t-window+1) ... t``. The effective key-slot count is clipped to
+    ``seq_len`` so asking for a window larger than the sequence does not create
+    unnecessary padding.
+    """
+    batch_size = int(batch_size)
+    seq_len = int(seq_len)
+    window = int(window)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if seq_len <= 0:
+        raise ValueError("seq_len must be positive")
+    if window <= 0:
+        raise ValueError("window must be positive")
+
+    key_slots = min(window, seq_len)
+    queries = xp.arange(seq_len, dtype=xp.int64)[:, None]
+    offsets = xp.arange(key_slots, dtype=xp.int64)[None, :]
+    raw = queries - (key_slots - 1) + offsets
+    valid = raw >= 0
+    indices = xp.maximum(raw, 0)
+
+    indices = xp.broadcast_to(
+        indices[None, None, :, :], (batch_size, 1, seq_len, key_slots)
+    ).copy()
+    valid = xp.broadcast_to(valid[None, None, :, :], indices.shape).copy()
+    return KeySelectionPlan(indices, valid)

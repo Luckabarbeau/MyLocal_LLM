@@ -477,7 +477,7 @@ def main():
             config_path = Path(args.checkpoint_dir) / "config.json"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, "w") as f:
-                json.dump(vars(config), f, indent=2)
+                json.dump(dataclasses.asdict(config), f, indent=2)
     
     # Adjust context length in config if needed
     if config.context_length != args.context_length:

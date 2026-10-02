@@ -1,6 +1,15 @@
 from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
+from .attention_selection import build_local_causal_plan
+from .indexed_attention import indexed_attention_forward, indexed_attention_backward
+from .retrieval_attention import ContextRetrievalAttention
+from ..config import (
+    AttentionLayerConfig,
+    DenseAttentionConfig,
+    LocalAttentionConfig,
+    RetrievalAttentionConfig,
+)
 
 
 def softmax_forward(x, axis=-1, logit_multiplier=1.0):
@@ -38,7 +47,7 @@ class GQAAttention:
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
         input_std, output_std, rng, rope_base=10_000.0,
-        name="attention", dtype="float32"
+        name="attention", dtype="float32", attention_config=None
     ):
         if n_q_heads * d_head != d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
@@ -53,6 +62,13 @@ class GQAAttention:
         self.scale = 1.0 / (d_head ** 0.5)
         self.rope_base = float(rope_base)
         self.dtype = dtype
+        if attention_config is not None and not isinstance(
+            attention_config, AttentionLayerConfig
+        ):
+            raise TypeError("attention_config must be an AttentionLayerConfig or None")
+        self.attention_config = attention_config
+        self._static_head_groups = []
+        self._retrieval_groups = []
 
         self.Wq = matrix_parameter(
             (d_model, n_q_heads * d_head), input_std, rng, f"{name}.Wq", dtype=dtype
@@ -67,8 +83,77 @@ class GQAAttention:
             (n_q_heads * d_head, d_model), output_std, rng, f"{name}.Wo", dtype=dtype
         )
 
+        if self.attention_config is not None:
+            if len(self.attention_config.heads) != self.n_q_heads:
+                raise ValueError(
+                    "attention_config must define exactly one topology per query head"
+                )
+            self._configure_attention_patterns(
+                self.attention_config, rng, input_std, name, dtype
+            )
+
     def parameters(self):
-        return [self.Wq, self.Wk, self.Wv, self.Wo]
+        params = [self.Wq, self.Wk, self.Wv, self.Wo]
+        for group in self._retrieval_groups:
+            params.extend(group["module"].parameters())
+        return params
+
+    def _configure_attention_patterns(self, attention_config, rng, input_std, name, dtype):
+        static_groups = {}
+        retrieval_groups = {}
+
+        for head_index, head_config in enumerate(attention_config.heads):
+            if isinstance(head_config, DenseAttentionConfig):
+                static_groups.setdefault(("dense", None), []).append(head_index)
+            elif isinstance(head_config, LocalAttentionConfig):
+                static_groups.setdefault(("local", int(head_config.window)), []).append(
+                    head_index
+                )
+            elif isinstance(head_config, RetrievalAttentionConfig):
+                group = retrieval_groups.setdefault(
+                    head_config.group,
+                    {"head_indices": [], "config": head_config.context_router},
+                )
+                if group["config"] != head_config.context_router:
+                    raise ValueError(
+                        f"retrieval group {head_config.group!r} must share one "
+                        "ContextRouterConfig"
+                    )
+                group["head_indices"].append(head_index)
+            else:
+                raise TypeError(
+                    f"unsupported attention head config: {type(head_config).__name__}"
+                )
+
+        self._static_head_groups = [
+            {"kind": kind, "window": window, "head_indices": tuple(indices)}
+            for (kind, window), indices in static_groups.items()
+        ]
+
+        self._retrieval_groups = []
+        for group_name, group in retrieval_groups.items():
+            head_indices = tuple(group["head_indices"])
+            router_config = group["config"]
+            if router_config.num_queries not in {1, len(head_indices)}:
+                raise ValueError(
+                    f"retrieval group {group_name!r} requires num_queries=1 or "
+                    f"num_queries={len(head_indices)}"
+                )
+            module = ContextRetrievalAttention(
+                d_model=self.d_model,
+                config=router_config,
+                rng=rng,
+                input_std=input_std,
+                name=f"{name}.retrieval.{group_name}",
+                dtype=dtype,
+            )
+            self._retrieval_groups.append(
+                {
+                    "name": group_name,
+                    "head_indices": head_indices,
+                    "module": module,
+                }
+            )
 
     def zero_grad(self):
         for p in self.parameters():
@@ -100,6 +185,140 @@ class GQAAttention:
             )
         return self._causal_mask_cache[t]
 
+    def _mixed_context_forward(self, x, q, k, v, return_cache):
+        b, t, _, _ = q.shape
+        context_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+        context = xp.zeros(q.shape, dtype=context_dtype)
+        group_caches = []
+        routing = {}
+
+        for group in self._static_head_groups:
+            head_indices = group["head_indices"]
+            q_subset = q[:, :, head_indices, :]
+            window = t if group["kind"] == "dense" else group["window"]
+            plan = build_local_causal_plan(b, t, window)
+            kv_head_indices = xp.asarray(
+                head_indices, dtype=xp.int64
+            ) // self.group_size
+            if return_cache:
+                subset, subset_cache = indexed_attention_forward(
+                    q_subset,
+                    k,
+                    v,
+                    plan,
+                    kv_head_indices=kv_head_indices,
+                    scale=self.scale,
+                    return_cache=True,
+                )
+                group_caches.append(
+                    {
+                        "kind": "indexed",
+                        "head_indices": head_indices,
+                        "cache": subset_cache,
+                    }
+                )
+            else:
+                subset = indexed_attention_forward(
+                    q_subset,
+                    k,
+                    v,
+                    plan,
+                    kv_head_indices=kv_head_indices,
+                    scale=self.scale,
+                    return_cache=False,
+                )
+            context[:, :, head_indices, :] = subset
+
+        for group in self._retrieval_groups:
+            head_indices = group["head_indices"]
+            q_subset = q[:, :, head_indices, :]
+            kv_head_indices = xp.asarray(
+                head_indices, dtype=xp.int64
+            ) // self.group_size
+            if return_cache:
+                subset, group_routing, subset_cache = group["module"].forward(
+                    x,
+                    q_subset,
+                    k,
+                    v,
+                    kv_head_indices=kv_head_indices,
+                    return_cache=True,
+                )
+                group_caches.append(
+                    {
+                        "kind": "retrieval",
+                        "name": group["name"],
+                        "head_indices": head_indices,
+                        "module": group["module"],
+                        "cache": subset_cache,
+                    }
+                )
+            else:
+                subset, group_routing = group["module"].forward(
+                    x,
+                    q_subset,
+                    k,
+                    v,
+                    kv_head_indices=kv_head_indices,
+                    return_cache=False,
+                )
+            context[:, :, head_indices, :] = subset
+            routing[group["name"]] = group_routing
+
+        return context, group_caches, routing
+
+    def _mixed_context_backward(self, dcontext, cache):
+        q, k, v = cache["q"], cache["k"], cache["v"]
+        grad_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+        dq = xp.zeros(q.shape, dtype=grad_dtype)
+        dk = xp.zeros(k.shape, dtype=grad_dtype)
+        dv = xp.zeros(v.shape, dtype=grad_dtype)
+        drouter_input = xp.zeros(cache["x"].shape, dtype=grad_dtype)
+
+        for group_cache in cache["pattern_caches"]:
+            head_indices = group_cache["head_indices"]
+            dsubset = dcontext[:, :, head_indices, :]
+            if group_cache["kind"] == "indexed":
+                dq_sub, dk_sub, dv_sub, _ = indexed_attention_backward(
+                    dsubset, group_cache["cache"]
+                )
+            else:
+                drouter, dq_sub, dk_sub, dv_sub = group_cache["module"].backward(
+                    dsubset, group_cache["cache"]
+                )
+                drouter_input += drouter.astype(grad_dtype, copy=False)
+
+            dq[:, :, head_indices, :] += dq_sub.astype(grad_dtype, copy=False)
+            dk += dk_sub.astype(grad_dtype, copy=False)
+            dv += dv_sub.astype(grad_dtype, copy=False)
+
+        return dq, dk, dv, drouter_input
+
+    def _projection_backward(self, x, dq, dk, dv, cache):
+        b, t, _ = x.shape
+        dq_pre = rope_backward(dq, cache["q_rope_cache"])
+        dk_pre = rope_backward(dk, cache["k_rope_cache"])
+
+        x2 = x.reshape(-1, self.d_model)
+        dq2 = dq_pre.reshape(-1, self.n_q_heads * self.d_head)
+        dk2 = dk_pre.reshape(-1, self.n_kv_heads * self.d_head)
+        dv2 = dv.reshape(-1, self.n_kv_heads * self.d_head)
+        if is_bfloat16_dtype(x.dtype):
+            dq2 = dq2.astype(x.dtype, copy=False)
+            dk2 = dk2.astype(x.dtype, copy=False)
+            dv2 = dv2.astype(x.dtype, copy=False)
+
+        self.Wq.grad += x2.T @ dq2
+        self.Wk.grad += x2.T @ dk2
+        self.Wv.grad += x2.T @ dv2
+
+        dx2 = (
+            dq2 @ self.Wq.data.T
+            + dk2 @ self.Wk.data.T
+            + dv2 @ self.Wv.data.T
+        )
+        return dx2.reshape(b, t, self.d_model)
+
     def forward(self, x, return_cache=True):
         if x.ndim != 3:
             raise ValueError("attention input must have shape [B,T,D].")
@@ -122,6 +341,33 @@ class GQAAttention:
 
         q, q_rope_cache = rope_forward(q_pre, self.rope_base)
         k, k_rope_cache = rope_forward(k_pre, self.rope_base)
+
+        if self.attention_config is not None:
+            context, pattern_caches, routing = self._mixed_context_forward(
+                x, q, k, v, return_cache
+            )
+            merged = context.reshape(b, t, self.n_q_heads * self.d_head)
+            merged_compute = (
+                merged.astype(x.dtype, copy=False)
+                if is_bfloat16_dtype(q.dtype) else merged
+            )
+            y = (
+                merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data
+            ).reshape(b, t, self.d_model)
+            if not return_cache:
+                return y
+            return y, {
+                "x": x,
+                "q": q,
+                "k": k,
+                "v": v,
+                "merged": merged,
+                "q_rope_cache": q_rope_cache,
+                "k_rope_cache": k_rope_cache,
+                "pattern_caches": pattern_caches,
+                "routing": routing,
+                "mixed": True,
+            }
 
         # Native GQA representation -- no xp.repeat(K/V).
         q_grouped = self._group_queries(q)             # [B,Hkv,G,T,Dh]
@@ -213,7 +459,7 @@ class GQAAttention:
     def backward(self, dy, cache):
         x = cache["x"]
         q, k, v = cache["q"], cache["k"], cache["v"]
-        probs, merged = cache["probs"], cache["merged"]
+        merged = cache["merged"]
         b, t, _ = x.shape
 
         self.Wo.grad += (
@@ -226,6 +472,14 @@ class GQAAttention:
             b, t, self.n_q_heads, self.d_head
         )
 
+        if self.attention_config is not None:
+            dq, dk, dv, drouter_input = self._mixed_context_backward(
+                dcontext, cache
+            )
+            dx = self._projection_backward(x, dq, dk, dv, cache)
+            return dx + drouter_input.astype(dx.dtype, copy=False)
+
+        probs = cache["probs"]
         q_grouped = self._group_queries(q)              # [B,Hkv,G,T,D]
         dcontext_grouped = self._group_queries(dcontext)
         k_heads = k.transpose(0, 2, 1, 3)              # [B,Hkv,T,D]
@@ -291,26 +545,4 @@ class GQAAttention:
         dk = dk_heads.transpose(0, 2, 1, 3)
         dv = dv_heads.transpose(0, 2, 1, 3)
 
-        dq_pre = rope_backward(dq, cache["q_rope_cache"])
-        dk_pre = rope_backward(dk, cache["k_rope_cache"])
-
-        x2 = x.reshape(-1, self.d_model)
-        dq2 = dq_pre.reshape(-1, self.n_q_heads * self.d_head)
-        dk2 = dk_pre.reshape(-1, self.n_kv_heads * self.d_head)
-        dv2 = dv.reshape(-1, self.n_kv_heads * self.d_head)
-        if bf16_attention:
-            dq2 = dq2.astype(x.dtype, copy=False)
-            dk2 = dk2.astype(x.dtype, copy=False)
-            dv2 = dv2.astype(x.dtype, copy=False)
-
-        self.Wq.grad += x2.T @ dq2
-        self.Wk.grad += x2.T @ dk2
-        self.Wv.grad += x2.T @ dv2
-
-        # Projection backwards are also strict 2-D GEMMs for BF16 compatibility.
-        dx2 = (
-            dq2 @ self.Wq.data.T
-            + dk2 @ self.Wk.data.T
-            + dv2 @ self.Wv.data.T
-        )
-        return dx2.reshape(b, t, self.d_model)
+        return self._projection_backward(x, dq, dk, dv, cache)

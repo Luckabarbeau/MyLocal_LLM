@@ -49,6 +49,11 @@ class DecoderLanguageModel:
         # Create transformer blocks
         self.blocks = []
         for layer_idx in range(config.n_layers):
+            attention_config = (
+                None
+                if config.attention_layers is None
+                else config.attention_layers[layer_idx]
+            )
             block = TransformerBlock(
                 d_model=config.d_model,
                 n_q_heads=config.n_q_heads,
@@ -63,7 +68,8 @@ class DecoderLanguageModel:
                 rng=rng,
                 eps=config.rms_eps,
                 name=f"blocks.{layer_idx}",
-                dtype=self.dtype
+                dtype=self.dtype,
+                attention_config=attention_config
             )
             self.blocks.append(block)
         

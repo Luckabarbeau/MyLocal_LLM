@@ -47,6 +47,12 @@ class InferenceModel:
         """
         self.config = config
         self.dtype = dtype if dtype is not None else config.dtype
+        if config.attention_layers is not None:
+            raise NotImplementedError(
+                "KV-cached inference for configurable per-head attention is not "
+                "implemented yet; use DecoderLanguageModel full-sequence forward "
+                "until the sparse inference cache is added."
+            )
         
         # Create inference components
         self.n_layers = config.n_layers

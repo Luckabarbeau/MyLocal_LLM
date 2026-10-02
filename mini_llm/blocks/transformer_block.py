@@ -36,7 +36,8 @@ class TransformerBlock:
         rng,
         eps: float = 1e-6,
         name: str = "block",
-        dtype: str = "float32"
+        dtype: str = "float32",
+        attention_config=None
     ):
         """Initialize the Transformer block."""
         self.d_model = d_model
@@ -63,7 +64,8 @@ class TransformerBlock:
             rope_base=rope_base,
             rng=rng,
             name=f"{name}.attention",
-            dtype=dtype
+            dtype=dtype,
+            attention_config=attention_config
         )
         
         # Second RMSNorm (input to MoE)

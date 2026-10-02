@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 
@@ -35,6 +35,10 @@ class ModelConfig:
 
     dtype: str = "float32"
 
+    # ``None`` preserves the original full-causal GQA implementation on every
+    # layer. Otherwise provide one AttentionLayerConfig per Transformer layer.
+    attention_layers: tuple | None = None
+
     def __post_init__(self):
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
@@ -42,6 +46,46 @@ class ModelConfig:
             raise ValueError("n_q_heads must be divisible by n_kv_heads.")
         if not (1 <= self.top_k <= self.n_experts):
             raise ValueError("top_k must satisfy 1 <= top_k <= n_experts.")
+
+        if self.attention_layers is not None:
+            layers = tuple(
+                _coerce_attention_layer(layer) for layer in self.attention_layers
+            )
+            if len(layers) != self.n_layers:
+                raise ValueError(
+                    "attention_layers must contain exactly one entry per model layer"
+                )
+            for layer_index, layer in enumerate(layers):
+                if len(layer.heads) != self.n_q_heads:
+                    raise ValueError(
+                        f"attention layer {layer_index} must define exactly "
+                        f"{self.n_q_heads} query heads"
+                    )
+                retrieval_groups = {}
+                for head in layer.heads:
+                    if not isinstance(head, RetrievalAttentionConfig):
+                        continue
+                    previous = retrieval_groups.setdefault(
+                        head.group, head.context_router
+                    )
+                    if previous != head.context_router:
+                        raise ValueError(
+                            f"retrieval group {head.group!r} in layer {layer_index} "
+                            "must use one shared ContextRouterConfig"
+                        )
+                for group_name, router_config in retrieval_groups.items():
+                    group_size = sum(
+                        isinstance(head, RetrievalAttentionConfig)
+                        and head.group == group_name
+                        for head in layer.heads
+                    )
+                    if router_config.num_queries not in {1, group_size}:
+                        raise ValueError(
+                            f"retrieval group {group_name!r} in layer {layer_index} "
+                            "requires num_queries=1 or num_queries equal to the "
+                            f"group head count ({group_size})"
+                        )
+            object.__setattr__(self, "attention_layers", layers)
 
     @property
     def residual_init_std(self) -> float:
@@ -214,3 +258,89 @@ class ContextRouterConfig:
             or self.router_weight_eps <= 0
         ):
             raise ValueError("router_weight_eps must be positive and finite")
+
+@dataclass(frozen=True)
+class DenseAttentionConfig:
+    """Full causal attention for one query head."""
+
+    kind: str = field(default="dense", init=False)
+
+
+@dataclass(frozen=True)
+class LocalAttentionConfig:
+    """Exact causal attention restricted to the most recent ``window`` keys."""
+
+    window: int = 4_096
+    kind: str = field(default="local", init=False)
+
+    def __post_init__(self):
+        if int(self.window) != self.window or self.window <= 0:
+            raise ValueError("local attention window must be a positive integer")
+
+
+@dataclass(frozen=True)
+class RetrievalAttentionConfig:
+    """Learned distant-block retrieval for one query head.
+
+    Heads carrying the same ``group`` string share one
+    :class:`ContextRetrievalAttention` router. ``context_router.num_queries``
+    must therefore be either 1 (one shared retrieval query) or the number of
+    heads in that group (one learned retrieval query per head).
+    """
+
+    context_router: ContextRouterConfig
+    group: str = "retrieval"
+    kind: str = field(default="retrieval", init=False)
+
+    def __post_init__(self):
+        if isinstance(self.context_router, dict):
+            object.__setattr__(
+                self, "context_router", ContextRouterConfig(**self.context_router)
+            )
+        if not isinstance(self.context_router, ContextRouterConfig):
+            raise TypeError("context_router must be a ContextRouterConfig")
+        if not isinstance(self.group, str) or not self.group:
+            raise ValueError("retrieval group must be a non-empty string")
+
+
+def _coerce_attention_head(value):
+    if isinstance(
+        value,
+        (DenseAttentionConfig, LocalAttentionConfig, RetrievalAttentionConfig),
+    ):
+        return value
+    if not isinstance(value, dict):
+        raise TypeError("attention heads must be attention configs or dictionaries")
+
+    data = dict(value)
+    kind = data.pop("kind", None)
+    if kind == "dense":
+        return DenseAttentionConfig(**data)
+    if kind == "local":
+        return LocalAttentionConfig(**data)
+    if kind == "retrieval":
+        return RetrievalAttentionConfig(**data)
+    raise ValueError(f"unsupported attention head kind: {kind!r}")
+
+
+@dataclass(frozen=True)
+class AttentionLayerConfig:
+    """Ordered per-query-head attention topology for one Transformer layer."""
+
+    heads: tuple
+
+    def __post_init__(self):
+        heads = tuple(_coerce_attention_head(head) for head in self.heads)
+        if not heads:
+            raise ValueError("attention layer must contain at least one head")
+        object.__setattr__(self, "heads", heads)
+
+
+def _coerce_attention_layer(value):
+    if isinstance(value, AttentionLayerConfig):
+        return value
+    if isinstance(value, dict):
+        return AttentionLayerConfig(**value)
+    if isinstance(value, (list, tuple)):
+        return AttentionLayerConfig(heads=tuple(value))
+    raise TypeError("attention layer entries must be AttentionLayerConfig-compatible")

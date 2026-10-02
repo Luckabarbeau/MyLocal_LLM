@@ -176,3 +176,32 @@ def test_weighted_block_plan_bias_backward_matches_directional_derivative():
         objective(weights + eps * direction) - objective(weights - eps * direction)
     ) / (2.0 * eps)
     np.testing.assert_allclose(analytical, finite_difference, rtol=2e-6, atol=1e-8)
+
+
+def test_local_causal_plan_exact_window_visibility():
+    from mini_llm.ops.attention_selection import build_local_causal_plan
+
+    plan = build_local_causal_plan(batch_size=1, seq_len=6, window=3)
+    expected_indices = np.array(
+        [
+            [0, 0, 0],
+            [0, 0, 1],
+            [0, 1, 2],
+            [1, 2, 3],
+            [2, 3, 4],
+            [3, 4, 5],
+        ],
+        dtype=np.int64,
+    )
+    expected_valid = np.array(
+        [
+            [False, False, True],
+            [False, True, True],
+            [True, True, True],
+            [True, True, True],
+            [True, True, True],
+            [True, True, True],
+        ]
+    )
+    np.testing.assert_array_equal(np.asarray(plan.key_indices[0, 0]), expected_indices)
+    np.testing.assert_array_equal(np.asarray(plan.valid_mask[0, 0]), expected_valid)

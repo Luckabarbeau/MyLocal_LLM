@@ -174,6 +174,65 @@ class ModelConfig:
             d_ff=1_536,
         )
     @classmethod
+    def medium_context_4k(cls):
+        """Medium long-context experiment with all sparse head types.
+
+        This is the first end-to-end context-expansion training preset.  It
+        keeps the existing medium trunk/MoE dimensions while using a 65,280
+        token vocabulary and a 4k training context.  Every layer uses:
+
+        - 4 exact local heads (1k window)
+        - 1 dilated head (4k span, dilation 4)
+        - 1 deterministic global sparse head (stride 128)
+        - 2 learned retrieval heads sharing one two-query context router
+
+        The shorter windows are intentional for the initial 4k validation
+        stage.  They keep retrieval active over a substantial fraction of the
+        sequence while exercising the same mechanisms that will later be
+        scaled to 8k/16k/32k contexts.
+        """
+        router = ContextRouterConfig(
+            history_block_size=128,
+            routing_stride=128,
+            query_window=512,
+            router_dim=32,
+            top_k_blocks=4,
+            exclude_recent_tokens=1_024,
+            query_pooling="learned",
+            history_pooling="mean",
+            num_queries=2,
+            router_weight_mode="logit_bias",
+            router_weight_scale=1.0,
+        )
+        layer_attention = AttentionLayerConfig(
+            heads=(
+                LocalAttentionConfig(window=1_024),
+                LocalAttentionConfig(window=1_024),
+                LocalAttentionConfig(window=1_024),
+                LocalAttentionConfig(window=1_024),
+                DilatedAttentionConfig(window=4_096, dilation=4, offset=0),
+                GlobalSparseAttentionConfig(
+                    stride=128, offset=0, include_current=True
+                ),
+                RetrievalAttentionConfig(router, group="far"),
+                RetrievalAttentionConfig(router, group="far"),
+            )
+        )
+        return cls(
+            tokenizer_vocab_size=65_280,
+            context_length=4_096,
+            n_layers=8,
+            d_model=512,
+            n_q_heads=8,
+            n_kv_heads=2,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=1_536,
+            attention_layers=tuple(layer_attention for _ in range(8)),
+        )
+
+    @classmethod
     def large(cls):
         """Large model: ~120M params."""
         return cls(
@@ -307,6 +366,32 @@ class DilatedAttentionConfig:
 
 
 @dataclass(frozen=True)
+class GlobalSparseAttentionConfig:
+    """Deterministic causal anchors spanning the complete available prefix.
+
+    Visible global anchor tokens satisfy ``key % stride == offset``. When
+    ``include_current`` is true, the query token itself is also visible even
+    when it is not on the anchor phase. Different heads can use complementary
+    offsets while retaining the same inexpensive whole-history connectivity.
+    """
+
+    stride: int = 256
+    offset: int = 0
+    include_current: bool = True
+    kind: str = field(default="global_sparse", init=False)
+
+    def __post_init__(self):
+        if int(self.stride) != self.stride or self.stride <= 0:
+            raise ValueError("global sparse stride must be a positive integer")
+        if int(self.offset) != self.offset or self.offset < 0:
+            raise ValueError("global sparse offset must be a non-negative integer")
+        if self.offset >= self.stride:
+            raise ValueError("global sparse offset must satisfy 0 <= offset < stride")
+        if not isinstance(self.include_current, bool):
+            raise TypeError("include_current must be a bool")
+
+
+@dataclass(frozen=True)
 class RetrievalAttentionConfig:
     """Learned distant-block retrieval for one query head.
 
@@ -338,6 +423,7 @@ def _coerce_attention_head(value):
             DenseAttentionConfig,
             LocalAttentionConfig,
             DilatedAttentionConfig,
+            GlobalSparseAttentionConfig,
             RetrievalAttentionConfig,
         ),
     ):
@@ -353,6 +439,8 @@ def _coerce_attention_head(value):
         return LocalAttentionConfig(**data)
     if kind == "dilated":
         return DilatedAttentionConfig(**data)
+    if kind == "global_sparse":
+        return GlobalSparseAttentionConfig(**data)
     if kind == "retrieval":
         return RetrievalAttentionConfig(**data)
     raise ValueError(f"unsupported attention head kind: {kind!r}")

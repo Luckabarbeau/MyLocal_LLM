@@ -357,3 +357,141 @@ def test_dilated_attention_config_round_trip_and_static_grouping():
     )
     assert len(attention._static_head_groups) == 2
     assert {group["offset"] for group in attention._static_head_groups} == {0, 1}
+
+
+def test_all_global_sparse_stride_one_matches_legacy_dense_gqa():
+    from mini_llm.config import GlobalSparseAttentionConfig
+
+    legacy = GQAAttention(
+        d_model=4,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=2,
+        input_std=0.15,
+        output_std=0.12,
+        rng=RandomStream(320),
+        dtype="float64",
+    )
+    mixed = GQAAttention(
+        d_model=4,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=2,
+        input_std=0.15,
+        output_std=0.12,
+        rng=RandomStream(321),
+        dtype="float64",
+        attention_config=AttentionLayerConfig(
+            heads=(
+                GlobalSparseAttentionConfig(stride=1, offset=0),
+                GlobalSparseAttentionConfig(stride=1, offset=0),
+            )
+        ),
+    )
+    _copy_base_parameters(legacy, mixed)
+
+    x = xp.asarray(np.random.default_rng(322).normal(size=(2, 7, 4)), dtype="float64")
+    coeff = xp.asarray(np.random.default_rng(323).normal(size=x.shape), dtype="float64")
+
+    y_legacy, cache_legacy = legacy.forward(x)
+    y_mixed, cache_mixed = mixed.forward(x)
+    np.testing.assert_allclose(np.asarray(y_mixed), np.asarray(y_legacy), rtol=2e-12, atol=2e-12)
+
+    legacy.zero_grad()
+    mixed.zero_grad()
+    dx_legacy = legacy.backward(coeff, cache_legacy)
+    dx_mixed = mixed.backward(coeff, cache_mixed)
+    np.testing.assert_allclose(np.asarray(dx_mixed), np.asarray(dx_legacy), rtol=3e-12, atol=3e-12)
+    for p_legacy, p_mixed in zip(legacy.parameters(), mixed.parameters()):
+        np.testing.assert_allclose(
+            np.asarray(p_mixed.grad), np.asarray(p_legacy.grad), rtol=3e-12, atol=3e-12
+        )
+
+
+def test_mixed_local_dilated_global_retrieval_input_directional_derivative():
+    from mini_llm.config import GlobalSparseAttentionConfig
+
+    layer_config = AttentionLayerConfig(
+        heads=(
+            LocalAttentionConfig(window=4),
+            DilatedAttentionConfig(window=9, dilation=3, offset=1),
+            GlobalSparseAttentionConfig(stride=3, offset=0, include_current=True),
+            RetrievalAttentionConfig(_router_config(), group="far"),
+        )
+    )
+    attention = GQAAttention(
+        d_model=8,
+        n_q_heads=4,
+        n_kv_heads=2,
+        d_head=2,
+        input_std=0.16,
+        output_std=0.11,
+        rng=RandomStream(324),
+        dtype="float64",
+        attention_config=layer_config,
+    )
+    x = xp.asarray(np.random.default_rng(325).normal(size=(1, 12, 8)), dtype="float64")
+    coeff = xp.asarray(np.random.default_rng(326).normal(size=x.shape), dtype="float64")
+    direction = xp.asarray(np.random.default_rng(327).normal(size=x.shape), dtype="float64")
+    direction /= xp.sqrt(xp.sum(direction * direction))
+
+    y, cache = attention.forward(x)
+    selected_ref = np.asarray(cache["routing"]["far"]["selected_blocks"]).copy()
+    attention.zero_grad()
+    dx = attention.backward(coeff, cache)
+    analytical = float(xp.sum(dx * direction))
+
+    def objective(x_value):
+        y_value, value_cache = attention.forward(x_value)
+        np.testing.assert_array_equal(
+            np.asarray(value_cache["routing"]["far"]["selected_blocks"]),
+            selected_ref,
+        )
+        return float(xp.sum(y_value * coeff))
+
+    eps = 1e-6
+    finite_difference = (
+        objective(x + eps * direction) - objective(x - eps * direction)
+    ) / (2.0 * eps)
+    np.testing.assert_allclose(analytical, finite_difference, rtol=8e-5, atol=4e-8)
+
+
+def test_global_sparse_config_round_trip_and_phase_grouping():
+    from mini_llm.config import GlobalSparseAttentionConfig
+
+    layer = AttentionLayerConfig(
+        heads=(
+            GlobalSparseAttentionConfig(stride=8, offset=0, include_current=True),
+            GlobalSparseAttentionConfig(stride=8, offset=4, include_current=False),
+        )
+    )
+    original = ModelConfig(
+        tokenizer_vocab_size=32,
+        context_length=16,
+        n_layers=1,
+        d_model=4,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=2,
+        n_experts=2,
+        top_k=1,
+        d_ff=8,
+        attention_layers=(layer,),
+    )
+    restored = ModelConfig(**dataclasses.asdict(original))
+    assert restored == original
+
+    attention = GQAAttention(
+        d_model=4,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=2,
+        input_std=0.1,
+        output_std=0.1,
+        rng=RandomStream(328),
+        dtype="float64",
+        attention_config=layer,
+    )
+    assert len(attention._static_head_groups) == 2
+    assert {group["offset"] for group in attention._static_head_groups} == {0, 4}
+    assert {group["include_current"] for group in attention._static_head_groups} == {True, False}

@@ -284,3 +284,79 @@ def test_dilated_plan_offset_can_have_empty_early_rows():
     assert not valid[2].any()
     assert valid[3].sum() == 1
     assert valid[4].sum() == 1
+
+
+def test_global_sparse_plan_uses_fixed_prefix_anchors_and_current_token():
+    from mini_llm.ops.attention_selection import build_global_sparse_causal_plan
+
+    plan = build_global_sparse_causal_plan(
+        batch_size=1,
+        seq_len=8,
+        stride=3,
+        offset=1,
+        include_current=True,
+    )
+
+    # Absolute anchor slots are 1, 4, 7. The final slot is the current token
+    # whenever it is not already one of those anchors.
+    expected_indices = np.array(
+        [
+            [1, 4, 7, 0],
+            [1, 4, 7, 1],
+            [1, 4, 7, 2],
+            [1, 4, 7, 3],
+            [1, 4, 7, 4],
+            [1, 4, 7, 5],
+            [1, 4, 7, 6],
+            [1, 4, 7, 7],
+        ],
+        dtype=np.int64,
+    )
+    expected_valid = np.array(
+        [
+            [False, False, False, True],
+            [True,  False, False, False],
+            [True,  False, False, True],
+            [True,  False, False, True],
+            [True,  True,  False, False],
+            [True,  True,  False, True],
+            [True,  True,  False, True],
+            [True,  True,  True,  False],
+        ]
+    )
+    np.testing.assert_array_equal(np.asarray(plan.key_indices[0, 0]), expected_indices)
+    np.testing.assert_array_equal(np.asarray(plan.valid_mask[0, 0]), expected_valid)
+
+
+def test_global_sparse_plan_without_current_can_have_empty_early_rows():
+    from mini_llm.ops.attention_selection import build_global_sparse_causal_plan
+
+    plan = build_global_sparse_causal_plan(
+        batch_size=1,
+        seq_len=7,
+        stride=4,
+        offset=2,
+        include_current=False,
+    )
+    valid = np.asarray(plan.valid_mask[0, 0])
+    assert not valid[0].any()
+    assert not valid[1].any()
+    assert valid[2].sum() == 1
+    assert valid[5].sum() == 1
+    assert valid[6].sum() == 2
+
+
+def test_global_sparse_stride_one_has_full_causal_visibility():
+    from mini_llm.ops.attention_selection import build_global_sparse_causal_plan
+
+    plan = build_global_sparse_causal_plan(
+        batch_size=2,
+        seq_len=6,
+        stride=1,
+        offset=0,
+        include_current=True,
+    )
+    indices = np.asarray(plan.key_indices[0, 0])
+    valid = np.asarray(plan.valid_mask[0, 0])
+    np.testing.assert_array_equal(indices, np.tile(np.arange(6), (6, 1)))
+    np.testing.assert_array_equal(valid, np.tri(6, 6, dtype=bool))

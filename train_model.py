@@ -52,7 +52,7 @@ def parse_args():
     # Model selection
     parser.add_argument(
         "--model",
-        choices=["micro", "mini", "small", "medium","large"],
+        choices=["micro", "mini", "small", "medium", "medium-context-4k", "large"],
         default="mini",
         help="Model size configuration",
     )
@@ -73,6 +73,22 @@ def parse_args():
         help="Path to Cosmopedia Parquet directory",
     )
     parser.add_argument(
+        "--shard-dir",
+        default="./token_shards",
+        help=(
+            "Directory containing token shards. Packed preprocessing uses "
+            "train_shard_*.bin / val_shard_*.bin."
+        ),
+    )
+    parser.add_argument(
+        "--tokenizer-path",
+        default=None,
+        help=(
+            "Tokenizer JSON used to create the shards. Defaults to "
+            "<shard-dir>/tokenizer.json when present."
+        ),
+    )
+    parser.add_argument(
         "--num-parquet-shards",
         type=int,
         default=104,
@@ -87,8 +103,8 @@ def parse_args():
     parser.add_argument(
         "--context-length",
         type=int,
-        default=512,
-        help="Maximum sequence length",
+        default=None,
+        help="Training sequence length (default: selected model preset)",
     )
     parser.add_argument(
         "--batch-size",
@@ -220,6 +236,49 @@ def parse_args():
     return parser.parse_args()
 
 
+def model_config_from_name(name: str) -> ModelConfig:
+    if name == "micro":
+        return ModelConfig.micro_debug()
+    if name == "mini":
+        return ModelConfig.mini()
+    if name == "small":
+        return ModelConfig.small()
+    if name == "medium":
+        return ModelConfig.medium()
+    if name == "medium-context-4k":
+        return ModelConfig.medium_context_4k()
+    if name == "large":
+        return ModelConfig.large()
+    raise ValueError(f"unknown model preset: {name}")
+
+
+def load_tokenizer_file(path: Path):
+    try:
+        return FastBPETokenizer.load(str(path))
+    except Exception:
+        return SimpleBPETokenizer.load(str(path))
+
+
+def discover_existing_shards(shard_dir: Path, val_ratio: float):
+    """Discover canonical packed shards first, then legacy shard names."""
+    train = sorted(shard_dir.glob("train_shard_*.bin"))
+    val = sorted(shard_dir.glob("val_shard_*.bin"))
+    if train:
+        if not val:
+            raise RuntimeError(
+                f"found packed training shards in {shard_dir} but no val_shard_*.bin"
+            )
+        return train, val
+
+    all_shards = sorted(shard_dir.glob("shard_*.bin"))
+    if not all_shards:
+        return [], []
+    num_val = max(1, int(len(all_shards) * val_ratio))
+    if len(all_shards) <= num_val:
+        raise RuntimeError("not enough legacy shards to create train/validation sets")
+    return all_shards[:-num_val], all_shards[-num_val:]
+
+
 def setup_model(config: ModelConfig, dtype: str = "float16") -> DecoderLanguageModel:
     """Create and initialize model."""
     print(f"Creating {config.d_model}d model with {config.n_layers} layers...")
@@ -341,8 +400,7 @@ def generate_shards_for_training(
 
 def main():
     args = parse_args()
-    
-    # Set random seed
+
     np.random.seed(args.seed)
     xp.random.seed(args.seed)
 
@@ -353,184 +411,154 @@ def main():
         model_dtype = "float16"
     else:
         model_dtype = "float32"
-    
+
+    shard_dir = Path(args.shard_dir)
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    tokenizer_path = (
+        Path(args.tokenizer_path)
+        if args.tokenizer_path is not None
+        else shard_dir / "tokenizer.json"
+    )
+
+    # Resolve the architecture first so its native context length can be used
+    # when --context-length is omitted.
+    if args.resume_from:
+        checkpoint_path = Path(args.resume_from)
+        config_path = checkpoint_path / "config.json"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                config = ModelConfig(**json.load(f))
+        else:
+            config = model_config_from_name(args.model)
+    else:
+        checkpoint_path = None
+        config = model_config_from_name(args.model)
+
+    run_context_length = (
+        int(args.context_length)
+        if args.context_length is not None
+        else int(config.context_length)
+    )
+
+    # Prefer context-independent packed shards.  Preserve the legacy automatic
+    # generator for older experiments, but require explicit packed preprocessing
+    # for the long-context preset so it can never silently train on padded rows.
+    train_shards, val_shards = discover_existing_shards(shard_dir, args.val_ratio)
+    if not train_shards:
+        if args.model == "medium-context-4k":
+            raise RuntimeError(
+                "medium-context-4k requires pre-generated packed shards. Run "
+                "generate_packed_cosmopedia_shards.py first."
+            )
+        print("\nGenerating legacy token shards...")
+        train_shards, val_shards, generated_tokenizer, tokenizer_vocab_size = (
+            generate_shards_for_training(
+                dataset_path=args.dataset_path,
+                output_dir=str(shard_dir),
+                num_parquet_shards=args.num_parquet_shards,
+                documents_per_shard=args.documents_per_shard,
+                context_length=run_context_length,
+                val_ratio=args.val_ratio,
+            )
+        )
+        tokenizer_path = Path(generated_tokenizer)
+    else:
+        tokenizer_vocab_size = None
+
+    if tokenizer_path.exists():
+        tokenizer = load_tokenizer_file(tokenizer_path)
+        tokenizer_vocab_size = len(tokenizer)
+        if tokenizer_vocab_size <= 0:
+            raise RuntimeError(f"tokenizer at {tokenizer_path} has empty vocabulary")
+    elif tokenizer_vocab_size is None:
+        raise FileNotFoundError(
+            f"tokenizer not found at {tokenizer_path}; pass --tokenizer-path explicitly"
+        )
+
+    config = dataclasses.replace(
+        config,
+        tokenizer_vocab_size=int(tokenizer_vocab_size),
+        context_length=run_context_length,
+        dtype=model_dtype,
+    )
+
     print("=" * 60)
     print("Extended Training Configuration")
     print("=" * 60)
     print(f"Model: {args.model}")
     print(f"Precision: {args.precision}")
-    print(f"Dataset: {args.dataset_path}")
-    print(f"Parquet shards: {args.num_parquet_shards}")
-    print(f"Context length: {args.context_length}")
+    print(f"Tokenizer: {tokenizer_path}")
+    print(f"Tokenizer vocab: {tokenizer_vocab_size:,}")
+    print(f"Shard directory: {shard_dir}")
+    print(f"Training shards: {len(train_shards)}")
+    print(f"Validation shards: {len(val_shards)}")
+    print(f"Context length: {run_context_length}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.grad_accum_steps}x")
     print(f"Effective batch: {args.batch_size * args.grad_accum_steps}")
     print(f"Training steps: {args.total_steps}")
     print(f"Learning rate: {args.peak_lr}")
     print(f"Warmup: {args.warmup_steps} steps")
-    print(f"Validation ratio: {args.val_ratio}")
-    print(f"Documents per shard: {args.documents_per_shard}")
     print()
-    
-    # Load or create model
+
+    model = setup_model(config, dtype=model_dtype)
+
     if args.resume_from:
-        # Resume from checkpoint
-        checkpoint_path = Path(args.resume_from)
-        # Load config
-        config_path = checkpoint_path / "config.json"
-        if config_path.exists():
-            with open(config_path, "r") as f:
-                config_dict = json.load(f)
-            config = ModelConfig(**config_dict)
-        else:
-            # Use args.model config
-            if args.model == "micro":
-                config = ModelConfig.micro_debug()
-            elif args.model == "mini":
-                config = ModelConfig.mini()
-            elif args.model == "small":
-                config = ModelConfig.small()
-            elif args.model == "medium":
-                config = ModelConfig.medium()
-            else:
-                config = ModelConfig.large()
         print(f"Resuming from checkpoint: {checkpoint_path}")
-        
-        # Load model
-        config = dataclasses.replace(config, dtype=model_dtype)
-        model = setup_model(config, dtype=model_dtype)
-        
-        # Load checkpoint
         from mini_llm.checkpoint import load_checkpoint
+
         param_names = [p.name for p in model.parameters()]
         loaded_params, optimizer_state, training_state = load_checkpoint(
             checkpoint_path,
             param_names=param_names,
         )
-        
-        # Apply loaded parameters
         for p in model.parameters():
             if p.name in loaded_params:
                 p.data[...] = loaded_params[p.name]
-        
-        # Store optimizer state for later restoration after trainer creation
+
         stored_optimizer_state = optimizer_state
-        
         start_step = training_state.get("step", 0) if training_state else 0
-        
-        # Issue #16: Restore tokens_processed
         if training_state and "tokens_processed" in training_state:
             tokens_processed = training_state["tokens_processed"]
         elif training_state:
-            tokens_processed = start_step * args.batch_size * args.context_length
+            tokens_processed = (
+                start_step * args.batch_size * run_context_length
+            )
         else:
             tokens_processed = 0
-        
-        # Issue #12: Restore RNG states
+
         if training_state and "train_rng_state" in training_state:
-            # Note: xp is imported at module level
-            # Note: We'll restore this after creating the trainer
             rng_states = {
                 "train": training_state["train_rng_state"],
                 "val": training_state["val_rng_state"],
             }
         else:
             rng_states = None
-        
     else:
-        # Create new model
-        shard_dir = Path("./token_shards")
         stored_optimizer_state = None
-        
-        if args.model == "micro":
-            config = ModelConfig.micro_debug()
-        elif args.model == "mini":
-            config = ModelConfig.mini()
-        elif args.model == "small":
-            config = ModelConfig.small()
-        elif args.model == "medium":
-            config = ModelConfig.medium()
-        else:
-            config = ModelConfig.large()
-        
-        # Load tokenizer to get actual vocab size (if existing shards exist)
-        existing_tokenizer_path = shard_dir / "tokenizer.json"
-        if existing_tokenizer_path.exists():
-            from mini_llm.tokenizer.tokenizer import FastBPETokenizer, SimpleBPETokenizer
-            try:
-                tokenizer = FastBPETokenizer.load(str(existing_tokenizer_path))
-            except Exception:
-                tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
-            
-            # Update config vocab size before creating model
-            config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
-            print(f"Tokenizer vocab size: {len(tokenizer)}")
-        
-        config = dataclasses.replace(config, dtype=model_dtype)
-        model = setup_model(config, dtype=model_dtype)
         start_step = 0
         tokens_processed = 0
         rng_states = None
-        
-        # Save config
-        if args.checkpoint_dir:
-            config_path = Path(args.checkpoint_dir) / "config.json"
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_path, "w") as f:
-                json.dump(dataclasses.asdict(config), f, indent=2)
-    
-    # Adjust context length in config if needed
-    if config.context_length != args.context_length:
-        print(f"Info: Context length set to {args.context_length} for this run (model config: {config.context_length})")
-    
-    # Generate or use existing token shards
-    shard_dir = Path("./token_shards")
-    
-    if not any(shard_dir.glob("shard_*.bin")):
-        print("\nGenerating token shards...")
-        train_shards, val_shards, _, tokenizer_vocab_size = generate_shards_for_training(
-            dataset_path=args.dataset_path,
-            output_dir=str(shard_dir),
-            num_parquet_shards=args.num_parquet_shards,
-            documents_per_shard=args.documents_per_shard,
-            context_length=args.context_length,
-            val_ratio=args.val_ratio,
-        )
-        
-        # Update config vocab size using dataclasses.replace for frozen dataclass
-        config = dataclasses.replace(config, tokenizer_vocab_size=tokenizer_vocab_size)
-        print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
-    else:
-        # Use existing shards
-        all_shards = sorted(shard_dir.glob("shard_*.bin"))
-        num_val = max(1, int(len(all_shards) * args.val_ratio))
-        val_shards = all_shards[-num_val:]
-        train_shards = all_shards[:-num_val]
-        
-        print(f"Found existing shards:")
-        print(f"  Training: {len(train_shards)}")
-        print(f"  Validation: {len(val_shards)}")
-        
-        # Load tokenizer from shards directory to get actual vocab size
-        existing_tokenizer_path = shard_dir / "tokenizer.json"
-        if existing_tokenizer_path.exists():
-            from mini_llm.tokenizer.tokenizer import FastBPETokenizer, SimpleBPETokenizer
-            try:
-                tokenizer = FastBPETokenizer.load(str(existing_tokenizer_path))
-            except Exception:
-                tokenizer = SimpleBPETokenizer.load(str(existing_tokenizer_path))
-            
-            # Update config vocab size using dataclasses.replace for frozen dataclass
-            config = dataclasses.replace(config, tokenizer_vocab_size=len(tokenizer))
-            print(f"Tokenizer vocab size: {len(tokenizer)}")
-    
-    # Create trainer
+
+    if args.checkpoint_dir:
+        config_path = Path(args.checkpoint_dir) / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w") as f:
+            json.dump(dataclasses.asdict(config), f, indent=2)
+
+        # Keep the exact tokenizer next to checkpoints for reproducible decode
+        # and later mixed-dataset training.
+        checkpoint_tokenizer = Path(args.checkpoint_dir) / "tokenizer.json"
+        if tokenizer_path.resolve() != checkpoint_tokenizer.resolve():
+            import shutil
+            shutil.copy2(tokenizer_path, checkpoint_tokenizer)
+
     trainer = ExtendedTrainer(
         model=model,
         train_shard_paths=[str(p) for p in train_shards],
         val_shard_paths=[str(p) for p in val_shards],
         batch_size=args.batch_size,
-        seq_length=args.context_length,
+        seq_length=run_context_length,
         grad_accum_steps=args.grad_accum_steps,
         warmup_steps=args.warmup_steps,
         total_steps=args.total_steps,
@@ -542,72 +570,70 @@ def main():
         val_interval=args.val_interval,
         val_steps=args.val_steps,
         save_interval=args.save_interval,
-        loss_scale=1.0,  # Can increase for mixed precision
+        loss_scale=1.0,
         numerical_debug=args.numerical_debug,
     )
-    
-    # Issue #12: Restore trainer state including RNGs and tokens_processed
+
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
-    
-    # Issue #14: Restore optimizer state after trainer creation
+
     if stored_optimizer_state is not None and "m" in stored_optimizer_state:
         trainer.optimizer.step_index = int(
             stored_optimizer_state.get("step", start_step)
         )
-    
         m_dict = stored_optimizer_state["m"]
         v_dict = stored_optimizer_state.get("v", {})
-        
-        # Build a mapping from parameter name to optimizer index
-        param_to_idx = {p.name: i for i, p in enumerate(trainer.model.parameters())}
-        
+        param_to_idx = {
+            p.name: i for i, p in enumerate(trainer.model.parameters())
+        }
         restored_count = 0
         for p in trainer.model.parameters():
             if p.name in m_dict and p.name in v_dict:
                 idx = param_to_idx[p.name]
                 m_arr = xp.asarray(m_dict[p.name])
                 v_arr = xp.asarray(v_dict[p.name])
-                
                 if m_arr.shape == trainer.optimizer.m[idx].shape:
                     trainer.optimizer.m[idx][...] = m_arr
                     trainer.optimizer.v[idx][...] = v_arr
                     restored_count += 1
                 else:
-                    print(f"WARNING: Shape mismatch for {p.name}: stored={m_arr.shape}, current={trainer.optimizer.m[idx].shape}")
-        
+                    print(
+                        f"WARNING: Shape mismatch for {p.name}: "
+                        f"stored={m_arr.shape}, current={trainer.optimizer.m[idx].shape}"
+                    )
         print(f"Restored optimizer state for {restored_count} parameters")
-        
-        # Check for missing parameters in optimizer state
-        missing = [p.name for p in trainer.model.parameters() if p.name not in m_dict]
+        missing = [
+            p.name for p in trainer.model.parameters() if p.name not in m_dict
+        ]
         if missing:
-            print(f"WARNING: {len(missing)} parameters not found in saved optimizer state: {missing[:5]}{'...' if len(missing) > 5 else ''}")
-    
-    # Issue #12: Restore RNG states after trainer creation
+            suffix = "..." if len(missing) > 5 else ""
+            print(
+                f"WARNING: {len(missing)} parameters not found in saved optimizer "
+                f"state: {missing[:5]}{suffix}"
+            )
+
     if rng_states is not None:
         trainer.train_rng.bit_generator.state = rng_states["train"]
         trainer.val_rng.bit_generator.state = rng_states["val"]
-    
+
     print()
     print("=" * 60)
     print("Starting Training")
     print("=" * 60)
-    
-    # Train
+
     losses = trainer.train(
         num_steps=args.total_steps - start_step,
         log_interval=args.log_interval,
     )
-    
+
     print()
     print("=" * 60)
     print("Training Complete!")
     print(f"Final loss: {losses[-1]:.4f}")
     print(f"Average loss: {np.mean(losses):.4f}")
-    
+
     if args.checkpoint_dir:
         print(f"Final checkpoint saved to: {Path(args.checkpoint_dir) / 'final'}")
-        # Save final checkpoint
         trainer.save()
 
 

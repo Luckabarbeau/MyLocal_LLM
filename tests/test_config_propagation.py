@@ -171,3 +171,27 @@ class TestRouterBackward:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_medium_context_4k_preset_covers_all_attention_topologies():
+    from mini_llm.config import ModelConfig
+
+    config = ModelConfig.medium_context_4k()
+    assert config.tokenizer_vocab_size == 65_280
+    assert config.context_length == 4_096
+    assert config.n_layers == 8
+    assert config.n_q_heads == 8
+
+    expected = [
+        "local", "local", "local", "local",
+        "dilated", "global_sparse", "retrieval", "retrieval",
+    ]
+    for layer in config.attention_layers:
+        assert [head.kind for head in layer.heads] == expected
+        router = layer.heads[-1].context_router
+        assert router.history_block_size == 128
+        assert router.routing_stride == 128
+        assert router.query_window == 512
+        assert router.exclude_recent_tokens == 1_024
+        assert router.top_k_blocks == 4
+        assert router.num_queries == 2

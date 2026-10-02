@@ -437,14 +437,13 @@ class FastBPETokenizer(TokenizerProtocol):
             initial_alphabet=hf['pre_tokenizers'].ByteLevel.alphabet(),
         )
 
-        # Convert texts to list for training
-        if isinstance(texts, (list, tuple)):
-            texts_list = list(texts)
-        else:
-            texts_list = [t for t in texts]
+        # Hugging Face tokenizers accepts any Python iterator.  Do not
+        # materialize large pretraining samples here: mixed-corpus tokenizer
+        # training can intentionally stream several GB of text.
+        texts_iterable = texts if not isinstance(texts, tuple) else list(texts)
 
-        # Train - must use train_from_iterator for proper training
-        self._tokenizer.train_from_iterator(texts_list, trainer=trainer)
+        # Train from the iterable so corpus sampling remains memory bounded.
+        self._tokenizer.train_from_iterator(texts_iterable, trainer=trainer)
 
     def encode(self, text: str) -> List[int]:
         """Encode a single text."""

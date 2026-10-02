@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.24",
     "ml-dtypes>=0.5",
     "pyarrow>=16.0",
+    "tokenizers>=0.20",
 ]
 
 [project.optional-dependencies]

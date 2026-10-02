@@ -3,6 +3,7 @@ from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
 from .attention_selection import (
     build_dilated_causal_plan,
+    build_global_sparse_causal_plan,
     build_local_causal_plan,
 )
 from .indexed_attention import indexed_attention_forward, indexed_attention_backward
@@ -12,6 +13,7 @@ from ..config import (
     DenseAttentionConfig,
     LocalAttentionConfig,
     DilatedAttentionConfig,
+    GlobalSparseAttentionConfig,
     RetrievalAttentionConfig,
 )
 
@@ -108,12 +110,12 @@ class GQAAttention:
 
         for head_index, head_config in enumerate(attention_config.heads):
             if isinstance(head_config, DenseAttentionConfig):
-                static_groups.setdefault(("dense", None, None, None), []).append(
-                    head_index
-                )
+                static_groups.setdefault(
+                    ("dense", None, None, None, None, None), []
+                ).append(head_index)
             elif isinstance(head_config, LocalAttentionConfig):
                 static_groups.setdefault(
-                    ("local", int(head_config.window), None, None), []
+                    ("local", int(head_config.window), None, None, None, None), []
                 ).append(head_index)
             elif isinstance(head_config, DilatedAttentionConfig):
                 static_groups.setdefault(
@@ -122,6 +124,20 @@ class GQAAttention:
                         int(head_config.window),
                         int(head_config.dilation),
                         int(head_config.offset),
+                        None,
+                        None,
+                    ),
+                    [],
+                ).append(head_index)
+            elif isinstance(head_config, GlobalSparseAttentionConfig):
+                static_groups.setdefault(
+                    (
+                        "global_sparse",
+                        None,
+                        None,
+                        int(head_config.offset),
+                        int(head_config.stride),
+                        bool(head_config.include_current),
                     ),
                     [],
                 ).append(head_index)
@@ -147,9 +163,18 @@ class GQAAttention:
                 "window": window,
                 "dilation": dilation,
                 "offset": offset,
+                "stride": stride,
+                "include_current": include_current,
                 "head_indices": tuple(indices),
             }
-            for (kind, window, dilation, offset), indices in static_groups.items()
+            for (
+                kind,
+                window,
+                dilation,
+                offset,
+                stride,
+                include_current,
+            ), indices in static_groups.items()
         ]
 
         self._retrieval_groups = []
@@ -228,6 +253,14 @@ class GQAAttention:
                     group["window"],
                     group["dilation"],
                     group["offset"],
+                )
+            elif group["kind"] == "global_sparse":
+                plan = build_global_sparse_causal_plan(
+                    b,
+                    t,
+                    group["stride"],
+                    group["offset"],
+                    group["include_current"],
                 )
             else:
                 raise RuntimeError(

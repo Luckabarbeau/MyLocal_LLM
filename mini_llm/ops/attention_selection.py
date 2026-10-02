@@ -436,3 +436,77 @@ def build_dilated_causal_plan(batch_size, seq_len, window, dilation, offset=0):
     ).copy()
     valid = xp.broadcast_to(valid[None, None, :, :], indices.shape).copy()
     return KeySelectionPlan(indices, valid)
+
+
+def build_global_sparse_causal_plan(
+    batch_size, seq_len, stride, offset=0, include_current=True
+):
+    """Build a shared causal whole-prefix fixed-anchor key plan.
+
+    Global anchors are absolute token positions
+
+        ``offset, offset + stride, offset + 2*stride, ...``
+
+    and query token ``t`` may use only anchors ``<= t``.  When
+    ``include_current`` is true, ``t`` is appended as an exact key whenever it
+    is not already one of the global anchors.  This gives every query a local
+    self path while preserving ``O(T / stride)`` whole-history connectivity.
+
+    Different heads can use complementary ``offset`` values without changing
+    the indexed-attention kernel.  ``stride=1, offset=0`` is exactly ordinary
+    full causal visibility.
+    """
+    batch_size = int(batch_size)
+    seq_len = int(seq_len)
+    stride = int(stride)
+    offset = int(offset)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if seq_len <= 0:
+        raise ValueError("seq_len must be positive")
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+    if offset < 0 or offset >= stride:
+        raise ValueError("offset must satisfy 0 <= offset < stride")
+    if not isinstance(include_current, (bool, xp.bool_)):
+        raise TypeError("include_current must be a bool")
+
+    anchors = xp.arange(offset, seq_len, stride, dtype=xp.int64)
+    n_anchors = int(anchors.shape[0])
+    extra_current = bool(include_current and stride != 1)
+    key_slots = n_anchors + int(extra_current)
+
+    # KeySelectionPlan intentionally requires at least one physical slot even
+    # when a head has no visible anchor yet.  Keep an invalid in-range
+    # placeholder for that rare configuration.
+    if key_slots == 0:
+        indices = xp.zeros((batch_size, 1, seq_len, 1), dtype=xp.int64)
+        valid = xp.zeros(indices.shape, dtype=bool)
+        return KeySelectionPlan(indices, valid)
+
+    queries = xp.arange(seq_len, dtype=xp.int64)[:, None]
+    if n_anchors:
+        anchor_indices = xp.broadcast_to(anchors[None, :], (seq_len, n_anchors))
+        anchor_valid = anchor_indices <= queries
+    else:
+        anchor_indices = xp.empty((seq_len, 0), dtype=xp.int64)
+        anchor_valid = xp.empty((seq_len, 0), dtype=bool)
+
+    if extra_current:
+        current = xp.arange(seq_len, dtype=xp.int64)[:, None]
+        # Avoid counting the same token twice when the current position itself
+        # lies on this global anchor phase.
+        on_phase = (current >= offset) & (((current - offset) % stride) == 0)
+        current_valid = ~on_phase
+        indices_2d = xp.concatenate((anchor_indices, current), axis=1)
+        valid_2d = xp.concatenate((anchor_valid, current_valid), axis=1)
+    else:
+        indices_2d = anchor_indices
+        valid_2d = anchor_valid
+
+    indices = xp.broadcast_to(
+        indices_2d[None, None, :, :],
+        (batch_size, 1, seq_len, key_slots),
+    ).copy()
+    valid = xp.broadcast_to(valid_2d[None, None, :, :], indices.shape).copy()
+    return KeySelectionPlan(indices, valid)

@@ -1,7 +1,7 @@
 """Experts for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, is_bfloat16_dtype
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
 
@@ -94,6 +94,14 @@ class ExpertsInference:
         self.W_up_stack = None
         self.W_down_stack = None
 
+        # CuPy 14.x cannot execute generic N-D BF16 matmul.  Single-token
+        # decode evaluates all experts as one batched operation, so retain
+        # FP32 mirrors of those stacked matrices only when the model weights
+        # are BF16.  Prompt/prefill still uses the original BF16 2-D GEMMs.
+        self.W_gate_stack_f32 = None
+        self.W_up_stack_f32 = None
+        self.W_down_stack_f32 = None
+
     def set_weights(self, experts):
         """Set weights and build persistent stacked decode matrices once."""
         for i in range(self.n_experts):
@@ -108,6 +116,21 @@ class ExpertsInference:
         self.W_down_stack = xp.stack(
             [expert.W_down for expert in self.experts], axis=0
         )
+
+        if is_bfloat16_dtype(self.W_gate_stack.dtype):
+            self.W_gate_stack_f32 = self.W_gate_stack.astype(
+                xp.float32, copy=False
+            )
+            self.W_up_stack_f32 = self.W_up_stack.astype(
+                xp.float32, copy=False
+            )
+            self.W_down_stack_f32 = self.W_down_stack.astype(
+                xp.float32, copy=False
+            )
+        else:
+            self.W_gate_stack_f32 = None
+            self.W_up_stack_f32 = None
+            self.W_down_stack_f32 = None
 
     def forward(self, x, weights, expert_indices):
         """Sparse inference dispatch with a special single-token decode path.
@@ -127,27 +150,48 @@ class ExpertsInference:
 
         if N == 1:
             # GPU-only decode experiment: evaluate all experts together rather
-            # than synchronizing selected expert ids to Python.  This performs
-            # more arithmetic than sparse top-k, but converts many tiny dynamic
-            # operations into three regular batched matmuls.  Benchmark on the
-            # target GPU before keeping this path.
-            x_experts = x_flat[xp.newaxis, :, :]  # [1,1,D]
-            g = xp.matmul(x_experts, self.W_gate_stack)  # [E,1,Dff]
-            u = xp.matmul(x_experts, self.W_up_stack)    # [E,1,Dff]
+            # than synchronizing selected expert ids to Python.  CuPy 14.x
+            # cannot run its generic N-D matmul path with BF16 operands.  For
+            # BF16 models, use persistent FP32 mirrors for these *batched*
+            # single-token expert products.  The much larger prompt/prefill
+            # expert products remain true 2-D BF16 GEMMs below.
+            bf16_decode = self.W_gate_stack_f32 is not None
+            if bf16_decode:
+                x_experts = x_flat.astype(
+                    xp.float32, copy=False
+                )[xp.newaxis, :, :]
+                W_gate = self.W_gate_stack_f32
+                W_up = self.W_up_stack_f32
+                W_down = self.W_down_stack_f32
+            else:
+                x_experts = x_flat[xp.newaxis, :, :]
+                W_gate = self.W_gate_stack
+                W_up = self.W_up_stack
+                W_down = self.W_down_stack
+
+            g = xp.matmul(x_experts, W_gate)  # [E,1,Dff]
+            u = xp.matmul(x_experts, W_up)    # [E,1,Dff]
             h = silu(g) * u
-            all_outputs = xp.matmul(
-                h, self.W_down_stack
-            )  # [E,1,D]
+            all_outputs = xp.matmul(h, W_down)  # [E,1,D]
 
             selected = all_outputs[
                 expert_indices.reshape(-1), 0, :
             ]  # [k,D], GPU gather only after expert computation
+            combine_weights = weights_flat[0, :, xp.newaxis]
+            if bf16_decode:
+                combine_weights = combine_weights.astype(
+                    xp.float32, copy=False
+                )
             combined = xp.sum(
-                selected * weights_flat[0, :, xp.newaxis],
+                selected * combine_weights,
                 axis=0,
             )
-            y_flat[0, :] = combined
-            return y_flat.reshape(batch_size, seq_len, d_model)
+
+            # Return the branch in the model compute dtype so the next block
+            # continues to use BF16 2-D projection GEMMs.
+            if bf16_decode:
+                combined = combined.astype(x.dtype, copy=False)
+            return combined.reshape(batch_size, seq_len, d_model)
 
         # Prompt/prefill path: group assignments once instead of performing
         # one device-synchronizing xp.any() check for every expert.

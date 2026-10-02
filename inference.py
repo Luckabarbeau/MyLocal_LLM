@@ -47,7 +47,14 @@ from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 
 
 def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
-    """Apply softmax with temperature scaling."""
+    """Apply softmax with temperature scaling in FP32.
+
+    CuPy's sorting/partitioning stack does not support BF16, and probability
+    calculations are numerically safer in FP32 anyway.  Sampling operates on
+    only one vocabulary vector per generated token, so this promotion is
+    negligible compared with the model forward pass.
+    """
+    logits = logits.astype(xp.float32, copy=False)
     # Subtract max for numerical stability
     logits = logits / temperature
     logits = logits - xp.max(logits, axis=-1, keepdims=True)
@@ -57,6 +64,7 @@ def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
 
 def greedy_decode(logits: np.ndarray) -> int:
     """Greedy decoding: pick highest probability token."""
+    logits = logits.astype(xp.float32, copy=False)
     return int(xp.argmax(logits, axis=-1))
 
 
@@ -89,7 +97,7 @@ def top_k_sample(logits, k: int, temperature: float = 1.0) -> int:
     # The generation path supplies a single [vocab] vector.  Flattening keeps
     # the helper robust to an accidental [1, vocab] input without making a
     # copy.
-    logits = logits.reshape(-1)
+    logits = logits.reshape(-1).astype(xp.float32, copy=False)
     vocab_size = int(logits.shape[0])
     k = max(1, min(int(k), vocab_size))
 

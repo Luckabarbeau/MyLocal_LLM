@@ -46,10 +46,12 @@ class RMSNorm:
             # Scale by gamma - keep this in FP32 to avoid extra conversion
             y_f32 = x_hat_f32 * self.gamma.data.astype("float32", copy=False)
             
-            # Cache FP32 quantities for backward
+            # Cache only the original low-precision input and inverse RMS.
+            # x_f32 and x_hat_f32 are cheap element-wise reconstructions in
+            # backward; retaining both full FP32 tensors needlessly doubles
+            # the RMSNorm activation footprint.
             cache = {
-                "x_f32": x_f32,
-                "x_hat_f32": x_hat_f32,
+                "x": x,
                 "inv_rms": inv_rms,
                 "original_dtype": input_dtype,
             }
@@ -63,9 +65,10 @@ class RMSNorm:
             x_hat = x * inv_rms
             y = x_hat * self.gamma.data
             
+            # x_hat is inexpensive to reconstruct in backward from x and
+            # inv_rms, so do not retain another full activation tensor.
             cache = {
                 "x": x,
-                "x_hat": x_hat,
                 "inv_rms": inv_rms,
                 "original_dtype": input_dtype,
             }
@@ -88,10 +91,12 @@ class RMSNorm:
         input_dtype = cache["original_dtype"]
         
         if is_low_precision_dtype(input_dtype):
-            # Get cached FP32 values
-            x_f32 = cache["x_f32"]
-            x_hat_f32 = cache["x_hat_f32"]
+            # Reconstruct the FP32 normalization state from the compact
+            # low-precision cache.  This is the exact same conversion and
+            # element-wise product used in forward.
+            x_f32 = cache["x"].astype("float32", copy=False)
             inv_rms = cache["inv_rms"]  # Already FP32
+            x_hat_f32 = x_f32 * inv_rms
             
             # Convert dy to float32 for computation
             dy_f32 = dy.astype("float32", copy=False)
@@ -115,8 +120,8 @@ class RMSNorm:
         else:
             # Float32 path - standard computation
             x = cache["x"]
-            x_hat = cache["x_hat"]
             inv_rms = cache["inv_rms"]
+            x_hat = x * inv_rms
             d = x.shape[-1]
 
             reduce_axes = tuple(range(dy.ndim - 1))

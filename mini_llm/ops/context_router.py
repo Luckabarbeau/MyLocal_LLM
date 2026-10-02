@@ -158,10 +158,12 @@ class CausalQueryPooler:
         pooled = xp.sum(windows * alpha[..., None], axis=2)
         cache = {
             "x_shape": x.shape,
+            "x": x,
             "route_starts": route_starts,
             "indices": indices,
             "valid": valid,
-            "windows": windows,
+            # Re-gather the query windows during backward instead of keeping
+            # the large [B,R,W,D] tensor alive for the whole layer backward.
             "alpha_work": alpha_work,
             "scale": scale,
         }
@@ -203,7 +205,7 @@ class CausalQueryPooler:
             dwindow = dpooled[:, :, None, :] / counts[:, :, None, :]
             dwindow = dwindow * valid[None, :, :, None]
         else:
-            windows = cache["windows"]
+            windows = cache["x"][:, indices, :]
             alpha_work = cache["alpha_work"]
             scale = cache["scale"]
             alpha_compute = (

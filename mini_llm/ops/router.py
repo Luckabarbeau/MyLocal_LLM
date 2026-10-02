@@ -95,26 +95,11 @@ class Router:
         output_weights, expert_indices, topk_cache = selected_topk_softmax_forward(
             logits, self.k, output_dtype=x.dtype
         )
-        output_weights_f32 = topk_cache["weights_work"]
-        selected_logits = xp.take_along_axis(
-            logits.astype("float32", copy=False)
-            if is_low_precision_dtype(logits.dtype) else logits,
-            expert_indices,
-            axis=-1,
-        )
-        flat_indices = expert_indices.reshape(-1, self.k)
-        batch_idx = xp.arange(batch_size * seq_len)[:, None]
-
+        # Backward only needs the input and the reusable selected-softmax
+        # cache.  Do not retain duplicate logits/indices/weights that are
+        # already represented inside topk_cache.
         cache = {
             "x": x,
-            "logits": logits,
-            "expert_indices": expert_indices,
-            "output_weights": output_weights,
-            "output_weights_f32": output_weights_f32,
-            # Store selected logits for backward pass (needed for gradient computation)
-            "selected_logits": selected_logits,
-            "selected_expert_indices": flat_indices,
-            "batch_idx": batch_idx,
             "topk_cache": topk_cache,
         }
         
@@ -141,12 +126,6 @@ class Router:
             dx: Gradient w.r.t. input x, shape (B, T, d_model)
         """
         x = cache["x"]
-        expert_indices = cache["expert_indices"]
-        output_weights = cache["output_weights"]
-        output_weights_f32 = cache.get("output_weights_f32", output_weights)
-        selected_logits = cache["selected_logits"]
-        batch_idx = cache["batch_idx"]
-        
         batch_size, seq_len, _ = x.shape
         N = batch_size * seq_len
         

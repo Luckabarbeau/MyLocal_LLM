@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -248,6 +251,78 @@ def build_root_manifest(
     }
 
 
+
+def parallelism_plan(
+    requested_workers: int,
+    total_threads: int,
+    pending_sources: int,
+) -> tuple[int, int]:
+    """Return ``(source_workers, tokenizer_threads_per_worker)``.
+
+    Source generation is independent, so separate sources can safely run in
+    different processes.  Hugging Face ``tokenizers`` uses Rayon internally;
+    its pool size is bounded per process so the aggregate CPU usage stays near
+    the user-requested budget rather than multiplying ``workers * cpu_count``.
+    """
+
+    if requested_workers <= 0:
+        raise ValueError("workers must be positive")
+    if total_threads <= 0:
+        raise ValueError("threads must be positive")
+    if pending_sources <= 0:
+        return 0, 0
+
+    workers = min(int(requested_workers), int(pending_sources), int(total_threads))
+    tokenizer_threads = max(1, int(total_threads) // workers)
+    return workers, tokenizer_threads
+
+
+def _generate_source_worker(job: dict) -> tuple[str, dict]:
+    """Generate one source in a spawned process.
+
+    ``RAYON_NUM_THREADS`` must be configured before the first tokenizer encode
+    in this process.  Each worker loads its own tokenizer instance, avoiding
+    cross-process tokenizer state and fork-after-Rayon hazards.
+    """
+
+    tokenizer_threads = int(job["tokenizer_threads"])
+    os.environ["RAYON_NUM_THREADS"] = str(tokenizer_threads)
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+    tokenizer_path = Path(job["tokenizer_path"])
+    tokenizer = load_tokenizer(str(tokenizer_path))
+    vocab_size = len(tokenizer)
+    if vocab_size != int(job["vocab_size"]):
+        raise RuntimeError(
+            f"worker tokenizer vocabulary changed: {vocab_size} != "
+            f"{job['vocab_size']}"
+        )
+    eos_id = tokenizer_token_id(tokenizer, tokenizer.eos_token)
+    if eos_id != int(job["eos_id"]):
+        raise RuntimeError(
+            f"worker tokenizer EOS changed: {eos_id} != {job['eos_id']}"
+        )
+
+    manifest = generate_source(
+        source_name=job["source_name"],
+        source_path=Path(job["source_path"]),
+        text_column=job["text_column"],
+        tokenizer=tokenizer,
+        eos_id=eos_id,
+        tokenizer_hash=job["tokenizer_hash"],
+        vocab_size=vocab_size,
+        source_dir=Path(job["source_dir"]),
+        shard_size_mb=float(job["shard_size_mb"]),
+        batch_documents=int(job["batch_documents"]),
+        parquet_batch_size=int(job["parquet_batch_size"]),
+        val_ratio=float(job["val_ratio"]),
+        seed=int(job["seed"]),
+        weight=float(job["weight"]),
+        max_documents=job["max_documents"],
+    )
+    return job["source_name"], manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate per-source packed shards for weighted pretraining"
@@ -265,6 +340,25 @@ def main() -> None:
     parser.add_argument("--parquet-batch-size", type=int, default=1024)
     parser.add_argument("--val-ratio", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help=(
+            "Number of corpus sources to generate concurrently in separate "
+            "processes. Each source writes only to its own directory."
+        ),
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help=(
+            "Total CPU thread budget for shard generation. The budget is "
+            "divided across active source workers and used to bound the "
+            "Hugging Face tokenizer Rayon pool. Default: os.cpu_count()."
+        ),
+    )
     parser.add_argument(
         "--source",
         action="append",
@@ -290,6 +384,17 @@ def main() -> None:
         raise ValueError("batch-documents must be positive")
     if args.parquet_batch_size <= 0:
         raise ValueError("parquet-batch-size must be positive")
+    if args.workers <= 0:
+        raise ValueError("workers must be positive")
+    total_threads = int(args.threads or (os.cpu_count() or 1))
+    if total_threads <= 0:
+        raise ValueError("threads must be positive")
+
+    # Bound the tokenizer pool even in the sequential path.  The final value
+    # for parallel workers is refined below once the number of pending sources
+    # is known.
+    os.environ["RAYON_NUM_THREADS"] = str(total_threads)
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     data_root = Path(args.data_root).expanduser().resolve()
     mix_path = Path(args.mix_config).expanduser().resolve()
@@ -338,13 +443,15 @@ def main() -> None:
     print(f"Tokenizer vocabulary: {vocab_size:,}")
     print(f"Output root:          {output_root}")
     print(f"Sources:              {', '.join(selected)}")
-    print()
 
+    jobs = []
     for name in selected:
         source_cfg = configured[name]
         source_dir = output_root / name
         completed_manifest = source_dir / "manifest.json"
-        existing_bins = list(source_dir.glob("*_shard_*.bin")) if source_dir.exists() else []
+        existing_bins = (
+            list(source_dir.glob("*_shard_*.bin")) if source_dir.exists() else []
+        )
         if completed_manifest.exists() and not args.overwrite:
             existing = json.loads(completed_manifest.read_text())
             if existing.get("tokenizer_sha256") != tokenizer_hash:
@@ -364,29 +471,82 @@ def main() -> None:
 
         source_path = data_root / source_cfg["relative_path"]
         text_column = overrides.get(name, source_cfg.get("text_column"))
-        print(f"[{name}] source: {source_path}")
-        manifest = generate_source(
-            source_name=name,
-            source_path=source_path,
-            text_column=text_column,
-            tokenizer=tokenizer,
-            eos_id=eos_id,
-            tokenizer_hash=tokenizer_hash,
-            vocab_size=vocab_size,
-            source_dir=source_dir,
-            shard_size_mb=args.shard_size_mb,
-            batch_documents=args.batch_documents,
-            parquet_batch_size=args.parquet_batch_size,
-            val_ratio=args.val_ratio,
-            seed=args.seed,
-            weight=float(source_cfg["pretraining_weight"]),
-            max_documents=args.max_documents_per_source,
+        jobs.append(
+            {
+                "source_name": name,
+                "source_path": str(source_path),
+                "text_column": text_column,
+                "tokenizer_path": str(tokenizer_path),
+                "eos_id": eos_id,
+                "tokenizer_hash": tokenizer_hash,
+                "vocab_size": vocab_size,
+                "source_dir": str(source_dir),
+                "shard_size_mb": args.shard_size_mb,
+                "batch_documents": args.batch_documents,
+                "parquet_batch_size": args.parquet_batch_size,
+                "val_ratio": args.val_ratio,
+                "seed": args.seed,
+                "weight": float(source_cfg["pretraining_weight"]),
+                "max_documents": args.max_documents_per_source,
+            }
         )
+
+    source_workers, tokenizer_threads = parallelism_plan(
+        args.workers, total_threads, len(jobs)
+    )
+    if jobs:
+        print(f"CPU thread budget:    {total_threads}")
+        print(f"Source workers:       {source_workers}")
+        print(f"Tokenizer threads:    {tokenizer_threads} per worker")
         print(
-            f"[{name}] complete: {manifest['tokens']['train']:,} train tokens, "
-            f"{manifest['tokens']['val']:,} val tokens, "
-            f"{manifest['shards']['train']}+{manifest['shards']['val']} shards"
+            f"Approx. active pool:  {source_workers * tokenizer_threads} "
+            "tokenizer threads"
         )
+    print()
+
+    for job in jobs:
+        job["tokenizer_threads"] = tokenizer_threads
+        print(f"[{job['source_name']}] source: {job['source_path']}")
+
+    if source_workers == 1:
+        # Avoid process startup overhead for the common sequential case while
+        # still respecting the explicit tokenizer thread budget.
+        if jobs:
+            os.environ["RAYON_NUM_THREADS"] = str(tokenizer_threads)
+        for job in jobs:
+            name, manifest = _generate_source_worker(job)
+            print(
+                f"[{name}] complete: {manifest['tokens']['train']:,} train tokens, "
+                f"{manifest['tokens']['val']:,} val tokens, "
+                f"{manifest['shards']['train']}+{manifest['shards']['val']} shards"
+            )
+    elif jobs:
+        # ``spawn`` is intentional: forking a process after a tokenizer/Rayon
+        # pool has been initialized can disable tokenizers parallelism or lead
+        # to unsafe inherited thread state.
+        context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=source_workers,
+            mp_context=context,
+        ) as executor:
+            future_to_name = {
+                executor.submit(_generate_source_worker, job): job["source_name"]
+                for job in jobs
+            }
+            try:
+                for future in as_completed(future_to_name):
+                    name, manifest = future.result()
+                    print(
+                        f"[{name}] complete: "
+                        f"{manifest['tokens']['train']:,} train tokens, "
+                        f"{manifest['tokens']['val']:,} val tokens, "
+                        f"{manifest['shards']['train']}+"
+                        f"{manifest['shards']['val']} shards"
+                    )
+            except BaseException:
+                for future in future_to_name:
+                    future.cancel()
+                raise
 
     root_manifest = build_root_manifest(
         output_root, mix_config, root_tokenizer, vocab_size

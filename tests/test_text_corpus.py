@@ -25,6 +25,48 @@ def test_text_source_streams_text_and_jsonl(tmp_path):
     assert texts == ["plain text", "code-ish content", "second record"]
 
 
+
+def test_text_source_streams_json_suffix_jsonlines(tmp_path):
+    root = tmp_path / "github"
+    root.mkdir()
+    path = root / "gharchive-dolma-0004.json"
+    with path.open("w") as handle:
+        handle.write(json.dumps({"id": "a", "text": "def alpha():\n    return 1"}) + "\n")
+        handle.write(json.dumps({"id": "b", "text": "class Beta:\n    pass"}) + "\n")
+
+    source = TextCorpusSource("github", root)
+    assert source.discover_files() == [path]
+    assert list(source.iter_texts(seed=1, shuffle_files=False)) == [
+        "def alpha():\n    return 1",
+        "class Beta:\n    pass",
+    ]
+    inspected = source.inspect()
+    assert inspected["suffix_counts"][".json"] == 1
+    assert inspected["json_fields"] == ["id", "text"]
+    assert inspected["selected_text_column"] == "text"
+
+
+def test_text_source_streams_top_level_json_array(tmp_path):
+    root = tmp_path / "array"
+    root.mkdir()
+    path = root / "records.json"
+    with path.open("w") as handle:
+        json.dump(
+            [
+                {"content": "first document"},
+                {"content": "second document"},
+            ],
+            handle,
+            indent=2,
+        )
+
+    source = TextCorpusSource("array", root)
+    assert list(source.iter_texts(seed=1, shuffle_files=False)) == [
+        "first document",
+        "second document",
+    ]
+
+
 def test_choose_text_column_prefers_text_then_code_candidates():
     assert TextCorpusSource.choose_text_column(["id", "text", "code"]) == "text"
     assert TextCorpusSource.choose_text_column(["id", "code"]) == "code"

@@ -7,7 +7,7 @@ that concern separate from tokenization and model training.
 
 Supported inputs are discovered recursively:
 - Parquet (preferred for the prepared datasets)
-- JSONL / NDJSON
+- JSON / JSONL / NDJSON
 - plain text / markdown
 - common source-code files (useful when a GitHub corpus is unpacked as files)
 
@@ -88,6 +88,7 @@ _TEXT_SUFFIXES = {
     ".yml",
     ".toml",
 }
+_JSON_SUFFIXES = {".json"}
 _JSONL_SUFFIXES = {".jsonl", ".ndjson"}
 
 
@@ -135,6 +136,7 @@ class TextCorpusSource:
         suffix = path.suffix.lower()
         return (
             suffix == ".parquet"
+            or suffix in _JSON_SUFFIXES
             or suffix in _JSONL_SUFFIXES
             or suffix in {s.lower() for s in _TEXT_SUFFIXES}
         )
@@ -195,18 +197,141 @@ class TextCorpusSource:
                 if text:
                     yield text
 
+    @staticmethod
+    def _iter_json_values(
+        path: Path, chunk_size: int = 4 * 1024 * 1024
+    ) -> Iterator[object]:
+        """Stream values from either JSON-lines or a top-level JSON array.
+
+        Some large prepared corpora (notably Dolma/GitHub exports) use a
+        ``.json`` suffix even though the file contains one JSON object per
+        line.  Others use an ordinary top-level JSON array.  Loading either
+        form with ``json.load`` is unacceptable for multi-gigabyte corpora,
+        so this parser incrementally feeds ``JSONDecoder.raw_decode``.
+        """
+
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+
+        decoder = json.JSONDecoder()
+        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+            buffer = ""
+            pos = 0
+            eof = False
+            in_array: Optional[bool] = None
+
+            def refill() -> bool:
+                nonlocal buffer, pos, eof
+                if eof:
+                    return False
+                # Discard already-consumed text before appending the next
+                # chunk.  This bounds memory to roughly one chunk plus the
+                # largest individual JSON record.
+                if pos:
+                    buffer = buffer[pos:]
+                    pos = 0
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    eof = True
+                    return False
+                buffer += chunk
+                return True
+
+            refill()
+            while True:
+                while True:
+                    while pos < len(buffer) and buffer[pos].isspace():
+                        pos += 1
+                    if pos < len(buffer) or eof:
+                        break
+                    refill()
+
+                if in_array is None:
+                    if pos >= len(buffer):
+                        return
+                    in_array = buffer[pos] == "["
+                    if in_array:
+                        pos += 1
+
+                if in_array:
+                    while True:
+                        while pos < len(buffer) and buffer[pos].isspace():
+                            pos += 1
+                        if pos >= len(buffer):
+                            if refill():
+                                continue
+                            raise ValueError(f"unterminated JSON array in {path}")
+                        if buffer[pos] == "]":
+                            return
+                        if buffer[pos] == ",":
+                            pos += 1
+                            continue
+                        break
+                else:
+                    while pos >= len(buffer) and not eof:
+                        refill()
+                    if pos >= len(buffer):
+                        return
+
+                while True:
+                    try:
+                        value, end = decoder.raw_decode(buffer, pos)
+                    except json.JSONDecodeError as exc:
+                        if refill():
+                            continue
+                        raise ValueError(
+                            f"invalid or truncated JSON corpus file {path}: {exc}"
+                        ) from exc
+                    pos = end
+                    yield value
+                    break
+
+    def _iter_json(self, path: Path) -> Iterator[str]:
+        selected_column: Optional[str] = self.text_column
+        for value in self._iter_json_values(path):
+            if isinstance(value, str):
+                text = value
+            elif isinstance(value, dict):
+                if selected_column is None:
+                    selected_column = self.choose_text_column(value.keys())
+                elif selected_column not in value:
+                    raise ValueError(
+                        f"requested/inferred text column {selected_column!r} is not "
+                        f"present in a JSON record from {path}; available columns: "
+                        f"{list(value.keys())}"
+                    )
+                raw = value.get(selected_column)
+                text = "" if raw is None else str(raw)
+            else:
+                continue
+            if text:
+                yield text
+
     def _iter_jsonl(self, path: Path) -> Iterator[str]:
+        selected_column: Optional[str] = self.text_column
         with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 line = line.strip()
                 if not line:
                     continue
-                value = json.loads(line)
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"invalid JSONL record in {path} at line {line_number}: {exc}"
+                    ) from exc
                 if isinstance(value, str):
                     text = value
                 elif isinstance(value, dict):
-                    column = self.choose_text_column(value.keys(), self.text_column)
-                    raw = value.get(column)
+                    if selected_column is None:
+                        selected_column = self.choose_text_column(value.keys())
+                    elif selected_column not in value:
+                        raise ValueError(
+                            f"requested/inferred text column {selected_column!r} is not "
+                            f"present in a JSONL record from {path}; available columns: "
+                            f"{list(value.keys())}"
+                        )
+                    raw = value.get(selected_column)
                     text = "" if raw is None else str(raw)
                 else:
                     continue
@@ -233,6 +358,8 @@ class TextCorpusSource:
             suffix = path.suffix.lower()
             if suffix == ".parquet":
                 yield from self._iter_parquet(path)
+            elif suffix in _JSON_SUFFIXES:
+                yield from self._iter_json(path)
             elif suffix in _JSONL_SUFFIXES:
                 yield from self._iter_jsonl(path)
             else:
@@ -263,6 +390,21 @@ class TextCorpusSource:
                 )
             except ImportError:
                 result["parquet_columns"] = "pyarrow unavailable"
+
+        first_json = next((p for p in files if p.suffix.lower() == ".json"), None)
+        if first_json is not None:
+            try:
+                sample = next(self._iter_json_values(first_json))
+            except StopIteration:
+                result["json_sample"] = "empty"
+            else:
+                result["json_sample_type"] = type(sample).__name__
+                if isinstance(sample, dict):
+                    columns = list(sample.keys())
+                    result["json_fields"] = columns
+                    result["selected_text_column"] = self.choose_text_column(
+                        columns, self.text_column
+                    )
         return result
 
 

@@ -93,3 +93,5 @@ test_full_shards/
 logs/
 
 tokenizers/
+
+token_shards_pretraining_65280/

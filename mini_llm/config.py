@@ -143,3 +143,54 @@ class ModelConfig:
             top_k=2,
             d_ff=1_536,
         )
+
+
+@dataclass(frozen=True)
+class ContextRouterConfig:
+    """Configuration for learned long-context block retrieval.
+
+    ``history_block_size`` controls how distant history is summarized and
+    stored. ``routing_stride`` independently controls how often a new retrieval
+    decision is made, so retrieval frequency can be changed without changing
+    the historical memory granularity.
+    """
+
+    history_block_size: int = 256
+    routing_stride: int = 256
+    query_window: int = 2_048
+    router_dim: int = 32
+    top_k_blocks: int = 8
+    exclude_recent_tokens: int = 4_096
+
+    query_pooling: str = "learned"
+    history_pooling: str = "mean"
+    score_function: str = "dot"
+    selection_strategy: str = "topk"
+    num_queries: int = 1
+
+    def __post_init__(self):
+        positive_ints = {
+            "history_block_size": self.history_block_size,
+            "routing_stride": self.routing_stride,
+            "query_window": self.query_window,
+            "router_dim": self.router_dim,
+            "top_k_blocks": self.top_k_blocks,
+            "num_queries": self.num_queries,
+        }
+        for name, value in positive_ints.items():
+            if int(value) != value or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.exclude_recent_tokens < 0:
+            raise ValueError("exclude_recent_tokens must be non-negative")
+        if self.query_pooling not in {"mean", "last", "learned"}:
+            raise ValueError("query_pooling must be 'mean', 'last', or 'learned'")
+        if self.history_pooling not in {"mean", "first", "last", "learned"}:
+            raise ValueError(
+                "history_pooling must be 'mean', 'first', 'last', or 'learned'"
+            )
+        if self.score_function != "dot":
+            raise ValueError("only score_function='dot' is currently implemented")
+        if self.selection_strategy != "topk":
+            raise ValueError(
+                "only selection_strategy='topk' is currently implemented"
+            )

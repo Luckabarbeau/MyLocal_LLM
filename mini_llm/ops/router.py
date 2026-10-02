@@ -11,6 +11,7 @@ straight-through estimator (fixed selection during gradient computation).
 """
 
 from ..backend import xp, resolve_dtype, is_low_precision_dtype
+from .topk import selected_topk_softmax_forward, selected_topk_softmax_backward
 
 
 class Router:
@@ -88,42 +89,22 @@ class Router:
             batch_size, seq_len, self.n_experts
         ) + self.b_router_param.data
         
-        # CuPy/Thrust does not currently implement argsort for BF16 arrays.
-        # Router logits are tiny compared with the expert activations
-        # (n_experts is typically single-digit), so promote them to FP32 for
-        # expert selection and router softmax. The projection GEMM above and
-        # all expert GEMMs remain in BF16.
-        logits_work = (
-            logits.astype("float32", copy=False)
-            if is_low_precision_dtype(logits.dtype) else logits
+        # Top-K selection and selected softmax are shared with the context
+        # router.  The helper preserves the original deterministic argsort and
+        # FP32 routing math for FP16/BF16 inputs.
+        output_weights, expert_indices, topk_cache = selected_topk_softmax_forward(
+            logits, self.k, output_dtype=x.dtype
         )
-
-        # Select top-k experts using argsort for deterministic selection.
-        expert_indices = xp.argsort(-logits_work, axis=-1)[..., :self.k]
-
-        # Gather selected logits for softmax computation
+        output_weights_f32 = topk_cache["weights_work"]
+        selected_logits = xp.take_along_axis(
+            logits.astype("float32", copy=False)
+            if is_low_precision_dtype(logits.dtype) else logits,
+            expert_indices,
+            axis=-1,
+        )
         flat_indices = expert_indices.reshape(-1, self.k)
         batch_idx = xp.arange(batch_size * seq_len)[:, None]
 
-        logits_flat = logits_work.reshape(-1, self.n_experts)
-        selected_logits = logits_flat[batch_idx, flat_indices].reshape(batch_size, seq_len, self.k)
-        
-        # Router softmax/reductions run in FP32 for FP16/BF16 inputs.  Cast the
-        # selected weights back to the branch dtype for sparse expert GEMMs and
-        # weighted accumulation.
-        selected_work = (
-            selected_logits.astype("float32", copy=False)
-            if is_low_precision_dtype(selected_logits.dtype) else selected_logits
-        )
-        selected_logits_max = xp.max(selected_work, axis=-1, keepdims=True)
-        exp_selected = xp.exp(selected_work - selected_logits_max)
-        selected_sums = xp.sum(exp_selected, axis=-1, keepdims=True)
-        output_weights_f32 = exp_selected / selected_sums
-        output_weights = (
-            output_weights_f32.astype(x.dtype, copy=False)
-            if is_low_precision_dtype(x.dtype) else output_weights_f32
-        )
-        
         cache = {
             "x": x,
             "logits": logits,
@@ -134,6 +115,7 @@ class Router:
             "selected_logits": selected_logits,
             "selected_expert_indices": flat_indices,
             "batch_idx": batch_idx,
+            "topk_cache": topk_cache,
         }
         
         return output_weights, expert_indices, cache
@@ -168,23 +150,9 @@ class Router:
         batch_size, seq_len, _ = x.shape
         N = batch_size * seq_len
         
-        # dL/dw = dweights (gradient w.r.t. output weights)
-        # For softmax: dw/dz = diag(w) - w * w^T
-        # So: dL/dz = w * (dL/dw - sum_j(w_j * dL/dw_j))
-        
-        # Compute the correction term: sum_j(w_j * dL/dw_j)
-        dweights_work = dweights.astype("float32", copy=False)
-        weights_work = output_weights_f32.astype("float32", copy=False)
-        w_dweights_sum = xp.sum(weights_work * dweights_work, axis=-1, keepdims=True)
-
-        # Gradient w.r.t. selected logits in FP32, then cast only for GEMMs.
-        dselected_logits = weights_work * (dweights_work - w_dweights_sum)
-        
-        # Scatter selected gradients back to full logits
-        dlogits_flat = xp.zeros((N, self.n_experts), dtype=dselected_logits.dtype)
-        dselected_logits_flat = dselected_logits.reshape(-1, self.k)
-        dlogits_flat[batch_idx, expert_indices.reshape(-1, self.k)] = dselected_logits_flat
-        dlogits = dlogits_flat.reshape(batch_size, seq_len, self.n_experts)
+        # Reuse the same selected-softmax Jacobian/scatter primitive used by
+        # the context router.  Top-K identities remain fixed locally.
+        dlogits = selected_topk_softmax_backward(dweights, cache["topk_cache"])
         dlogits_compute = (
             dlogits.astype(x.dtype, copy=False)
             if is_low_precision_dtype(x.dtype) else dlogits

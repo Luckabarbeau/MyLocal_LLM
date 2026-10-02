@@ -1,7 +1,7 @@
 from ..backend import xp, scalar, is_low_precision_dtype
 
 
-def cross_entropy_forward(logits, targets):
+def cross_entropy_forward(logits, targets, loss_mask=None):
     """
     Cross entropy loss with mixed precision support.
     
@@ -31,7 +31,22 @@ def cross_entropy_forward(logits, targets):
 
         xp.exp(work, out=work)
         normalizer = xp.sum(work, axis=-1, keepdims=True)
-        loss_f32 = xp.mean(xp.log(normalizer[:, 0]) - target_shifted)
+        per_token_loss = xp.log(normalizer[:, 0]) - target_shifted
+        if loss_mask is None:
+            loss_f32 = xp.mean(per_token_loss)
+            mask_f32 = None
+            normalizer_count = float(n)
+        else:
+            mask_f32 = xp.asarray(loss_mask, dtype="float32").reshape(-1)
+            if mask_f32.shape[0] != n:
+                raise ValueError(
+                    f"loss_mask has {mask_f32.shape[0]} elements, expected {n}"
+                )
+            normalizer_count_backend = xp.sum(mask_f32)
+            normalizer_count = float(normalizer_count_backend.item())
+            if normalizer_count <= 0.0:
+                raise ValueError("loss_mask must select at least one target token")
+            loss_f32 = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
         # Reuse work as the FP32 probability cache needed by backward.
         xp.divide(work, normalizer, out=work)
@@ -41,6 +56,8 @@ def cross_entropy_forward(logits, targets):
             "targets": flat_targets,
             "original_shape": logits.shape,
             "n": n,
+            "loss_mask_f32": mask_f32,
+            "normalizer_count": normalizer_count,
         }
 
         return scalar(loss_f32), cache
@@ -53,13 +70,30 @@ def cross_entropy_forward(logits, targets):
 
         rows = xp.arange(n)
         target_probs = probs[rows, flat_targets]
-        loss = -xp.mean(xp.log(target_probs + 1e-30))
+        per_token_loss = -xp.log(target_probs + 1e-30)
+        if loss_mask is None:
+            loss = xp.mean(per_token_loss)
+            mask_f32 = None
+            normalizer_count = float(n)
+        else:
+            mask_f32 = xp.asarray(loss_mask, dtype="float32").reshape(-1)
+            if mask_f32.shape[0] != n:
+                raise ValueError(
+                    f"loss_mask has {mask_f32.shape[0]} elements, expected {n}"
+                )
+            normalizer_count_backend = xp.sum(mask_f32)
+            normalizer_count = float(normalizer_count_backend.item())
+            if normalizer_count <= 0.0:
+                raise ValueError("loss_mask must select at least one target token")
+            loss = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
         return scalar(loss), {
             "probs": probs,
             "targets": flat_targets,
             "original_shape": logits.shape,
             "n": n,
+            "loss_mask_f32": mask_f32,
+            "normalizer_count": normalizer_count,
         }
 
 
@@ -86,9 +120,13 @@ def cross_entropy_backward(cache):
     targets = cache["targets"]
     n = cache["n"]
     original_shape = cache["original_shape"]
-    
+    loss_mask_f32 = cache.get("loss_mask_f32")
+    normalizer_count = float(cache.get("normalizer_count", n))
+
     rows = xp.arange(n)
     probs[rows, targets] -= 1.0
-    probs /= float(n)
+    if loss_mask_f32 is not None:
+        probs *= loss_mask_f32[:, None]
+    probs /= normalizer_count
     
     return probs.reshape(original_shape)

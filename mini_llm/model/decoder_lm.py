@@ -152,19 +152,22 @@ class DecoderLanguageModel:
         
         return logits, cache
     
-    def compute_loss(self, logits, targets):
+    def compute_loss(self, logits, targets, loss_mask=None):
         """
         Compute cross-entropy loss.
         
         Args:
             logits: Logits from forward pass, shape (B, T, vocab_size)
             targets: Target token IDs, shape (B, T)
-            
+            loss_mask: Optional mask, shape (B, T). Non-zero entries select
+                target positions that contribute to the loss. This is used for
+                assistant-only supervised fine-tuning.
+
         Returns:
             loss: Scalar loss value
             cache: Dictionary for backward pass
         """
-        return cross_entropy_forward(logits, targets)
+        return cross_entropy_forward(logits, targets, loss_mask=loss_mask)
     
     def backward_loss(self, loss_cache):
         """

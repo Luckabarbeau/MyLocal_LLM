@@ -13,7 +13,7 @@ def test_cosmopedia_pipeline():
     print("COSMOPEDE-V2 PIPELINE TEST (Limited)")
     print("=" * 70)
     
-    dataset_path = "../cosmopedia-v2/cosmopedia-v2"
+    dataset_path = "../pretraining_data/cosmopedia-v2"
     
     print(f"\n=== Step 1: Load Parquet Reader ===")
     parquet_reader = CosmopediaParquetReader(dataset_path=dataset_path)

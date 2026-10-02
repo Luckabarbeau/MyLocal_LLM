@@ -15,7 +15,7 @@ import csv
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Mapping
 
 try:
     import numpy as np
@@ -75,6 +75,9 @@ class ExtendedTrainer:
         rng_seed: int = 42,
         numerical_debug: bool = False,
         shard_cache_size: int = 2,
+        train_source_shards: Optional[Mapping[str, List[str]]] = None,
+        val_source_shards: Optional[Mapping[str, List[str]]] = None,
+        source_weights: Optional[Mapping[str, float]] = None,
     ):
         """
         Initialize the extended trainer.
@@ -101,10 +104,29 @@ class ExtendedTrainer:
             numerical_debug: Enable Inf/NaN checks at each tensor (slow, for debugging)
             shard_cache_size: Maximum number of train and validation shard
                 memmaps retained by the trainer.
+            train_source_shards: Optional mapping of source name to training
+                shard paths. When provided, minibatches choose a source using
+                ``source_weights`` before choosing that source's next shard.
+            val_source_shards: Validation counterpart to ``train_source_shards``.
+            source_weights: Sampling probabilities for mixed-corpus training.
+                Weights are normalized internally and are independent of the
+                number or physical size of shards in each source.
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
         self.val_shard_paths = [Path(p) for p in val_shard_paths]
+        self.train_source_shards = (
+            {str(name): [Path(p) for p in paths] for name, paths in train_source_shards.items()}
+            if train_source_shards is not None
+            else None
+        )
+        self.val_source_shards = (
+            {str(name): [Path(p) for p in paths] for name, paths in val_source_shards.items()}
+            if val_source_shards is not None
+            else None
+        )
+        self.source_weights = self._normalize_source_weights(source_weights)
+        self._validate_mixed_sources()
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.grad_accum_steps = grad_accum_steps
@@ -116,6 +138,12 @@ class ExtendedTrainer:
         self.val_steps = val_steps
         self.save_interval = save_interval
         self.shard_cache_size = max(1, int(shard_cache_size))
+        if self.train_source_shards is not None:
+            # Keep at least the current shard for each corpus mapped.  Memmaps
+            # reserve address space but do not copy whole shards into RAM.
+            self.shard_cache_size = max(
+                self.shard_cache_size, len(self.train_source_shards)
+            )
         
         # Effective batch size
         self.effective_batch_size = batch_size * grad_accum_steps
@@ -145,6 +173,16 @@ class ExtendedTrainer:
         # dataset in process memory.
         self.shards = OrderedDict()
         self.current_train_shard_idx = 0
+        self.current_train_source_shard_idx = (
+            {name: 0 for name in self.train_source_shards}
+            if self.train_source_shards is not None
+            else {}
+        )
+        self.train_source_batch_counts = (
+            {name: 0 for name in self.train_source_shards}
+            if self.train_source_shards is not None
+            else {}
+        )
         
         # Issue #12: Persistent RNGs (one for train, one for val)
         self.train_rng = np.random.default_rng(rng_seed)
@@ -155,6 +193,16 @@ class ExtendedTrainer:
         
         # Validation state
         self.current_val_shard_idx = 0
+        self.current_val_source_shard_idx = (
+            {name: 0 for name in self.val_source_shards}
+            if self.val_source_shards is not None
+            else {}
+        )
+        self.val_source_batch_counts = (
+            {name: 0 for name in self.val_source_shards}
+            if self.val_source_shards is not None
+            else {}
+        )
         self.val_shards = OrderedDict()
         
         # Numerical debugging
@@ -176,12 +224,72 @@ class ExtendedTrainer:
         print(f"ExtendedTrainer initialized:")
         print(f"  Train shards: {len(train_shard_paths)}")
         print(f"  Val shards: {len(val_shard_paths)}")
+        if self.train_source_shards is not None:
+            print("  Mixed pretraining sources:")
+            for name in self._source_names:
+                print(
+                    f"    {name:16s} {100.0 * self.source_weights[name]:6.2f}%  "
+                    f"{len(self.train_source_shards[name])} train shards / "
+                    f"{len(self.val_source_shards[name])} val shards"
+                )
         print(f"  Batch size: {batch_size} (effective: {self.effective_batch_size})")
         print(f"  Sequence length: {seq_length}")
         print(f"  Total steps: {total_steps}")
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Log file: {log_file}")
         
+    @staticmethod
+    def _normalize_source_weights(
+        source_weights: Optional[Mapping[str, float]],
+    ) -> Optional[Dict[str, float]]:
+        if source_weights is None:
+            return None
+        converted = {str(name): float(weight) for name, weight in source_weights.items()}
+        if any(weight < 0.0 for weight in converted.values()):
+            raise ValueError("source weights must be non-negative")
+        total = sum(converted.values())
+        if total <= 0.0:
+            raise ValueError("sum of source weights must be positive")
+        return {name: weight / total for name, weight in converted.items()}
+
+    def _validate_mixed_sources(self) -> None:
+        mixed_values = (
+            self.train_source_shards,
+            self.val_source_shards,
+            self.source_weights,
+        )
+        if all(value is None for value in mixed_values):
+            self._source_names = []
+            self._source_probabilities = None
+            return
+        if any(value is None for value in mixed_values):
+            raise ValueError(
+                "train_source_shards, val_source_shards, and source_weights "
+                "must be provided together"
+            )
+        train_names = set(self.train_source_shards)
+        val_names = set(self.val_source_shards)
+        weight_names = set(self.source_weights)
+        if train_names != val_names or train_names != weight_names:
+            raise ValueError(
+                "mixed train/validation sources and source weights must use "
+                "the same source names"
+            )
+        for name in train_names:
+            if not self.train_source_shards[name]:
+                raise ValueError(f"mixed source {name!r} has no training shards")
+            if not self.val_source_shards[name]:
+                raise ValueError(f"mixed source {name!r} has no validation shards")
+        self._source_names = sorted(train_names)
+        self._source_probabilities = np.asarray(
+            [self.source_weights[name] for name in self._source_names],
+            dtype=np.float64,
+        )
+
+    def _choose_source(self, rng) -> str:
+        index = int(rng.choice(len(self._source_names), p=self._source_probabilities))
+        return self._source_names[index]
+
     def _init_validation_blocks(self):
         """
         Issue #13: Initialize deterministic validation block set.
@@ -253,14 +361,14 @@ class ExtendedTrainer:
         if mmap_obj is not None:
             mmap_obj.close()
 
-    def _get_cached_shard(self, cache, shard_idx, paths, loader):
-        if shard_idx in cache:
-            shard = cache.pop(shard_idx)
-            cache[shard_idx] = shard
+    def _get_cached_shard(self, cache, cache_key, path, loader):
+        if cache_key in cache:
+            shard = cache.pop(cache_key)
+            cache[cache_key] = shard
             return shard
 
-        shard = loader(str(paths[shard_idx]))
-        cache[shard_idx] = shard
+        shard = loader(str(path))
+        cache[cache_key] = shard
 
         while len(cache) > self.shard_cache_size:
             _, evicted = cache.popitem(last=False)
@@ -274,16 +382,35 @@ class ExtendedTrainer:
         
         Uses persistent RNG for reproducibility (Issue #12).
         """
-        shard_data = self._get_cached_shard(
-            self.shards,
-            self.current_train_shard_idx,
-            self.train_shard_paths,
-            self.load_train_shard,
+        if self.train_source_shards is not None:
+            source = self._choose_source(self.train_rng)
+            paths = self.train_source_shards[source]
+            shard_idx = self.current_train_source_shard_idx[source]
+            shard_data = self._get_cached_shard(
+                self.shards,
+                (source, shard_idx),
+                paths[shard_idx],
+                self.load_train_shard,
+            )
+            self.current_train_source_shard_idx[source] = (
+                shard_idx + 1
+            ) % len(paths)
+            self.train_source_batch_counts[source] += 1
+        else:
+            shard_idx = self.current_train_shard_idx
+            shard_data = self._get_cached_shard(
+                self.shards,
+                shard_idx,
+                self.train_shard_paths[shard_idx],
+                self.load_train_shard,
+            )
+            self.current_train_shard_idx = (
+                self.current_train_shard_idx + 1
+            ) % len(self.train_shard_paths)
+
+        inputs, targets = create_minibatch(
+            shard_data, self.batch_size, self.seq_length, rng=self.train_rng
         )
-        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.train_rng)
-        
-        # Cycle through shards
-        self.current_train_shard_idx = (self.current_train_shard_idx + 1) % len(self.train_shard_paths)
         
         # Issue #16: Track tokens processed
         self.tokens_processed += self.batch_size * self.seq_length
@@ -296,16 +423,35 @@ class ExtendedTrainer:
         
         Uses deterministic validation block selection (Issue #13).
         """
-        shard_data = self._get_cached_shard(
-            self.val_shards,
-            self.current_val_shard_idx,
-            self.val_shard_paths,
-            self.load_val_shard,
+        if self.val_source_shards is not None:
+            source = self._choose_source(self.val_rng)
+            paths = self.val_source_shards[source]
+            shard_idx = self.current_val_source_shard_idx[source]
+            shard_data = self._get_cached_shard(
+                self.val_shards,
+                (source, shard_idx),
+                paths[shard_idx],
+                self.load_val_shard,
+            )
+            self.current_val_source_shard_idx[source] = (
+                shard_idx + 1
+            ) % len(paths)
+            self.val_source_batch_counts[source] += 1
+        else:
+            shard_idx = self.current_val_shard_idx
+            shard_data = self._get_cached_shard(
+                self.val_shards,
+                shard_idx,
+                self.val_shard_paths[shard_idx],
+                self.load_val_shard,
+            )
+            self.current_val_shard_idx = (
+                self.current_val_shard_idx + 1
+            ) % len(self.val_shard_paths)
+
+        inputs, targets = create_minibatch(
+            shard_data, self.batch_size, self.seq_length, rng=self.val_rng
         )
-        inputs, targets = create_minibatch(shard_data, self.batch_size, self.seq_length, rng=self.val_rng)
-        
-        # Cycle through shards
-        self.current_val_shard_idx = (self.current_val_shard_idx + 1) % len(self.val_shard_paths)
         
         return inputs, targets
     
@@ -490,6 +636,10 @@ class ExtendedTrainer:
             "total_steps": self.total_steps,
             "current_train_shard_idx": self.current_train_shard_idx,
             "current_val_shard_idx": self.current_val_shard_idx,
+            "current_train_source_shard_idx": self.current_train_source_shard_idx,
+            "current_val_source_shard_idx": self.current_val_source_shard_idx,
+            "train_source_batch_counts": self.train_source_batch_counts,
+            "val_source_batch_counts": self.val_source_batch_counts,
         }
         
         # Issue #12: Include RNG states

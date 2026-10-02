@@ -36,8 +36,6 @@ import numpy as np
 
 from mini_llm.backend import xp, validate_bfloat16_backend
 from mini_llm.config import ModelConfig
-from mini_llm.data.parquet_reader import CosmopediaParquetReader
-from mini_llm.data.token_shards import TokenShardGenerator, load_token_shard
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.train_extended import ExtendedTrainer
@@ -78,6 +76,15 @@ def parse_args():
         help=(
             "Directory containing token shards. Packed preprocessing uses "
             "train_shard_*.bin / val_shard_*.bin."
+        ),
+    )
+    parser.add_argument(
+        "--mixed-shard-root",
+        default=None,
+        help=(
+            "Root produced by generate_mixed_pretraining_shards.py. When set, "
+            "training samples corpora using mixture_manifest.json weights instead "
+            "of treating all shards as one uniform pool."
         ),
     )
     parser.add_argument(
@@ -412,12 +419,21 @@ def main():
     else:
         model_dtype = "float32"
 
+    mixed_shard_root = (
+        Path(args.mixed_shard_root).expanduser().resolve()
+        if args.mixed_shard_root is not None
+        else None
+    )
     shard_dir = Path(args.shard_dir)
-    shard_dir.mkdir(parents=True, exist_ok=True)
+    if mixed_shard_root is None:
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        default_tokenizer_path = shard_dir / "tokenizer.json"
+    else:
+        default_tokenizer_path = mixed_shard_root / "tokenizer.json"
     tokenizer_path = (
         Path(args.tokenizer_path)
         if args.tokenizer_path is not None
-        else shard_dir / "tokenizer.json"
+        else default_tokenizer_path
     )
 
     # Resolve the architecture first so its native context length can be used
@@ -440,36 +456,64 @@ def main():
         else int(config.context_length)
     )
 
-    # Prefer context-independent packed shards.  Preserve the legacy automatic
-    # generator for older experiments, but require explicit packed preprocessing
-    # for the long-context preset so it can never silently train on padded rows.
-    train_shards, val_shards = discover_existing_shards(shard_dir, args.val_ratio)
-    if not train_shards:
-        if args.model == "medium-context-4k":
-            raise RuntimeError(
-                "medium-context-4k requires pre-generated packed shards. Run "
-                "generate_packed_cosmopedia_shards.py first."
-            )
-        print("\nGenerating legacy token shards...")
-        train_shards, val_shards, generated_tokenizer, tokenizer_vocab_size = (
-            generate_shards_for_training(
-                dataset_path=args.dataset_path,
-                output_dir=str(shard_dir),
-                num_parquet_shards=args.num_parquet_shards,
-                documents_per_shard=args.documents_per_shard,
-                context_length=run_context_length,
-                val_ratio=args.val_ratio,
-            )
+    # Prefer context-independent packed shards.  Mixed pretraining keeps each
+    # source physically separate and samples source names according to explicit
+    # weights in mixture_manifest.json.
+    mixed_sources = None
+    mixed_manifest = None
+    if mixed_shard_root is not None:
+        from mini_llm.data.mixed_shards import load_weighted_shard_sources
+
+        mixed_sources, mixed_manifest = load_weighted_shard_sources(
+            mixed_shard_root
         )
-        tokenizer_path = Path(generated_tokenizer)
+        train_shards = [
+            path for source in mixed_sources for path in source.train_paths
+        ]
+        val_shards = [
+            path for source in mixed_sources for path in source.val_paths
+        ]
+        tokenizer_vocab_size = int(mixed_manifest["vocab_size"])
     else:
-        tokenizer_vocab_size = None
+        train_shards, val_shards = discover_existing_shards(
+            shard_dir, args.val_ratio
+        )
+        if not train_shards:
+            if args.model == "medium-context-4k":
+                raise RuntimeError(
+                    "medium-context-4k requires pre-generated packed shards. "
+                    "Run generate_packed_cosmopedia_shards.py or use "
+                    "--mixed-shard-root."
+                )
+            print("\nGenerating legacy token shards...")
+            train_shards, val_shards, generated_tokenizer, tokenizer_vocab_size = (
+                generate_shards_for_training(
+                    dataset_path=args.dataset_path,
+                    output_dir=str(shard_dir),
+                    num_parquet_shards=args.num_parquet_shards,
+                    documents_per_shard=args.documents_per_shard,
+                    context_length=run_context_length,
+                    val_ratio=args.val_ratio,
+                )
+            )
+            tokenizer_path = Path(generated_tokenizer)
+        else:
+            tokenizer_vocab_size = None
 
     if tokenizer_path.exists():
         tokenizer = load_tokenizer_file(tokenizer_path)
-        tokenizer_vocab_size = len(tokenizer)
-        if tokenizer_vocab_size <= 0:
+        loaded_vocab_size = len(tokenizer)
+        if loaded_vocab_size <= 0:
             raise RuntimeError(f"tokenizer at {tokenizer_path} has empty vocabulary")
+        if (
+            tokenizer_vocab_size is not None
+            and int(tokenizer_vocab_size) != int(loaded_vocab_size)
+        ):
+            raise RuntimeError(
+                "tokenizer vocabulary does not match dataset manifest: "
+                f"{loaded_vocab_size} != {tokenizer_vocab_size}"
+            )
+        tokenizer_vocab_size = loaded_vocab_size
     elif tokenizer_vocab_size is None:
         raise FileNotFoundError(
             f"tokenizer not found at {tokenizer_path}; pass --tokenizer-path explicitly"
@@ -489,7 +533,16 @@ def main():
     print(f"Precision: {args.precision}")
     print(f"Tokenizer: {tokenizer_path}")
     print(f"Tokenizer vocab: {tokenizer_vocab_size:,}")
-    print(f"Shard directory: {shard_dir}")
+    if mixed_shard_root is not None:
+        print(f"Mixed shard root: {mixed_shard_root}")
+        print("Pretraining mixture:")
+        for source in mixed_sources:
+            print(
+                f"  {source.name:16s} {100.0 * source.weight:6.2f}%  "
+                f"{len(source.train_paths)} train / {len(source.val_paths)} val shards"
+            )
+    else:
+        print(f"Shard directory: {shard_dir}")
     print(f"Training shards: {len(train_shards)}")
     print(f"Validation shards: {len(val_shards)}")
     print(f"Context length: {run_context_length}")
@@ -552,6 +605,30 @@ def main():
         if tokenizer_path.resolve() != checkpoint_tokenizer.resolve():
             import shutil
             shutil.copy2(tokenizer_path, checkpoint_tokenizer)
+        if mixed_shard_root is not None:
+            import shutil
+            shutil.copy2(
+                mixed_shard_root / "mixture_manifest.json",
+                Path(args.checkpoint_dir) / "mixture_manifest.json",
+            )
+            mix_config_path = mixed_shard_root / "mix_config.json"
+            if mix_config_path.exists():
+                shutil.copy2(
+                    mix_config_path, Path(args.checkpoint_dir) / "mix_config.json"
+                )
+
+    if mixed_sources is not None:
+        from mini_llm.data.mixed_shards import (
+            source_paths_by_split,
+            source_weight_dict,
+        )
+        train_source_shards = source_paths_by_split(mixed_sources, "train")
+        val_source_shards = source_paths_by_split(mixed_sources, "val")
+        source_weights = source_weight_dict(mixed_sources)
+    else:
+        train_source_shards = None
+        val_source_shards = None
+        source_weights = None
 
     trainer = ExtendedTrainer(
         model=model,
@@ -572,10 +649,41 @@ def main():
         save_interval=args.save_interval,
         loss_scale=1.0,
         numerical_debug=args.numerical_debug,
+        train_source_shards=train_source_shards,
+        val_source_shards=val_source_shards,
+        source_weights=source_weights,
     )
 
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
+    if args.resume_from and training_state:
+        trainer.current_train_shard_idx = int(
+            training_state.get("current_train_shard_idx", 0)
+        )
+        trainer.current_val_shard_idx = int(
+            training_state.get("current_val_shard_idx", 0)
+        )
+        if trainer.train_source_shards is not None:
+            for name, value in training_state.get(
+                "current_train_source_shard_idx", {}
+            ).items():
+                if name in trainer.current_train_source_shard_idx:
+                    trainer.current_train_source_shard_idx[name] = int(value)
+            for name, value in training_state.get(
+                "current_val_source_shard_idx", {}
+            ).items():
+                if name in trainer.current_val_source_shard_idx:
+                    trainer.current_val_source_shard_idx[name] = int(value)
+            for name, value in training_state.get(
+                "train_source_batch_counts", {}
+            ).items():
+                if name in trainer.train_source_batch_counts:
+                    trainer.train_source_batch_counts[name] = int(value)
+            for name, value in training_state.get(
+                "val_source_batch_counts", {}
+            ).items():
+                if name in trainer.val_source_batch_counts:
+                    trainer.val_source_batch_counts[name] = int(value)
 
     if stored_optimizer_state is not None and "m" in stored_optimizer_state:
         trainer.optimizer.step_index = int(

@@ -301,3 +301,77 @@ class TestExtendedTrainerLogging:
             
             # Log file should exist after init (header written)
             assert log_file.exists()
+
+
+class TestExtendedTrainerMixedSources:
+    def test_weighted_source_selection(self):
+        model = make_model()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            paths = {}
+            for name, token in (("a", 11), ("b", 22)):
+                train = root / f"{name}_train.bin"
+                val = root / f"{name}_val.bin"
+                np.full(2048, token, dtype=np.uint16).tofile(train)
+                np.full(1024, token, dtype=np.uint16).tofile(val)
+                paths[name] = (train, val)
+
+            trainer = ExtendedTrainer(
+                model=model,
+                train_shard_paths=[str(paths["a"][0]), str(paths["b"][0])],
+                val_shard_paths=[str(paths["a"][1]), str(paths["b"][1])],
+                train_source_shards={
+                    name: [str(pair[0])] for name, pair in paths.items()
+                },
+                val_source_shards={
+                    name: [str(pair[1])] for name, pair in paths.items()
+                },
+                source_weights={"a": 1.0, "b": 0.0},
+                batch_size=2,
+                seq_length=32,
+                total_steps=10,
+                warmup_steps=1,
+                rng_seed=42,
+            )
+
+            inputs, targets = trainer.get_train_batch()
+            assert np.all(inputs == 11)
+            assert np.all(targets == 11)
+            assert trainer.train_source_batch_counts == {"a": 1, "b": 0}
+
+            val_inputs, val_targets = trainer.get_val_batch()
+            assert np.all(val_inputs == 11)
+            assert np.all(val_targets == 11)
+            assert trainer.val_source_batch_counts == {"a": 1, "b": 0}
+
+    def test_mixed_source_weights_are_normalized(self):
+        model = make_model()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            paths = {}
+            for name in ("a", "b"):
+                train = root / f"{name}_train.bin"
+                val = root / f"{name}_val.bin"
+                np.ones(512, dtype=np.uint16).tofile(train)
+                np.ones(512, dtype=np.uint16).tofile(val)
+                paths[name] = (train, val)
+
+            trainer = ExtendedTrainer(
+                model=model,
+                train_shard_paths=[str(paths["a"][0]), str(paths["b"][0])],
+                val_shard_paths=[str(paths["a"][1]), str(paths["b"][1])],
+                train_source_shards={
+                    name: [str(pair[0])] for name, pair in paths.items()
+                },
+                val_source_shards={
+                    name: [str(pair[1])] for name, pair in paths.items()
+                },
+                source_weights={"a": 7.0, "b": 3.0},
+                batch_size=1,
+                seq_length=16,
+                total_steps=10,
+                warmup_steps=1,
+            )
+            assert trainer.source_weights["a"] == pytest.approx(0.7)
+            assert trainer.source_weights["b"] == pytest.approx(0.3)
+            assert trainer.shard_cache_size >= 2

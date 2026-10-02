@@ -10,9 +10,6 @@ from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
 import numpy as np
-import pyarrow.parquet as pq
-
-from mini_llm.data.parquet_reader import CosmopediaParquetReader
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
 
 
@@ -144,7 +141,7 @@ class TokenShardGenerator:
     def __init__(
         self,
         tokenizer: SimpleBPETokenizer,
-        parquet_reader: CosmopediaParquetReader,
+        parquet_reader,
         output_dir: str = "token_shards",
         context_length: int = 1024,
         documents_per_shard: int = 10_000,

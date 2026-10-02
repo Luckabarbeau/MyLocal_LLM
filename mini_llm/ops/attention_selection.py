@@ -385,3 +385,54 @@ def build_local_causal_plan(batch_size, seq_len, window):
     ).copy()
     valid = xp.broadcast_to(valid[None, None, :, :], indices.shape).copy()
     return KeySelectionPlan(indices, valid)
+
+
+def build_dilated_causal_plan(batch_size, seq_len, window, dilation, offset=0):
+    """Build a shared causal fixed-phase dilated key plan.
+
+    Query token ``t`` sees exact key positions
+
+        ``t - offset - n*dilation``
+
+    that fall inside the trailing ``window``-token span.  Keys are returned in
+    chronological order.  ``offset=0`` includes the current token, while
+    offsets ``1 ... dilation-1`` expose complementary phases without changing
+    the attention kernel.
+
+    The number of key slots is approximately ``window / dilation`` rather than
+    ``window``.  Early query positions may have no valid key for non-zero
+    offsets; indexed attention defines those rows to have zero context.
+    """
+    batch_size = int(batch_size)
+    seq_len = int(seq_len)
+    window = int(window)
+    dilation = int(dilation)
+    offset = int(offset)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if seq_len <= 0:
+        raise ValueError("seq_len must be positive")
+    if window <= 0:
+        raise ValueError("window must be positive")
+    if dilation <= 0:
+        raise ValueError("dilation must be positive")
+    if offset < 0 or offset >= dilation:
+        raise ValueError("offset must satisfy 0 <= offset < dilation")
+    if offset >= window:
+        raise ValueError("offset must be smaller than window")
+
+    # Largest admissible lag is window-1.  The selected lags are
+    # offset, offset+dilation, ... <= window-1.
+    key_slots = ((window - 1 - offset) // dilation) + 1
+    queries = xp.arange(seq_len, dtype=xp.int64)[:, None]
+    steps = xp.arange(key_slots - 1, -1, -1, dtype=xp.int64)[None, :]
+    lags = offset + steps * dilation
+    raw = queries - lags
+    valid = raw >= 0
+    indices = xp.maximum(raw, 0)
+
+    indices = xp.broadcast_to(
+        indices[None, None, :, :], (batch_size, 1, seq_len, key_slots)
+    ).copy()
+    valid = xp.broadcast_to(valid[None, None, :, :], indices.shape).copy()
+    return KeySelectionPlan(indices, valid)

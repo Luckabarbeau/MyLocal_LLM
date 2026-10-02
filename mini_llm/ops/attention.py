@@ -1,13 +1,17 @@
 from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
-from .attention_selection import build_local_causal_plan
+from .attention_selection import (
+    build_dilated_causal_plan,
+    build_local_causal_plan,
+)
 from .indexed_attention import indexed_attention_forward, indexed_attention_backward
 from .retrieval_attention import ContextRetrievalAttention
 from ..config import (
     AttentionLayerConfig,
     DenseAttentionConfig,
     LocalAttentionConfig,
+    DilatedAttentionConfig,
     RetrievalAttentionConfig,
 )
 
@@ -104,11 +108,23 @@ class GQAAttention:
 
         for head_index, head_config in enumerate(attention_config.heads):
             if isinstance(head_config, DenseAttentionConfig):
-                static_groups.setdefault(("dense", None), []).append(head_index)
-            elif isinstance(head_config, LocalAttentionConfig):
-                static_groups.setdefault(("local", int(head_config.window)), []).append(
+                static_groups.setdefault(("dense", None, None, None), []).append(
                     head_index
                 )
+            elif isinstance(head_config, LocalAttentionConfig):
+                static_groups.setdefault(
+                    ("local", int(head_config.window), None, None), []
+                ).append(head_index)
+            elif isinstance(head_config, DilatedAttentionConfig):
+                static_groups.setdefault(
+                    (
+                        "dilated",
+                        int(head_config.window),
+                        int(head_config.dilation),
+                        int(head_config.offset),
+                    ),
+                    [],
+                ).append(head_index)
             elif isinstance(head_config, RetrievalAttentionConfig):
                 group = retrieval_groups.setdefault(
                     head_config.group,
@@ -126,8 +142,14 @@ class GQAAttention:
                 )
 
         self._static_head_groups = [
-            {"kind": kind, "window": window, "head_indices": tuple(indices)}
-            for (kind, window), indices in static_groups.items()
+            {
+                "kind": kind,
+                "window": window,
+                "dilation": dilation,
+                "offset": offset,
+                "head_indices": tuple(indices),
+            }
+            for (kind, window, dilation, offset), indices in static_groups.items()
         ]
 
         self._retrieval_groups = []
@@ -195,8 +217,22 @@ class GQAAttention:
         for group in self._static_head_groups:
             head_indices = group["head_indices"]
             q_subset = q[:, :, head_indices, :]
-            window = t if group["kind"] == "dense" else group["window"]
-            plan = build_local_causal_plan(b, t, window)
+            if group["kind"] == "dense":
+                plan = build_local_causal_plan(b, t, t)
+            elif group["kind"] == "local":
+                plan = build_local_causal_plan(b, t, group["window"])
+            elif group["kind"] == "dilated":
+                plan = build_dilated_causal_plan(
+                    b,
+                    t,
+                    group["window"],
+                    group["dilation"],
+                    group["offset"],
+                )
+            else:
+                raise RuntimeError(
+                    f"unsupported static attention kind: {group['kind']!r}"
+                )
             kv_head_indices = xp.asarray(
                 head_indices, dtype=xp.int64
             ) // self.group_size

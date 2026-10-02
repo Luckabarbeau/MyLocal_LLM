@@ -205,3 +205,82 @@ def test_local_causal_plan_exact_window_visibility():
     )
     np.testing.assert_array_equal(np.asarray(plan.key_indices[0, 0]), expected_indices)
     np.testing.assert_array_equal(np.asarray(plan.valid_mask[0, 0]), expected_valid)
+
+
+def test_dilated_causal_plan_exact_phase_visibility():
+    from mini_llm.ops.attention_selection import build_dilated_causal_plan
+
+    plan = build_dilated_causal_plan(
+        batch_size=1,
+        seq_len=8,
+        window=8,
+        dilation=3,
+        offset=1,
+    )
+    expected_indices = np.array(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+            [0, 0, 1],
+            [0, 0, 2],
+            [0, 0, 3],
+            [0, 1, 4],
+            [0, 2, 5],
+            [0, 3, 6],
+        ],
+        dtype=np.int64,
+    )
+    expected_valid = np.array(
+        [
+            [False, False, False],
+            [False, False, True],
+            [False, False, True],
+            [False, False, True],
+            [False, True, True],
+            [False, True, True],
+            [False, True, True],
+            [True, True, True],
+        ]
+    )
+    np.testing.assert_array_equal(np.asarray(plan.key_indices[0, 0]), expected_indices)
+    np.testing.assert_array_equal(np.asarray(plan.valid_mask[0, 0]), expected_valid)
+
+
+def test_dilation_one_offset_zero_matches_local_plan():
+    from mini_llm.ops.attention_selection import (
+        build_dilated_causal_plan,
+        build_local_causal_plan,
+    )
+
+    local = build_local_causal_plan(batch_size=2, seq_len=9, window=5)
+    dilated = build_dilated_causal_plan(
+        batch_size=2,
+        seq_len=9,
+        window=5,
+        dilation=1,
+        offset=0,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(dilated.key_indices), np.asarray(local.key_indices)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(dilated.valid_mask), np.asarray(local.valid_mask)
+    )
+
+
+def test_dilated_plan_offset_can_have_empty_early_rows():
+    from mini_llm.ops.attention_selection import build_dilated_causal_plan
+
+    plan = build_dilated_causal_plan(
+        batch_size=1,
+        seq_len=5,
+        window=5,
+        dilation=4,
+        offset=3,
+    )
+    valid = np.asarray(plan.valid_mask[0, 0])
+    assert not valid[0].any()
+    assert not valid[1].any()
+    assert not valid[2].any()
+    assert valid[3].sum() == 1
+    assert valid[4].sum() == 1

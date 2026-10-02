@@ -279,6 +279,34 @@ class LocalAttentionConfig:
 
 
 @dataclass(frozen=True)
+class DilatedAttentionConfig:
+    """Exact causal attention sampled at a fixed dilation phase.
+
+    For query position ``t``, visible keys are
+    ``t-offset-n*dilation`` while they remain inside the trailing ``window``
+    token span. ``offset=0`` includes the current token; non-zero offsets let
+    different heads/layers cover complementary phases.
+    """
+
+    window: int = 32_768
+    dilation: int = 8
+    offset: int = 0
+    kind: str = field(default="dilated", init=False)
+
+    def __post_init__(self):
+        if int(self.window) != self.window or self.window <= 0:
+            raise ValueError("dilated attention window must be a positive integer")
+        if int(self.dilation) != self.dilation or self.dilation <= 0:
+            raise ValueError("dilation must be a positive integer")
+        if int(self.offset) != self.offset or self.offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        if self.offset >= self.dilation:
+            raise ValueError("offset must satisfy 0 <= offset < dilation")
+        if self.offset >= self.window:
+            raise ValueError("offset must be smaller than window")
+
+
+@dataclass(frozen=True)
 class RetrievalAttentionConfig:
     """Learned distant-block retrieval for one query head.
 
@@ -306,7 +334,12 @@ class RetrievalAttentionConfig:
 def _coerce_attention_head(value):
     if isinstance(
         value,
-        (DenseAttentionConfig, LocalAttentionConfig, RetrievalAttentionConfig),
+        (
+            DenseAttentionConfig,
+            LocalAttentionConfig,
+            DilatedAttentionConfig,
+            RetrievalAttentionConfig,
+        ),
     ):
         return value
     if not isinstance(value, dict):
@@ -318,6 +351,8 @@ def _coerce_attention_head(value):
         return DenseAttentionConfig(**data)
     if kind == "local":
         return LocalAttentionConfig(**data)
+    if kind == "dilated":
+        return DilatedAttentionConfig(**data)
     if kind == "retrieval":
         return RetrievalAttentionConfig(**data)
     raise ValueError(f"unsupported attention head kind: {kind!r}")

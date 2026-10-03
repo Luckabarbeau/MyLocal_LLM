@@ -39,6 +39,28 @@ _LOCAL_BF16_PIPELINE_DISABLED = False
 _RETRIEVAL_SCATTER_MODULE = None
 _RETRIEVAL_SCATTER_DISABLED = False
 
+_RETRIEVAL_BF16_PIPELINE_MODULE = None
+_RETRIEVAL_BF16_PIPELINE_DISABLED = False
+
+
+def _bf16_retrieval_pipeline_enabled(dtype):
+    """Use BF16 Tensor-Core GEMMs throughout block retrieval attention.
+
+    The retrieval path needs a dedicated implementation because router weights
+    enter attention as an additive log-probability bias.  The fast path keeps
+    score/probability/backward matrices in BF16 storage, performs softmax and
+    its Jacobian in FP32 inside CUDA, and accumulates final Q/K/V gradients
+    into the existing FP32 buffers.
+    """
+    raw = os.environ.get(
+        "MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE", "0"
+    ).strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
 
 def _direct_retrieval_scatter_enabled():
     """Use direct CUDA scatter kernels for block retrieval attention."""
@@ -182,6 +204,562 @@ def _retrieval_kv_scatter_add_f32(dk_src, dv_src, dk_dst, dv_dst, key_indices, k
          np.int32(d_head), np.int32(dk_dst.shape[1]), np.int32(dk_dst.shape[2])),
     )
     return True
+
+
+
+def _get_retrieval_bf16_pipeline_module():
+    """Compile the block-retrieval BF16 Tensor-Core/softmax CUDA kernels."""
+    global _RETRIEVAL_BF16_PIPELINE_MODULE, _RETRIEVAL_BF16_PIPELINE_DISABLED
+    if BACKEND_NAME != "cupy" or _RETRIEVAL_BF16_PIPELINE_DISABLED:
+        return None
+    if _RETRIEVAL_BF16_PIPELINE_MODULE is not None:
+        return _RETRIEVAL_BF16_PIPELINE_MODULE
+
+    code = r"""
+    #include <cuda_bf16.h>
+    #include <mma.h>
+    using namespace nvcuda;
+
+    // All three GEMM kernels intentionally require dimensions divisible by 16.
+    // The production 4k retrieval geometry is S=128, K=512, Dh=64, so no edge
+    // tiles are needed and every block is a single warp-level Tensor-Core tile.
+    extern "C" __global__
+    void retrieval_bf16_gemm_nt(
+        const __nv_bfloat16* A, const __nv_bfloat16* B, __nv_bfloat16* C,
+        int batches, int M, int N, int K, float alpha) {
+        int batch = (int)blockIdx.z;
+        int m0 = (int)blockIdx.y * 16;
+        int n0 = (int)blockIdx.x * 16;
+        if (batch >= batches || m0 >= M || n0 >= N) return;
+
+        wmma::fragment<wmma::matrix_a, 16, 16, 16,
+                       __nv_bfloat16, wmma::row_major> a_frag;
+        wmma::fragment<wmma::matrix_b, 16, 16, 16,
+                       __nv_bfloat16, wmma::col_major> b_frag;
+        wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+        wmma::fill_fragment(c_frag, 0.0f);
+
+        const __nv_bfloat16* Ab = A + (long long)batch * M * K;
+        // B is physically [N,K] row-major.  Interpreting it as [K,N]
+        // column-major gives B^T without an explicit transpose.
+        const __nv_bfloat16* Bb = B + (long long)batch * N * K;
+        for (int k0 = 0; k0 < K; k0 += 16) {
+            wmma::load_matrix_sync(a_frag, Ab + (long long)m0 * K + k0, K);
+            wmma::load_matrix_sync(b_frag, Bb + (long long)n0 * K + k0, K);
+            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        }
+        #pragma unroll
+        for (int i = 0; i < c_frag.num_elements; ++i) c_frag.x[i] *= alpha;
+        __shared__ float tile[16 * 16];
+        wmma::store_matrix_sync(tile, c_frag, 16, wmma::mem_row_major);
+        __syncthreads();
+        for (int i = threadIdx.x; i < 256; i += blockDim.x) {
+            int mi = i >> 4;
+            int ni = i & 15;
+            C[((long long)batch * M + (m0 + mi)) * N + (n0 + ni)] =
+                __float2bfloat16_rn(tile[i]);
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_bf16_gemm_nn(
+        const __nv_bfloat16* A, const __nv_bfloat16* B, __nv_bfloat16* C,
+        int batches, int M, int N, int K, float alpha) {
+        int batch = (int)blockIdx.z;
+        int m0 = (int)blockIdx.y * 16;
+        int n0 = (int)blockIdx.x * 16;
+        if (batch >= batches || m0 >= M || n0 >= N) return;
+
+        wmma::fragment<wmma::matrix_a, 16, 16, 16,
+                       __nv_bfloat16, wmma::row_major> a_frag;
+        wmma::fragment<wmma::matrix_b, 16, 16, 16,
+                       __nv_bfloat16, wmma::row_major> b_frag;
+        wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+        wmma::fill_fragment(c_frag, 0.0f);
+
+        const __nv_bfloat16* Ab = A + (long long)batch * M * K;
+        const __nv_bfloat16* Bb = B + (long long)batch * K * N;
+        for (int k0 = 0; k0 < K; k0 += 16) {
+            wmma::load_matrix_sync(a_frag, Ab + (long long)m0 * K + k0, K);
+            wmma::load_matrix_sync(b_frag, Bb + (long long)k0 * N + n0, N);
+            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        }
+        #pragma unroll
+        for (int i = 0; i < c_frag.num_elements; ++i) c_frag.x[i] *= alpha;
+        __shared__ float tile[16 * 16];
+        wmma::store_matrix_sync(tile, c_frag, 16, wmma::mem_row_major);
+        __syncthreads();
+        for (int i = threadIdx.x; i < 256; i += blockDim.x) {
+            int mi = i >> 4;
+            int ni = i & 15;
+            C[((long long)batch * M + (m0 + mi)) * N + (n0 + ni)] =
+                __float2bfloat16_rn(tile[i]);
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_bf16_gemm_tn(
+        const __nv_bfloat16* A_storage, const __nv_bfloat16* B,
+        __nv_bfloat16* C, int batches, int M, int N, int K, float alpha) {
+        int batch = (int)blockIdx.z;
+        int m0 = (int)blockIdx.y * 16;
+        int n0 = (int)blockIdx.x * 16;
+        if (batch >= batches || m0 >= M || n0 >= N) return;
+
+        // A_storage is physically [K,M] row-major.  The same bytes represent
+        // A_storage^T=[M,K] in column-major order with leading dimension M.
+        wmma::fragment<wmma::matrix_a, 16, 16, 16,
+                       __nv_bfloat16, wmma::col_major> a_frag;
+        wmma::fragment<wmma::matrix_b, 16, 16, 16,
+                       __nv_bfloat16, wmma::row_major> b_frag;
+        wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+        wmma::fill_fragment(c_frag, 0.0f);
+
+        const __nv_bfloat16* Ab = A_storage + (long long)batch * K * M;
+        const __nv_bfloat16* Bb = B + (long long)batch * K * N;
+        for (int k0 = 0; k0 < K; k0 += 16) {
+            wmma::load_matrix_sync(a_frag, Ab + (long long)k0 * M + m0, M);
+            wmma::load_matrix_sync(b_frag, Bb + (long long)k0 * N + n0, N);
+            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        }
+        #pragma unroll
+        for (int i = 0; i < c_frag.num_elements; ++i) c_frag.x[i] *= alpha;
+        __shared__ float tile[16 * 16];
+        wmma::store_matrix_sync(tile, c_frag, 16, wmma::mem_row_major);
+        __syncthreads();
+        for (int i = threadIdx.x; i < 256; i += blockDim.x) {
+            int mi = i >> 4;
+            int ni = i & 15;
+            C[((long long)batch * M + (m0 + mi)) * N + (n0 + ni)] =
+                __float2bfloat16_rn(tile[i]);
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_softmax_fwd_bf16(
+        const __nv_bfloat16* scores, const __nv_bfloat16* weights,
+        const bool* query_valid, __nv_bfloat16* probs,
+        long long rows, int routes, int heads, int stride, int keys,
+        int router_heads, int selected_blocks, int block_size,
+        float score_scale, int use_logit_bias, float weight_scale,
+        float weight_eps) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        int s = (int)(row % stride);
+        long long t = row / stride;
+        int h = (int)(t % heads); t /= heads;
+        int r = (int)(t % routes); t /= routes;
+        int b = (int)t;
+        const __nv_bfloat16* src = scores + row * keys;
+        __nv_bfloat16* dst = probs + row * keys;
+        if (!query_valid[(long long)r * stride + s]) {
+            for (int j = threadIdx.x; j < keys; j += blockDim.x)
+                dst[j] = __float2bfloat16_rn(0.0f);
+            return;
+        }
+        int rh = router_heads == 1 ? 0 : h;
+        const __nv_bfloat16* wr = weights
+            + (((long long)b * routes + r) * router_heads + rh) * selected_blocks;
+        extern __shared__ float sh[];
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < keys; j += blockDim.x) {
+            float value = __bfloat162float(src[j]) * score_scale;
+            if (use_logit_bias) {
+                int block = j / block_size;
+                float w = __bfloat162float(wr[block]);
+                value += weight_scale * logf(w + weight_eps);
+            }
+            local_max = fmaxf(local_max, value);
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int d = blockDim.x >> 1; d > 0; d >>= 1) {
+            if (threadIdx.x < d) sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + d]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < keys; j += blockDim.x) {
+            float value = __bfloat162float(src[j]) * score_scale;
+            if (use_logit_bias) {
+                int block = j / block_size;
+                float w = __bfloat162float(wr[block]);
+                value += weight_scale * logf(w + weight_eps);
+            }
+            local_sum += expf(value - row_max);
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int d = blockDim.x >> 1; d > 0; d >>= 1) {
+            if (threadIdx.x < d) sh[threadIdx.x] += sh[threadIdx.x + d];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+        for (int j = threadIdx.x; j < keys; j += blockDim.x) {
+            float value = __bfloat162float(src[j]) * score_scale;
+            if (use_logit_bias) {
+                int block = j / block_size;
+                float w = __bfloat162float(wr[block]);
+                value += weight_scale * logf(w + weight_eps);
+            }
+            dst[j] = __float2bfloat16_rn(expf(value - row_max) * inv);
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_softmax_bwd_bf16(
+        const __nv_bfloat16* dprobs, const __nv_bfloat16* probs,
+        const bool* query_valid, __nv_bfloat16* dscores,
+        long long rows, int routes, int heads, int stride, int keys) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        int s = (int)(row % stride);
+        long long t = row / stride;
+        (void)(t % heads); t /= heads;
+        int r = (int)(t % routes);
+        const __nv_bfloat16* dp = dprobs + row * keys;
+        const __nv_bfloat16* p = probs + row * keys;
+        __nv_bfloat16* ds = dscores + row * keys;
+        if (!query_valid[(long long)r * stride + s]) {
+            for (int j = threadIdx.x; j < keys; j += blockDim.x)
+                ds[j] = __float2bfloat16_rn(0.0f);
+            return;
+        }
+        extern __shared__ float sh[];
+        float local = 0.0f;
+        for (int j = threadIdx.x; j < keys; j += blockDim.x)
+            local += __bfloat162float(dp[j]) * __bfloat162float(p[j]);
+        sh[threadIdx.x] = local;
+        __syncthreads();
+        for (int d = blockDim.x >> 1; d > 0; d >>= 1) {
+            if (threadIdx.x < d) sh[threadIdx.x] += sh[threadIdx.x + d];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < keys; j += blockDim.x) {
+            float pf = __bfloat162float(p[j]);
+            ds[j] = __float2bfloat16_rn(pf * (__bfloat162float(dp[j]) - correction));
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_route_scatter_bf16_to_f32(
+        const __nv_bfloat16* src, float* dst,
+        const long long* query_positions, const bool* query_valid,
+        int batch, int routes, int heads, int stride, int d_head, int seq_len) {
+        long long n = (long long)batch * routes * heads * stride * d_head;
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n; idx += (long long)blockDim.x * gridDim.x) {
+            long long t = idx;
+            int d = (int)(t % d_head); t /= d_head;
+            int s = (int)(t % stride); t /= stride;
+            int h = (int)(t % heads); t /= heads;
+            int r = (int)(t % routes); t /= routes;
+            int b = (int)t;
+            long long rs = (long long)r * stride + s;
+            if (!query_valid[rs]) continue;
+            long long qpos = query_positions[rs];
+            if (qpos < 0 || qpos >= seq_len) continue;
+            long long out = ((((long long)b * seq_len + qpos) * heads + h) * d_head + d);
+            dst[out] = __bfloat162float(src[idx]);
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_kv_scatter_bf16_to_f32(
+        const __nv_bfloat16* dk_src, const __nv_bfloat16* dv_src,
+        float* dk_dst, float* dv_dst,
+        const long long* key_indices, const long long* kv_map,
+        int batch, int routes, int heads, int keys, int d_head,
+        int seq_len, int n_kv_heads) {
+        long long n = (long long)batch * routes * heads * keys * d_head;
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n; idx += (long long)blockDim.x * gridDim.x) {
+            long long t = idx;
+            int d = (int)(t % d_head); t /= d_head;
+            int kslot = (int)(t % keys); t /= keys;
+            int h = (int)(t % heads); t /= heads;
+            int r = (int)(t % routes); t /= routes;
+            int b = (int)t;
+            long long key_idx = key_indices[(((long long)b * routes + r) * heads + h) * keys + kslot];
+            long long kvh = kv_map[h];
+            if (key_idx < 0 || key_idx >= seq_len || kvh < 0 || kvh >= n_kv_heads) continue;
+            long long out = ((((long long)b * seq_len + key_idx) * n_kv_heads + kvh) * d_head + d);
+            atomicAdd(dk_dst + out, __bfloat162float(dk_src[idx]));
+            atomicAdd(dv_dst + out, __bfloat162float(dv_src[idx]));
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_bias_grad_bf16(
+        const __nv_bfloat16* dscores, const __nv_bfloat16* weights,
+        float* dweights, int batch, int routes, int heads, int stride,
+        int router_heads, int selected_blocks, int block_size,
+        float weight_scale, float weight_eps) {
+        long long out_count = (long long)batch * routes * router_heads * selected_blocks;
+        long long out = (long long)blockIdx.x;
+        if (out >= out_count) return;
+        long long t = out;
+        int block = (int)(t % selected_blocks); t /= selected_blocks;
+        int rh = (int)(t % router_heads); t /= router_heads;
+        int r = (int)(t % routes); t /= routes;
+        int b = (int)t;
+        int keys = selected_blocks * block_size;
+        float local = 0.0f;
+        for (int h = (router_heads == 1 ? 0 : rh);
+             h < heads;
+             h += (router_heads == 1 ? 1 : heads)) {
+            for (int s = 0; s < stride; ++s) {
+                const __nv_bfloat16* row = dscores
+                    + (((((long long)b * routes + r) * heads + h) * stride + s) * keys);
+                for (int j = threadIdx.x; j < block_size; j += blockDim.x)
+                    local += __bfloat162float(row[block * block_size + j]);
+            }
+        }
+        extern __shared__ float sh[];
+        sh[threadIdx.x] = local;
+        __syncthreads();
+        for (int d = blockDim.x >> 1; d > 0; d >>= 1) {
+            if (threadIdx.x < d) sh[threadIdx.x] += sh[threadIdx.x + d];
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            float w = __bfloat162float(weights[out]);
+            dweights[out] = sh[0] * (weight_scale / (w + weight_eps));
+        }
+    }
+    """
+    names = (
+        "retrieval_bf16_gemm_nt",
+        "retrieval_bf16_gemm_nn",
+        "retrieval_bf16_gemm_tn",
+        "retrieval_softmax_fwd_bf16",
+        "retrieval_softmax_bwd_bf16",
+        "retrieval_route_scatter_bf16_to_f32",
+        "retrieval_kv_scatter_bf16_to_f32",
+        "retrieval_bias_grad_bf16",
+    )
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++14",),
+            name_expressions=names,
+        )
+        for name in names:
+            module.get_function(name)
+        _RETRIEVAL_BF16_PIPELINE_MODULE = module
+    except Exception:
+        strict = os.environ.get(
+            "MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE_STRICT", "0"
+        ).strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _RETRIEVAL_BF16_PIPELINE_DISABLED = True
+        return None
+    return _RETRIEVAL_BF16_PIPELINE_MODULE
+
+
+def _retrieval_bf16_shape_ok(*dims):
+    return all(int(d) > 0 and int(d) % 16 == 0 for d in dims)
+
+
+def _retrieval_bf16_gemm_nt(a, b, alpha=1.0):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(a.dtype) and is_bfloat16_dtype(b.dtype)):
+        return None
+    if a.ndim < 2 or b.ndim != a.ndim or a.shape[:-2] != b.shape[:-2]:
+        return None
+    M, K = map(int, a.shape[-2:])
+    N, Kb = map(int, b.shape[-2:])
+    if K != Kb or not _retrieval_bf16_shape_ok(M, N, K):
+        return None
+    a = xp.ascontiguousarray(a)
+    b = xp.ascontiguousarray(b)
+    batches = int(np.prod(a.shape[:-2], dtype=np.int64))
+    out = xp.empty(a.shape[:-2] + (M, N), dtype=a.dtype)
+    module.get_function("retrieval_bf16_gemm_nt")(
+        ((N + 15) // 16, (M + 15) // 16, batches), (32,),
+        (a, b, out, np.int32(batches), np.int32(M), np.int32(N), np.int32(K), np.float32(alpha)),
+    )
+    return out
+
+
+def _retrieval_bf16_gemm_nn(a, b, alpha=1.0):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(a.dtype) and is_bfloat16_dtype(b.dtype)):
+        return None
+    if a.ndim < 2 or b.ndim != a.ndim or a.shape[:-2] != b.shape[:-2]:
+        return None
+    M, K = map(int, a.shape[-2:])
+    Kb, N = map(int, b.shape[-2:])
+    if K != Kb or not _retrieval_bf16_shape_ok(M, N, K):
+        return None
+    a = xp.ascontiguousarray(a)
+    b = xp.ascontiguousarray(b)
+    batches = int(np.prod(a.shape[:-2], dtype=np.int64))
+    out = xp.empty(a.shape[:-2] + (M, N), dtype=a.dtype)
+    module.get_function("retrieval_bf16_gemm_nn")(
+        ((N + 15) // 16, (M + 15) // 16, batches), (32,),
+        (a, b, out, np.int32(batches), np.int32(M), np.int32(N), np.int32(K), np.float32(alpha)),
+    )
+    return out
+
+
+def _retrieval_bf16_gemm_tn(a_storage, b, alpha=1.0):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(a_storage.dtype) and is_bfloat16_dtype(b.dtype)):
+        return None
+    if a_storage.ndim < 2 or b.ndim != a_storage.ndim or a_storage.shape[:-2] != b.shape[:-2]:
+        return None
+    K, M = map(int, a_storage.shape[-2:])
+    Kb, N = map(int, b.shape[-2:])
+    if K != Kb or not _retrieval_bf16_shape_ok(M, N, K):
+        return None
+    a_storage = xp.ascontiguousarray(a_storage)
+    b = xp.ascontiguousarray(b)
+    batches = int(np.prod(a_storage.shape[:-2], dtype=np.int64))
+    out = xp.empty(a_storage.shape[:-2] + (M, N), dtype=a_storage.dtype)
+    module.get_function("retrieval_bf16_gemm_tn")(
+        ((N + 15) // 16, (M + 15) // 16, batches), (32,),
+        (a_storage, b, out, np.int32(batches), np.int32(M), np.int32(N), np.int32(K), np.float32(alpha)),
+    )
+    return out
+
+
+def _retrieval_softmax_forward_bf16(
+    scores, selected_weights, query_valid, n_router_heads, block_size,
+    scale, weight_mode, weight_scale, weight_eps,
+):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not is_bfloat16_dtype(scores.dtype):
+        return None
+    if not is_bfloat16_dtype(selected_weights.dtype):
+        return None
+    if scores.ndim != 5:
+        return None
+    batch, routes, heads, stride, keys = map(int, scores.shape)
+    selected_blocks = int(selected_weights.shape[-1])
+    if keys != selected_blocks * int(block_size):
+        return None
+    scores = xp.ascontiguousarray(scores)
+    weights = xp.ascontiguousarray(selected_weights)
+    query_valid = xp.ascontiguousarray(query_valid.astype(bool, copy=False))
+    probs = xp.empty_like(scores)
+    rows = batch * routes * heads * stride
+    threads = 256
+    module.get_function("retrieval_softmax_fwd_bf16")(
+        (rows,), (threads,),
+        (
+            scores, weights, query_valid, probs, np.int64(rows),
+            np.int32(routes), np.int32(heads), np.int32(stride), np.int32(keys),
+            np.int32(n_router_heads), np.int32(selected_blocks), np.int32(block_size),
+            np.float32(scale), np.int32(1 if weight_mode == "logit_bias" else 0),
+            np.float32(weight_scale), np.float32(weight_eps),
+        ),
+        shared_mem=threads * 4,
+    )
+    return probs
+
+
+def _retrieval_softmax_backward_bf16(dprobs, probs, query_valid):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(dprobs.dtype) and is_bfloat16_dtype(probs.dtype)):
+        return None
+    if dprobs.shape != probs.shape or probs.ndim != 5:
+        return None
+    batch, routes, heads, stride, keys = map(int, probs.shape)
+    dprobs = xp.ascontiguousarray(dprobs)
+    probs = xp.ascontiguousarray(probs)
+    query_valid = xp.ascontiguousarray(query_valid.astype(bool, copy=False))
+    dscores = xp.empty_like(probs)
+    rows = batch * routes * heads * stride
+    threads = 256
+    module.get_function("retrieval_softmax_bwd_bf16")(
+        (rows,), (threads,),
+        (
+            dprobs, probs, query_valid, dscores, np.int64(rows),
+            np.int32(routes), np.int32(heads), np.int32(stride), np.int32(keys),
+        ),
+        shared_mem=threads * 4,
+    )
+    return dscores
+
+
+def _retrieval_route_scatter_bf16_to_f32(src, dst, query_positions, query_valid):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not is_bfloat16_dtype(src.dtype) or dst.dtype != xp.float32:
+        return False
+    src = xp.ascontiguousarray(src)
+    query_positions = xp.ascontiguousarray(query_positions)
+    query_valid = xp.ascontiguousarray(query_valid.astype(bool, copy=False))
+    batch, routes, heads, stride, d_head = map(int, src.shape)
+    n = int(src.size)
+    threads = 256
+    blocks = min((n + threads - 1) // threads, 65535)
+    module.get_function("retrieval_route_scatter_bf16_to_f32")(
+        (blocks,), (threads,),
+        (
+            src, dst, query_positions, query_valid,
+            np.int32(batch), np.int32(routes), np.int32(heads), np.int32(stride),
+            np.int32(d_head), np.int32(dst.shape[1]),
+        ),
+    )
+    return True
+
+
+def _retrieval_kv_scatter_bf16_to_f32(
+    dk_src, dv_src, dk_dst, dv_dst, key_indices, kv_map,
+):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(dk_src.dtype) and is_bfloat16_dtype(dv_src.dtype)):
+        return False
+    if dk_dst.dtype != xp.float32 or dv_dst.dtype != xp.float32:
+        return False
+    dk_src = xp.ascontiguousarray(dk_src)
+    dv_src = xp.ascontiguousarray(dv_src)
+    key_indices = xp.ascontiguousarray(key_indices)
+    kv_map = xp.ascontiguousarray(kv_map)
+    batch, routes, heads, keys, d_head = map(int, dk_src.shape)
+    n = int(dk_src.size)
+    threads = 256
+    blocks = min((n + threads - 1) // threads, 65535)
+    module.get_function("retrieval_kv_scatter_bf16_to_f32")(
+        (blocks,), (threads,),
+        (
+            dk_src, dv_src, dk_dst, dv_dst, key_indices, kv_map,
+            np.int32(batch), np.int32(routes), np.int32(heads), np.int32(keys),
+            np.int32(d_head), np.int32(dk_dst.shape[1]), np.int32(dk_dst.shape[2]),
+        ),
+    )
+    return True
+
+
+def _retrieval_bias_grad_bf16(
+    dscores, selected_weights, n_router_heads, block_size, weight_scale, weight_eps,
+):
+    module = _get_retrieval_bf16_pipeline_module()
+    if module is None or not (is_bfloat16_dtype(dscores.dtype) and is_bfloat16_dtype(selected_weights.dtype)):
+        return None
+    batch, routes, heads, stride, keys = map(int, dscores.shape)
+    selected_blocks = int(selected_weights.shape[-1])
+    if keys != selected_blocks * int(block_size):
+        return None
+    dscores = xp.ascontiguousarray(dscores)
+    weights = xp.ascontiguousarray(selected_weights)
+    out = xp.empty(selected_weights.shape, dtype=xp.float32)
+    count = int(out.size)
+    threads = 256
+    module.get_function("retrieval_bias_grad_bf16")(
+        (count,), (threads,),
+        (
+            dscores, weights, out,
+            np.int32(batch), np.int32(routes), np.int32(heads), np.int32(stride),
+            np.int32(n_router_heads), np.int32(selected_blocks), np.int32(block_size),
+            np.float32(weight_scale), np.float32(weight_eps),
+        ),
+        shared_mem=threads * 4,
+    )
+    return out
 
 
 def _fused_local_softmax_enabled():
@@ -2934,6 +3512,7 @@ def block_retrieval_attention_forward(
         kv_head_indices, n_q_heads, n_kv_heads
     )
     bf16_attention = is_bfloat16_dtype(q.dtype)
+    bf16_pipeline_requested = _bf16_retrieval_pipeline_enabled(q.dtype)
     context_dtype = xp.float32 if bf16_attention else q.dtype
     context = xp.zeros(q.shape, dtype=context_dtype)
 
@@ -2953,6 +3532,7 @@ def block_retrieval_attention_forward(
             "kv_head_indices_host": kv_map_host,
             "scale": scale,
             "bf16_attention": bf16_attention,
+            "bf16_pipeline": False,
             "weight_mode": weight_mode,
             "weight_scale": weight_scale,
             "weight_eps": weight_eps,
@@ -2995,51 +3575,98 @@ def block_retrieval_attention_forward(
     kv_ids = kv_map[None, None, :, None]
     k_selected = k[batch_ids, key_indices, kv_ids, :]
 
-    if bf16_attention:
-        q_score = q_routes.astype("float32") * scale
-        k_score = k_selected.astype("float32")
-    else:
-        q_score = q_routes * scale
-        k_score = k_selected
-    scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
-
-    if weight_mode == "logit_bias":
-        weights_work = (
-            weights_for_heads.astype("float32", copy=False)
-            if is_low_precision_dtype(weights_for_heads.dtype)
-            else weights_for_heads
+    bf16_pipeline = (
+        bf16_pipeline_requested
+        and is_bfloat16_dtype(selected_weights.dtype)
+        and _retrieval_bf16_shape_ok(
+            routing_stride, n_selected * block_size, d_head
         )
-        block_bias = weight_scale * xp.log(weights_work + weight_eps)
-        token_bias = xp.repeat(block_bias, block_size, axis=-1)
-        scores = scores + token_bias[..., None, :]
+        and _get_retrieval_bf16_pipeline_module() is not None
+    )
 
     valid_scores = query_valid[None, :, None, :, None]
-    probs = _masked_softmax_forward(scores, valid_scores)
-    del scores, q_score, k_score, k_selected
-
-    v_selected = v[batch_ids, key_indices, kv_ids, :]
-    if bf16_attention:
-        v_compute = v_selected.astype("float32")
-        probs_compute = probs
-    else:
-        v_compute = v_selected
-        probs_compute = (
-            probs.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else probs
+    if bf16_pipeline:
+        # One strided Tensor-Core workload covers every [B,R,H] route matrix.
+        # Scores stay BF16; scale and router logit bias are applied in FP32
+        # inside the fused softmax kernel before probabilities are rounded back
+        # to BF16 storage.
+        scores = _retrieval_bf16_gemm_nt(q_routes, k_selected)
+        if scores is None:
+            raise RuntimeError(
+                "BF16 retrieval score GEMM declined a validated route layout"
+            )
+        probs = _retrieval_softmax_forward_bf16(
+            scores,
+            selected_weights,
+            query_valid,
+            n_router_heads,
+            block_size,
+            scale,
+            weight_mode,
+            weight_scale,
+            weight_eps,
         )
-    context_routes = xp.matmul(probs_compute, v_compute)
-    if not _retrieval_route_scatter_f32(
-        context_routes, context, query_positions, query_valid
-    ):
-        # [B,R,H,S,D] -> [B,R,S,H,D]
-        context_route_tokens = context_routes.transpose(0, 1, 3, 2, 4)
-        flat_valid = query_valid.reshape(-1)
-        flat_positions = query_positions.reshape(-1)[flat_valid]
-        flat_context = context_route_tokens.reshape(
-            batch, n_routes * routing_stride, n_q_heads, d_head
-        )[:, flat_valid, :, :]
-        context[:, flat_positions, :, :] = flat_context
+        if probs is None:
+            raise RuntimeError(
+                "BF16 retrieval softmax declined a validated route layout"
+            )
+        del scores, k_selected
+
+        v_selected = v[batch_ids, key_indices, kv_ids, :]
+        context_routes = _retrieval_bf16_gemm_nn(probs, v_selected)
+        if context_routes is None:
+            raise RuntimeError(
+                "BF16 retrieval context GEMM declined a validated route layout"
+            )
+        if not _retrieval_route_scatter_bf16_to_f32(
+            context_routes, context, query_positions, query_valid
+        ):
+            raise RuntimeError("BF16 retrieval route scatter fast path declined")
+    else:
+        if bf16_attention:
+            q_score = q_routes.astype("float32") * scale
+            k_score = k_selected.astype("float32")
+        else:
+            q_score = q_routes * scale
+            k_score = k_selected
+        scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+
+        if weight_mode == "logit_bias":
+            weights_work = (
+                weights_for_heads.astype("float32", copy=False)
+                if is_low_precision_dtype(weights_for_heads.dtype)
+                else weights_for_heads
+            )
+            block_bias = weight_scale * xp.log(weights_work + weight_eps)
+            token_bias = xp.repeat(block_bias, block_size, axis=-1)
+            scores = scores + token_bias[..., None, :]
+
+        probs = _masked_softmax_forward(scores, valid_scores)
+        del scores, q_score, k_score, k_selected
+
+        v_selected = v[batch_ids, key_indices, kv_ids, :]
+        if bf16_attention:
+            v_compute = v_selected.astype("float32")
+            probs_compute = probs
+        else:
+            v_compute = v_selected
+            probs_compute = (
+                probs.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs
+            )
+        context_routes = xp.matmul(probs_compute, v_compute)
+        if not _retrieval_route_scatter_f32(
+            context_routes, context, query_positions, query_valid
+        ):
+            # [B,R,H,S,D] -> [B,R,S,H,D]
+            context_route_tokens = context_routes.transpose(0, 1, 3, 2, 4)
+            flat_valid = query_valid.reshape(-1)
+            flat_positions = query_positions.reshape(-1)[flat_valid]
+            flat_context = context_route_tokens.reshape(
+                batch, n_routes * routing_stride, n_q_heads, d_head
+            )[:, flat_valid, :, :]
+            context[:, flat_positions, :, :] = flat_context
 
     if not return_cache:
         return context
@@ -3057,6 +3684,7 @@ def block_retrieval_attention_forward(
         "kv_head_indices_host": kv_map_host,
         "scale": scale,
         "bf16_attention": bf16_attention,
+        "bf16_pipeline": bf16_pipeline,
         "weight_mode": weight_mode,
         "weight_scale": weight_scale,
         "weight_eps": weight_eps,
@@ -3096,7 +3724,7 @@ def block_retrieval_attention_backward(dcontext, cache):
     query_positions = cache["query_positions"]
     query_valid = cache["query_valid"]
     probs = cache["probs"]
-    probs_f32 = _restore_cached_probs(probs, bf16_attention)
+    bf16_pipeline = cache.get("bf16_pipeline", False)
 
     grad_dtype = xp.float32 if bf16_attention else q.dtype
     dq = xp.zeros(q.shape, dtype=grad_dtype)
@@ -3109,92 +3737,145 @@ def block_retrieval_attention_backward(dcontext, cache):
     dcontext_routes = dcontext[:, query_positions, :, :].transpose(0, 1, 3, 2, 4)
     q_routes = q[:, query_positions, :, :].transpose(0, 1, 3, 2, 4)
     valid_q = query_valid[None, :, None, :, None]
-    dcontext_routes = xp.where(valid_q, dcontext_routes, 0.0)
-    q_routes = xp.where(valid_q, q_routes, 0.0)
 
     batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
     kv_ids = kv_map[None, None, :, None]
     v_selected = v[batch_ids, key_indices, kv_ids, :]
 
-    if bf16_attention:
-        dcontext_compute = dcontext_routes.astype("float32")
-        q_compute = q_routes.astype("float32")
-        v_compute = v_selected.astype("float32")
-        probs_compute = probs_f32
+    if bf16_pipeline:
+        # Invalid rows already have zero probabilities/dscores, so the clipped
+        # final-route query position never contributes to dv/dk.  Avoiding the
+        # reference xp.where() also avoids building two FP32 route tensors.
+        dc_bf16 = dcontext_routes.astype(q.dtype, copy=False)
+        dprobs = _retrieval_bf16_gemm_nt(dc_bf16, v_selected)
+        dv_selected = _retrieval_bf16_gemm_tn(probs, dc_bf16)
+        if dprobs is None or dv_selected is None:
+            raise RuntimeError(
+                "BF16 retrieval dP/dV GEMM declined a validated route layout"
+            )
+        dscores = _retrieval_softmax_backward_bf16(
+            dprobs, probs, query_valid
+        )
+        if dscores is None:
+            raise RuntimeError(
+                "BF16 retrieval backward softmax declined a validated layout"
+            )
+
+        k_selected = k[batch_ids, key_indices, kv_ids, :]
+        dq_routes = _retrieval_bf16_gemm_nn(dscores, k_selected, alpha=scale)
+        dk_selected = _retrieval_bf16_gemm_tn(dscores, q_routes, alpha=scale)
+        if dq_routes is None or dk_selected is None:
+            raise RuntimeError(
+                "BF16 retrieval dQ/dK GEMM declined a validated route layout"
+            )
+
+        if not _retrieval_route_scatter_bf16_to_f32(
+            dq_routes, dq, query_positions, query_valid
+        ):
+            raise RuntimeError("BF16 retrieval dQ scatter fast path declined")
+        if not _retrieval_kv_scatter_bf16_to_f32(
+            dk_selected, dv_selected, dk, dv, key_indices, kv_map
+        ):
+            raise RuntimeError("BF16 retrieval dK/dV scatter fast path declined")
+
+        if cache["weight_mode"] == "logit_bias":
+            direct = _retrieval_bias_grad_bf16(
+                dscores,
+                selected_weights,
+                n_router_heads,
+                block_size,
+                cache["weight_scale"],
+                cache["weight_eps"],
+            )
+            if direct is None:
+                raise RuntimeError(
+                    "BF16 retrieval router-weight gradient fast path declined"
+                )
+            dweights = direct
     else:
-        dcontext_compute = dcontext_routes
-        q_compute = q_routes
-        v_compute = v_selected
-        probs_compute = (
-            probs.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else probs
-        )
+        probs_f32 = _restore_cached_probs(probs, bf16_attention)
+        dcontext_routes = xp.where(valid_q, dcontext_routes, 0.0)
+        q_routes = xp.where(valid_q, q_routes, 0.0)
 
-    dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
-    dv_selected = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-    dscores = _masked_softmax_backward(dprobs, probs_f32, valid_q)
-    dscores_compute = (
-        dscores.astype("float32", copy=False)
-        if bf16_attention
-        else (
-            dscores.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else dscores
-        )
-    )
-
-    k_selected = k[batch_ids, key_indices, kv_ids, :]
-    k_compute = k_selected.astype("float32") if bf16_attention else k_selected
-    dq_routes = xp.matmul(dscores_compute, k_compute) * scale
-    dk_selected = xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
-
-    # Routes own disjoint query ranges, so Q gradients can be assigned without
-    # a scatter-add.  The CUDA fast path indexes the regular route tensor
-    # directly and avoids CuPy boolean-mask scans entirely.
-    if not _retrieval_route_scatter_f32(
-        dq_routes, dq, query_positions, query_valid
-    ):
-        dq_route_tokens = dq_routes.transpose(0, 1, 3, 2, 4).reshape(
-            batch, n_routes * routing_stride, n_q_heads, d_head
-        )
-        flat_valid = query_valid.reshape(-1)
-        flat_positions = query_positions.reshape(-1)[flat_valid]
-        dq[:, flat_positions, :, :] = dq_route_tokens[:, flat_valid, :, :]
-
-    # K/V may be selected by several routes or query heads, so accumulation is
-    # genuinely irregular.  The CUDA path performs both FP32 atomic scatter
-    # adds in one launch instead of two generic ``xp.add.at`` calls.
-    dk_selected_grad = dk_selected.astype(grad_dtype, copy=False)
-    dv_selected_grad = dv_selected.astype(grad_dtype, copy=False)
-    if not _retrieval_kv_scatter_add_f32(
-        dk_selected_grad, dv_selected_grad, dk, dv, key_indices, kv_map
-    ):
-        scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
-        scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
-        xp.add.at(dk, (scatter_batch, key_indices, scatter_kv), dk_selected_grad)
-        xp.add.at(dv, (scatter_batch, key_indices, scatter_kv), dv_selected_grad)
-
-    if cache["weight_mode"] == "logit_bias":
-        # One block logit prior is shared by all exact tokens in that block and
-        # every query token governed by the route.  Sum those score gradients
-        # before applying d(alpha*log(w+eps))/dw.
-        dbias_heads = dscores.reshape(
-            batch,
-            n_routes,
-            n_q_heads,
-            routing_stride,
-            n_selected,
-            block_size,
-        ).sum(axis=(3, 5))
-        if n_router_heads == 1 and n_q_heads != 1:
-            dbias_router = xp.sum(dbias_heads, axis=2, keepdims=True)
+        if bf16_attention:
+            dcontext_compute = dcontext_routes.astype("float32")
+            q_compute = q_routes.astype("float32")
+            v_compute = v_selected.astype("float32")
+            probs_compute = probs_f32
         else:
-            dbias_router = dbias_heads
-        weights_work = selected_weights.astype(dbias_router.dtype, copy=False)
-        dweights = dbias_router * (
-            cache["weight_scale"] / (weights_work + cache["weight_eps"])
+            dcontext_compute = dcontext_routes
+            q_compute = q_routes
+            v_compute = v_selected
+            probs_compute = (
+                probs.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else probs
+            )
+
+        dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
+        dv_selected = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+        dscores = _masked_softmax_backward(dprobs, probs_f32, valid_q)
+        dscores_compute = (
+            dscores.astype("float32", copy=False)
+            if bf16_attention
+            else (
+                dscores.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype)
+                else dscores
+            )
         )
-        dweights = dweights.astype(grad_dtype, copy=False)
+
+        k_selected = k[batch_ids, key_indices, kv_ids, :]
+        k_compute = k_selected.astype("float32") if bf16_attention else k_selected
+        dq_routes = xp.matmul(dscores_compute, k_compute) * scale
+        dk_selected = xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+
+        # Routes own disjoint query ranges, so Q gradients can be assigned without
+        # a scatter-add.  The CUDA fast path indexes the regular route tensor
+        # directly and avoids CuPy boolean-mask scans entirely.
+        if not _retrieval_route_scatter_f32(
+            dq_routes, dq, query_positions, query_valid
+        ):
+            dq_route_tokens = dq_routes.transpose(0, 1, 3, 2, 4).reshape(
+                batch, n_routes * routing_stride, n_q_heads, d_head
+            )
+            flat_valid = query_valid.reshape(-1)
+            flat_positions = query_positions.reshape(-1)[flat_valid]
+            dq[:, flat_positions, :, :] = dq_route_tokens[:, flat_valid, :, :]
+
+        # K/V may be selected by several routes or query heads, so accumulation is
+        # genuinely irregular.  The CUDA path performs both FP32 atomic scatter
+        # adds in one launch instead of two generic ``xp.add.at`` calls.
+        dk_selected_grad = dk_selected.astype(grad_dtype, copy=False)
+        dv_selected_grad = dv_selected.astype(grad_dtype, copy=False)
+        if not _retrieval_kv_scatter_add_f32(
+            dk_selected_grad, dv_selected_grad, dk, dv, key_indices, kv_map
+        ):
+            scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
+            scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
+            xp.add.at(dk, (scatter_batch, key_indices, scatter_kv), dk_selected_grad)
+            xp.add.at(dv, (scatter_batch, key_indices, scatter_kv), dv_selected_grad)
+
+        if cache["weight_mode"] == "logit_bias":
+            # One block logit prior is shared by all exact tokens in that block and
+            # every query token governed by the route.  Sum those score gradients
+            # before applying d(alpha*log(w+eps))/dw.
+            dbias_heads = dscores.reshape(
+                batch,
+                n_routes,
+                n_q_heads,
+                routing_stride,
+                n_selected,
+                block_size,
+            ).sum(axis=(3, 5))
+            if n_router_heads == 1 and n_q_heads != 1:
+                dbias_router = xp.sum(dbias_heads, axis=2, keepdims=True)
+            else:
+                dbias_router = dbias_heads
+            weights_work = selected_weights.astype(dbias_router.dtype, copy=False)
+            dweights = dbias_router * (
+                cache["weight_scale"] / (weights_work + cache["weight_eps"])
+            )
+            dweights = dweights.astype(grad_dtype, copy=False)
 
     return dq, dk, dv, dweights

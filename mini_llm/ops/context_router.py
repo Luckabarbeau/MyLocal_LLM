@@ -10,11 +10,532 @@ later expanded back to full-resolution tokens/KV by ``context_blocks``.
 """
 
 import math
+import os
 
-from ..backend import xp, is_low_precision_dtype
+import numpy as np
+
+from ..backend import (
+    xp,
+    BACKEND_NAME,
+    is_bfloat16_dtype,
+    is_low_precision_dtype,
+)
 from ..parameter import Parameter
+from ..performance_profiler import retrieval_router_detail_scope
 from .context_blocks import HistoryBlockPooler, complete_block_count
 from .topk import selected_topk_softmax_forward, selected_topk_softmax_backward
+
+
+_DIRECT_QUERY_POOL_MODULE = None
+_DIRECT_QUERY_POOL_DISABLED = False
+
+
+def _direct_query_pool_enabled(dtype):
+    """Whether to use the BF16/CUDA direct learned-query pooling path."""
+    raw = os.environ.get("MINI_LLM_DIRECT_QUERY_POOL", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no", ""}
+    )
+
+
+def _get_direct_query_pool_module():
+    """Compile the direct BF16 learned-query pooling kernels lazily.
+
+    The forward path deliberately keeps only the compact ``alpha`` tensor in
+    FP32. Hidden states and pooled outputs remain BF16, and no
+    ``[B,R,W,D]`` activation window is materialized.
+    """
+    global _DIRECT_QUERY_POOL_MODULE, _DIRECT_QUERY_POOL_DISABLED
+    if BACKEND_NAME != "cupy" or _DIRECT_QUERY_POOL_DISABLED:
+        return None
+    if _DIRECT_QUERY_POOL_MODULE is not None:
+        return _DIRECT_QUERY_POOL_MODULE
+
+    code = r"""
+    __device__ __forceinline__ float bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    __device__ __forceinline__ unsigned short float_to_bf16(float x) {
+        union { unsigned int u; float f; } v;
+        v.f = x;
+        unsigned int bits = v.u;
+        unsigned int lsb = (bits >> 16) & 1u;
+        bits += 0x7fffu + lsb;
+        return (unsigned short)(bits >> 16);
+    }
+
+    extern "C" __global__
+    void query_pool_softmax_bf16(
+        const unsigned short* token_scores,
+        const long long* route_starts,
+        float* alpha,
+        int batch, int seq_len, int n_routes, int query_window,
+        float score_scale) {
+        int row = (int)blockIdx.x;
+        int total_rows = batch * n_routes;
+        if (row >= total_rows) return;
+
+        int b = row / n_routes;
+        int r = row - b * n_routes;
+        int start = (int)route_starts[r];
+        int first = start - query_window;
+        int valid_begin = 0;
+        if (first < 0) {
+            valid_begin = -first;
+            first = 0;
+        }
+
+        extern __shared__ float sh[];
+        float local_max = -3.402823466e+38F;
+        for (int j = valid_begin + threadIdx.x; j < query_window; j += blockDim.x) {
+            int token = first + (j - valid_begin);
+            if (token >= 0 && token < start && token < seq_len) {
+                float s = bf16_to_float(token_scores[(long long)b * seq_len + token]);
+                local_max = fmaxf(local_max, s * score_scale);
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = valid_begin + threadIdx.x; j < query_window; j += blockDim.x) {
+            int token = first + (j - valid_begin);
+            if (token >= 0 && token < start && token < seq_len) {
+                float s = bf16_to_float(token_scores[(long long)b * seq_len + token]);
+                local_sum += expf(s * score_scale - row_max);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv_sum = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+
+        long long alpha_base = (long long)row * query_window;
+        for (int j = threadIdx.x; j < query_window; j += blockDim.x) {
+            float a = 0.0f;
+            if (j >= valid_begin) {
+                int token = first + (j - valid_begin);
+                if (token >= 0 && token < start && token < seq_len) {
+                    float s = bf16_to_float(token_scores[(long long)b * seq_len + token]);
+                    a = expf(s * score_scale - row_max) * inv_sum;
+                }
+            }
+            alpha[alpha_base + j] = a;
+        }
+    }
+
+    extern "C" __global__
+    void query_pool_reduce_bf16(
+        const unsigned short* x,
+        const long long* route_starts,
+        const float* alpha,
+        unsigned short* pooled,
+        float* pooled_work,
+        int batch, int seq_len, int d_model, int n_routes, int query_window) {
+        int row = (int)blockIdx.x;
+        int d = (int)blockIdx.y * blockDim.x + threadIdx.x;
+        int total_rows = batch * n_routes;
+        if (row >= total_rows || d >= d_model) return;
+
+        int b = row / n_routes;
+        int r = row - b * n_routes;
+        int start = (int)route_starts[r];
+        int first = start - query_window;
+        int valid_begin = 0;
+        if (first < 0) {
+            valid_begin = -first;
+            first = 0;
+        }
+
+        long long alpha_base = (long long)row * query_window;
+        float acc = 0.0f;
+        for (int j = valid_begin; j < query_window; ++j) {
+            int token = first + (j - valid_begin);
+            if (token >= 0 && token < start && token < seq_len) {
+                long long x_idx = ((long long)b * seq_len + token) * d_model + d;
+                acc += alpha[alpha_base + j] * bf16_to_float(x[x_idx]);
+            }
+        }
+        long long out_idx = ((long long)row * d_model) + d;
+        pooled_work[out_idx] = acc;
+        pooled[out_idx] = float_to_bf16(acc);
+    }
+
+    // Aggregate the scalar softmax-score gradient for each sequence token:
+    //
+    //   D_t = sum_r alpha_rt * g_r^T (x_t - y_r)
+    //
+    // Each token belongs to only a few overlapping causal windows. We scan
+    // the compact route list instead of materializing [B,R,W,D] windows or
+    // per-window D-dimensional gradients.
+    extern "C" __global__
+    void query_pool_token_ds_bf16(
+        const unsigned short* x,
+        const unsigned short* dpooled,
+        const float* pooled_work,
+        const long long* route_starts,
+        const float* alpha,
+        float* token_ds,
+        int batch, int seq_len, int d_model, int n_routes, int query_window) {
+        int bt = (int)blockIdx.x;
+        int total_tokens = batch * seq_len;
+        if (bt >= total_tokens) return;
+
+        int b = bt / seq_len;
+        int token = bt - b * seq_len;
+        extern __shared__ float sh[];
+        float total_ds = 0.0f;
+
+        for (int r = 0; r < n_routes; ++r) {
+            int start = (int)route_starts[r];
+            int raw_first = start - query_window;
+            int first = raw_first > 0 ? raw_first : 0;
+            if (token < first || token >= start) continue;
+
+            int j = token - raw_first;
+            if (j < 0 || j >= query_window) continue;
+
+            long long row = (long long)b * n_routes + r;
+            long long x_base = ((long long)b * seq_len + token) * d_model;
+            long long g_base = row * d_model;
+            float local = 0.0f;
+            for (int d = threadIdx.x; d < d_model; d += blockDim.x) {
+                float xv = bf16_to_float(x[x_base + d]);
+                float yv = pooled_work[g_base + d];
+                float gv = bf16_to_float(dpooled[g_base + d]);
+                local += gv * (xv - yv);
+            }
+            sh[threadIdx.x] = local;
+            __syncthreads();
+            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+                if (threadIdx.x < stride)
+                    sh[threadIdx.x] += sh[threadIdx.x + stride];
+                __syncthreads();
+            }
+            if (threadIdx.x == 0) {
+                total_ds += alpha[row * query_window + j] * sh[0];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) token_ds[bt] = total_ds;
+    }
+
+    // Build dx directly. The first term is the ordinary weighted-pooling
+    // derivative; the second is the score path using the scalar D_t above.
+    extern "C" __global__
+    void query_pool_dx_bf16(
+        const unsigned short* dpooled,
+        const unsigned short* score_param,
+        const long long* route_starts,
+        const float* alpha,
+        const float* token_ds,
+        float* dx,
+        int batch, int seq_len, int d_model, int n_routes, int query_window,
+        float score_scale) {
+        long long linear = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+        long long total = (long long)batch * seq_len * d_model;
+        if (linear >= total) return;
+
+        int d = (int)(linear % d_model);
+        long long bt = linear / d_model;
+        int token = (int)(bt % seq_len);
+        int b = (int)(bt / seq_len);
+
+        float direct = 0.0f;
+        for (int r = 0; r < n_routes; ++r) {
+            int start = (int)route_starts[r];
+            int raw_first = start - query_window;
+            int first = raw_first > 0 ? raw_first : 0;
+            if (token < first || token >= start) continue;
+            int j = token - raw_first;
+            if (j < 0 || j >= query_window) continue;
+
+            long long row = (long long)b * n_routes + r;
+            float a = alpha[row * query_window + j];
+            direct += a * bf16_to_float(dpooled[row * d_model + d]);
+        }
+
+        float score_path = token_ds[bt] * bf16_to_float(score_param[d]) * score_scale;
+        dx[linear] = direct + score_path;
+    }
+
+    // Accumulate dw = scale * sum_t D_t x_t directly in FP32. One block owns
+    // each parameter element, so no atomics are needed even though gradients
+    // are accumulated across microbatches.
+    extern "C" __global__
+    void query_pool_wgrad_bf16(
+        const unsigned short* x,
+        const float* token_ds,
+        float* grad_score,
+        int batch, int seq_len, int d_model, float score_scale) {
+        int d = (int)blockIdx.x;
+        if (d >= d_model) return;
+        extern __shared__ float sh[];
+        int total_tokens = batch * seq_len;
+        float local = 0.0f;
+        for (int bt = threadIdx.x; bt < total_tokens; bt += blockDim.x) {
+            float xv = bf16_to_float(x[(long long)bt * d_model + d]);
+            local += token_ds[bt] * xv;
+        }
+        sh[threadIdx.x] = local;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) grad_score[d] += sh[0] * score_scale;
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=(
+                "query_pool_softmax_bf16",
+                "query_pool_reduce_bf16",
+                "query_pool_token_ds_bf16",
+                "query_pool_dx_bf16",
+                "query_pool_wgrad_bf16",
+            ),
+        )
+        module.get_function("query_pool_softmax_bf16")
+        module.get_function("query_pool_reduce_bf16")
+        module.get_function("query_pool_token_ds_bf16")
+        module.get_function("query_pool_dx_bf16")
+        module.get_function("query_pool_wgrad_bf16")
+        _DIRECT_QUERY_POOL_MODULE = module
+    except Exception:
+        strict = os.environ.get(
+            "MINI_LLM_DIRECT_QUERY_POOL_STRICT", "0"
+        ).strip().lower()
+        if strict not in {"0", "false", "off", "no", ""}:
+            raise
+        _DIRECT_QUERY_POOL_DISABLED = True
+        return None
+    return _DIRECT_QUERY_POOL_MODULE
+
+
+def _direct_learned_query_pool_forward(x, route_starts, score_param, query_window):
+    """Direct BF16 learned-query pooling without gathering activation windows.
+
+    Returns ``(pooled, alpha_work, pooled_work)`` when the optimized CUDA path is usable,
+    otherwise ``None`` so callers can fall back to the reference path.
+    """
+    if not _direct_query_pool_enabled(x.dtype):
+        return None
+    if not is_bfloat16_dtype(score_param.dtype):
+        return None
+    if x.ndim != 3 or route_starts.ndim != 1:
+        return None
+    if not x.flags.c_contiguous or not score_param.flags.c_contiguous:
+        return None
+
+    batch, seq_len, d_model = map(int, x.shape)
+    n_routes = int(route_starts.shape[0])
+    query_window = int(query_window)
+    if n_routes == 0:
+        return (
+            xp.empty((batch, 0, d_model), dtype=x.dtype),
+            xp.empty((batch, 0, query_window), dtype="float32"),
+            xp.empty((batch, 0, d_model), dtype="float32"),
+        )
+    if n_routes * batch > 2147483647:
+        return None
+
+    module = _get_direct_query_pool_module()
+    if module is None:
+        return None
+
+    # One global projection scores each sequence token exactly once.  This is
+    # a regular 2-D BF16 GEMM and therefore stays on the Tensor-Core path.
+    with retrieval_router_detail_scope("router.qpool.direct_score_gemm"):
+        token_scores = x.reshape(batch * seq_len, d_model) @ score_param
+        token_scores = token_scores.reshape(batch, seq_len)
+    if not token_scores.flags.c_contiguous:
+        token_scores = xp.ascontiguousarray(token_scores)
+    if not route_starts.flags.c_contiguous:
+        route_starts = xp.ascontiguousarray(route_starts)
+
+    alpha_work = xp.empty((batch, n_routes, query_window), dtype="float32")
+    pooled = xp.empty((batch, n_routes, d_model), dtype=x.dtype)
+    # Keep the tiny [B,R,D] FP32 pooled value for the direct backward. This
+    # preserves the exact FP32 softmax correction without retaining the huge
+    # [B,R,W,D] activation windows.
+    pooled_work = xp.empty((batch, n_routes, d_model), dtype="float32")
+
+    threads = 256
+    rows = batch * n_routes
+    with retrieval_router_detail_scope("router.qpool.direct_softmax"):
+        module.get_function("query_pool_softmax_bf16")(
+            (rows,),
+            (threads,),
+            (
+                token_scores,
+                route_starts,
+                alpha_work,
+                np.int32(batch),
+                np.int32(seq_len),
+                np.int32(n_routes),
+                np.int32(query_window),
+                np.float32(1.0 / math.sqrt(d_model)),
+            ),
+            shared_mem=threads * 4,
+        )
+
+    reduce_threads = 128
+    d_blocks = (d_model + reduce_threads - 1) // reduce_threads
+    with retrieval_router_detail_scope("router.qpool.direct_reduce"):
+        module.get_function("query_pool_reduce_bf16")(
+            (rows, d_blocks),
+            (reduce_threads,),
+            (
+                x,
+                route_starts,
+                alpha_work,
+                pooled,
+                pooled_work,
+                np.int32(batch),
+                np.int32(seq_len),
+                np.int32(d_model),
+                np.int32(n_routes),
+                np.int32(query_window),
+            ),
+        )
+    return pooled, alpha_work, pooled_work
+
+
+def _direct_query_pool_backward_enabled():
+    raw = os.environ.get(
+        "MINI_LLM_DIRECT_QUERY_POOL_BACKWARD", "0"
+    ).strip().lower()
+    return BACKEND_NAME == "cupy" and raw not in {"0", "false", "off", "no", ""}
+
+
+def _direct_learned_query_pool_backward(
+    dpooled, cache, score_param, query_window
+):
+    """Direct BF16 learned-query backward without window tensors/scatters.
+
+    The CUDA path computes the scalar per-token score gradient first, then
+    gathers the at-most-few overlapping route contributions directly into dx
+    and accumulates the score-vector gradient in FP32. Returns ``None`` when
+    the optimized path is not applicable so callers can use the reference
+    implementation.
+    """
+    if not _direct_query_pool_backward_enabled():
+        return None
+    if not cache.get("direct_forward", False):
+        return None
+    x = cache.get("x")
+    pooled_work = cache.get("pooled_work")
+    route_starts = cache.get("route_starts")
+    alpha_work = cache.get("alpha_work")
+    if x is None or pooled_work is None or route_starts is None or alpha_work is None:
+        return None
+    if not (is_bfloat16_dtype(x.dtype) and is_bfloat16_dtype(dpooled.dtype)):
+        return None
+    if not is_bfloat16_dtype(score_param.data.dtype):
+        return None
+    if score_param.grad.dtype != xp.dtype("float32"):
+        return None
+    arrays = (x, dpooled, pooled_work, route_starts, alpha_work, score_param.data)
+    if any(not array.flags.c_contiguous for array in arrays):
+        return None
+
+    batch, seq_len, d_model = map(int, x.shape)
+    n_routes = int(route_starts.shape[0])
+    query_window = int(query_window)
+    if dpooled.shape != (batch, n_routes, d_model):
+        return None
+    if pooled_work.shape != (batch, n_routes, d_model):
+        return None
+    if alpha_work.shape != (batch, n_routes, query_window):
+        return None
+
+    module = _get_direct_query_pool_module()
+    if module is None:
+        return None
+
+    token_ds = xp.empty((batch, seq_len), dtype="float32")
+    dx = xp.empty((batch, seq_len, d_model), dtype="float32")
+    reduce_threads = 128
+    with retrieval_router_detail_scope("router.qpool.bwd.direct_token_ds"):
+        module.get_function("query_pool_token_ds_bf16")(
+            (batch * seq_len,),
+            (reduce_threads,),
+            (
+                x,
+                dpooled,
+                pooled_work,
+                route_starts,
+                alpha_work,
+                token_ds,
+                np.int32(batch),
+                np.int32(seq_len),
+                np.int32(d_model),
+                np.int32(n_routes),
+                np.int32(query_window),
+            ),
+            shared_mem=reduce_threads * 4,
+        )
+
+    threads = 256
+    total = batch * seq_len * d_model
+    blocks = (total + threads - 1) // threads
+    with retrieval_router_detail_scope("router.qpool.bwd.direct_dx"):
+        module.get_function("query_pool_dx_bf16")(
+            (blocks,),
+            (threads,),
+            (
+                dpooled,
+                score_param.data,
+                route_starts,
+                alpha_work,
+                token_ds,
+                dx,
+                np.int32(batch),
+                np.int32(seq_len),
+                np.int32(d_model),
+                np.int32(n_routes),
+                np.int32(query_window),
+                np.float32(1.0 / math.sqrt(d_model)),
+            ),
+        )
+
+    wgrad_threads = 256
+    with retrieval_router_detail_scope("router.qpool.bwd.direct_wgrad"):
+        module.get_function("query_pool_wgrad_bf16")(
+            (d_model,),
+            (wgrad_threads,),
+            (
+                x,
+                token_ds,
+                score_param.grad,
+                np.int32(batch),
+                np.int32(seq_len),
+                np.int32(d_model),
+                np.float32(1.0 / math.sqrt(d_model)),
+            ),
+            shared_mem=wgrad_threads * 4,
+        )
+    cache["direct_backward"] = True
+    return dx
 
 
 def eligible_route_starts(seq_len, config):
@@ -87,14 +608,20 @@ class CausalQueryPooler:
         clipped = xp.maximum(raw, 0)
         return clipped, valid
 
-    def forward(self, x, route_starts):
+    def forward(self, x, route_starts, window_metadata=None):
         if x.ndim != 3 or x.shape[-1] != self.d_model:
             raise ValueError("x must have shape (batch, seq_len, d_model)")
         if route_starts.ndim != 1:
             raise ValueError("route_starts must be one-dimensional")
-        if route_starts.size:
-            if bool(xp.any(route_starts <= 0)) or bool(xp.any(route_starts > x.shape[1])):
-                raise ValueError("route starts must satisfy 0 < start <= seq_len")
+        if window_metadata is None:
+            with retrieval_router_detail_scope("router.qpool.validate"):
+                if route_starts.size:
+                    if bool(xp.any(route_starts <= 0)) or bool(
+                        xp.any(route_starts > x.shape[1])
+                    ):
+                        raise ValueError(
+                            "route starts must satisfy 0 < start <= seq_len"
+                        )
 
         batch = x.shape[0]
         n_routes = int(route_starts.shape[0])
@@ -107,9 +634,14 @@ class CausalQueryPooler:
                 "valid": xp.zeros((0, self.query_window), dtype=bool),
             }
 
-        indices, valid = self._window_indices(route_starts)
-        windows = x[:, indices, :]  # (B, R, W, D)
-        valid_f = valid.astype(windows.dtype, copy=False)
+        if window_metadata is None:
+            with retrieval_router_detail_scope("router.qpool.indices"):
+                indices, valid = self._window_indices(route_starts)
+        else:
+            indices, valid = window_metadata
+            expected = (n_routes, self.query_window)
+            if indices.shape != expected or valid.shape != expected:
+                raise ValueError("window_metadata has incompatible shape")
 
         if self.strategy == "last":
             pooled = x[:, route_starts - 1, :]
@@ -121,9 +653,39 @@ class CausalQueryPooler:
             }
             return pooled, cache
 
+        # The optimized learned path computes each token score once over
+        # [B,T,D] and pools windows directly from x. The compact FP32 pooled
+        # value is retained for the optional 0048C direct backward; the old
+        # indices/valid metadata remains available for the reference fallback.
+        if self.strategy == "learned":
+            direct = _direct_learned_query_pool_forward(
+                x, route_starts, self.score_param.data, self.query_window
+            )
+            if direct is not None:
+                pooled, alpha_work, pooled_work = direct
+                cache = {
+                    "x_shape": x.shape,
+                    "x": x,
+                    "route_starts": route_starts,
+                    "indices": indices,
+                    "valid": valid,
+                    "alpha_work": alpha_work,
+                    "pooled_work": pooled_work,
+                    "scale": 1.0 / math.sqrt(self.d_model),
+                    "direct_forward": True,
+                }
+                return pooled, cache
+
+        with retrieval_router_detail_scope("router.qpool.gather"):
+            windows = x[:, indices, :]  # (B, R, W, D)
+            valid_f = valid.astype(windows.dtype, copy=False)
+
         if self.strategy == "mean":
-            counts = xp.sum(valid_f, axis=1).reshape(1, n_routes, 1)
-            pooled = xp.sum(windows * valid_f[None, :, :, None], axis=2) / counts
+            with retrieval_router_detail_scope("router.qpool.mean_reduce"):
+                counts = xp.sum(valid_f, axis=1).reshape(1, n_routes, 1)
+                pooled = (
+                    xp.sum(windows * valid_f[None, :, :, None], axis=2) / counts
+                )
             cache = {
                 "x_shape": x.shape,
                 "route_starts": route_starts,
@@ -134,28 +696,31 @@ class CausalQueryPooler:
             return pooled, cache
 
         scale = 1.0 / math.sqrt(self.d_model)
-        windows_2d = windows.reshape(-1, self.d_model)
-        scores = (windows_2d @ self.score_param.data).reshape(
-            batch, n_routes, self.query_window
-        ) * scale
-        scores_work = (
-            scores.astype("float32", copy=False)
-            if is_low_precision_dtype(scores.dtype)
-            else scores
-        )
-        neg_inf = xp.asarray(-xp.inf, dtype=scores_work.dtype)
-        scores_work = xp.where(valid[None, :, :], scores_work, neg_inf)
-        max_scores = xp.max(scores_work, axis=2, keepdims=True)
-        exp_scores = xp.where(
-            valid[None, :, :], xp.exp(scores_work - max_scores), 0.0
-        )
-        alpha_work = exp_scores / xp.sum(exp_scores, axis=2, keepdims=True)
-        alpha = (
-            alpha_work.astype(x.dtype, copy=False)
-            if is_low_precision_dtype(x.dtype)
-            else alpha_work
-        )
-        pooled = xp.sum(windows * alpha[..., None], axis=2)
+        with retrieval_router_detail_scope("router.qpool.score_gemm"):
+            windows_2d = windows.reshape(-1, self.d_model)
+            scores = (windows_2d @ self.score_param.data).reshape(
+                batch, n_routes, self.query_window
+            ) * scale
+        with retrieval_router_detail_scope("router.qpool.softmax"):
+            scores_work = (
+                scores.astype("float32", copy=False)
+                if is_low_precision_dtype(scores.dtype)
+                else scores
+            )
+            neg_inf = xp.asarray(-xp.inf, dtype=scores_work.dtype)
+            scores_work = xp.where(valid[None, :, :], scores_work, neg_inf)
+            max_scores = xp.max(scores_work, axis=2, keepdims=True)
+            exp_scores = xp.where(
+                valid[None, :, :], xp.exp(scores_work - max_scores), 0.0
+            )
+            alpha_work = exp_scores / xp.sum(exp_scores, axis=2, keepdims=True)
+            alpha = (
+                alpha_work.astype(x.dtype, copy=False)
+                if is_low_precision_dtype(x.dtype)
+                else alpha_work
+            )
+        with retrieval_router_detail_scope("router.qpool.reduce"):
+            pooled = xp.sum(windows * alpha[..., None], axis=2)
         cache = {
             "x_shape": x.shape,
             "x": x,
@@ -180,9 +745,18 @@ class CausalQueryPooler:
         grad_dtype = (
             "float32" if is_low_precision_dtype(dpooled.dtype) else dpooled.dtype
         )
-        dx = xp.zeros(x_shape, dtype=grad_dtype)
         if n_routes == 0:
-            return dx
+            return xp.zeros(x_shape, dtype=grad_dtype)
+
+        if self.strategy == "learned":
+            direct_dx = _direct_learned_query_pool_backward(
+                dpooled, cache, self.score_param, self.query_window
+            )
+            if direct_dx is not None:
+                return direct_dx
+
+        with retrieval_router_detail_scope("router.qpool.bwd.alloc"):
+            dx = xp.zeros(x_shape, dtype=grad_dtype)
 
         if self.strategy == "last":
             batch_ids = xp.broadcast_to(
@@ -201,45 +775,58 @@ class CausalQueryPooler:
         indices = cache["indices"]
         valid = cache["valid"]
         if self.strategy == "mean":
-            counts = cache["counts"]
-            dwindow = dpooled[:, :, None, :] / counts[:, :, None, :]
-            dwindow = dwindow * valid[None, :, :, None]
+            with retrieval_router_detail_scope("router.qpool.bwd.direct"):
+                counts = cache["counts"]
+                dwindow = dpooled[:, :, None, :] / counts[:, :, None, :]
+                dwindow = dwindow * valid[None, :, :, None]
         else:
-            windows = cache["x"][:, indices, :]
-            alpha_work = cache["alpha_work"]
-            scale = cache["scale"]
-            alpha_compute = (
-                alpha_work.astype(dpooled.dtype, copy=False)
-                if is_low_precision_dtype(dpooled.dtype)
-                else alpha_work
+            with retrieval_router_detail_scope("router.qpool.bwd.gather"):
+                windows = cache["x"][:, indices, :]
+                alpha_work = cache["alpha_work"]
+                scale = cache["scale"]
+            with retrieval_router_detail_scope("router.qpool.bwd.direct"):
+                alpha_compute = (
+                    alpha_work.astype(dpooled.dtype, copy=False)
+                    if is_low_precision_dtype(dpooled.dtype)
+                    else alpha_work
+                )
+                dwindow = alpha_compute[..., None] * dpooled[:, :, None, :]
+
+            with retrieval_router_detail_scope("router.qpool.bwd.softmax"):
+                dpooled_work = dpooled.astype("float32", copy=False)
+                windows_work = windows.astype("float32", copy=False)
+                dalpha = xp.sum(
+                    windows_work * dpooled_work[:, :, None, :], axis=-1
+                )
+                correction = xp.sum(alpha_work * dalpha, axis=2, keepdims=True)
+                dscores = alpha_work * (dalpha - correction)
+                dscores = xp.where(valid[None, :, :], dscores, 0.0)
+
+            with retrieval_router_detail_scope("router.qpool.bwd.score_path"):
+                score_vector_work = self.score_param.data.astype(
+                    "float32", copy=False
+                )
+                score_path = dscores[..., None] * score_vector_work * scale
+                dwindow += score_path.astype(dwindow.dtype, copy=False)
+            with retrieval_router_detail_scope("router.qpool.bwd.score_wgrad"):
+                grad_score = xp.sum(
+                    dscores[..., None] * windows_work, axis=(0, 1, 2)
+                ) * scale
+                self.score_param.grad += grad_score
+
+        with retrieval_router_detail_scope("router.qpool.bwd.scatter"):
+            flat_indices = xp.broadcast_to(
+                indices[None, :, :], (batch, n_routes, self.query_window)
+            ).reshape(batch, -1)
+            values = dwindow.reshape(batch, -1, d_model)
+            batch_ids = xp.broadcast_to(
+                xp.arange(batch)[:, None], flat_indices.shape
             )
-            dwindow = alpha_compute[..., None] * dpooled[:, :, None, :]
-
-            dpooled_work = dpooled.astype("float32", copy=False)
-            windows_work = windows.astype("float32", copy=False)
-            dalpha = xp.sum(windows_work * dpooled_work[:, :, None, :], axis=-1)
-            correction = xp.sum(alpha_work * dalpha, axis=2, keepdims=True)
-            dscores = alpha_work * (dalpha - correction)
-            dscores = xp.where(valid[None, :, :], dscores, 0.0)
-
-            score_vector_work = self.score_param.data.astype("float32", copy=False)
-            score_path = dscores[..., None] * score_vector_work * scale
-            dwindow += score_path.astype(dwindow.dtype, copy=False)
-            grad_score = xp.sum(
-                dscores[..., None] * windows_work, axis=(0, 1, 2)
-            ) * scale
-            self.score_param.grad += grad_score
-
-        flat_indices = xp.broadcast_to(
-            indices[None, :, :], (batch, n_routes, self.query_window)
-        ).reshape(batch, -1)
-        values = dwindow.reshape(batch, -1, d_model)
-        batch_ids = xp.broadcast_to(xp.arange(batch)[:, None], flat_indices.shape)
-        xp.add.at(
-            dx,
-            (batch_ids, flat_indices),
-            values.astype(grad_dtype, copy=False),
-        )
+            xp.add.at(
+                dx,
+                (batch_ids, flat_indices),
+                values.astype(grad_dtype, copy=False),
+            )
         return dx
 
 
@@ -293,6 +880,36 @@ class ContextRouter:
         )
         self.W_query = Parameter(query_data, name=f"{name}.W_query")
         self.W_history = Parameter(history_data, name=f"{name}.W_history")
+        # Routing geometry depends only on sequence length and immutable
+        # ContextRouterConfig values. Reuse these small device tensors across
+        # microbatches instead of rebuilding aranges, masks and query-window
+        # indices 128 times per optimizer update.
+        self._routing_metadata_cache = {}
+
+    def _routing_metadata(self, seq_len):
+        seq_len = int(seq_len)
+        cached = self._routing_metadata_cache.get(seq_len)
+        if cached is not None:
+            return cached
+
+        route_starts = eligible_route_starts(seq_len, self.config)
+        query_indices, query_valid = self.query_pooler._window_indices(route_starts)
+        n_blocks = complete_block_count(seq_len, self.config.history_block_size)
+        block_ends = (
+            xp.arange(n_blocks, dtype=route_starts.dtype) + 1
+        ) * int(self.config.history_block_size)
+        candidate_mask = block_ends[None, :] <= (
+            route_starts[:, None] - int(self.config.exclude_recent_tokens)
+        )
+        cached = {
+            "route_starts": route_starts,
+            "query_indices": query_indices,
+            "query_valid": query_valid,
+            "candidate_mask": candidate_mask,
+            "n_blocks": int(n_blocks),
+        }
+        self._routing_metadata_cache[seq_len] = cached
+        return cached
 
     def parameters(self):
         return (
@@ -310,11 +927,24 @@ class ContextRouter:
             raise ValueError("x must have shape (batch, seq_len, d_model)")
 
         batch, seq_len, _ = x.shape
-        route_starts = eligible_route_starts(seq_len, self.config)
-        query_pooled, query_cache = self.query_pooler.forward(x, route_starts)
-        history_pooled, history_cache = self.history_pooler.forward(x)
+        with retrieval_router_detail_scope("router.route_starts"):
+            routing_metadata = self._routing_metadata(seq_len)
+            route_starts = routing_metadata["route_starts"]
+        with retrieval_router_detail_scope("router.qpool.forward"):
+            query_pooled, query_cache = self.query_pooler.forward(
+                x,
+                route_starts,
+                window_metadata=(
+                    routing_metadata["query_indices"],
+                    routing_metadata["query_valid"],
+                ),
+            )
+        with retrieval_router_detail_scope("router.hpool.forward"):
+            history_pooled, history_cache = self.history_pooler.forward(x)
         n_routes = int(route_starts.shape[0])
         n_blocks = int(history_pooled.shape[1])
+        if n_blocks != routing_metadata["n_blocks"]:
+            raise RuntimeError("cached routing metadata disagrees with history pooling")
 
         if n_routes == 0:
             shape = (batch, 0, self.num_queries, self.config.top_k_blocks)
@@ -335,12 +965,14 @@ class ContextRouter:
             }
             return weights, selected, route_starts, cache
 
-        query_proj = (query_pooled.reshape(-1, self.d_model) @ self.W_query.data).reshape(
-            batch, n_routes, self.num_queries, self.router_dim
-        )
-        history_proj = (
-            history_pooled.reshape(-1, self.d_model) @ self.W_history.data
-        ).reshape(batch, n_blocks, self.router_dim)
+        with retrieval_router_detail_scope("router.qproj.forward"):
+            query_proj = (
+                query_pooled.reshape(-1, self.d_model) @ self.W_query.data
+            ).reshape(batch, n_routes, self.num_queries, self.router_dim)
+        with retrieval_router_detail_scope("router.hproj.forward"):
+            history_proj = (
+                history_pooled.reshape(-1, self.d_model) @ self.W_history.data
+            ).reshape(batch, n_blocks, self.router_dim)
 
         query_3d = query_proj.reshape(
             batch, n_routes * self.num_queries, self.router_dim
@@ -353,36 +985,33 @@ class ContextRouter:
         # activations, so perform this batched query/history product in FP32
         # for *all* low-precision model dtypes.  This also keeps Top-K logits
         # numerically stable and matches the existing MoE routing convention.
-        if is_low_precision_dtype(query_3d.dtype):
-            query_score = query_3d.astype("float32", copy=False)
-            history_score_t = history_t.astype("float32", copy=False)
-        else:
-            query_score = query_3d
-            history_score_t = history_t
-        scores = xp.matmul(query_score, history_score_t).reshape(
-            batch, n_routes, self.num_queries, n_blocks
-        ) / math.sqrt(self.router_dim)
+        with retrieval_router_detail_scope("router.score_gemm"):
+            if is_low_precision_dtype(query_3d.dtype):
+                query_score = query_3d.astype("float32", copy=False)
+                history_score_t = history_t.astype("float32", copy=False)
+            else:
+                query_score = query_3d
+                history_score_t = history_t
+            scores = xp.matmul(query_score, history_score_t).reshape(
+                batch, n_routes, self.num_queries, n_blocks
+            ) / math.sqrt(self.router_dim)
 
-        block_ends = (
-            xp.arange(n_blocks, dtype=route_starts.dtype) + 1
-        ) * int(self.config.history_block_size)
-        candidate_mask = block_ends[None, :] <= (
-            route_starts[:, None] - int(self.config.exclude_recent_tokens)
-        )
+        candidate_mask = routing_metadata["candidate_mask"]
 
-        scores_work = (
-            scores.astype("float32", copy=False)
-            if is_low_precision_dtype(scores.dtype)
-            else scores
-        )
-        masked_scores = xp.where(
-            candidate_mask[None, :, None, :], scores_work, -xp.inf
-        )
-        weights, selected, topk_cache = selected_topk_softmax_forward(
-            masked_scores,
-            int(self.config.top_k_blocks),
-            output_dtype=x.dtype,
-        )
+        with retrieval_router_detail_scope("router.mask_topk"):
+            scores_work = (
+                scores.astype("float32", copy=False)
+                if is_low_precision_dtype(scores.dtype)
+                else scores
+            )
+            masked_scores = xp.where(
+                candidate_mask[None, :, None, :], scores_work, -xp.inf
+            )
+            weights, selected, topk_cache = selected_topk_softmax_forward(
+                masked_scores,
+                int(self.config.top_k_blocks),
+                output_dtype=x.dtype,
+            )
 
         cache = {
             "x": x,
@@ -416,14 +1045,17 @@ class ContextRouter:
         if n_routes == 0:
             return xp.zeros_like(x)
 
-        dscores = selected_topk_softmax_backward(dweights, cache["topk_cache"])
-        if dscores_extra is not None:
-            if dscores_extra.shape != dscores.shape:
-                raise ValueError("dscores_extra must have the same shape as full scores")
-            dscores = dscores + dscores_extra.astype(dscores.dtype, copy=False)
-        dscores = xp.where(
-            cache["candidate_mask"][None, :, None, :], dscores, 0.0
-        )
+        with retrieval_router_detail_scope("router.topk.backward"):
+            dscores = selected_topk_softmax_backward(dweights, cache["topk_cache"])
+            if dscores_extra is not None:
+                if dscores_extra.shape != dscores.shape:
+                    raise ValueError(
+                        "dscores_extra must have the same shape as full scores"
+                    )
+                dscores = dscores + dscores_extra.astype(dscores.dtype, copy=False)
+            dscores = xp.where(
+                cache["candidate_mask"][None, :, None, :], dscores, 0.0
+            )
 
         query_proj = cache["query_proj"]
         history_proj = cache["history_proj"]
@@ -435,10 +1067,12 @@ class ContextRouter:
             dscores.dtype, copy=False
         )
         history_work = history_proj.astype(dscores.dtype, copy=False)
-        dquery_proj_work = (dscores_3d @ history_work) * scale
-        dhistory_proj_work = (
-            xp.swapaxes(dscores_3d, 1, 2) @ query_work
-        ) * scale
+        with retrieval_router_detail_scope("router.score_bwd.query"):
+            dquery_proj_work = (dscores_3d @ history_work) * scale
+        with retrieval_router_detail_scope("router.score_bwd.history"):
+            dhistory_proj_work = (
+                xp.swapaxes(dscores_3d, 1, 2) @ query_work
+            ) * scale
 
         compute_dtype = x.dtype
         dquery_proj = dquery_proj_work.astype(compute_dtype, copy=False).reshape(
@@ -446,21 +1080,29 @@ class ContextRouter:
         )
         dhistory_proj = dhistory_proj_work.astype(compute_dtype, copy=False)
 
-        query_pooled = cache["query_pooled"]
-        query_2d = query_pooled.reshape(-1, self.d_model)
-        dq_2d = dquery_proj.reshape(-1, self.num_queries * self.router_dim)
-        self.W_query.grad += query_2d.T @ dq_2d
-        dquery_pooled = (dq_2d @ self.W_query.data.T).reshape(query_pooled.shape)
+        with retrieval_router_detail_scope("router.qproj.backward"):
+            query_pooled = cache["query_pooled"]
+            query_2d = query_pooled.reshape(-1, self.d_model)
+            dq_2d = dquery_proj.reshape(-1, self.num_queries * self.router_dim)
+            self.W_query.grad += query_2d.T @ dq_2d
+            dquery_pooled = (dq_2d @ self.W_query.data.T).reshape(
+                query_pooled.shape
+            )
 
-        history_2d = history_pooled.reshape(-1, self.d_model)
-        dh_2d = dhistory_proj.reshape(-1, self.router_dim)
-        self.W_history.grad += history_2d.T @ dh_2d
-        dhistory_pooled = (dh_2d @ self.W_history.data.T).reshape(
-            history_pooled.shape
-        )
+        with retrieval_router_detail_scope("router.hproj.backward"):
+            history_2d = history_pooled.reshape(-1, self.d_model)
+            dh_2d = dhistory_proj.reshape(-1, self.router_dim)
+            self.W_history.grad += history_2d.T @ dh_2d
+            dhistory_pooled = (dh_2d @ self.W_history.data.T).reshape(
+                history_pooled.shape
+            )
 
-        dx_query = self.query_pooler.backward(dquery_pooled, cache["query_cache"])
-        dx_history = self.history_pooler.backward(
-            dhistory_pooled, cache["history_cache"]
-        )
+        with retrieval_router_detail_scope("router.qpool.backward"):
+            dx_query = self.query_pooler.backward(
+                dquery_pooled, cache["query_cache"]
+            )
+        with retrieval_router_detail_scope("router.hpool.backward"):
+            dx_history = self.history_pooler.backward(
+                dhistory_pooled, cache["history_cache"]
+            )
         return dx_query + dx_history

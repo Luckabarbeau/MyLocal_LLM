@@ -30,6 +30,18 @@ class _PerformanceProfiler:
         self.local_detail_enabled = raw_local_detail not in {
             "0", "false", "off", "no", ""
         }
+        raw_retrieval_detail = os.environ.get(
+            "MINI_LLM_RETRIEVAL_ROUTER_DETAIL_PROFILE", "0"
+        ).strip().lower()
+        self.retrieval_router_detail_enabled = raw_retrieval_detail not in {
+            "0", "false", "off", "no", ""
+        }
+        raw_rmsnorm_detail = os.environ.get(
+            "MINI_LLM_RMSNORM_DETAIL_PROFILE", "0"
+        ).strip().lower()
+        self.rmsnorm_detail_enabled = raw_rmsnorm_detail not in {
+            "0", "false", "off", "no", ""
+        }
 
     def configure(self, enabled: bool, reset: bool = False):
         self.enabled = bool(enabled)
@@ -113,6 +125,67 @@ class _PerformanceProfiler:
         ``MINI_LLM_LOCAL_DETAIL_PROFILE=1``.
         """
         if not self.enabled or not self.local_detail_enabled:
+            yield
+            return
+
+        host_start = time.perf_counter()
+        if BACKEND_NAME == "cupy":
+            start_event = xp.cuda.Event()
+            end_event = xp.cuda.Event()
+            start_event.record()
+        else:
+            start_event = end_event = None
+
+        try:
+            yield
+        finally:
+            host_elapsed = time.perf_counter() - host_start
+            self._record(f"{name}.host", host_elapsed)
+            if BACKEND_NAME == "cupy":
+                end_event.record()
+                self._pending_gpu_events.append(
+                    (f"{name}.gpu", start_event, end_event)
+                )
+
+    @contextmanager
+    def retrieval_router_detail_scope(self, name: str):
+        """Profile retrieval-router sub-operations with deferred CUDA events.
+
+        This mirrors the MoE/local detail profilers: ``.host`` measures Python
+        and CuPy submission time while ``.gpu`` measures queued CUDA work.  CUDA
+        events are resolved only when the profile report is requested, avoiding
+        a synchronization at every small router operation.
+
+        The scope is active only while the normal performance profiler is
+        enabled and ``MINI_LLM_RETRIEVAL_ROUTER_DETAIL_PROFILE=1``.
+        """
+        if not self.enabled or not self.retrieval_router_detail_enabled:
+            yield
+            return
+
+        host_start = time.perf_counter()
+        if BACKEND_NAME == "cupy":
+            start_event = xp.cuda.Event()
+            end_event = xp.cuda.Event()
+            start_event.record()
+        else:
+            start_event = end_event = None
+
+        try:
+            yield
+        finally:
+            host_elapsed = time.perf_counter() - host_start
+            self._record(f"{name}.host", host_elapsed)
+            if BACKEND_NAME == "cupy":
+                end_event.record()
+                self._pending_gpu_events.append(
+                    (f"{name}.gpu", start_event, end_event)
+                )
+
+    @contextmanager
+    def rmsnorm_detail_scope(self, name: str):
+        """Profile fused RMSNorm sub-kernels with deferred CUDA events."""
+        if not self.enabled or not self.rmsnorm_detail_enabled:
             yield
             return
 
@@ -227,3 +300,7 @@ def performance_report(title: str = "Performance profile") -> str:
 
 def local_detail_scope(name: str):
     return PERFORMANCE_PROFILER.local_detail_scope(name)
+
+
+def retrieval_router_detail_scope(name: str):
+    return PERFORMANCE_PROFILER.retrieval_router_detail_scope(name)

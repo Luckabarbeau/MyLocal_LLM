@@ -124,7 +124,10 @@ class TransformerBlock:
         # Norm → Attention → residual. RMSNorm follows the residual dtype; cast
         # only its normalized output back to the compute dtype before GEMMs.
         with performance_scope("block.norm1.forward"):
-            norm1_out, norm1_cache = self.norm1.forward(x)
+            if self.use_fp32_residual and hasattr(self.norm1, "forward_compute"):
+                norm1_out, norm1_cache = self.norm1.forward_compute(x, self.compute_dtype)
+            else:
+                norm1_out, norm1_cache = self.norm1.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.norm1", xp.all(xp.isfinite(norm1_out))))
 
@@ -155,7 +158,10 @@ class TransformerBlock:
         
         # Norm → MoE → residual. As above, only the branch compute is FP16.
         with performance_scope("block.norm2.forward"):
-            norm2_out, norm2_cache = self.norm2.forward(x)
+            if self.use_fp32_residual and hasattr(self.norm2, "forward_compute"):
+                norm2_out, norm2_cache = self.norm2.forward_compute(x, self.compute_dtype)
+            else:
+                norm2_out, norm2_cache = self.norm2.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.norm2", xp.all(xp.isfinite(norm2_out))))
 
@@ -227,12 +233,20 @@ class TransformerBlock:
         # Backward through MoE
         with performance_scope("block.moe.backward"):
             dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
-        if self.use_fp32_residual:
-            dnorm2_out = dnorm2_out.astype("float32", copy=False)
         
-        # Backward through second RMSNorm - this gives gradient through FFN path
+        # Backward through second RMSNorm - this gives gradient through FFN path.
+        # Fused BF16 RMSNorm consumes the BF16 branch gradient directly and emits
+        # an FP32 residual gradient; the reference fallback preserves the old
+        # explicit promotion internally.
         with performance_scope("block.norm2.backward"):
-            dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)
+            if self.use_fp32_residual and hasattr(self.norm2, "backward_residual"):
+                dx_norm2_through_ffn = self.norm2.backward_residual(
+                    dnorm2_out, norm2_cache
+                )
+            else:
+                if self.use_fp32_residual:
+                    dnorm2_out = dnorm2_out.astype("float32", copy=False)
+                dx_norm2_through_ffn = self.norm2.backward(dnorm2_out, norm2_cache)
         if self.use_fp32_residual:
             dx_norm2_through_ffn = dx_norm2_through_ffn.astype("float32", copy=False)
         
@@ -249,12 +263,18 @@ class TransformerBlock:
         # Backward through attention
         with performance_scope("block.attention.backward"):
             dnorm1_out = self.attention.backward(dattn_out, cache["attn_cache"])
-        if self.use_fp32_residual:
-            dnorm1_out = dnorm1_out.astype("float32", copy=False)
         
-        # Backward through first RMSNorm
+        # Backward through first RMSNorm.  As above, the fused path avoids a
+        # separate BF16->FP32 gradient promotion.
         with performance_scope("block.norm1.backward"):
-            dx_norm1 = self.norm1.backward(dnorm1_out, cache["norm1_cache"])
+            if self.use_fp32_residual and hasattr(self.norm1, "backward_residual"):
+                dx_norm1 = self.norm1.backward_residual(
+                    dnorm1_out, cache["norm1_cache"]
+                )
+            else:
+                if self.use_fp32_residual:
+                    dnorm1_out = dnorm1_out.astype("float32", copy=False)
+                dx_norm1 = self.norm1.backward(dnorm1_out, cache["norm1_cache"])
         if self.use_fp32_residual:
             dx_norm1 = dx_norm1.astype("float32", copy=False)
         

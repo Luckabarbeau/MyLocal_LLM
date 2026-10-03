@@ -147,7 +147,10 @@ class DecoderLanguageModel:
         # transformer residual stream in FP32, but the large output projection
         # remains on the fast FP16 GEMM path.
         with performance_scope("model.final_norm.forward"):
-            x, final_norm_cache = self.final_norm.forward(x)
+            if is_low_precision_dtype(self.dtype):
+                x, final_norm_cache = self.final_norm.forward_compute(x, self.dtype)
+            else:
+                x, final_norm_cache = self.final_norm.forward(x)
         if finite_trace is not None:
             finite_trace.append(("final_norm", xp.all(xp.isfinite(x))))
 

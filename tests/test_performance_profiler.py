@@ -50,3 +50,22 @@ def test_moe_detail_profiler_records_host_submit_time_on_numpy():
     assert "moe.test.host" in rows
     assert rows["moe.test.host"]["count"] == 1
     assert rows["moe.test.host"]["total_s"] >= 0.0
+
+
+def test_retrieval_router_detail_profiler_records_host_submit_time_on_numpy():
+    configure_performance_profiler(True, reset=True)
+    old = PERFORMANCE_PROFILER.retrieval_router_detail_enabled
+    PERFORMANCE_PROFILER.retrieval_router_detail_enabled = True
+    try:
+        from mini_llm.performance_profiler import retrieval_router_detail_scope
+
+        with retrieval_router_detail_scope("router.test"):
+            sum(i * i for i in range(100))
+    finally:
+        PERFORMANCE_PROFILER.retrieval_router_detail_enabled = old
+        configure_performance_profiler(False)
+
+    rows = {row["name"]: row for row in PERFORMANCE_PROFILER.rows()}
+    assert "router.test.host" in rows
+    assert rows["router.test.host"]["count"] == 1
+    assert rows["router.test.host"]["total_s"] >= 0.0

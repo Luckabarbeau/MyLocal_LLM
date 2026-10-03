@@ -12,7 +12,16 @@ import os
 import numpy as np
 
 from ..backend import xp, BACKEND_NAME, is_bfloat16_dtype, is_low_precision_dtype
+from ..performance_profiler import local_detail_scope
 from .attention_selection import KeySelectionPlan
+
+
+def _bf16_mixed_context_enabled(dtype):
+    """Mirror the mixed-attention BF16 context-storage fast-path flag."""
+    if not is_bfloat16_dtype(dtype):
+        return False
+    raw = os.environ.get("MINI_LLM_BF16_MIXED_CONTEXT", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 _DEFAULT_QUERY_CHUNK_SIZE = 128
@@ -22,6 +31,9 @@ _DEFAULT_DILATED_QUERY_CHUNK_SIZE = 1024
 
 _LOCAL_SOFTMAX_MODULE = None
 _LOCAL_SOFTMAX_DISABLED = False
+
+_LOCAL_BF16_PIPELINE_MODULE = None
+_LOCAL_BF16_PIPELINE_DISABLED = False
 
 
 _RETRIEVAL_SCATTER_MODULE = None
@@ -376,6 +388,250 @@ def _local_causal_softmax_backward_cuda(dprobs, probs, q_start, key_start, windo
     return dscores
 
 
+
+def _fused_bf16_local_pipeline_enabled(dtype):
+    """Use BF16-native local softmax I/O around Tensor-Core GEMMs.
+
+    The ordinary fused local softmax keeps its interface in FP32.  With BF16
+    Tensor-Core score/context GEMMs that forces several full attention-matrix
+    casts per chunk.  This opt-in path performs those BF16<->FP32 conversions
+    inside the softmax kernels instead, while max/sum/exp/Jacobian arithmetic
+    remains FP32.
+    """
+    raw = os.environ.get("MINI_LLM_FUSED_BF16_LOCAL_PIPELINE", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
+
+def _get_local_bf16_pipeline_module():
+    global _LOCAL_BF16_PIPELINE_MODULE, _LOCAL_BF16_PIPELINE_DISABLED
+    if BACKEND_NAME != "cupy" or _LOCAL_BF16_PIPELINE_DISABLED:
+        return None
+    if _LOCAL_BF16_PIPELINE_MODULE is not None:
+        return _LOCAL_BF16_PIPELINE_MODULE
+
+    code = r"""
+    __device__ __forceinline__ float bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    __device__ __forceinline__ unsigned short float_to_bf16(float x) {
+        union { unsigned int u; float f; } v;
+        v.f = x;
+        unsigned int bits = v.u;
+        unsigned int lsb = (bits >> 16) & 1u;
+        bits += 0x7fffu + lsb;
+        return (unsigned short)(bits >> 16);
+    }
+
+    extern "C" __global__
+    void local_causal_softmax_fwd_bf16(
+        const unsigned short* scores,
+        unsigned short* probs,
+        int rows, int q_len, int k_len,
+        int q_start, int key_start, int window, float scale) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        int q_local = row % q_len;
+        int q_pos = q_start + q_local;
+        const unsigned short* s = scores + ((long long)row) * k_len;
+        unsigned short* p = probs + ((long long)row) * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(s[j]) * scale;
+                local_max = fmaxf(local_max, value);
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(s[j]) * scale;
+                local_sum += expf(value - row_max);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+
+        // Recompute exp here so no FP32 probability workspace is required.
+        // Only the final normalized probability is rounded to BF16, matching
+        // the existing context/cache boundary.
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            float out = 0.0f;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(s[j]) * scale;
+                out = expf(value - row_max) * inv;
+            }
+            p[j] = float_to_bf16(out);
+        }
+    }
+
+    extern "C" __global__
+    void local_causal_softmax_bwd_bf16(
+        const unsigned short* dprobs,
+        const unsigned short* probs,
+        unsigned short* dscores,
+        int rows, int q_len, int k_len,
+        int q_start, int key_start, int window) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        int q_local = row % q_len;
+        int q_pos = q_start + q_local;
+        const unsigned short* dp = dprobs + ((long long)row) * k_len;
+        const unsigned short* p = probs + ((long long)row) * k_len;
+        unsigned short* ds = dscores + ((long long)row) * k_len;
+        extern __shared__ float sh[];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                local_sum += bf16_to_float(dp[j]) * bf16_to_float(p[j]);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            float out = 0.0f;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float pf = bf16_to_float(p[j]);
+                out = pf * (bf16_to_float(dp[j]) - correction);
+            }
+            ds[j] = float_to_bf16(out);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=(
+                "local_causal_softmax_fwd_bf16",
+                "local_causal_softmax_bwd_bf16",
+            ),
+        )
+        module.get_function("local_causal_softmax_fwd_bf16")
+        module.get_function("local_causal_softmax_bwd_bf16")
+        _LOCAL_BF16_PIPELINE_MODULE = module
+    except Exception:
+        strict = os.environ.get(
+            "MINI_LLM_FUSED_BF16_LOCAL_PIPELINE_STRICT", "0"
+        ).strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _LOCAL_BF16_PIPELINE_DISABLED = True
+        return None
+    return _LOCAL_BF16_PIPELINE_MODULE
+
+
+def _local_causal_softmax_forward_bf16_cuda(
+    scores_bf16, probs_bf16, q_start, key_start, window, scale
+):
+    if not _fused_bf16_local_pipeline_enabled(scores_bf16.dtype):
+        return None
+    module = _get_local_bf16_pipeline_module()
+    if module is None:
+        return None
+    if scores_bf16.dtype != probs_bf16.dtype:
+        return None
+    if not is_bfloat16_dtype(scores_bf16.dtype):
+        return None
+    if scores_bf16.shape != probs_bf16.shape:
+        return None
+    if not scores_bf16.flags.c_contiguous or not probs_bf16.flags.c_contiguous:
+        return None
+    q_len = int(scores_bf16.shape[-2])
+    k_len = int(scores_bf16.shape[-1])
+    rows = int(scores_bf16.size // k_len)
+    threads = 256
+    module.get_function("local_causal_softmax_fwd_bf16")(
+        (rows,),
+        (threads,),
+        (
+            scores_bf16,
+            probs_bf16,
+            np.int32(rows),
+            np.int32(q_len),
+            np.int32(k_len),
+            np.int32(q_start),
+            np.int32(key_start),
+            np.int32(window),
+            np.float32(scale),
+        ),
+        shared_mem=threads * 4,
+    )
+    return probs_bf16
+
+
+def _local_causal_softmax_backward_bf16_cuda(
+    dprobs_bf16, probs_bf16, q_start, key_start, window
+):
+    if not _fused_bf16_local_pipeline_enabled(probs_bf16.dtype):
+        return None
+    module = _get_local_bf16_pipeline_module()
+    if module is None:
+        return None
+    if dprobs_bf16.dtype != probs_bf16.dtype:
+        return None
+    if not is_bfloat16_dtype(probs_bf16.dtype):
+        return None
+    if dprobs_bf16.shape != probs_bf16.shape:
+        return None
+    if not dprobs_bf16.flags.c_contiguous or not probs_bf16.flags.c_contiguous:
+        return None
+    q_len = int(probs_bf16.shape[-2])
+    k_len = int(probs_bf16.shape[-1])
+    rows = int(probs_bf16.size // k_len)
+    dscores_bf16 = xp.empty_like(probs_bf16)
+    threads = 256
+    module.get_function("local_causal_softmax_bwd_bf16")(
+        (rows,),
+        (threads,),
+        (
+            dprobs_bf16,
+            probs_bf16,
+            dscores_bf16,
+            np.int32(rows),
+            np.int32(q_len),
+            np.int32(k_len),
+            np.int32(q_start),
+            np.int32(key_start),
+            np.int32(window),
+        ),
+        shared_mem=threads * 4,
+    )
+    return dscores_bf16
+
 def _resolve_query_chunk_size(query_length, query_chunk_size=None):
     """Resolve bounded query chunking for the indexed attention hot path.
 
@@ -482,7 +738,7 @@ def _cache_probs_for_backward(probs, source_dtype):
     makes the same transformation unsafe for FP16.
     """
     if is_bfloat16_dtype(source_dtype):
-        return probs.astype(source_dtype)
+        return probs.astype(source_dtype, copy=False)
     return probs
 
 
@@ -884,7 +1140,19 @@ def local_window_attention_forward(
     q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,T,D]
     bf16_attention = is_bfloat16_dtype(q.dtype)
     bf16_tensorcore = _bf16_local_tensorcore_enabled(q.dtype)
-    context_dtype = xp.float32 if bf16_attention else q.dtype
+    bf16_pipeline = (
+        bf16_tensorcore
+        and _fused_bf16_local_pipeline_enabled(q.dtype)
+        and _get_local_bf16_pipeline_module() is not None
+    )
+    keep_bf16_context = (
+        bf16_pipeline and _bf16_mixed_context_enabled(q.dtype)
+    )
+    context_dtype = (
+        q.dtype
+        if keep_bf16_context
+        else (xp.float32 if bf16_attention else q.dtype)
+    )
     context_heads = xp.empty(
         (batch, n_q_heads, query_length, d_head), dtype=context_dtype
     )
@@ -926,25 +1194,60 @@ def local_window_attention_forward(
             k_native = k[:, key_start:key_end, kvh, :][:, None, :, :]
             if bf16_tensorcore:
                 # CuPy supports the target BF16 2-D GEMM even where generic
-                # N-D BF16 matmul is unavailable.  Fold query heads into the
+                # N-D BF16 matmul is unavailable. Fold query heads into the
                 # row dimension; K is shared by the whole native GQA group.
                 n_group_heads = len(head_group)
                 q_count = q_end - q_start
                 k_count = key_end - key_start
-                scores = xp.empty(
-                    (batch, n_group_heads, q_count, k_count), dtype=xp.float32
-                )
+                if bf16_pipeline:
+                    # Keep score/probability matrices in BF16 storage. The
+                    # fused kernel promotes individual values internally for
+                    # FP32 max/sum/exp and writes the final probabilities
+                    # directly in the format consumed by the context GEMM and
+                    # backward cache.
+                    probs_chunk = xp.empty(
+                        (batch, n_group_heads, q_count, k_count), dtype=q.dtype
+                    )
+                    scores = None
+                else:
+                    scores = xp.empty(
+                        (batch, n_group_heads, q_count, k_count), dtype=xp.float32
+                    )
                 for batch_idx in range(batch):
-                    q_2d = xp.ascontiguousarray(
-                        q_chunk[batch_idx].reshape(n_group_heads * q_count, d_head)
-                    )
-                    k_2d = xp.ascontiguousarray(k_native[batch_idx, 0])
-                    score_bf16 = q_2d @ k_2d.T
-                    scores[batch_idx] = (
-                        score_bf16.reshape(n_group_heads, q_count, k_count)
-                        .astype("float32")
-                        * scale
-                    )
+                    with local_detail_scope("local.fwd.score_pack"):
+                        q_2d = xp.ascontiguousarray(
+                            q_chunk[batch_idx].reshape(
+                                n_group_heads * q_count, d_head
+                            )
+                        )
+                        k_2d = xp.ascontiguousarray(k_native[batch_idx, 0])
+                    with local_detail_scope("local.fwd.score_gemm"):
+                        score_bf16 = q_2d @ k_2d.T
+                    if bf16_pipeline:
+                        with local_detail_scope("local.fwd.bf16_softmax_pipeline"):
+                            out = _local_causal_softmax_forward_bf16_cuda(
+                                score_bf16.reshape(
+                                    n_group_heads, q_count, k_count
+                                ),
+                                probs_chunk[batch_idx],
+                                q_start,
+                                key_start,
+                                window,
+                                scale,
+                            )
+                            if out is None:
+                                raise RuntimeError(
+                                    "BF16 local softmax pipeline declined an "
+                                    "internally generated contiguous layout"
+                                )
+                    else:
+                        with local_detail_scope("local.fwd.score_promote"):
+                            scores[batch_idx] = (
+                                score_bf16.reshape(
+                                    n_group_heads, q_count, k_count
+                                ).astype("float32")
+                                * scale
+                            )
                 k_score = None
             else:
                 if bf16_attention:
@@ -954,14 +1257,17 @@ def local_window_attention_forward(
                     q_score = q_chunk * (scale * score_prescale)
                     k_score = k_native
                 scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
-            probs_chunk = _local_causal_softmax_forward_cuda(
-                scores, q_start, key_start, window, (1.0 / score_prescale)
-            )
-            if probs_chunk is None:
-                probs_chunk = _masked_softmax_forward(
-                    scores, valid, logit_multiplier=(1.0 / score_prescale)
-                )
-            del scores
+
+            if not bf16_pipeline:
+                with local_detail_scope("local.fwd.softmax"):
+                    probs_chunk = _local_causal_softmax_forward_cuda(
+                        scores, q_start, key_start, window, (1.0 / score_prescale)
+                    )
+                    if probs_chunk is None:
+                        probs_chunk = _masked_softmax_forward(
+                            scores, valid, logit_multiplier=(1.0 / score_prescale)
+                        )
+                del scores
             if k_score is not None:
                 del k_score
 
@@ -971,16 +1277,28 @@ def local_window_attention_forward(
                 q_count = q_end - q_start
                 k_count = key_end - key_start
                 for batch_idx in range(batch):
-                    probs_2d = xp.ascontiguousarray(
-                        probs_chunk[batch_idx]
-                        .reshape(n_group_heads * q_count, k_count)
-                        .astype(q.dtype)
-                    )
-                    v_2d = xp.ascontiguousarray(v_native[batch_idx, 0])
-                    context_bf16 = probs_2d @ v_2d
-                    context_heads[
-                        batch_idx, head_group, q_start:q_end, :
-                    ] = context_bf16.reshape(n_group_heads, q_count, d_head)
+                    with local_detail_scope("local.fwd.context_pack"):
+                        if bf16_pipeline:
+                            probs_2d = xp.ascontiguousarray(
+                                probs_chunk[batch_idx].reshape(
+                                    n_group_heads * q_count, k_count
+                                )
+                            )
+                        else:
+                            probs_2d = xp.ascontiguousarray(
+                                probs_chunk[batch_idx]
+                                .reshape(n_group_heads * q_count, k_count)
+                                .astype(q.dtype)
+                            )
+                        v_2d = xp.ascontiguousarray(v_native[batch_idx, 0])
+                    with local_detail_scope("local.fwd.context_gemm"):
+                        context_bf16 = probs_2d @ v_2d
+                    with local_detail_scope("local.fwd.context_store"):
+                        context_heads[
+                            batch_idx, head_group, q_start:q_end, :
+                        ] = context_bf16.reshape(
+                            n_group_heads, q_count, d_head
+                        )
             else:
                 if bf16_attention:
                     v_compute = v_native.astype("float32")
@@ -1017,6 +1335,7 @@ def local_window_attention_forward(
         "scale": scale,
         "bf16_attention": bf16_attention,
         "bf16_tensorcore": bf16_tensorcore,
+        "bf16_pipeline": bf16_pipeline,
         "kv_head_indices_host": kv_map_host,
         "active_groups": active_groups,
         "chunks": chunk_caches,
@@ -1039,6 +1358,7 @@ def local_window_attention_backward(dcontext, cache):
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
     bf16_tensorcore = cache.get("bf16_tensorcore", False)
+    bf16_pipeline = cache.get("bf16_pipeline", False)
     active_groups = cache["active_groups"]
 
     q_heads = q.transpose(0, 2, 1, 3)
@@ -1063,35 +1383,71 @@ def local_window_attention_backward(dcontext, cache):
             v_native = v[:, key_start:key_end, kvh, :][:, None, :, :]
 
             if bf16_tensorcore:
-                probs_compute = _restore_cached_probs(probs_chunk, True)
+                if bf16_pipeline:
+                    # Forward already cached normalized probabilities in BF16.
+                    # Keep dP/dS in BF16 storage too; the fused backward kernel
+                    # promotes individual values internally for the FP32
+                    # softmax Jacobian and rounds only the final dS.
+                    probs_compute = probs_chunk
+                    dprobs = xp.empty(
+                        (batch, len(head_group), q_end - q_start, key_end - key_start),
+                        dtype=q.dtype,
+                    )
+                else:
+                    with local_detail_scope("local.bwd.restore_probs"):
+                        probs_compute = _restore_cached_probs(probs_chunk, True)
+                    dprobs = xp.empty(
+                        (batch, len(head_group), q_end - q_start, key_end - key_start),
+                        dtype=xp.float32,
+                    )
                 n_group_heads = len(head_group)
                 q_count = q_end - q_start
                 k_count = key_end - key_start
-                dprobs = xp.empty(
-                    (batch, n_group_heads, q_count, k_count), dtype=xp.float32
-                )
-                # dP = dO V^T.  Fold heads into rows while keeping the shared
+                # dP = dO V^T. Fold heads into rows while keeping the shared
                 # native V matrix exactly once per batch.
                 dcontext_bf16 = []
                 for batch_idx in range(batch):
-                    dc_2d = xp.ascontiguousarray(
-                        dcontext_chunk[batch_idx]
-                        .reshape(n_group_heads * q_count, d_head)
-                        .astype(q.dtype)
-                    )
-                    dcontext_bf16.append(dc_2d)
-                    v_2d = xp.ascontiguousarray(v_native[batch_idx, 0])
-                    dp_bf16 = dc_2d @ v_2d.T
-                    dprobs[batch_idx] = dp_bf16.reshape(
-                        n_group_heads, q_count, k_count
-                    ).astype("float32")
+                    with local_detail_scope("local.bwd.dprobs_pack"):
+                        dc_2d = xp.ascontiguousarray(
+                            dcontext_chunk[batch_idx]
+                            .reshape(n_group_heads * q_count, d_head)
+                            .astype(q.dtype)
+                        )
+                        dcontext_bf16.append(dc_2d)
+                        v_2d = xp.ascontiguousarray(v_native[batch_idx, 0])
+                    with local_detail_scope("local.bwd.dprobs_gemm"):
+                        dp_bf16 = dc_2d @ v_2d.T
+                    with local_detail_scope("local.bwd.dprobs_promote"):
+                        if bf16_pipeline:
+                            dprobs[batch_idx] = dp_bf16.reshape(
+                                n_group_heads, q_count, k_count
+                            )
+                        else:
+                            dprobs[batch_idx] = dp_bf16.reshape(
+                                n_group_heads, q_count, k_count
+                            ).astype("float32")
 
-                dscores = _local_causal_softmax_backward_cuda(
-                    dprobs, probs_compute, q_start, key_start, cache["window"]
-                )
-                if dscores is None:
-                    dscores = _softmax_backward(dprobs, probs_compute)
-                    dscores = xp.where(valid, dscores, 0.0)
+                with local_detail_scope("local.bwd.softmax"):
+                    if bf16_pipeline:
+                        dscores = _local_causal_softmax_backward_bf16_cuda(
+                            dprobs,
+                            probs_compute,
+                            q_start,
+                            key_start,
+                            cache["window"],
+                        )
+                        if dscores is None:
+                            raise RuntimeError(
+                                "BF16 local backward pipeline declined an "
+                                "internally generated contiguous layout"
+                            )
+                    else:
+                        dscores = _local_causal_softmax_backward_cuda(
+                            dprobs, probs_compute, q_start, key_start, cache["window"]
+                        )
+                        if dscores is None:
+                            dscores = _softmax_backward(dprobs, probs_compute)
+                            dscores = xp.where(valid, dscores, 0.0)
 
                 dk_native = xp.empty(
                     (batch, k_count, d_head), dtype=grad_dtype
@@ -1100,32 +1456,53 @@ def local_window_attention_backward(dcontext, cache):
                     (batch, k_count, d_head), dtype=grad_dtype
                 )
                 for batch_idx in range(batch):
-                    q_2d = xp.ascontiguousarray(
-                        q_chunk[batch_idx].reshape(n_group_heads * q_count, d_head)
-                    )
-                    k_2d = xp.ascontiguousarray(k_native[batch_idx, 0])
-                    p_2d = xp.ascontiguousarray(
-                        probs_compute[batch_idx]
-                        .reshape(n_group_heads * q_count, k_count)
-                        .astype(q.dtype)
-                    )
-                    ds_2d = xp.ascontiguousarray(
-                        dscores[batch_idx]
-                        .reshape(n_group_heads * q_count, k_count)
-                        .astype(q.dtype)
-                    )
-                    dc_2d = dcontext_bf16[batch_idx]
+                    with local_detail_scope("local.bwd.qkpd_pack"):
+                        q_2d = xp.ascontiguousarray(
+                            q_chunk[batch_idx].reshape(
+                                n_group_heads * q_count, d_head
+                            )
+                        )
+                        k_2d = xp.ascontiguousarray(k_native[batch_idx, 0])
+                        if bf16_pipeline:
+                            p_2d = xp.ascontiguousarray(
+                                probs_compute[batch_idx].reshape(
+                                    n_group_heads * q_count, k_count
+                                )
+                            )
+                            ds_2d = xp.ascontiguousarray(
+                                dscores[batch_idx].reshape(
+                                    n_group_heads * q_count, k_count
+                                )
+                            )
+                        else:
+                            p_2d = xp.ascontiguousarray(
+                                probs_compute[batch_idx]
+                                .reshape(n_group_heads * q_count, k_count)
+                                .astype(q.dtype)
+                            )
+                            ds_2d = xp.ascontiguousarray(
+                                dscores[batch_idx]
+                                .reshape(n_group_heads * q_count, k_count)
+                                .astype(q.dtype)
+                            )
+                        dc_2d = dcontext_bf16[batch_idx]
 
-                    dq_bf16 = ds_2d @ k_2d
-                    dk_bf16 = ds_2d.T @ q_2d
-                    dv_bf16 = p_2d.T @ dc_2d
-                    dq_heads[batch_idx, head_group, q_start:q_end, :] = (
-                        dq_bf16.reshape(n_group_heads, q_count, d_head)
-                        .astype(grad_dtype)
-                        * scale
-                    )
-                    dk_native[batch_idx] = dk_bf16.astype(grad_dtype) * scale
-                    dv_native[batch_idx] = dv_bf16.astype(grad_dtype)
+                    with local_detail_scope("local.bwd.dq_gemm"):
+                        dq_bf16 = ds_2d @ k_2d
+                    with local_detail_scope("local.bwd.dk_gemm"):
+                        dk_bf16 = ds_2d.T @ q_2d
+                    with local_detail_scope("local.bwd.dv_gemm"):
+                        dv_bf16 = p_2d.T @ dc_2d
+                    with local_detail_scope("local.bwd.grad_store"):
+                        dq_heads[batch_idx, head_group, q_start:q_end, :] = (
+                            dq_bf16.reshape(n_group_heads, q_count, d_head)
+                            .astype(grad_dtype)
+                            * scale
+                        )
+                        dk_native[batch_idx] = (
+                            dk_bf16.astype(grad_dtype) * scale
+                        )
+                        dv_native[batch_idx] = dv_bf16.astype(grad_dtype)
             else:
                 if bf16_attention:
                     dcontext_compute = dcontext_chunk.astype("float32")
@@ -1176,12 +1553,13 @@ def local_window_attention_backward(dcontext, cache):
                 # The K/V head is shared by all query heads in the group.
                 dk_native = xp.sum(dk_group, axis=1)
                 dv_native = xp.sum(dv_group, axis=1)
-            dk[:, key_start:key_end, kvh, :] += dk_native.astype(
-                grad_dtype, copy=False
-            )
-            dv[:, key_start:key_end, kvh, :] += dv_native.astype(
-                grad_dtype, copy=False
-            )
+            with local_detail_scope("local.bwd.kv_accumulate"):
+                dk[:, key_start:key_end, kvh, :] += dk_native.astype(
+                    grad_dtype, copy=False
+                )
+                dv[:, key_start:key_end, kvh, :] += dv_native.astype(
+                    grad_dtype, copy=False
+                )
 
     return dq_heads.transpose(0, 2, 1, 3), dk, dv
 

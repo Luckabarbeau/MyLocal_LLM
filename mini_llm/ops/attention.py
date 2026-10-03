@@ -1,3 +1,5 @@
+import os
+
 from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
@@ -24,6 +26,14 @@ from ..config import (
     GlobalSparseAttentionConfig,
     RetrievalAttentionConfig,
 )
+
+
+def _bf16_mixed_context_enabled(dtype):
+    """Keep mixed-attention context in BF16 storage through the output projection."""
+    if not is_bfloat16_dtype(dtype):
+        return False
+    raw = os.environ.get("MINI_LLM_BF16_MIXED_CONTEXT", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 def softmax_forward(x, axis=-1, logit_multiplier=1.0):
@@ -242,7 +252,12 @@ class GQAAttention:
 
     def _mixed_context_forward(self, x, q, k, v, return_cache):
         b, t, _, _ = q.shape
-        context_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+        keep_bf16_context = _bf16_mixed_context_enabled(q.dtype)
+        context_dtype = (
+            q.dtype
+            if keep_bf16_context
+            else (xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype)
+        )
         context = xp.zeros(q.shape, dtype=context_dtype)
         group_caches = []
         routing = {}

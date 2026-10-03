@@ -24,6 +24,12 @@ class _PerformanceProfiler:
         self._pending_gpu_events = []
         raw_detail = os.environ.get("MINI_LLM_MOE_DETAIL_PROFILE", "0").strip().lower()
         self.moe_detail_enabled = raw_detail not in {"0", "false", "off", "no", ""}
+        raw_local_detail = os.environ.get(
+            "MINI_LLM_LOCAL_DETAIL_PROFILE", "0"
+        ).strip().lower()
+        self.local_detail_enabled = raw_local_detail not in {
+            "0", "false", "off", "no", ""
+        }
 
     def configure(self, enabled: bool, reset: bool = False):
         self.enabled = bool(enabled)
@@ -75,6 +81,38 @@ class _PerformanceProfiler:
         ``MINI_LLM_MOE_DETAIL_PROFILE=1`` are enabled.
         """
         if not self.enabled or not self.moe_detail_enabled:
+            yield
+            return
+
+        host_start = time.perf_counter()
+        if BACKEND_NAME == "cupy":
+            start_event = xp.cuda.Event()
+            end_event = xp.cuda.Event()
+            start_event.record()
+        else:
+            start_event = end_event = None
+
+        try:
+            yield
+        finally:
+            host_elapsed = time.perf_counter() - host_start
+            self._record(f"{name}.host", host_elapsed)
+            if BACKEND_NAME == "cupy":
+                end_event.record()
+                self._pending_gpu_events.append(
+                    (f"{name}.gpu", start_event, end_event)
+                )
+
+    @contextmanager
+    def local_detail_scope(self, name: str):
+        """Profile fine-grained local-attention work with deferred CUDA events.
+
+        Like :meth:`moe_detail_scope`, this records ``.host`` submission time
+        and ``.gpu`` CUDA-event time without synchronizing every sub-operation.
+        It is active only while the normal profiler is enabled and
+        ``MINI_LLM_LOCAL_DETAIL_PROFILE=1``.
+        """
+        if not self.enabled or not self.local_detail_enabled:
             yield
             return
 
@@ -185,3 +223,7 @@ def moe_detail_scope(name: str):
 
 def performance_report(title: str = "Performance profile") -> str:
     return PERFORMANCE_PROFILER.format_report(title)
+
+
+def local_detail_scope(name: str):
+    return PERFORMANCE_PROFILER.local_detail_scope(name)

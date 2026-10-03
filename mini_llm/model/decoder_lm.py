@@ -176,7 +176,7 @@ class DecoderLanguageModel:
         
         return logits, cache
     
-    def compute_loss(self, logits, targets, loss_mask=None):
+    def compute_loss(self, logits, targets, loss_mask=None, return_device_loss=False):
         """
         Compute cross-entropy loss.
         
@@ -191,7 +191,10 @@ class DecoderLanguageModel:
             loss: Scalar loss value
             cache: Dictionary for backward pass
         """
-        return cross_entropy_forward(logits, targets, loss_mask=loss_mask)
+        return cross_entropy_forward(
+            logits, targets, loss_mask=loss_mask,
+            return_device_loss=return_device_loss,
+        )
     
     def backward_loss(self, loss_cache):
         """

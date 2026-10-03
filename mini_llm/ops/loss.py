@@ -2,7 +2,7 @@ from ..backend import xp, scalar, is_low_precision_dtype, is_bfloat16_dtype
 import os
 
 
-def cross_entropy_forward(logits, targets, loss_mask=None):
+def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False):
     """
     Cross entropy loss with mixed precision support.
     
@@ -62,7 +62,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None):
             probs_bf16[start:end] = work.astype(logits.dtype)
 
         loss_f32 = loss_sum / normalizer_count
-        return scalar(loss_f32), {
+        return (loss_f32 if return_device_loss else scalar(loss_f32)), {
             "probs_bf16": probs_bf16,
             "targets": flat_targets,
             "original_shape": logits.shape,
@@ -110,7 +110,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None):
             "loss_mask_f32": mask_f32,
             "normalizer_count": normalizer_count,
         }
-        return scalar(loss_f32), cache
+        return (loss_f32 if return_device_loss else scalar(loss_f32)), cache
     else:
         # Float32 path - standard computation
         max_logit = xp.max(flat_logits, axis=-1, keepdims=True)
@@ -137,7 +137,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None):
                 raise ValueError("loss_mask must select at least one target token")
             loss = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
-        return scalar(loss), {
+        return (loss if return_device_loss else scalar(loss)), {
             "probs": probs,
             "targets": flat_targets,
             "original_shape": logits.shape,

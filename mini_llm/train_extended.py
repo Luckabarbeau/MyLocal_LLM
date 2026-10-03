@@ -518,7 +518,9 @@ class ExtendedTrainer:
         # Accumulate gradients over multiple steps
         # Use Python floats for loss accumulation (minimal overhead)
         # The main optimization is avoiding host-device sync during gradient computation
-        losses = []
+        # Keep microbatch losses on-device; converting each one to a
+        # Python float forces a CUDA stream synchronization.
+        loss_sum_backend = xp.asarray(0.0, dtype="float32")
         
         for accum_step in range(self.grad_accum_steps):
             # Get learning rate for this step (use final lr of accumulated batch)
@@ -561,12 +563,10 @@ class ExtendedTrainer:
                 raise ValueError(f"Nonfinite logits detected at step {self.step}!")
             
             with performance_scope("train.loss_forward"):
-                loss, loss_cache = self.model.compute_loss(logits, targets)
-            losses.append(loss)  # loss is already a Python float from scalar()
-            
-            # Check for NaN (this will sync once per step, acceptable)
-            if loss != loss:  # NaN check without converting to backend
-                raise ValueError(f"NaN loss detected at step {self.step}!")
+                loss_backend, loss_cache = self.model.compute_loss(
+                    logits, targets, return_device_loss=True
+                )
+            loss_sum_backend += loss_backend
             
             # Backward pass - apply loss scaling to d_logits before backward
             with performance_scope("train.loss_backward"):
@@ -580,8 +580,9 @@ class ExtendedTrainer:
                 self.model.backward(d_logits, cache)
         
         # Average loss - only sync once at the end
-        avg_loss = float(sum(losses) / self.grad_accum_steps)
-        
+        avg_loss = float(_array_to_float(loss_sum_backend / self.grad_accum_steps))
+        if not np.isfinite(avg_loss):
+            raise ValueError(f"NaN/Inf loss detected at step {self.step}!")
         # Scale down gradients by loss_scale to cancel out the scaling
         if self.loss_scale != 1.0:
             for p in self.model.parameters():

@@ -11,10 +11,18 @@ from mini_llm.backend import xp, BACKEND_NAME, asnumpy
 
 
 def _convert_to_numpy(data):
-    """Convert data to NumPy array, handling CuPy arrays."""
-    if BACKEND_NAME == "cupy":
-        return asnumpy(data)
+    """Convert backend or host-offloaded arrays to NumPy without assumptions."""
+    if BACKEND_NAME == "cupy" and hasattr(data, "get"):
+        return data.get()
     return np.asarray(data)
+
+
+def _optimizer_offload_mode():
+    """Return the active optimizer offload policy for checkpoint loading."""
+    if BACKEND_NAME != "cupy":
+        return "none"
+    raw = os.environ.get("MINI_LLM_OPTIMIZER_OFFLOAD", "none").strip().lower()
+    return raw if raw in {"moments", "full"} else "none"
 
 
 def save_checkpoint(
@@ -144,11 +152,12 @@ def load_checkpoint(
             
             # Load master weights (if they exist)
             master_weights_path = optimizer_dir / "master_weights"
+            keep_optimizer_host = _optimizer_offload_mode() != "none"
             if master_weights_path.exists() and master_weights_path.is_dir():
                 optimizer_state["master_weights"] = {}
                 for npy_file in master_weights_path.glob("*.npy"):
                     arr = np.load(npy_file)
-                    if BACKEND_NAME == "cupy":
+                    if BACKEND_NAME == "cupy" and not keep_optimizer_host:
                         import cupy
                         arr = cupy.asarray(arr)
                     optimizer_state["master_weights"][npy_file.stem] = arr
@@ -157,11 +166,12 @@ def load_checkpoint(
             m_path = optimizer_dir / "m"
             v_path = optimizer_dir / "v"
             
+            keep_moments_host = _optimizer_offload_mode() in {"moments", "full"}
             if m_path.exists() and m_path.is_dir():
                 optimizer_state["m"] = {}
                 for npy_file in m_path.glob("*.npy"):
                     arr = np.load(npy_file)
-                    if BACKEND_NAME == "cupy":
+                    if BACKEND_NAME == "cupy" and not keep_moments_host:
                         import cupy
                         arr = cupy.asarray(arr)
                     optimizer_state["m"][npy_file.stem] = arr
@@ -170,7 +180,7 @@ def load_checkpoint(
                 optimizer_state["v"] = {}
                 for npy_file in v_path.glob("*.npy"):
                     arr = np.load(npy_file)
-                    if BACKEND_NAME == "cupy":
+                    if BACKEND_NAME == "cupy" and not keep_moments_host:
                         import cupy
                         arr = cupy.asarray(arr)
                     optimizer_state["v"][npy_file.stem] = arr

@@ -17,6 +17,18 @@ def _fused_bf16_ce_enabled(dtype):
     )
 
 
+def _inplace_bf16_ce_enabled(dtype):
+    """Reuse the BF16 logits allocation as the CE probability/gradient cache.
+
+    Training never needs logits after cross-entropy forward.  Reusing that
+    one-gigabyte-class buffer avoids allocating a second full-vocabulary BF16
+    tensor.  It is opt-in because callers that inspect logits after loss
+    evaluation may rely on the historical non-mutating API.
+    """
+    raw = os.environ.get("MINI_LLM_INPLACE_BF16_CE", "0").strip().lower()
+    return is_bfloat16_dtype(dtype) and raw not in {"0", "false", "off", "no"}
+
+
 def _get_fused_bf16_ce_module():
     """Compile the BF16 cross-entropy CUDA kernels lazily.
 
@@ -95,13 +107,19 @@ def _get_fused_bf16_ce_module():
         float row_sum = sh[0];
         float inv_sum = 1.0f / row_sum;
 
+        // Preserve the target logit before writing probabilities.  This barrier
+        // is required when 0055A aliases probs with logits in-place: another
+        // thread may own the target column and overwrite it below.
+        float target_logit = 0.0f;
+        if (threadIdx.x == 0)
+            target_logit = bf16_to_float(z[targets[row]]);
+        __syncthreads();
+
         for (int j = threadIdx.x; j < vocab; j += blockDim.x) {
             p[j] = float_to_bf16(w[j] * inv_sum);
         }
 
         if (threadIdx.x == 0) {
-            int target = targets[row];
-            float target_logit = bf16_to_float(z[target]);
             float loss = logf(row_sum) + row_max - target_logit;
             if (has_mask) loss *= loss_mask[row];
             row_losses[row] = loss;
@@ -149,7 +167,9 @@ def _get_fused_bf16_ce_module():
     return _FUSED_BF16_CE_MODULE
 
 
-def _fused_bf16_cross_entropy_forward(flat_logits, flat_targets, mask_f32, token_chunk):
+def _fused_bf16_cross_entropy_forward(
+    flat_logits, flat_targets, mask_f32, token_chunk, *, reuse_logits=False
+):
     module = _get_fused_bf16_ce_module()
     if module is None or not flat_logits.flags.c_contiguous:
         return None
@@ -162,7 +182,11 @@ def _fused_bf16_cross_entropy_forward(flat_logits, flat_targets, mask_f32, token
     targets_i32 = xp.asarray(flat_targets, dtype=xp.int32).reshape(-1)
     if not targets_i32.flags.c_contiguous:
         targets_i32 = xp.ascontiguousarray(targets_i32)
-    probs_bf16 = xp.empty(flat_logits.shape, dtype=flat_logits.dtype)
+    # 0055A memory mode can safely reuse flat_logits: the kernel finishes all
+    # row reads (max + exp workspace) before the synchronized probability write.
+    probs_bf16 = flat_logits if reuse_logits else xp.empty(
+        flat_logits.shape, dtype=flat_logits.dtype
+    )
     row_losses = xp.empty((n,), dtype=xp.float32)
     work_rows = min(int(token_chunk), n)
     work_f32 = xp.empty((work_rows, vocab), dtype=xp.float32)
@@ -267,9 +291,12 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             if normalizer_count <= 0.0:
                 raise ValueError("loss_mask must select at least one target token")
 
+        reuse_logits = _inplace_bf16_ce_enabled(logits.dtype)
+
         if _fused_bf16_ce_enabled(logits.dtype):
             fused = _fused_bf16_cross_entropy_forward(
-                flat_logits, flat_targets, mask_f32, token_chunk
+                flat_logits, flat_targets, mask_f32, token_chunk,
+                reuse_logits=reuse_logits,
             )
             if fused is not None:
                 probs_bf16, targets_i32, row_losses = fused
@@ -283,9 +310,14 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
                     "normalizer_count": normalizer_count,
                     "token_chunk": token_chunk,
                     "fused_bf16_ce": True,
+                    "inplace_bf16_ce": reuse_logits,
                 }
 
-        probs_bf16 = xp.empty(flat_logits.shape, dtype=logits.dtype)
+        probs_bf16 = (
+            flat_logits
+            if reuse_logits
+            else xp.empty(flat_logits.shape, dtype=logits.dtype)
+        )
         loss_sum = xp.asarray(0.0, dtype="float32")
         for start in range(0, n, token_chunk):
             end = min(start + token_chunk, n)
@@ -317,6 +349,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             "loss_mask_f32": mask_f32,
             "normalizer_count": normalizer_count,
             "token_chunk": token_chunk,
+            "inplace_bf16_ce": reuse_logits,
         }
 
     if is_low_precision_dtype(logits.dtype):

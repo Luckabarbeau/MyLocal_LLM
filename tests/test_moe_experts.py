@@ -227,3 +227,43 @@ def test_expert_ffn_training_cache_recomputes_elementwise_intermediates():
     dx = expert.backward(dy, cache)
     assert dx.shape == x.shape
     assert xp.all(xp.isfinite(dx))
+
+
+def test_experts_compact_cache_reconstructs_router_weight_gradient():
+    """0055A must drop expert_x/output caches without changing router gradients."""
+    experts = make_experts()
+    x = xp.asarray(np.random.default_rng(31).normal(size=(1, 3, 4)), dtype="float64")
+    weights = xp.asarray(
+        [[[0.7, 0.3], [0.4, 0.6], [0.55, 0.45]]], dtype="float64"
+    )
+    expert_indices = xp.asarray(
+        [[[0, 1], [1, 2], [0, 2]]], dtype=xp.int64
+    )
+    dy = xp.asarray(np.random.default_rng(32).normal(size=x.shape), dtype="float64")
+
+    _, cache = experts.forward(x, weights, expert_indices)
+    assert "expert_outputs" not in cache
+    assert "y" not in cache
+    assert "weights" not in cache
+    assert "expert_indices" not in cache
+    for expert_cache in cache["expert_caches"].values():
+        assert "x" not in expert_cache
+        assert set(expert_cache) == {"g", "u"}
+
+    experts.zero_grad()
+    _, dweights = experts.backward(dy, cache, return_dweights=True)
+
+    direction = xp.asarray(
+        np.random.default_rng(33).normal(size=weights.shape), dtype="float64"
+    )
+    direction /= xp.sqrt(xp.sum(direction * direction))
+    eps = 1e-6
+
+    def objective(w):
+        out, _ = experts.forward(x, w, expert_indices)
+        return float(xp.sum(out * dy))
+
+    fd = (objective(weights + eps * direction) - objective(weights - eps * direction)) / (2 * eps)
+    an = float(xp.sum(dweights * direction))
+    rel = abs(fd - an) / (abs(fd) + abs(an) + 1e-12)
+    assert rel < 1e-6, f"router-weight gradient mismatch: fd={fd}, an={an}, rel={rel}"

@@ -125,3 +125,26 @@ def test_bfloat16_cross_entropy_cache_is_half_fp32_size_before_backward():
     assert str(np.dtype(probs.dtype)).lower() == "bfloat16"
     assert probs.nbytes == logits.size * 2
     assert probs.nbytes * 2 == logits.size * 4
+
+
+def test_bfloat16_cross_entropy_can_reuse_logits_storage(monkeypatch):
+    """0055A in-place BF16 CE should avoid a second full-vocab BF16 buffer."""
+    import ml_dtypes
+
+    monkeypatch.setenv("MINI_LLM_INPLACE_BF16_CE", "1")
+    logits = xp.asarray(
+        np.random.default_rng(140).normal(size=(2, 3, 17)).astype(np.float32),
+        dtype=ml_dtypes.bfloat16,
+    )
+    targets = xp.asarray([[1, 2, 3], [4, 5, 6]], dtype="int64")
+    original_shape = logits.shape
+
+    _, cache = cross_entropy_forward(logits, targets)
+    probs = cache["probs_bf16"]
+    assert cache.get("inplace_bf16_ce") is True
+    assert probs.size == logits.size
+    assert bool(xp.shares_memory(probs, logits))
+
+    grad = cross_entropy_backward(cache)
+    assert bool(xp.shares_memory(grad, logits))
+    assert bool(xp.all(xp.isfinite(grad)))

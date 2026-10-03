@@ -20,6 +20,7 @@ from .cublas_grouped import (
     available as _cublas_grouped_available,
     grouped_bf16_gemm as _cublas_grouped_bf16_gemm,
     is_enabled as _cublas_grouped_local_enabled,
+    local_cublas_mode as _cublas_local_mode,
     strict_enabled as _cublas_grouped_strict_enabled,
 )
 
@@ -1116,6 +1117,144 @@ def _get_local_bf16_pipeline_module():
             ds[j] = float_to_bf16(out);
         }
     }
+
+    // 0053F: one launch covers the three static local-attention query chunks.
+    // Each CUDA block still owns exactly one softmax row, so the numerical
+    // reduction order is identical to the established per-chunk kernel.
+    extern "C" __global__
+    void local_causal_softmax_fwd3_bf16(
+        const unsigned short* scores0, unsigned short* probs0,
+        int rows0, int q_len0, int k_len0, int q_start0, int key_start0,
+        const unsigned short* scores1, unsigned short* probs1,
+        int rows1, int q_len1, int k_len1, int q_start1, int key_start1,
+        const unsigned short* scores2, unsigned short* probs2,
+        int rows2, int q_len2, int k_len2, int q_start2, int key_start2,
+        int window, float scale) {
+        int global_row = blockIdx.x;
+        int total_rows = rows0 + rows1 + rows2;
+        if (global_row >= total_rows) return;
+
+        const unsigned short* scores;
+        unsigned short* probs;
+        int row, q_len, k_len, q_start, key_start;
+        if (global_row < rows0) {
+            scores = scores0; probs = probs0; row = global_row;
+            q_len = q_len0; k_len = k_len0; q_start = q_start0; key_start = key_start0;
+        } else if (global_row < rows0 + rows1) {
+            scores = scores1; probs = probs1; row = global_row - rows0;
+            q_len = q_len1; k_len = k_len1; q_start = q_start1; key_start = key_start1;
+        } else {
+            scores = scores2; probs = probs2; row = global_row - rows0 - rows1;
+            q_len = q_len2; k_len = k_len2; q_start = q_start2; key_start = key_start2;
+        }
+
+        int q_local = row % q_len;
+        int q_pos = q_start + q_local;
+        const unsigned short* sp = scores + ((long long)row) * k_len;
+        unsigned short* pp = probs + ((long long)row) * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(sp[j]) * scale;
+                local_max = fmaxf(local_max, value);
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(sp[j]) * scale;
+                local_sum += expf(value - row_max);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            float out = 0.0f;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float value = bf16_to_float(sp[j]) * scale;
+                out = expf(value - row_max) * inv;
+            }
+            pp[j] = float_to_bf16(out);
+        }
+    }
+
+    extern "C" __global__
+    void local_causal_softmax_bwd3_bf16(
+        const unsigned short* dprobs0, const unsigned short* probs0, unsigned short* dscores0,
+        int rows0, int q_len0, int k_len0, int q_start0, int key_start0,
+        const unsigned short* dprobs1, const unsigned short* probs1, unsigned short* dscores1,
+        int rows1, int q_len1, int k_len1, int q_start1, int key_start1,
+        const unsigned short* dprobs2, const unsigned short* probs2, unsigned short* dscores2,
+        int rows2, int q_len2, int k_len2, int q_start2, int key_start2,
+        int window) {
+        int global_row = blockIdx.x;
+        int total_rows = rows0 + rows1 + rows2;
+        if (global_row >= total_rows) return;
+
+        const unsigned short* dprobs;
+        const unsigned short* probs;
+        unsigned short* dscores;
+        int row, q_len, k_len, q_start, key_start;
+        if (global_row < rows0) {
+            dprobs = dprobs0; probs = probs0; dscores = dscores0; row = global_row;
+            q_len = q_len0; k_len = k_len0; q_start = q_start0; key_start = key_start0;
+        } else if (global_row < rows0 + rows1) {
+            dprobs = dprobs1; probs = probs1; dscores = dscores1; row = global_row - rows0;
+            q_len = q_len1; k_len = k_len1; q_start = q_start1; key_start = key_start1;
+        } else {
+            dprobs = dprobs2; probs = probs2; dscores = dscores2; row = global_row - rows0 - rows1;
+            q_len = q_len2; k_len = k_len2; q_start = q_start2; key_start = key_start2;
+        }
+
+        int q_local = row % q_len;
+        int q_pos = q_start + q_local;
+        const unsigned short* dp = dprobs + ((long long)row) * k_len;
+        const unsigned short* pp = probs + ((long long)row) * k_len;
+        unsigned short* ds = dscores + ((long long)row) * k_len;
+        extern __shared__ float sh[];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1)
+                local_sum += bf16_to_float(dp[j]) * bf16_to_float(pp[j]);
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            float out = 0.0f;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float pf = bf16_to_float(pp[j]);
+                out = pf * (bf16_to_float(dp[j]) - correction);
+            }
+            ds[j] = float_to_bf16(out);
+        }
+    }
     """
     try:
         module = xp.RawModule(
@@ -1124,10 +1263,14 @@ def _get_local_bf16_pipeline_module():
             name_expressions=(
                 "local_causal_softmax_fwd_bf16",
                 "local_causal_softmax_bwd_bf16",
+                "local_causal_softmax_fwd3_bf16",
+                "local_causal_softmax_bwd3_bf16",
             ),
         )
         module.get_function("local_causal_softmax_fwd_bf16")
         module.get_function("local_causal_softmax_bwd_bf16")
+        module.get_function("local_causal_softmax_fwd3_bf16")
+        module.get_function("local_causal_softmax_bwd3_bf16")
         _LOCAL_BF16_PIPELINE_MODULE = module
     except Exception:
         strict = os.environ.get(
@@ -1217,6 +1360,103 @@ def _local_causal_softmax_backward_bf16_cuda(
         shared_mem=threads * 4,
     )
     return dscores_bf16
+
+def _multi_chunk_local_softmax_enabled():
+    raw = os.environ.get(
+        "MINI_LLM_FUSED_LOCAL_MULTI_CHUNK_SOFTMAX", "1"
+    ).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _local_causal_softmax_forward3_bf16_cuda(chunks, window, scale):
+    """0053F: process exactly three local chunks in one CUDA launch.
+
+    The production 4096/1536 geometry and the GPU validator both have three
+    chunks. Other geometries deliberately fall back to the established
+    per-chunk kernels rather than changing their behavior.
+    """
+    if not _multi_chunk_local_softmax_enabled() or len(chunks) != 3:
+        return False
+    module = _get_local_bf16_pipeline_module()
+    if module is None:
+        return False
+    args = []
+    total_rows = 0
+    for chunk in chunks:
+        scores = chunk["scores"]
+        probs = chunk["probs"]
+        if (
+            scores.dtype != probs.dtype
+            or not is_bfloat16_dtype(scores.dtype)
+            or scores.shape != probs.shape
+            or not scores.flags.c_contiguous
+            or not probs.flags.c_contiguous
+        ):
+            return False
+        q_len = int(scores.shape[-2])
+        k_len = int(scores.shape[-1])
+        rows = int(scores.size // k_len)
+        total_rows += rows
+        args.extend((
+            scores, probs,
+            np.int32(rows), np.int32(q_len), np.int32(k_len),
+            np.int32(chunk["q_start"]), np.int32(chunk["key_start"]),
+        ))
+    if total_rows <= 0:
+        return True
+    threads = 256
+    args.extend((np.int32(window), np.float32(scale)))
+    module.get_function("local_causal_softmax_fwd3_bf16")(
+        (total_rows,), (threads,), tuple(args), shared_mem=threads * 4,
+    )
+    return True
+
+
+def _local_causal_softmax_backward3_bf16_cuda(chunks, window):
+    """0053F: process three local softmax Jacobian products in one launch."""
+    if not _multi_chunk_local_softmax_enabled() or len(chunks) != 3:
+        return False
+    module = _get_local_bf16_pipeline_module()
+    if module is None:
+        return False
+    args = []
+    total_rows = 0
+    allocated = []
+    for chunk in chunks:
+        dprobs = chunk["dprobs"]
+        probs = chunk["probs"]
+        if (
+            dprobs.dtype != probs.dtype
+            or not is_bfloat16_dtype(probs.dtype)
+            or dprobs.shape != probs.shape
+            or not dprobs.flags.c_contiguous
+            or not probs.flags.c_contiguous
+        ):
+            return False
+        dscores = xp.empty_like(probs)
+        allocated.append(dscores)
+        q_len = int(probs.shape[-2])
+        k_len = int(probs.shape[-1])
+        rows = int(probs.size // k_len)
+        total_rows += rows
+        args.extend((
+            dprobs, probs, dscores,
+            np.int32(rows), np.int32(q_len), np.int32(k_len),
+            np.int32(chunk["q_start"]), np.int32(chunk["key_start"]),
+        ))
+    if total_rows <= 0:
+        for chunk, dscores in zip(chunks, allocated):
+            chunk["dscores"] = dscores
+        return True
+    threads = 256
+    args.append(np.int32(window))
+    module.get_function("local_causal_softmax_bwd3_bf16")(
+        (total_rows,), (threads,), tuple(args), shared_mem=threads * 4,
+    )
+    for chunk, dscores in zip(chunks, allocated):
+        chunk["dscores"] = dscores
+    return True
+
 
 def _resolve_query_chunk_size(query_length, query_chunk_size=None):
     """Resolve bounded query chunking for the indexed attention hot path.
@@ -1766,6 +2006,194 @@ def _get_indexed_bf16_pipeline_module():
             ds[j] = float_to_bf16(out);
         }
     }
+
+    extern "C" __global__
+    void dilated_softmax_fwd4_inplace_bf16(
+        unsigned short* buf0, long long rows0, int q_len0, int k_len0,
+        int phase_start0, int key_start0, int alignment_shift0,
+        unsigned short* buf1, long long rows1, int q_len1, int k_len1,
+        int phase_start1, int key_start1, int alignment_shift1,
+        unsigned short* buf2, long long rows2, int q_len2, int k_len2,
+        int phase_start2, int key_start2, int alignment_shift2,
+        unsigned short* buf3, long long rows3, int q_len3, int k_len3,
+        int phase_start3, int key_start3, int alignment_shift3,
+        int key_slots, float score_scale) {
+        long long global_row = (long long)blockIdx.x;
+        long long total_rows = rows0 + rows1 + rows2 + rows3;
+        if (global_row >= total_rows) return;
+
+        unsigned short* buf;
+        long long row;
+        int q_len, k_len, phase_start, key_start, alignment_shift;
+        if (global_row < rows0) {
+            buf = buf0; row = global_row;
+            q_len = q_len0; k_len = k_len0;
+            phase_start = phase_start0; key_start = key_start0;
+            alignment_shift = alignment_shift0;
+        } else if (global_row < rows0 + rows1) {
+            buf = buf1; row = global_row - rows0;
+            q_len = q_len1; k_len = k_len1;
+            phase_start = phase_start1; key_start = key_start1;
+            alignment_shift = alignment_shift1;
+        } else if (global_row < rows0 + rows1 + rows2) {
+            buf = buf2; row = global_row - rows0 - rows1;
+            q_len = q_len2; k_len = k_len2;
+            phase_start = phase_start2; key_start = key_start2;
+            alignment_shift = alignment_shift2;
+        } else {
+            buf = buf3; row = global_row - rows0 - rows1 - rows2;
+            q_len = q_len3; k_len = k_len3;
+            phase_start = phase_start3; key_start = key_start3;
+            alignment_shift = alignment_shift3;
+        }
+
+        int q_local = (int)(row % q_len);
+        int q_phase = phase_start + q_local;
+        int max_key = q_phase + alignment_shift;
+        unsigned short* data = buf + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        int any_valid = 0;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_phase = key_start + j;
+            if (k_phase <= max_key && k_phase >= max_key - key_slots + 1) {
+                local_max = fmaxf(
+                    local_max, bf16_to_float(data[j]) * score_scale
+                );
+                any_valid = 1;
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(
+                    sh[threadIdx.x], sh[threadIdx.x + stride]
+                );
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float* sh_valid = sh + blockDim.x;
+        sh_valid[threadIdx.x] = (float)any_valid;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh_valid[threadIdx.x] += sh_valid[threadIdx.x + stride];
+            __syncthreads();
+        }
+        if (sh_valid[0] == 0.0f) {
+            for (int j = threadIdx.x; j < k_len; j += blockDim.x)
+                data[j] = (unsigned short)0;
+            return;
+        }
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_phase = key_start + j;
+            if (k_phase <= max_key && k_phase >= max_key - key_slots + 1) {
+                float value = bf16_to_float(data[j]) * score_scale;
+                local_sum += expf(value - row_max);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_phase = key_start + j;
+            float out = 0.0f;
+            if (k_phase <= max_key && k_phase >= max_key - key_slots + 1) {
+                float value = bf16_to_float(data[j]) * score_scale;
+                out = expf(value - row_max) * inv;
+            }
+            data[j] = float_to_bf16(out);
+        }
+    }
+
+    extern "C" __global__
+    void dilated_softmax_bwd4_inplace_bf16(
+        unsigned short* dprobs0, const unsigned short* probs0,
+        long long rows0, int q_len0, int k_len0,
+        int phase_start0, int key_start0, int alignment_shift0,
+        unsigned short* dprobs1, const unsigned short* probs1,
+        long long rows1, int q_len1, int k_len1,
+        int phase_start1, int key_start1, int alignment_shift1,
+        unsigned short* dprobs2, const unsigned short* probs2,
+        long long rows2, int q_len2, int k_len2,
+        int phase_start2, int key_start2, int alignment_shift2,
+        unsigned short* dprobs3, const unsigned short* probs3,
+        long long rows3, int q_len3, int k_len3,
+        int phase_start3, int key_start3, int alignment_shift3,
+        int key_slots) {
+        long long global_row = (long long)blockIdx.x;
+        long long total_rows = rows0 + rows1 + rows2 + rows3;
+        if (global_row >= total_rows) return;
+
+        unsigned short* dp;
+        const unsigned short* p;
+        long long row;
+        int q_len, k_len, phase_start, key_start, alignment_shift;
+        if (global_row < rows0) {
+            dp = dprobs0; p = probs0; row = global_row;
+            q_len = q_len0; k_len = k_len0;
+            phase_start = phase_start0; key_start = key_start0;
+            alignment_shift = alignment_shift0;
+        } else if (global_row < rows0 + rows1) {
+            dp = dprobs1; p = probs1; row = global_row - rows0;
+            q_len = q_len1; k_len = k_len1;
+            phase_start = phase_start1; key_start = key_start1;
+            alignment_shift = alignment_shift1;
+        } else if (global_row < rows0 + rows1 + rows2) {
+            dp = dprobs2; p = probs2; row = global_row - rows0 - rows1;
+            q_len = q_len2; k_len = k_len2;
+            phase_start = phase_start2; key_start = key_start2;
+            alignment_shift = alignment_shift2;
+        } else {
+            dp = dprobs3; p = probs3; row = global_row - rows0 - rows1 - rows2;
+            q_len = q_len3; k_len = k_len3;
+            phase_start = phase_start3; key_start = key_start3;
+            alignment_shift = alignment_shift3;
+        }
+
+        int q_local = (int)(row % q_len);
+        int q_phase = phase_start + q_local;
+        int max_key = q_phase + alignment_shift;
+        unsigned short* dp_row = dp + row * k_len;
+        const unsigned short* p_row = p + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_phase = key_start + j;
+            if (k_phase <= max_key && k_phase >= max_key - key_slots + 1)
+                local_sum += (
+                    bf16_to_float(dp_row[j]) * bf16_to_float(p_row[j])
+                );
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_phase = key_start + j;
+            float out = 0.0f;
+            if (k_phase <= max_key && k_phase >= max_key - key_slots + 1) {
+                float pf = bf16_to_float(p_row[j]);
+                out = pf * (bf16_to_float(dp_row[j]) - correction);
+            }
+            dp_row[j] = float_to_bf16(out);
+        }
+    }
     """
     try:
         module = xp.RawModule(
@@ -1774,10 +2202,14 @@ def _get_indexed_bf16_pipeline_module():
             name_expressions=(
                 "indexed_masked_softmax_fwd_bf16",
                 "indexed_masked_softmax_bwd_bf16",
+                "dilated_softmax_fwd4_inplace_bf16",
+                "dilated_softmax_bwd4_inplace_bf16",
             ),
         )
         module.get_function("indexed_masked_softmax_fwd_bf16")
         module.get_function("indexed_masked_softmax_bwd_bf16")
+        module.get_function("dilated_softmax_fwd4_inplace_bf16")
+        module.get_function("dilated_softmax_bwd4_inplace_bf16")
         _INDEXED_BF16_PIPELINE_MODULE = module
     except Exception:
         strict = os.environ.get(
@@ -1862,6 +2294,115 @@ def _masked_softmax_backward_bf16_cuda(dprobs, probs, valid_mask):
         shared_mem=threads * 4,
     )
     return dscores
+
+
+def _multi_chunk_dilated_softmax_enabled():
+    """Enable 0054A four-phase in-place dilated softmax fusion."""
+    raw = os.environ.get(
+        "MINI_LLM_FUSED_DILATED_MULTI_CHUNK_SOFTMAX", "1"
+    ).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _dilated_softmax_forward4_inplace_bf16_cuda(chunks, key_slots, score_scale):
+    """0054A: normalize four dilated phase buffers in one in-place launch.
+
+    The fixed-phase mask is reconstructed analytically from phase metadata, so
+    no boolean ``valid`` matrices are allocated or retained for backward.
+    Reusing each BF16 score allocation as its probability cache also removes
+    the extra score->probability allocation at the softmax boundary.
+    """
+    if not _multi_chunk_dilated_softmax_enabled() or len(chunks) != 4:
+        return False
+    module = _get_indexed_bf16_pipeline_module()
+    if module is None:
+        return False
+
+    args = []
+    total_rows = 0
+    for chunk in chunks:
+        scores = chunk.get("scores")
+        if (
+            scores is None
+            or not is_bfloat16_dtype(scores.dtype)
+            or scores.ndim != 4
+            or not scores.flags.c_contiguous
+        ):
+            return False
+        q_len = int(scores.shape[-2])
+        k_len = int(scores.shape[-1])
+        rows = int(scores.size // k_len)
+        if rows <= 0 or k_len <= 0:
+            return False
+        total_rows += rows
+        args.extend((
+            scores, np.int64(rows), np.int32(q_len), np.int32(k_len),
+            np.int32(chunk["phase_start"]), np.int32(chunk["key_start"]),
+            np.int32(chunk["alignment_shift"]),
+        ))
+    if total_rows > 2147483647:
+        return False
+
+    args.extend((np.int32(key_slots), np.float32(score_scale)))
+    threads = 256
+    module.get_function("dilated_softmax_fwd4_inplace_bf16")(
+        (total_rows,), (threads,), tuple(args),
+        shared_mem=threads * 2 * 4,
+    )
+    for chunk in chunks:
+        chunk["probs"] = chunk.pop("scores")
+        chunk["valid"] = None
+    return True
+
+
+def _dilated_softmax_backward4_inplace_bf16_cuda(chunks, key_slots):
+    """0054A: four softmax Jacobian products in-place on dP buffers."""
+    if not _multi_chunk_dilated_softmax_enabled() or len(chunks) != 4:
+        return False
+    module = _get_indexed_bf16_pipeline_module()
+    if module is None:
+        return False
+
+    args = []
+    total_rows = 0
+    for chunk in chunks:
+        dprobs = chunk.get("dprobs")
+        probs = chunk.get("probs")
+        if (
+            dprobs is None
+            or probs is None
+            or dprobs.dtype != probs.dtype
+            or not is_bfloat16_dtype(probs.dtype)
+            or dprobs.shape != probs.shape
+            or dprobs.ndim != 4
+            or not dprobs.flags.c_contiguous
+            or not probs.flags.c_contiguous
+        ):
+            return False
+        q_len = int(probs.shape[-2])
+        k_len = int(probs.shape[-1])
+        rows = int(probs.size // k_len)
+        if rows <= 0 or k_len <= 0:
+            return False
+        total_rows += rows
+        args.extend((
+            dprobs, probs, np.int64(rows), np.int32(q_len), np.int32(k_len),
+            np.int32(chunk["phase_start"]), np.int32(chunk["key_start"]),
+            np.int32(chunk["alignment_shift"]),
+        ))
+    if total_rows > 2147483647:
+        return False
+
+    args.append(np.int32(key_slots))
+    threads = 256
+    module.get_function("dilated_softmax_bwd4_inplace_bf16")(
+        (total_rows,), (threads,), tuple(args),
+        shared_mem=threads * 4,
+    )
+    for chunk in chunks:
+        chunk["dscores"] = chunk.pop("dprobs")
+    return True
+
 
 def _softmax_backward(dprobs, probs):
     correction = xp.sum(dprobs * probs, axis=-1, keepdims=True)
@@ -2355,7 +2896,9 @@ def _local_grouped_forward(
     q, k, v, window, scale, kv_map_host, query_chunk_size,
     context_dtype, return_cache,
 ):
-    """0053 grouped-cuBLAS local forward with zero Q/K/V packing."""
+    """0053/0053E cuBLAS local forward with zero Q/K/V packing."""
+    cublas_mode = _cublas_local_mode()
+    profile_prefix = f"local.{cublas_mode}"
     batch, query_length, n_q_heads, d_head = map(int, q.shape)
     q_row = _row_stride_elems(q, 1)
     k_row = _row_stride_elems(k, 1)
@@ -2391,20 +2934,28 @@ def _local_grouped_forward(
             "scores": scores, "probs": probs,
         })
 
-    with local_detail_scope("local.grouped.score_gemm"):
+    with local_detail_scope(f"{profile_prefix}.score_gemm"):
         if not _cublas_grouped_bf16_gemm(tuple(score_groups)):
             return None
 
-    for chunk in chunks:
-        with local_detail_scope("local.grouped.softmax"):
-            out = _local_causal_softmax_forward_bf16_cuda(
-                chunk["scores"], chunk["probs"],
-                chunk["q_start"], chunk["key_start"], window, scale,
+    fused_softmax = False
+    if _multi_chunk_local_softmax_enabled() and len(chunks) == 3:
+        with local_detail_scope(f"{profile_prefix}.softmax"):
+            fused_softmax = _local_causal_softmax_forward3_bf16_cuda(
+                chunks, window, scale
             )
-            if out is None:
-                if _cublas_grouped_strict_enabled():
-                    raise RuntimeError("grouped local BF16 softmax fast path declined layout")
-                return None
+    if not fused_softmax:
+        for chunk in chunks:
+            with local_detail_scope(f"{profile_prefix}.softmax"):
+                out = _local_causal_softmax_forward_bf16_cuda(
+                    chunk["scores"], chunk["probs"],
+                    chunk["q_start"], chunk["key_start"], window, scale,
+                )
+                if out is None:
+                    if _cublas_grouped_strict_enabled():
+                        raise RuntimeError("grouped local BF16 softmax fast path declined layout")
+                    return None
+    for chunk in chunks:
         del chunk["scores"]
 
     context_tmps = []
@@ -2432,13 +2983,13 @@ def _local_grouped_forward(
                 ))
         context_groups.append(RowMajorGemmGroup(tuple(problems)))
 
-    with local_detail_scope("local.grouped.context_gemm"):
+    with local_detail_scope(f"{profile_prefix}.context_gemm"):
         if not _cublas_grouped_bf16_gemm(tuple(context_groups)):
             return None
 
     context_heads = xp.empty((batch, n_q_heads, query_length, d_head), dtype=context_dtype)
     for chunk, tmp in zip(chunks, context_tmps):
-        with local_detail_scope("local.grouped.context_store"):
+        with local_detail_scope(f"{profile_prefix}.context_store"):
             context_heads[:, :, chunk["q_start"]:chunk["q_end"], :] = tmp
 
     context = context_heads.transpose(0, 2, 1, 3)
@@ -2455,11 +3006,15 @@ def _local_grouped_forward(
         "chunks": tuple(chunks),
         "query_chunk_size": query_chunk_size,
         "grouped_cublas_local": True,
+        "cublas_local_mode": cublas_mode,
+        "fused_local_softmax3": fused_softmax,
     }
 
 
 def _local_grouped_backward(dcontext, cache):
-    """0053 grouped-cuBLAS local backward."""
+    """0053/0053E cuBLAS local backward."""
+    cublas_mode = cache.get("cublas_local_mode", _cublas_local_mode())
+    profile_prefix = f"local.{cublas_mode}"
     q, k, v = cache["q"], cache["k"], cache["v"]
     batch, query_length, n_q_heads, d_head = map(int, q.shape)
     n_kv_heads = int(k.shape[2])
@@ -2470,7 +3025,7 @@ def _local_grouped_backward(dcontext, cache):
     k_row = _row_stride_elems(k, 1)
     v_row = _row_stride_elems(v, 1)
 
-    with local_detail_scope("local.grouped.dcontext_cast"):
+    with local_detail_scope(f"{profile_prefix}.dcontext_cast"):
         dc = xp.ascontiguousarray(dcontext.astype(q.dtype, copy=False))
     dc_row = _row_stride_elems(dc, 1)
     dq = xp.zeros(q.shape, dtype=xp.float32)
@@ -2500,21 +3055,30 @@ def _local_grouped_backward(dcontext, cache):
                 ))
         dprobs_groups.append(RowMajorGemmGroup(tuple(problems)))
 
-    with local_detail_scope("local.grouped.dprobs_gemm"):
+    with local_detail_scope(f"{profile_prefix}.dprobs_gemm"):
         if not _cublas_grouped_bf16_gemm(tuple(dprobs_groups)):
             return None
 
-    for chunk in cache["chunks"]:
-        with local_detail_scope("local.grouped.softmax_backward"):
-            ds = _local_causal_softmax_backward_bf16_cuda(
-                chunk["dprobs"], chunk["probs"],
-                chunk["q_start"], chunk["key_start"], cache["window"],
+    fused_softmax_backward = False
+    if _multi_chunk_local_softmax_enabled() and len(cache["chunks"]) == 3:
+        with local_detail_scope(f"{profile_prefix}.softmax_backward"):
+            fused_softmax_backward = _local_causal_softmax_backward3_bf16_cuda(
+                cache["chunks"], cache["window"]
             )
-            if ds is None:
-                if _cublas_grouped_strict_enabled():
-                    raise RuntimeError("grouped local BF16 softmax backward declined layout")
-                return None
-            chunk["dscores"] = ds
+    if not fused_softmax_backward:
+        for chunk in cache["chunks"]:
+            with local_detail_scope(f"{profile_prefix}.softmax_backward"):
+                ds = _local_causal_softmax_backward_bf16_cuda(
+                    chunk["dprobs"], chunk["probs"],
+                    chunk["q_start"], chunk["key_start"], cache["window"],
+                )
+                if ds is None:
+                    if _cublas_grouped_strict_enabled():
+                        raise RuntimeError("grouped local BF16 softmax backward declined layout")
+                    return None
+                chunk["dscores"] = ds
+    cache["fused_local_softmax3_backward"] = fused_softmax_backward
+    for chunk in cache["chunks"]:
         del chunk["dprobs"]
 
     grad_groups = []
@@ -2569,12 +3133,12 @@ def _local_grouped_backward(dcontext, cache):
             RowMajorGemmGroup(tuple(dv_problems)),
         ))
 
-    with local_detail_scope("local.grouped.grad_gemm"):
+    with local_detail_scope(f"{profile_prefix}.grad_gemm"):
         if not _cublas_grouped_bf16_gemm(tuple(grad_groups)):
             return None
 
     for chunk, dq_tmp, dk_tmp, dv_tmp in work:
-        with local_detail_scope("local.grouped.grad_store"):
+        with local_detail_scope(f"{profile_prefix}.grad_store"):
             if not _local_grouped_store_grads(
                 dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
                 chunk["q_start"], chunk["key_start"], scale,
@@ -3113,6 +3677,426 @@ def local_window_attention_backward(dcontext, cache):
     return dq_heads.transpose(0, 2, 1, 3), dk, dv
 
 
+
+def _grouped_dilated_enabled():
+    """Enable 0054 direct-pointer grouped-cuBLAS dilated attention."""
+    raw = os.environ.get(
+        "MINI_LLM_CUBLAS_GROUPED_DILATED_GEMM", "0"
+    ).strip().lower()
+    return BACKEND_NAME == "cupy" and raw not in {"0", "false", "off", "no"}
+
+
+def _dilated_grouped_fastpath_ready(q, k, v, bf16_pipeline):
+    # The cuBLAS bridge is shared with the validated local-attention path, so
+    # MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM remains the master backend switch.
+    return (
+        _grouped_dilated_enabled()
+        and bf16_pipeline
+        and _cublas_grouped_local_enabled()
+        and _cublas_local_mode() == "grouped"
+        and _local_grouped_matrix_layout_ready(q)
+        and _local_grouped_matrix_layout_ready(k)
+        and _local_grouped_matrix_layout_ready(v)
+        and _cublas_grouped_available()
+    )
+
+
+def _dilated_direct_chunks(
+    query_length, key_length, window, dilation, offset, query_chunk_size,
+):
+    """Build the exact specialized-dilated phase/chunk geometry on the host.
+
+    0054 keeps this tiny metadata calculation on Python scalars while removing
+    Q/K/V gathers from the GPU hot path.  Each returned chunk describes a
+    regular strided matrix view into the original [B,T,H,D] tensors.
+    """
+    key_slots = ((window - 1 - offset) // dilation) + 1
+    chunks = []
+    for query_residue in range(dilation):
+        phase_length = (query_length - 1 - query_residue) // dilation + 1
+        if phase_length <= 0:
+            continue
+        key_residue = (query_residue - offset) % dilation
+        key_phase_length = (key_length - 1 - key_residue) // dilation + 1
+        if key_phase_length <= 0:
+            continue
+        alignment_shift = 0 if query_residue >= offset else -1
+        phase_chunk = _resolve_dilated_query_chunk_size(
+            phase_length, query_chunk_size
+        )
+        for phase_start, phase_end in _query_chunks(phase_length, phase_chunk):
+            max_key_end = phase_end + alignment_shift
+            key_end = min(key_phase_length, max(0, max_key_end))
+            key_start = max(
+                0, phase_start + alignment_shift - key_slots + 1
+            )
+            chunks.append({
+                "query_residue": int(query_residue),
+                "phase_start": int(phase_start),
+                "phase_end": int(phase_end),
+                "key_residue": int(key_residue),
+                "key_start": int(key_start),
+                "key_end": int(key_end),
+                "alignment_shift": int(alignment_shift),
+                "q_count": int(phase_end - phase_start),
+                "k_count": int(max(0, key_end - key_start)),
+            })
+    return chunks
+
+
+def _dilated_grouped_forward(
+    q, k, v, window, dilation, offset, scale, kv_map_host,
+    query_chunk_size, context_dtype, return_cache,
+):
+    """0054 grouped-cuBLAS dilated forward with zero Q/K/V gathers."""
+    batch, query_length, n_q_heads, d_head = map(int, q.shape)
+    key_length = int(k.shape[1])
+    q_row = dilation * _row_stride_elems(q, 1)
+    k_row = dilation * _row_stride_elems(k, 1)
+    v_row = dilation * _row_stride_elems(v, 1)
+    key_slots = ((window - 1 - offset) // dilation) + 1
+
+    chunks = _dilated_direct_chunks(
+        query_length, key_length, window, dilation, offset, query_chunk_size
+    )
+    score_groups = []
+    live_chunks = []
+    for chunk in chunks:
+        q_count = chunk["q_count"]
+        k_count = chunk["k_count"]
+        if k_count <= 0:
+            chunk["probs"] = None
+            continue
+        scores = xp.empty(
+            (batch, n_q_heads, q_count, k_count), dtype=q.dtype
+        )
+        problems = []
+        q_token0 = chunk["query_residue"] + chunk["phase_start"] * dilation
+        k_token0 = chunk["key_residue"] + chunk["key_start"] * dilation
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = (
+                    int(q.data.ptr) + b * int(q.strides[0])
+                    + q_token0 * int(q.strides[1]) + h * int(q.strides[2])
+                )
+                b_ptr = (
+                    int(k.data.ptr) + b * int(k.strides[0])
+                    + k_token0 * int(k.strides[1]) + kvh * int(k.strides[2])
+                )
+                c_ptr = (
+                    int(scores.data.ptr) + b * int(scores.strides[0])
+                    + h * int(scores.strides[1])
+                )
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, k_count, d_head,
+                    q_row, k_row, k_count,
+                    False, True,
+                ))
+        score_groups.append(RowMajorGemmGroup(tuple(problems)))
+        chunk["scores"] = scores
+        live_chunks.append(chunk)
+
+    with local_detail_scope("dilated.grouped.score_gemm"):
+        if score_groups and not _cublas_grouped_bf16_gemm(tuple(score_groups)):
+            return None
+
+    fused_softmax4 = False
+    if len(live_chunks) == 4 and _multi_chunk_dilated_softmax_enabled():
+        with local_detail_scope("dilated.grouped.softmax"):
+            fused_softmax4 = _dilated_softmax_forward4_inplace_bf16_cuda(
+                live_chunks, key_slots, scale
+            )
+
+    if not fused_softmax4:
+        for chunk in live_chunks:
+            q_indices = xp.arange(
+                chunk["phase_start"], chunk["phase_end"], dtype=xp.int64
+            )[:, None]
+            k_indices = xp.arange(
+                chunk["key_start"], chunk["key_end"], dtype=xp.int64
+            )[None, :]
+            max_keys = q_indices + chunk["alignment_shift"]
+            valid = (
+                (k_indices <= max_keys)
+                & (k_indices >= (max_keys - key_slots + 1))
+            )[None, None, :, :]
+            chunk["valid"] = valid
+            with local_detail_scope("dilated.grouped.softmax"):
+                probs = _masked_softmax_forward_bf16_cuda(
+                    chunk["scores"], valid, scale
+                )
+            if probs is None:
+                return None
+            chunk["probs"] = probs
+            del chunk["scores"]
+
+    context_groups = []
+    context_tmps = []
+    for chunk in live_chunks:
+        q_count = chunk["q_count"]
+        k_count = chunk["k_count"]
+        probs = chunk["probs"]
+        tmp = xp.empty(
+            (batch, n_q_heads, q_count, d_head), dtype=q.dtype
+        )
+        context_tmps.append(tmp)
+        problems = []
+        k_token0 = chunk["key_residue"] + chunk["key_start"] * dilation
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = (
+                    int(probs.data.ptr) + b * int(probs.strides[0])
+                    + h * int(probs.strides[1])
+                )
+                b_ptr = (
+                    int(v.data.ptr) + b * int(v.strides[0])
+                    + k_token0 * int(v.strides[1]) + kvh * int(v.strides[2])
+                )
+                c_ptr = (
+                    int(tmp.data.ptr) + b * int(tmp.strides[0])
+                    + h * int(tmp.strides[1])
+                )
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, d_head, k_count,
+                    k_count, v_row, d_head,
+                    False, False,
+                ))
+        context_groups.append(RowMajorGemmGroup(tuple(problems)))
+
+    with local_detail_scope("dilated.grouped.context_gemm"):
+        if context_groups and not _cublas_grouped_bf16_gemm(tuple(context_groups)):
+            return None
+
+    context_heads = xp.zeros(
+        (batch, n_q_heads, query_length, d_head), dtype=context_dtype
+    )
+    for chunk, tmp in zip(live_chunks, context_tmps):
+        q_slice = slice(
+            chunk["query_residue"] + chunk["phase_start"] * dilation,
+            chunk["query_residue"] + chunk["phase_end"] * dilation,
+            dilation,
+        )
+        with local_detail_scope("dilated.grouped.context_store"):
+            context_heads[:, :, q_slice, :] = tmp
+
+    context = context_heads.transpose(0, 2, 1, 3)
+    if not return_cache:
+        return context
+    return context, {
+        "q": q, "k": k, "v": v,
+        "window": int(window), "dilation": int(dilation), "offset": int(offset),
+        "key_slots": key_slots,
+        "scale": float(scale),
+        "bf16_attention": True, "bf16_pipeline": True,
+        "kv_head_indices": xp.asarray(kv_map_host, dtype=xp.int64),
+        "kv_head_indices_host": tuple(kv_map_host),
+        "chunks": tuple(chunks),
+        "query_chunk_size": query_chunk_size,
+        "grouped_cublas_dilated": True,
+        "fused_dilated_softmax4": fused_softmax4,
+    }
+
+
+def _dilated_grouped_backward(dcontext, cache):
+    """0054 grouped-cuBLAS backward for direct strided dilated phases."""
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    batch, query_length, n_q_heads, d_head = map(int, q.shape)
+    n_kv_heads = int(k.shape[2])
+    dilation = int(cache["dilation"])
+    scale = float(cache["scale"])
+    kv_map_host = cache["kv_head_indices_host"]
+
+    q_row = dilation * _row_stride_elems(q, 1)
+    k_row = dilation * _row_stride_elems(k, 1)
+    v_row = dilation * _row_stride_elems(v, 1)
+    with local_detail_scope("dilated.grouped.dcontext_cast"):
+        dc = xp.ascontiguousarray(dcontext.astype(q.dtype, copy=False))
+    dc_row = dilation * _row_stride_elems(dc, 1)
+
+    dq = xp.zeros(q.shape, dtype=xp.float32)
+    dk = xp.zeros(k.shape, dtype=xp.float32)
+    dv = xp.zeros(v.shape, dtype=xp.float32)
+    live_chunks = [c for c in cache["chunks"] if c.get("probs") is not None]
+
+    dprobs_groups = []
+    for chunk in live_chunks:
+        q_count, k_count = chunk["q_count"], chunk["k_count"]
+        dprobs = xp.empty_like(chunk["probs"])
+        chunk["dprobs"] = dprobs
+        q_token0 = chunk["query_residue"] + chunk["phase_start"] * dilation
+        k_token0 = chunk["key_residue"] + chunk["key_start"] * dilation
+        problems = []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = (
+                    int(dc.data.ptr) + b * int(dc.strides[0])
+                    + q_token0 * int(dc.strides[1]) + h * int(dc.strides[2])
+                )
+                b_ptr = (
+                    int(v.data.ptr) + b * int(v.strides[0])
+                    + k_token0 * int(v.strides[1]) + kvh * int(v.strides[2])
+                )
+                c_ptr = (
+                    int(dprobs.data.ptr) + b * int(dprobs.strides[0])
+                    + h * int(dprobs.strides[1])
+                )
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, k_count, d_head,
+                    dc_row, v_row, k_count,
+                    False, True,
+                ))
+        dprobs_groups.append(RowMajorGemmGroup(tuple(problems)))
+
+    with local_detail_scope("dilated.grouped.dprobs_gemm"):
+        if dprobs_groups and not _cublas_grouped_bf16_gemm(tuple(dprobs_groups)):
+            return None
+
+    fused_softmax4_backward = False
+    if cache.get("fused_dilated_softmax4", False):
+        with local_detail_scope("dilated.grouped.softmax_backward"):
+            fused_softmax4_backward = (
+                _dilated_softmax_backward4_inplace_bf16_cuda(
+                    live_chunks, int(cache["key_slots"])
+                )
+            )
+        if not fused_softmax4_backward:
+            raise RuntimeError(
+                "0054A fused dilated backward softmax declined a cache "
+                "created by the fused forward path"
+            )
+    else:
+        for chunk in live_chunks:
+            with local_detail_scope("dilated.grouped.softmax_backward"):
+                ds = _masked_softmax_backward_bf16_cuda(
+                    chunk["dprobs"], chunk["probs"], chunk["valid"]
+                )
+            if ds is None:
+                return None
+            chunk["dscores"] = ds
+            del chunk["dprobs"]
+    cache["fused_dilated_softmax4_backward"] = fused_softmax4_backward
+
+    grad_groups = []
+    work = []
+    for chunk in live_chunks:
+        q_count, k_count = chunk["q_count"], chunk["k_count"]
+        ds = chunk["dscores"]
+        probs = chunk["probs"]
+        dq_tmp = xp.empty(
+            (batch, n_q_heads, q_count, d_head), dtype=q.dtype
+        )
+        dk_tmp = xp.empty(
+            (batch, n_q_heads, k_count, d_head), dtype=q.dtype
+        )
+        dv_tmp = xp.empty_like(dk_tmp)
+        work.append((chunk, dq_tmp, dk_tmp, dv_tmp))
+
+        q_token0 = chunk["query_residue"] + chunk["phase_start"] * dilation
+        k_token0 = chunk["key_residue"] + chunk["key_start"] * dilation
+        dq_problems, dk_problems, dv_problems = [], [], []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                ds_ptr = (
+                    int(ds.data.ptr) + b * int(ds.strides[0])
+                    + h * int(ds.strides[1])
+                )
+                p_ptr = (
+                    int(probs.data.ptr) + b * int(probs.strides[0])
+                    + h * int(probs.strides[1])
+                )
+                q_ptr = (
+                    int(q.data.ptr) + b * int(q.strides[0])
+                    + q_token0 * int(q.strides[1]) + h * int(q.strides[2])
+                )
+                k_ptr = (
+                    int(k.data.ptr) + b * int(k.strides[0])
+                    + k_token0 * int(k.strides[1]) + kvh * int(k.strides[2])
+                )
+                dc_ptr = (
+                    int(dc.data.ptr) + b * int(dc.strides[0])
+                    + q_token0 * int(dc.strides[1]) + h * int(dc.strides[2])
+                )
+                dq_ptr = (
+                    int(dq_tmp.data.ptr) + b * int(dq_tmp.strides[0])
+                    + h * int(dq_tmp.strides[1])
+                )
+                dk_ptr = (
+                    int(dk_tmp.data.ptr) + b * int(dk_tmp.strides[0])
+                    + h * int(dk_tmp.strides[1])
+                )
+                dv_ptr = (
+                    int(dv_tmp.data.ptr) + b * int(dv_tmp.strides[0])
+                    + h * int(dv_tmp.strides[1])
+                )
+                dq_problems.append(RowMajorGemmProblem(
+                    ds_ptr, k_ptr, dq_ptr,
+                    q_count, d_head, k_count,
+                    k_count, k_row, d_head,
+                    False, False,
+                ))
+                dk_problems.append(RowMajorGemmProblem(
+                    ds_ptr, q_ptr, dk_ptr,
+                    k_count, d_head, q_count,
+                    k_count, q_row, d_head,
+                    True, False,
+                ))
+                dv_problems.append(RowMajorGemmProblem(
+                    p_ptr, dc_ptr, dv_ptr,
+                    k_count, d_head, q_count,
+                    k_count, dc_row, d_head,
+                    True, False,
+                ))
+        grad_groups.extend((
+            RowMajorGemmGroup(tuple(dq_problems)),
+            RowMajorGemmGroup(tuple(dk_problems)),
+            RowMajorGemmGroup(tuple(dv_problems)),
+        ))
+
+    with local_detail_scope("dilated.grouped.grad_gemm"):
+        if grad_groups and not _cublas_grouped_bf16_gemm(tuple(grad_groups)):
+            return None
+
+    q_heads_for_kv = [
+        tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
+        for kvh in range(n_kv_heads)
+    ]
+    for chunk, dq_tmp, dk_tmp, dv_tmp in work:
+        q_slice = slice(
+            chunk["query_residue"] + chunk["phase_start"] * dilation,
+            chunk["query_residue"] + chunk["phase_end"] * dilation,
+            dilation,
+        )
+        k_slice = slice(
+            chunk["key_residue"] + chunk["key_start"] * dilation,
+            chunk["key_residue"] + chunk["key_end"] * dilation,
+            dilation,
+        )
+        with local_detail_scope("dilated.grouped.grad_store"):
+            dq[:, q_slice, :, :] = (
+                dq_tmp.transpose(0, 2, 1, 3).astype(xp.float32) * scale
+            )
+            for kvh, head_group in enumerate(q_heads_for_kv):
+                if not head_group:
+                    continue
+                if len(head_group) == 1:
+                    dk_native = dk_tmp[:, head_group[0], :, :]
+                    dv_native = dv_tmp[:, head_group[0], :, :]
+                else:
+                    dk_native = xp.sum(dk_tmp[:, head_group, :, :], axis=1)
+                    dv_native = xp.sum(dv_tmp[:, head_group, :, :], axis=1)
+                dk[:, k_slice, kvh, :] += dk_native.astype(xp.float32) * scale
+                dv[:, k_slice, kvh, :] += dv_native.astype(xp.float32)
+        del chunk["dscores"]
+
+    return dq, dk, dv
+
 def dilated_attention_forward(
     q,
     k,
@@ -3161,13 +4145,29 @@ def dilated_attention_forward(
     kv_map, kv_map_host = _normalize_kv_head_mapping(
         kv_head_indices, n_q_heads, n_kv_heads
     )
-    q_heads = q.transpose(0, 2, 1, 3)
     bf16_attention = is_bfloat16_dtype(q.dtype)
     bf16_pipeline = (
         _bf16_indexed_pipeline_enabled(q.dtype)
         and _get_indexed_bf16_pipeline_module() is not None
     )
     context_dtype = xp.float32 if bf16_attention else q.dtype
+
+    # 0054: the fixed-phase pattern is a set of regular strided matrices.
+    # Dispatch every phase/chunk through one grouped-cuBLAS score call and one
+    # context call, reading Q/K/V directly instead of materializing xp.take
+    # gathers and issuing one CuPy matmul per batch/head.
+    if _dilated_grouped_fastpath_ready(q, k, v, bf16_pipeline):
+        with local_detail_scope("dilated.grouped.forward"):
+            grouped = _dilated_grouped_forward(
+                q, k, v, window, dilation, offset, scale, kv_map_host,
+                query_chunk_size, context_dtype, return_cache,
+            )
+        if grouped is not None:
+            return grouped
+        if _cublas_grouped_strict_enabled():
+            raise RuntimeError("0054 grouped dilated forward unexpectedly declined")
+
+    q_heads = q.transpose(0, 2, 1, 3)
     context_heads = xp.zeros(
         (batch, n_q_heads, query_length, d_head), dtype=context_dtype
     )
@@ -3329,6 +4329,14 @@ def dilated_attention_backward(dcontext, cache):
     bf16_pipeline = cache.get("bf16_pipeline", False)
     kv_map = cache["kv_head_indices"]
     kv_map_host = cache["kv_head_indices_host"]
+
+    if cache.get("grouped_cublas_dilated", False):
+        with local_detail_scope("dilated.grouped.backward"):
+            grouped = _dilated_grouped_backward(dcontext, cache)
+        if grouped is not None:
+            return grouped
+        if _cublas_grouped_strict_enabled():
+            raise RuntimeError("0054 grouped dilated backward unexpectedly declined")
 
     q_heads = q.transpose(0, 2, 1, 3)
     dcontext_heads = dcontext.transpose(0, 2, 1, 3)

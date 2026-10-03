@@ -256,7 +256,7 @@ class ExpertFFN:
 
     _forward_call_count = 0  # Class-level counter for profiling
 
-    def forward(self, x, return_cache=True):
+    def forward(self, x, return_cache=True, cache_input=True):
         """
         Forward pass through the expert.
         
@@ -308,28 +308,50 @@ class ExpertFFN:
         # recomputed in backward rather than retained for every routed token.
         # At long context this removes two d_ff-sized BF16 activation caches
         # per expert assignment without adding any extra GEMM work.
+        # 0055A: the parent Experts dispatcher already retains the original
+        # MoE input and routing plan.  Keeping every gathered expert_x here
+        # duplicates all routed tokens (top-k times) until backward.  Cache only
+        # the two expensive SwiGLU projection activations; the dispatcher
+        # regathers expert_x from the original input during backward.
         cache = {
-            "x": x,
             "g": g,
             "u": u,
         }
+        if cache_input:
+            cache["x"] = x
         
         return y, cache
 
-    def backward(self, dy, cache):
-        """
-        Backward pass through the expert.
-        
+    def backward(
+        self, dy, cache, *, x=None, route_weights=None, return_route_dweights=False
+    ):
+        """Backward pass through the expert.
+
+        ``0055A`` optionally accepts unweighted routed ``dy`` together with the
+        selected ``route_weights``.  This lets the same down-projection GEMM
+        provide the expert-path gradient while computing ``dL/d(route_weight)``
+        from the cached hidden activation, so the full expert output no longer
+        has to be retained from forward.
+
         Args:
-            dy: Gradient w.r.t. output, same shape as y
-            cache: Dictionary from forward pass
-            
+            dy: Gradient w.r.t. expert output.  When ``route_weights`` is
+                supplied this is the *unweighted* upstream MoE gradient.
+            cache: Expert cache containing the expensive G/U projections.
+            x: Regathered expert input.  Legacy caches may omit this argument
+               and retain ``cache["x"]`` instead.
+            route_weights: Optional selected router weights for this expert.
+            return_route_dweights: Also return dL/d(selected router weight).
+
         Returns:
-            dx: Gradient w.r.t. input, same shape as x
+            dx, or ``(dx, droute_weights)`` when requested.
         """
-        x = cache["x"]
+        if x is None:
+            x = cache.get("x")
+        if x is None:
+            raise ValueError("ExpertFFN.backward requires x or a legacy cache['x']")
         g = cache["g"]
         u = cache["u"]
+
         # Recompute only the down-projection input.  The fused BF16 path
         # produces H directly from cached G/U and avoids materializing A.
         with moe_detail_scope("moe.expert.recompute"):
@@ -339,15 +361,45 @@ class ExpertFFN:
                 a = silu(g)
                 h = a * u
 
-        dy_2d = dy.reshape(-1, dy.shape[-1])
+        raw_dy_2d = dy.reshape(-1, dy.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
         h_2d = h.reshape(-1, h.shape[-1])
+        route_dweights = None
+
+        if route_weights is not None:
+            route_weights_2d = route_weights.reshape(-1, 1)
+            # Parameter gradients must see the same weighted branch gradient as
+            # before 0055A.  The expert-output cache is avoided by deriving the
+            # router gradient from H and the down-projection input gradient:
+            #   dL/dw = <raw_dy, H W_down>
+            #          = <raw_dy W_down^T, H>.
+            weighted_dy_2d = raw_dy_2d * route_weights_2d
+        else:
+            route_weights_2d = None
+            weighted_dy_2d = raw_dy_2d
 
         with moe_detail_scope("moe.expert.down_wgrad"):
-            self.W_down.grad += h_2d.T @ dy_2d
+            self.W_down.grad += h_2d.T @ weighted_dy_2d
 
         with moe_detail_scope("moe.expert.down_dx"):
-            dh = dy_2d @ self.W_down.data.T
+            if route_weights_2d is None:
+                dh = weighted_dy_2d @ self.W_down.data.T
+            else:
+                # Compute the unweighted down-projection input gradient once.
+                # It supplies dL/dw and is then weighted for the expert path.
+                dh_raw = raw_dy_2d @ self.W_down.data.T
+                if return_route_dweights:
+                    with moe_detail_scope("moe.dispatch.router_wgrad"):
+                        route_dweights = xp.sum(
+                            dh_raw * h_2d, axis=-1, dtype=xp.float32
+                        )
+                dh = dh_raw * route_weights_2d
+
+        if return_route_dweights and route_weights_2d is None:
+            raise ValueError(
+                "return_route_dweights=True requires route_weights"
+            )
+
         with moe_detail_scope("moe.expert.swiglu_bwd"):
             fused_grads = (
                 _fused_swiglu_backward(
@@ -366,7 +418,7 @@ class ExpertFFN:
                 da = dh * u.reshape(-1, u.shape[-1])
                 du = dh * a.reshape(-1, a.shape[-1])
                 dg = da * silu_prime(g.reshape(-1, g.shape[-1]))
-        
+
         if _fused_expert_gemm_enabled():
             # The concatenated d[G,U] matrix lets both parameter gradients be
             # produced by one GEMM, and the same packed weights turn the two
@@ -395,8 +447,11 @@ class ExpertFFN:
             with moe_detail_scope("moe.expert.dx_add"):
                 dx = dx_gate + dx_up
         dx = dx.reshape(dy.shape)
-        
+
+        if return_route_dweights:
+            return dx, route_dweights
         return dx
+
 
 
 class Experts:
@@ -495,13 +550,11 @@ class Experts:
     ):
         """Sparse expert forward with independent experts overlapped on streams.
 
-        Only expert-local gather + FFN work is concurrent.  The weighted token
-        scatter is intentionally performed on the caller stream after waiting
-        for every expert event because different top-k experts can contribute
-        to the same output token.
+        0055A keeps only the expensive G/U expert activations.  Gathered expert
+        inputs and expert outputs are intentionally not retained; both can be
+        reconstructed from the original MoE input/routing plan during backward.
         """
         batch_size, seq_len, d_model = x.shape
-        k = weights.shape[-1]
         N = batch_size * seq_len
         x_flat = x.reshape(N, d_model)
 
@@ -514,7 +567,6 @@ class Experts:
             stream.wait_event(ready)
 
         pending = []
-        expert_outputs = {}
         expert_caches = {}
 
         for exp_idx in range(self.n_experts):
@@ -531,7 +583,7 @@ class Experts:
                 if return_cache:
                     with moe_detail_scope("moe.expert.forward_total"):
                         expert_out, expert_cache = self.experts[exp_idx].forward(
-                            expert_x
+                            expert_x, cache_input=False
                         )
                 else:
                     with moe_detail_scope("moe.expert.forward_total"):
@@ -548,14 +600,10 @@ class Experts:
 
         self._wait_for_expert_events([item[-1] for item in pending])
 
-        # Preserve the existing deterministic serialized scatter semantics.
+        # Preserve deterministic serialized scatter semantics.  Do not put
+        # expert_out in the backward cache; after the scatter it can die here.
         for exp_idx, token_indices, expert_weights, expert_out, expert_cache, _ in pending:
             if return_cache:
-                expert_outputs[exp_idx] = {
-                    "outputs": expert_out,
-                    "token_indices": token_indices,
-                    "weights": expert_weights,
-                }
                 expert_caches[exp_idx] = expert_cache
             with moe_detail_scope("moe.dispatch.fwd_weight"):
                 weighted_out = expert_weights[:, xp.newaxis] * expert_out
@@ -567,10 +615,6 @@ class Experts:
             return y
         return y, {
             "x": x,
-            "weights": weights,
-            "expert_indices": expert_indices,
-            "y": y,
-            "expert_outputs": expert_outputs,
             "expert_caches": expert_caches,
             "routing_plan": routing_plan,
         }
@@ -578,42 +622,35 @@ class Experts:
     def _backward_concurrent(self, dy, cache, return_dweights):
         """Sparse expert backward with independent expert math overlapped.
 
-        Each expert owns disjoint parameters, so its weight-gradient updates are
-        safe on a private stream.  Token dX and router-weight scatters remain on
-        the caller stream after event waits, avoiding cross-stream write races.
+        Expert inputs are regathered from the original MoE input.  Router
+        weight gradients are derived inside ExpertFFN.backward from H and the
+        down-projection input gradient, avoiding the cached expert output.
         """
         x = cache["x"]
-        weights = cache["weights"]
-        expert_indices = cache["expert_indices"]
         routing_plan = cache.get("routing_plan")
         if routing_plan is None:
-            # Legacy caches keep the original serial implementation.
             return None
 
         batch_size, seq_len, d_model = x.shape
         N = batch_size * seq_len
-        k = weights.shape[-1]
+        k = int(routing_plan.k)
+        x_flat = x.reshape(N, d_model)
         dy_flat = dy.reshape(N, d_model)
 
         with moe_detail_scope("moe.dispatch.bwd_alloc"):
             dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
             dweights_flat = (
-                xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
+                xp.zeros((N, k), dtype=xp.float32) if return_dweights else None
             )
 
-        expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
         active_experts = [
             exp_idx
             for exp_idx in range(self.n_experts)
             if routing_plan.get_assignment_count(exp_idx) > 0
         ]
-        if any(
-            exp_idx not in expert_outputs or exp_idx not in expert_caches
-            for exp_idx in active_experts
-        ):
-            # New optimized forward always caches these.  Retain the serial
-            # fallback for any old/hand-built cache used by tests or tools.
+        if any(exp_idx not in expert_caches for exp_idx in active_experts):
+            # Compatibility fallback for hand-built/legacy caches.
             return None
 
         streams = self._get_expert_streams()
@@ -626,27 +663,30 @@ class Experts:
             token_indices, slot_indices, expert_weights = (
                 routing_plan.get_expert_assignments(exp_idx)
             )
-            expert_out = expert_outputs[exp_idx]["outputs"]
             expert_cache = expert_caches[exp_idx]
             stream = streams[exp_idx % len(streams)]
             with stream:
                 with moe_detail_scope("moe.dispatch.bwd_gather"):
+                    expert_x = x_flat[token_indices]
                     raw_expert_dy = dy_flat[token_indices]
 
-                if return_dweights:
-                    with moe_detail_scope("moe.dispatch.router_wgrad"):
-                        dweight_values = xp.sum(
-                            raw_expert_dy * expert_out, axis=-1
-                        )
-                else:
-                    dweight_values = None
-
-                with moe_detail_scope("moe.dispatch.bwd_weight"):
-                    expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
                 with moe_detail_scope("moe.expert.backward_total"):
-                    expert_dx = self.experts[exp_idx].backward(
-                        expert_dy, expert_cache
-                    )
+                    if return_dweights:
+                        expert_dx, dweight_values = self.experts[exp_idx].backward(
+                            raw_expert_dy,
+                            expert_cache,
+                            x=expert_x,
+                            route_weights=expert_weights,
+                            return_route_dweights=True,
+                        )
+                    else:
+                        expert_dx = self.experts[exp_idx].backward(
+                            raw_expert_dy,
+                            expert_cache,
+                            x=expert_x,
+                            route_weights=expert_weights,
+                        )
+                        dweight_values = None
                 done = xp.cuda.Event()
                 done.record()
 
@@ -668,38 +708,21 @@ class Experts:
             return dx, dweights_flat.reshape(batch_size, seq_len, k)
         return dx
 
-    def forward(self, x, weights, expert_indices, routing_plan: RoutingPlan = None, n_experts: int = None, return_cache=True):
-        """
-        Forward pass through experts with true sparse token-to-expert dispatch.
-        
-        Flattens tokens and dispatches each token to its selected experts.
-        Each expert only processes tokens routed to it (sparse computation).
-        
-        Args:
-            x: Input tensor of shape (B, T, d_model)
-            weights: Expert weights from router, shape (B, T, k)
-            expert_indices: Indices of selected experts, shape (B, T, k)
-            routing_plan: Pre-computed routing plan (optional, creates if not provided)
-            n_experts: Total number of experts (uses self.n_experts if not provided)
-            
-        Returns:
-            y: Weighted combination of expert outputs, shape (B, T, d_model)
-            cache: Dictionary for backward pass
+    def forward(
+        self, x, weights, expert_indices, routing_plan: RoutingPlan = None,
+        n_experts: int = None, return_cache=True
+    ):
+        """Forward pass through sparsely-routed experts.
+
+        0055A's training cache stores only the original MoE input, routing plan,
+        and each expert's expensive G/U activations.  It deliberately avoids
+        retaining gathered expert_x, expert outputs, or the MoE output itself.
         """
         batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
-        N = batch_size * seq_len  # Total tokens
-        
-        # Flatten inputs: [B, T, D] -> [N, D]
+        N = batch_size * seq_len
         x_flat = x.reshape(N, d_model)
-        weights_flat = weights.reshape(N, k)
-        expert_indices_flat = expert_indices.reshape(N, k)
-        
-        # For each (token, slot) pair, we have: token_idx, expert_idx, weight
-        # Total assignments = N * k
 
-        # Determine n_experts and build the routing plan before allocating the
-        # serial output buffer so the concurrent path does not allocate it twice.
         if n_experts is None:
             n_experts = self.n_experts
         if routing_plan is None:
@@ -712,105 +735,84 @@ class Experts:
                 x, weights, expert_indices, routing_plan, return_cache
             )
 
-        # Prepare output: [N, D]
         with moe_detail_scope("moe.dispatch.fwd_alloc"):
             y_flat = xp.zeros((N, d_model), dtype=x.dtype)
 
-        # Cache for expert outputs and caches (to avoid recomputation in backward)
-        expert_outputs = {}  # exp_idx -> {"outputs": [...], "token_indices": [...], "weights": [...]}
-        expert_caches = {}   # exp_idx -> cache from expert.forward()
-        
-        # Group assignments by expert using the routing plan
+        expert_caches = {}
+
         for exp_idx in range(self.n_experts):
-            # Get token, slot, and weight indices for this expert from plan
-            token_indices, slot_indices, expert_weights = routing_plan.get_expert_assignments(exp_idx)
-            
-            if len(token_indices) > 0:
-                # Gather tokens: [n_assigned, D]
-                with moe_detail_scope("moe.dispatch.fwd_gather"):
-                    expert_x = x_flat[token_indices]
+            token_indices, slot_indices, expert_weights = (
+                routing_plan.get_expert_assignments(exp_idx)
+            )
+            if routing_plan.get_assignment_count(exp_idx) == 0:
+                continue
 
-                # Forward through this expert.  Reference inference does not
-                # retain activations or routed outputs needed only by backward.
-                if return_cache:
-                    with moe_detail_scope("moe.expert.forward_total"):
-                        expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
-                    expert_outputs[exp_idx] = {
-                        "outputs": expert_out,
-                        "token_indices": token_indices,
-                        "weights": expert_weights,
-                    }
-                    expert_caches[exp_idx] = expert_cache
-                else:
-                    with moe_detail_scope("moe.expert.forward_total"):
-                        expert_out = self.experts[exp_idx].forward(
-                            expert_x, return_cache=False
-                        )
+            with moe_detail_scope("moe.dispatch.fwd_gather"):
+                expert_x = x_flat[token_indices]
 
-                # Weight and accumulate to output.  token_indices are unique
-                # within a single expert because top-k cannot select the same
-                # expert twice for one token, so atomics are unnecessary.
-                with moe_detail_scope("moe.dispatch.fwd_weight"):
-                    weighted_out = expert_weights[:, xp.newaxis] * expert_out
-                with moe_detail_scope("moe.dispatch.fwd_scatter"):
-                    y_flat[token_indices] += weighted_out
-        
-        # Reshape: [N, D] -> [B, T, D]
+            if return_cache:
+                with moe_detail_scope("moe.expert.forward_total"):
+                    expert_out, expert_cache = self.experts[exp_idx].forward(
+                        expert_x, cache_input=False
+                    )
+                expert_caches[exp_idx] = expert_cache
+            else:
+                with moe_detail_scope("moe.expert.forward_total"):
+                    expert_out = self.experts[exp_idx].forward(
+                        expert_x, return_cache=False
+                    )
+
+            with moe_detail_scope("moe.dispatch.fwd_weight"):
+                weighted_out = expert_weights[:, xp.newaxis] * expert_out
+            with moe_detail_scope("moe.dispatch.fwd_scatter"):
+                y_flat[token_indices] += weighted_out
+
         y = y_flat.reshape(batch_size, seq_len, d_model)
-        
         if not return_cache:
             return y
 
-        # Store cache for backward - includes expert outputs to avoid recomputation
-        cache = {
+        return y, {
             "x": x,
-            "weights": weights,
-            "expert_indices": expert_indices,
-            "y": y,
-            "expert_outputs": expert_outputs,  # For router gradient computation
-            "expert_caches": expert_caches,    # For expert backward pass
-            "routing_plan": routing_plan,      # For backward pass
+            "expert_caches": expert_caches,
+            "routing_plan": routing_plan,
         }
-        
-        return y, cache
 
     def backward(self, dy, cache, return_dweights=False):
-        """
-        Backward pass through sparsely-routed experts.
+        """Backward pass through sparsely-routed experts.
 
-        The routing plan and expert outputs cached in forward are reused here.
-        When ``return_dweights`` is true, the router-weight gradient is
-        computed in this SAME expert loop, avoiding the second dispatch pass
-        that previously lived in ``MoE.backward``.
-
-        Args:
-            dy: Gradient w.r.t. MoE output, shape (B, T, d_model).
-            cache: Dictionary returned by ``Experts.forward``.
-            return_dweights: Also return dL/d(selected routing weights).
-
-        Returns:
-            dx, or ``(dx, dweights)`` when ``return_dweights=True``.
+        Normal 0055A caches reuse the RoutingPlan and G/U activations, regather
+        expert_x from the original MoE input, and derive router-weight gradients
+        without a retained expert-output tensor.  A compatibility fallback is
+        retained for older/hand-built caches that still contain weights and
+        expert indices.
         """
         x = cache["x"]
-        weights = cache["weights"]
-        expert_indices = cache["expert_indices"]
+        routing_plan = cache.get("routing_plan")
         batch_size, seq_len, d_model = x.shape
         N = batch_size * seq_len
-        k = weights.shape[-1]
-
+        x_flat = x.reshape(N, d_model)
         dy_flat = dy.reshape(N, d_model)
-        weights_flat = weights.reshape(N, k)
-        expert_indices_flat = expert_indices.reshape(N, k)
+
+        if routing_plan is not None:
+            k = int(routing_plan.k)
+            weights = None
+            expert_indices = None
+            weights_flat = None
+            expert_indices_flat = None
+        else:
+            weights = cache["weights"]
+            expert_indices = cache["expert_indices"]
+            k = int(weights.shape[-1])
+            weights_flat = weights.reshape(N, k)
+            expert_indices_flat = expert_indices.reshape(N, k)
 
         with moe_detail_scope("moe.dispatch.bwd_alloc"):
             dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
             dweights_flat = (
-                xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
+                xp.zeros((N, k), dtype=xp.float32) if return_dweights else None
             )
 
-        expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
-        routing_plan = cache.get("routing_plan")
 
         if _concurrent_experts_enabled(x.dtype):
             concurrent = self._backward_concurrent(
@@ -819,8 +821,6 @@ class Experts:
             if concurrent is not None:
                 return concurrent
 
-        # Fallback metadata is built lazily only for legacy caches.  The normal
-        # optimized path always receives a RoutingPlan from forward.
         fallback_token_ids = None
         fallback_slot_ids = None
         fallback_weights = None
@@ -846,46 +846,38 @@ class Experts:
                 if len(token_indices) == 0:
                     continue
 
-            # Raw dy is needed for dL/d(router weight).  The expert parameter
-            # gradient receives dy multiplied by the selected routing weight.
             with moe_detail_scope("moe.dispatch.bwd_gather"):
+                expert_x = x_flat[token_indices]
                 raw_expert_dy = dy_flat[token_indices]
 
-            if exp_idx in expert_outputs and exp_idx in expert_caches:
-                expert_out = expert_outputs[exp_idx]["outputs"]
-                expert_cache = expert_caches[exp_idx]
-            else:
-                # Legacy-cache fallback only.  New forward passes always cache
-                # both expert output and activation cache.
-                expert_x = x.reshape(N, d_model)[token_indices]
-                expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+            expert_cache = expert_caches.get(exp_idx)
+            if expert_cache is None:
+                # Legacy/hand-built cache fallback.  This intentionally pays a
+                # recompute cost only outside the normal optimized path.
+                _, expert_cache = self.experts[exp_idx].forward(expert_x)
 
-            if return_dweights:
-                # For y = sum_s w_s E_s(x):
-                #   dL/dw_s = dot(dL/dy, E_s(x)).
-                # The cached output order is exactly the routing-plan order for
-                # this expert, so no token search / xp.where is necessary.
-                with moe_detail_scope("moe.dispatch.router_wgrad"):
-                    dweight_values = xp.sum(
-                        raw_expert_dy * expert_out, axis=-1
+            with moe_detail_scope("moe.expert.backward_total"):
+                if return_dweights:
+                    expert_dx, dweight_values = self.experts[exp_idx].backward(
+                        raw_expert_dy,
+                        expert_cache,
+                        x=expert_x,
+                        route_weights=expert_weights,
+                        return_route_dweights=True,
                     )
                     dweights_flat[token_indices, slot_indices] = dweight_values
+                else:
+                    expert_dx = self.experts[exp_idx].backward(
+                        raw_expert_dy,
+                        expert_cache,
+                        x=expert_x,
+                        route_weights=expert_weights,
+                    )
 
-            with moe_detail_scope("moe.dispatch.bwd_weight"):
-                expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
-            with moe_detail_scope("moe.expert.backward_total"):
-                expert_dx = self.experts[exp_idx].backward(
-                    expert_dy, expert_cache
-                )
-
-            # top-k selection contains each expert at most once per token, so
-            # token_indices are unique within this expert.  The expert loop is
-            # serialized on the same stream; atomics are unnecessary here.
             with moe_detail_scope("moe.dispatch.bwd_scatter"):
                 dx_flat[token_indices] += expert_dx
 
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
-
         if return_dweights:
             return dx, dweights_flat.reshape(batch_size, seq_len, k)
         return dx

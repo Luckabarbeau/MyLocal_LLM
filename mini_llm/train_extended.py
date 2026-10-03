@@ -149,6 +149,19 @@ class ExtendedTrainer:
         self.save_interval = save_interval
         self.profile_steps = max(0, int(profile_steps))
         self._profiled_steps = 0
+
+        # 0055A: optional synchronized VRAM accounting.  This is deliberately
+        # opt-in because memGetInfo()/synchronize() perturb timing.  When
+        # enabled, record the maximum live device/pool usage observed at each
+        # major training boundary across all accumulation microsteps.
+        memory_profile_raw = os.environ.get("MINI_LLM_MEMORY_PROFILE", "0").strip().lower()
+        memory_profile_enabled = memory_profile_raw not in {"0", "false", "off", "no", ""}
+        memory_profile_steps_raw = os.environ.get("MINI_LLM_MEMORY_PROFILE_STEPS")
+        if memory_profile_steps_raw is None:
+            self.memory_profile_steps = 1 if memory_profile_enabled else 0
+        else:
+            self.memory_profile_steps = max(0, int(memory_profile_steps_raw))
+        self._memory_profiled_steps = 0
         self.shard_cache_size = max(1, int(shard_cache_size))
         if self.train_source_shards is not None:
             # Keep at least the current shard for each corpus mapped.  Memmaps
@@ -246,6 +259,17 @@ class ExtendedTrainer:
                 )
         print(f"  Batch size: {batch_size} (effective: {self.effective_batch_size})")
         print(f"  Sequence length: {seq_length}")
+        if getattr(self.optimizer, "moments_offloaded", False):
+            label = (
+                "Optimizer state"
+                if getattr(self.optimizer, "master_weights_offloaded", False)
+                else "Optimizer moments"
+            )
+            print(
+                f"  {label}: pinned RAM "
+                f"({self.optimizer.offload_host_bytes / (1024 ** 3):.2f} GiB host, "
+                f"{self.optimizer.offload_stage_bytes / (1024 ** 2):.0f} MiB GPU staging)"
+            )
         print(f"  Total steps: {total_steps}")
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Log file: {log_file}")
@@ -467,6 +491,64 @@ class ExtendedTrainer:
         
         return inputs, targets
     
+    def _record_memory_snapshot(self, records, label):
+        """Record one synchronized CuPy/device memory snapshot for 0055A."""
+        if self._memory_profiled_steps >= self.memory_profile_steps:
+            return
+        if not hasattr(xp, "cuda"):
+            return
+        synchronize()
+        free_bytes, total_bytes = xp.cuda.runtime.memGetInfo()
+        pool = xp.get_default_memory_pool()
+        snapshot = {
+            "device_used": int(total_bytes - free_bytes),
+            "device_free": int(free_bytes),
+            "device_total": int(total_bytes),
+            "pool_used": int(pool.used_bytes()),
+            "pool_reserved": int(pool.total_bytes()),
+        }
+        # Keep the highest-device-used occurrence for each boundary.  This
+        # naturally captures the worst gradient-accumulation microstep.
+        previous = records.get(label)
+        if previous is None or snapshot["device_used"] > previous["device_used"]:
+            records[label] = snapshot
+
+    @staticmethod
+    def _format_memory_gib(value):
+        return float(value) / float(1024 ** 3)
+
+    def _print_memory_report(self, records):
+        if not records:
+            return
+        print()
+        print(f"VRAM profile: optimizer step {self.step}")
+        print("-" * 96)
+        print(
+            f"{'boundary':34s} {'device used':>12s} {'pool live':>12s} "
+            f"{'pool reserved':>14s} {'device free':>12s} {'non-pool':>10s}"
+        )
+        peak_label = None
+        peak_used = -1
+        for label, snap in records.items():
+            non_pool = max(0, snap["device_used"] - snap["pool_reserved"])
+            print(
+                f"{label:34s} "
+                f"{self._format_memory_gib(snap['device_used']):11.2f}G "
+                f"{self._format_memory_gib(snap['pool_used']):11.2f}G "
+                f"{self._format_memory_gib(snap['pool_reserved']):13.2f}G "
+                f"{self._format_memory_gib(snap['device_free']):11.2f}G "
+                f"{self._format_memory_gib(non_pool):9.2f}G"
+            )
+            if snap["device_used"] > peak_used:
+                peak_label = label
+                peak_used = snap["device_used"]
+        print(
+            f"Observed boundary peak: {self._format_memory_gib(peak_used):.2f} GiB "
+            f"at {peak_label}. (Boundary sampling; short-lived kernel workspaces "
+            "between boundaries can be higher.)"
+        )
+        print()
+
     def compute_val_loss(self) -> float:
         """
         Compute validation loss over multiple steps.
@@ -515,6 +597,11 @@ class ExtendedTrainer:
             synchronize()
             profile_wall_start = time.perf_counter()
 
+        memory_records = {}
+        memory_active = self._memory_profiled_steps < self.memory_profile_steps
+        if memory_active:
+            self._record_memory_snapshot(memory_records, "step_start")
+
         # Accumulate gradients over multiple steps
         # Use Python floats for loss accumulation (minimal overhead)
         # The main optimization is avoiding host-device sync during gradient computation
@@ -541,6 +628,8 @@ class ExtendedTrainer:
             finite_trace = [] if trace_active else None
             with performance_scope("train.model_forward"):
                 logits, cache = self.model.forward(inputs, finite_trace=finite_trace)
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_model_forward")
 
             if finite_trace is not None:
                 final_ok = bool(finite_trace[-1][1].item())
@@ -567,10 +656,21 @@ class ExtendedTrainer:
                     logits, targets, return_device_loss=True
                 )
             loss_sum_backend += loss_backend
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_loss_forward")
+
+            # The loss cache owns everything needed for backward.  In ordinary
+            # BF16 CE this immediately releases the separate logits allocation;
+            # in 0055A in-place CE it merely drops the redundant Python alias.
+            del logits
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_logits_release")
             
             # Backward pass - apply loss scaling to d_logits before backward
             with performance_scope("train.loss_backward"):
                 d_logits = self.model.backward_loss(loss_cache)
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_loss_backward")
             
             # Scale the gradient by loss_scale for mixed precision (trainer owns it)
             if self.loss_scale != 1.0:
@@ -578,7 +678,21 @@ class ExtendedTrainer:
             
             with performance_scope("train.model_backward"):
                 self.model.backward(d_logits, cache)
-        
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_model_backward")
+
+            # Critical 0055A lifetime cleanup: Python evaluates the RHS of the
+            # next ``logits, cache = model.forward(...)`` before replacing the
+            # old locals.  Without these deletes, the previous microbatch's
+            # entire backward cache and CE gradient can stay alive during the
+            # next microbatch forward, artificially doubling activation peak.
+            del cache, loss_cache, d_logits, inputs, targets
+            if memory_active:
+                self._record_memory_snapshot(memory_records, "after_microbatch_release")
+
+        if memory_active:
+            self._record_memory_snapshot(memory_records, "after_grad_accum")
+
         # Average loss - only sync once at the end
         avg_loss = float(_array_to_float(loss_sum_backend / self.grad_accum_steps))
         if not np.isfinite(avg_loss):
@@ -615,13 +729,21 @@ class ExtendedTrainer:
         # Update parameters (only once per accumulated batch)
         with performance_scope("train.optimizer_step"):
             self.optimizer.step(lr=lr)
+        if memory_active:
+            self._record_memory_snapshot(memory_records, "after_optimizer_step")
         if hasattr(self.model, "refresh_compute_buffers"):
             with performance_scope("train.refresh_compute_buffers"):
                 self.model.refresh_compute_buffers()
         with performance_scope("train.zero_grad"):
             self.optimizer.zero_grad()
+        if memory_active:
+            self._record_memory_snapshot(memory_records, "after_zero_grad")
         
         self.step += 1
+
+        if memory_active:
+            self._print_memory_report(memory_records)
+            self._memory_profiled_steps += 1
 
         if profile_active:
             synchronize()
@@ -728,10 +850,23 @@ class ExtendedTrainer:
         print(f"Effective batch size: {self.effective_batch_size}")
         
         start_time = time.time()
+        # 0053F: precise per-optimizer-step timing. train_step() returns only
+        # after grad_norm is materialized on the host, so the CUDA stream has
+        # already been synchronized at this boundary; perf_counter therefore
+        # measures the completed optimizer step without adding another sync.
+        recent_step_seconds = []
+        tokens_per_optimizer_step = (
+            self.batch_size * self.seq_length * self.grad_accum_steps
+        )
         
         for step in range(num_steps):
             # Train step
+            precise_step_start = time.perf_counter()
             loss, grad_norm = self.train_step()
+            precise_step_seconds = time.perf_counter() - precise_step_start
+            recent_step_seconds.append(precise_step_seconds)
+            if len(recent_step_seconds) > 10:
+                del recent_step_seconds[0]
             losses.append(loss)
             
             # train_step() increments self.step after a successful optimizer
@@ -750,13 +885,23 @@ class ExtendedTrainer:
                 elapsed = time.time() - start_time
                 steps_per_sec = (self.step - start_step) / elapsed
                 lr = self.optimizer.lr
+                precise_tokens_per_sec = (
+                    tokens_per_optimizer_step / max(precise_step_seconds, 1e-12)
+                )
+                rolling_step_seconds = float(np.mean(recent_step_seconds))
+                rolling_tokens_per_sec = (
+                    tokens_per_optimizer_step / max(rolling_step_seconds, 1e-12)
+                )
                 
                 print(
                     f"Step {self.step}/{num_steps + start_step}: "
                     f"loss={avg_loss:.4f}, "
                     f"lr={lr:.6f}, "
                     f"grad_norm={grad_norm:.4f}, "
-                    f"{steps_per_sec:.2f} steps/sec"
+                    f"{steps_per_sec:.2f} steps/sec, "
+                    f"step_time={precise_step_seconds * 1000.0:.1f} ms, "
+                    f"tok/s={precise_tokens_per_sec:,.0f}, "
+                    f"tok/s_10={rolling_tokens_per_sec:,.0f}"
                 )
                 
                 # Log to CSV
@@ -767,6 +912,9 @@ class ExtendedTrainer:
                     "grad_norm": grad_norm,
                     "val_loss": val_loss if val_loss is not None else "",
                     "steps_per_sec": steps_per_sec,
+                    "step_time_ms": precise_step_seconds * 1000.0,
+                    "tokens_per_sec": precise_tokens_per_sec,
+                    "tokens_per_sec_rolling_10": rolling_tokens_per_sec,
                 })
             
             # Save using the completed optimizer-step count.

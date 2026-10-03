@@ -176,7 +176,6 @@ class DecoderLanguageModel:
 
         cache = {
             "token_ids": token_ids,
-            "embedding_input": output_proj_input,  # Input to logits projection
             "embed_cache": embed_cache,
             "final_norm_cache": final_norm_cache,
             "output_proj_cache": output_proj_cache,
@@ -229,9 +228,9 @@ class DecoderLanguageModel:
         Returns:
             None (gradients stored in parameter.grad)
         """
-        # Get intermediate values from cache
-        x = cache["embedding_input"]  # Final normalized state (input to logits)
-        token_ids = cache["token_ids"]
+        # Consume one-shot training caches destructively so processed layers can
+        # release their activations during backward instead of all surviving
+        # until the full model backward returns.
         block_caches = cache["block_caches"]
         
         # BF16 has FP32-like exponent range, so the FP32 cross-entropy gradient
@@ -242,23 +241,30 @@ class DecoderLanguageModel:
             d_logits.astype(self.dtype, copy=False)
             if is_bfloat16_dtype(self.dtype) else d_logits
         )
+        output_proj_cache = cache.pop("output_proj_cache")
         with performance_scope("model.output_projection.backward"):
-            dx = self.output_proj.backward(d_logits_compute, cache["output_proj_cache"])
-        
-        # Backward through final RMSNorm
+            dx = self.output_proj.backward(d_logits_compute, output_proj_cache)
+        del output_proj_cache, d_logits_compute
+
+        # Backward through final RMSNorm.
+        final_norm_cache = cache.pop("final_norm_cache")
         with performance_scope("model.final_norm.backward"):
-            dx = self.final_norm.backward(dx, cache["final_norm_cache"])
-        
-        # Backward through transformer blocks (in reverse order)
-        for layer_idx, (block, block_cache) in enumerate(
-            zip(reversed(self.blocks), reversed(block_caches))
-        ):
-            original_idx = len(self.blocks) - 1 - layer_idx
+            dx = self.final_norm.backward(dx, final_norm_cache)
+        del final_norm_cache
+
+        # Backward through transformer blocks in reverse order.  Pop each cache
+        # as soon as it is consumed so layer-7 activations need not remain live
+        # while layer-6/5/... backward workspaces are allocated.
+        for original_idx in range(len(self.blocks) - 1, -1, -1):
+            block_cache = block_caches.pop()
             with performance_scope(f"model.layer{original_idx}.backward"):
-                dx = block.backward(dx, block_cache)
-        
-        # Backward through embedding - this computes the gradient for W_E
+                dx = self.blocks[original_idx].backward(dx, block_cache)
+            del block_cache
+
+        # Backward through embedding - this computes the gradient for W_E.
+        embed_cache = cache.pop("embed_cache")
         with performance_scope("model.embedding.backward"):
-            self.embedding.backward(dx, cache["embed_cache"])
+            self.embedding.backward(dx, embed_cache)
+        del embed_cache
         
 

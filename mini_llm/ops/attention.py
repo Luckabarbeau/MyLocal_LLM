@@ -50,6 +50,18 @@ def _packed_qkv_strict():
     return raw not in {"0", "false", "off", "no", ""}
 
 
+def _compact_packed_v_enabled():
+    """Copy packed-QKV V into compact storage so the large QKV backing can die.
+
+    Packed Q/K are immediately transformed by RoPE into independent tensors,
+    while V would otherwise remain a strided view that keeps the full packed
+    [Q,K,V] projection alive until backward.  The compact copy is tiny compared
+    with the retained backing allocation and is therefore enabled by default.
+    """
+    raw = os.environ.get("MINI_LLM_COMPACT_PACKED_V", "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
 _PACKED_QKV_BF16_PACK_KERNEL = None
 _PACKED_QKV_BF16_PACK_DISABLED = False
 
@@ -821,6 +833,17 @@ class GQAAttention:
         with performance_scope("attention.rope.forward"):
             q, q_rope_cache = rope_forward(q_pre, self.rope_base)
             k, k_rope_cache = rope_forward(k_pre, self.rope_base)
+
+        # 0055A: with packed QKV, V is a narrow strided view into the much
+        # larger packed projection.  Q and K already have independent RoPE
+        # outputs, so keeping that V view alive unnecessarily pins the entire
+        # QKV backing allocation in every layer until backward.  Copy only V
+        # (~1/6 of the packed tensor for the production GQA geometry) and let
+        # the original packed storage be reclaimed.
+        if _packed_qkv_enabled() and _compact_packed_v_enabled():
+            with performance_scope("attention.qkv_projection.forward.compact_v"):
+                v = xp.array(v, copy=True, order="C")
+            del qkv, q_pre, k_pre
 
         if self.attention_config is not None:
             context, pattern_caches, routing = self._mixed_context_forward(

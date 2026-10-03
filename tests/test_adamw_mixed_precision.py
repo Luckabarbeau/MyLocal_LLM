@@ -252,3 +252,40 @@ def test_optimized_adam_update_matches_reference_formula():
         np.testing.assert_allclose(
             np.asarray(opt.master_weights[0]), ref_w, rtol=2e-6, atol=2e-7
         )
+
+
+def test_restore_moments_matches_shapes():
+    p = Parameter(
+        data=xp.asarray([[1.0, 2.0]], dtype="float32"),
+        name="restore_moments", decay=True,
+    )
+    opt = AdamW([p], lr=1e-3)
+    m = np.asarray([[0.25, -0.5]], dtype=np.float32)
+    v = np.asarray([[0.1, 0.2]], dtype=np.float32)
+    assert opt.restore_moments(0, m, v)
+    np.testing.assert_allclose(np.asarray(opt.m[0]), m)
+    np.testing.assert_allclose(np.asarray(opt.v[0]), v)
+
+
+def test_restore_moments_rejects_shape_mismatch():
+    p = Parameter(
+        data=xp.asarray([[1.0, 2.0]], dtype="float32"),
+        name="restore_moments_shape", decay=True,
+    )
+    opt = AdamW([p], lr=1e-3)
+    bad = np.asarray([0.1], dtype=np.float32)
+    assert not opt.restore_moments(0, bad, bad)
+
+
+def test_full_optimizer_offload_mode_is_reference_backend_safe(monkeypatch):
+    """0055C full offload is a no-op on NumPy and remains numerically usable."""
+    monkeypatch.setenv("MINI_LLM_OPTIMIZER_OFFLOAD", "full")
+    p = Parameter(
+        data=xp.asarray([[1.0, -2.0]], dtype="float32"),
+        name="full_offload_reference",
+        decay=True,
+    )
+    opt = AdamW([p], lr=1e-3)
+    p.grad = xp.asarray([[0.25, -0.5]], dtype="float32")
+    opt.step()
+    assert np.all(np.isfinite(np.asarray(p.data)))

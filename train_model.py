@@ -589,14 +589,6 @@ def main():
         loaded_params.clear()
         del loaded_params
 
-        # The optimizer created below initializes its FP32 master weights from
-        # the model parameters we just restored, which is exactly the desired
-        # checkpoint value.  The separately loaded checkpoint master-weight
-        # dictionary is therefore redundant and can be released before the
-        # trainer allocates its own optimizer state.
-        if optimizer_state is not None:
-            optimizer_state.pop("master_weights", None)
-
         # Return now-unreferenced CuPy blocks to the device before constructing
         # the trainer.  NumPy has no memory-pool API, so this is a no-op there.
         get_pool = getattr(xp, "get_default_memory_pool", None)
@@ -720,54 +712,74 @@ def main():
                 if name in trainer.val_source_batch_counts:
                     trainer.val_source_batch_counts[name] = int(value)
 
-    if stored_optimizer_state is not None and "m" in stored_optimizer_state:
+    if stored_optimizer_state is not None:
         trainer.optimizer.step_index = int(
             stored_optimizer_state.get("step", start_step)
         )
-        m_dict = stored_optimizer_state["m"]
-        v_dict = stored_optimizer_state.get("v", {})
-        saved_m_names = set(m_dict)
         param_to_idx = {
             p.name: i for i, p in enumerate(trainer.model.parameters())
         }
-        restored_count = 0
+
+        # 0055C: restore exact FP32 master weights as well as moments.  When
+        # optimizer offload is active, load_checkpoint keeps these arrays on
+        # the host so resume never materializes a second optimizer-sized GPU
+        # copy.
+        master_dict = stored_optimizer_state.get("master_weights", {})
+        restored_masters = 0
         for p in trainer.model.parameters():
-            if p.name in m_dict and p.name in v_dict:
-                idx = param_to_idx[p.name]
-                # Pop before copying so each temporary checkpoint array becomes
-                # reclaimable as soon as this parameter has been restored.
-                m_arr = xp.asarray(m_dict.pop(p.name))
-                v_arr = xp.asarray(v_dict.pop(p.name))
-                if m_arr.shape == trainer.optimizer.m[idx].shape:
-                    trainer.optimizer.m[idx][...] = m_arr
-                    trainer.optimizer.v[idx][...] = v_arr
-                    restored_count += 1
-                else:
-                    print(
-                        f"WARNING: Shape mismatch for {p.name}: "
-                        f"stored={m_arr.shape}, current={trainer.optimizer.m[idx].shape}"
-                    )
-                del m_arr, v_arr
-        print(f"Restored optimizer state for {restored_count} parameters")
-        missing = [
-            p.name for p in trainer.model.parameters() if p.name not in saved_m_names
-        ]
-        if missing:
-            suffix = "..." if len(missing) > 5 else ""
-            print(
-                f"WARNING: {len(missing)} parameters not found in saved optimizer "
-                f"state: {missing[:5]}{suffix}"
-            )
+            value = master_dict.pop(p.name, None)
+            if value is None:
+                continue
+            idx = param_to_idx[p.name]
+            if trainer.optimizer.restore_master_weight(idx, value):
+                restored_masters += 1
+            else:
+                print(
+                    f"WARNING: Master-weight shape mismatch for {p.name}: "
+                    f"stored={value.shape}, "
+                    f"current={trainer.optimizer.master_weights[idx].shape}"
+                )
+            del value
+        if master_dict is not None:
+            master_dict.clear()
+        if restored_masters:
+            print(f"Restored exact FP32 master weights for {restored_masters} parameters")
+
+        if "m" in stored_optimizer_state:
+            m_dict = stored_optimizer_state["m"]
+            v_dict = stored_optimizer_state.get("v", {})
+            saved_m_names = set(m_dict)
+            restored_count = 0
+            for p in trainer.model.parameters():
+                if p.name in m_dict and p.name in v_dict:
+                    idx = param_to_idx[p.name]
+                    m_value = m_dict.pop(p.name)
+                    v_value = v_dict.pop(p.name)
+                    if trainer.optimizer.restore_moments(idx, m_value, v_value):
+                        restored_count += 1
+                    else:
+                        print(
+                            f"WARNING: Shape mismatch for {p.name}: "
+                            f"stored={m_value.shape}, current={trainer.optimizer.m[idx].shape}"
+                        )
+                    del m_value, v_value
+            print(f"Restored optimizer state for {restored_count} parameters")
+            missing = [
+                p.name for p in trainer.model.parameters() if p.name not in saved_m_names
+            ]
+            if missing:
+                suffix = "..." if len(missing) > 5 else ""
+                print(
+                    f"WARNING: {len(missing)} parameters not found in saved optimizer "
+                    f"state: {missing[:5]}{suffix}"
+                )
+            m_dict.clear()
+            v_dict.clear()
 
         # No checkpoint optimizer arrays are needed after the in-place restore.
-        # Clearing both the nested dictionaries and their parent removes the
-        # duplicate GPU state before the first forward pass.
-        m_dict.clear()
-        v_dict.clear()
         stored_optimizer_state.clear()
         stored_optimizer_state = None
         optimizer_state = None
-        del m_dict, v_dict
         get_pool = getattr(xp, "get_default_memory_pool", None)
         if get_pool is not None:
             get_pool().free_all_blocks()

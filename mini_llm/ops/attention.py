@@ -1,6 +1,9 @@
 import os
+import numpy as np
 
-from ..backend import xp, is_low_precision_dtype, is_bfloat16_dtype
+from ..backend import (
+    xp, BACKEND_NAME, is_low_precision_dtype, is_bfloat16_dtype,
+)
 from ..init import matrix_parameter
 from .rope import rope_forward, rope_backward, clear_rope_cache
 from .attention_selection import (
@@ -34,6 +37,146 @@ def _bf16_mixed_context_enabled(dtype):
         return False
     raw = os.environ.get("MINI_LLM_BF16_MIXED_CONTEXT", "0").strip().lower()
     return raw not in {"0", "false", "off", "no"}
+
+
+def _packed_qkv_enabled():
+    """Use one packed QKV projection GEMM instead of three separate GEMMs."""
+    raw = os.environ.get("MINI_LLM_PACKED_QKV", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _packed_qkv_strict():
+    raw = os.environ.get("MINI_LLM_PACKED_QKV_STRICT", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no", ""}
+
+
+_PACKED_QKV_BF16_PACK_KERNEL = None
+_PACKED_QKV_BF16_PACK_DISABLED = False
+
+
+def _get_packed_qkv_bf16_pack_kernel():
+    """Compile/cache 0052B inverse-RoPE + BF16 QKV packing kernel."""
+    global _PACKED_QKV_BF16_PACK_KERNEL, _PACKED_QKV_BF16_PACK_DISABLED
+    if BACKEND_NAME != "cupy" or _PACKED_QKV_BF16_PACK_DISABLED:
+        return None
+    if _PACKED_QKV_BF16_PACK_KERNEL is not None:
+        return _PACKED_QKV_BF16_PACK_KERNEL
+
+    code = r"""
+    #include <cuda_bf16.h>
+
+    extern "C" __global__
+    void inverse_rope_pack_qkv_bf16(
+        const float* __restrict__ dq,
+        const float* __restrict__ dk,
+        const float* __restrict__ dv,
+        const __nv_bfloat16* __restrict__ cos_table,
+        const __nv_bfloat16* __restrict__ sin_table,
+        __nv_bfloat16* __restrict__ out,
+        int rows, int seq_len, int q_width, int kv_width, int d_head)
+    {
+        const long long total_width = (long long)q_width + 2LL * kv_width;
+        const long long total = (long long)rows * total_width;
+        const int half = d_head >> 1;
+
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < total;
+             idx += (long long)blockDim.x * gridDim.x) {
+            const int row = (int)(idx / total_width);
+            const int col = (int)(idx - (long long)row * total_width);
+            const int pos = row % seq_len;
+            float value;
+
+            if (col < q_width) {
+                const int local = col;
+                const int lane = local % d_head;
+                const int pair = lane >> 1;
+                const int pair_base = local - (lane & 1);
+                const long long base = (long long)row * q_width + pair_base;
+                const float a = dq[base];
+                const float b = dq[base + 1];
+                const long long trig = (long long)pos * half + pair;
+                const float c = __bfloat162float(cos_table[trig]);
+                const float s = __bfloat162float(sin_table[trig]);
+                value = (lane & 1) ? (-a * s + b * c) : (a * c + b * s);
+            } else if (col < q_width + kv_width) {
+                const int local = col - q_width;
+                const int lane = local % d_head;
+                const int pair = lane >> 1;
+                const int pair_base = local - (lane & 1);
+                const long long base = (long long)row * kv_width + pair_base;
+                const float a = dk[base];
+                const float b = dk[base + 1];
+                const long long trig = (long long)pos * half + pair;
+                const float c = __bfloat162float(cos_table[trig]);
+                const float s = __bfloat162float(sin_table[trig]);
+                value = (lane & 1) ? (-a * s + b * c) : (a * c + b * s);
+            } else {
+                const int local = col - q_width - kv_width;
+                value = dv[(long long)row * kv_width + local];
+            }
+            out[idx] = __float2bfloat16_rn(value);
+        }
+    }
+    """
+    try:
+        _PACKED_QKV_BF16_PACK_KERNEL = xp.RawKernel(
+            code,
+            "inverse_rope_pack_qkv_bf16",
+            options=("--std=c++11",),
+        )
+    except Exception:
+        _PACKED_QKV_BF16_PACK_DISABLED = True
+        if _packed_qkv_strict():
+            raise
+        return None
+    return _PACKED_QKV_BF16_PACK_KERNEL
+
+
+def _fused_inverse_rope_pack_bf16(dq, dk, dv, rope_cache, *, seq_len, d_head):
+    """Return packed BF16 [dQ_pre|dK_pre|dV], or None for fallback."""
+    if BACKEND_NAME != "cupy":
+        return None
+    if dq.dtype != xp.float32 or dk.dtype != xp.float32 or dv.dtype != xp.float32:
+        return None
+    if any(not a.flags.c_contiguous for a in (dq, dk, dv)):
+        return None
+    cos = rope_cache["cos"]
+    sin = rope_cache["sin"]
+    if not is_bfloat16_dtype(cos.dtype) or not is_bfloat16_dtype(sin.dtype):
+        return None
+    if not cos.flags.c_contiguous or not sin.flags.c_contiguous:
+        return None
+
+    rows = int(dq.shape[0] * dq.shape[1])
+    q_width = int(dq.shape[2] * dq.shape[3])
+    kv_width = int(dk.shape[2] * dk.shape[3])
+    if tuple(dv.shape) != tuple(dk.shape) or int(dq.shape[3]) != int(d_head):
+        return None
+    out = xp.empty((rows, q_width + 2 * kv_width), dtype=cos.dtype)
+    kernel = _get_packed_qkv_bf16_pack_kernel()
+    if kernel is None:
+        return None
+    total = int(out.size)
+    threads = 256
+    blocks = min((total + threads - 1) // threads, 65535)
+    try:
+        kernel(
+            (blocks,),
+            (threads,),
+            (
+                dq, dk, dv, cos, sin, out,
+                np.int32(rows), np.int32(seq_len), np.int32(q_width),
+                np.int32(kv_width), np.int32(d_head),
+            ),
+        )
+    except Exception:
+        global _PACKED_QKV_BF16_PACK_DISABLED
+        _PACKED_QKV_BF16_PACK_DISABLED = True
+        if _packed_qkv_strict():
+            raise
+        return None
+    return out
 
 
 def softmax_forward(x, axis=-1, logit_multiplier=1.0):
@@ -106,6 +249,17 @@ class GQAAttention:
         self.Wo = matrix_parameter(
             (n_q_heads * d_head, d_model), output_std, rng, f"{name}.Wo", dtype=dtype
         )
+
+        # 0052: packed QKV is a non-parameter compute buffer.  Wq/Wk/Wv remain
+        # the canonical trainable/checkpoint parameters so optimizer/checkpoint
+        # compatibility is unchanged.  The buffer is refreshed once after each
+        # optimizer update instead of being rebuilt for every microbatch.
+        self._packed_qkv_weight = None
+        self._packed_qkv_valid = False
+        self._packed_qkv_grad = None
+        self._q_width = self.n_q_heads * self.d_head
+        self._kv_width = self.n_kv_heads * self.d_head
+        self._qkv_width = self._q_width + 2 * self._kv_width
 
         if self.attention_config is not None:
             if len(self.attention_config.heads) != self.n_q_heads:
@@ -223,6 +377,65 @@ class GQAAttention:
     def zero_grad(self):
         for p in self.parameters():
             p.zero_grad()
+
+    def _ensure_packed_qkv_grad_views(self):
+        """Make Wq/Wk/Wv.grad non-overlapping views of one packed buffer.
+
+        This is purely a storage/layout change.  The three Parameter objects
+        remain canonical for checkpointing and the optimizer, but packed QKV
+        backward can now accumulate one contiguous dW matrix instead of
+        splitting/copying it back into three independent arrays.
+        """
+        grad_dtype = self.Wq.grad.dtype
+        shape = (self.d_model, self._qkv_width)
+        if (
+            self._packed_qkv_grad is None
+            or self._packed_qkv_grad.shape != shape
+            or self._packed_qkv_grad.dtype != grad_dtype
+        ):
+            packed = xp.zeros(shape, dtype=grad_dtype)
+            q_end = self._q_width
+            k_end = q_end + self._kv_width
+            packed[:, :q_end] = self.Wq.grad
+            packed[:, q_end:k_end] = self.Wk.grad
+            packed[:, k_end:] = self.Wv.grad
+            self._packed_qkv_grad = packed
+        q_end = self._q_width
+        k_end = q_end + self._kv_width
+        self.Wq.grad = self._packed_qkv_grad[:, :q_end]
+        self.Wk.grad = self._packed_qkv_grad[:, q_end:k_end]
+        self.Wv.grad = self._packed_qkv_grad[:, k_end:]
+
+    def refresh_compute_buffers(self):
+        """Refresh non-parameter compute buffers after a parameter update.
+
+        The packed QKV matrix is intentionally not a Parameter.  That keeps
+        checkpoint names, optimizer moments, and master-weight state exactly
+        the same as the reference Wq/Wk/Wv implementation.
+        """
+        if not _packed_qkv_enabled():
+            self._packed_qkv_valid = False
+            return
+        self._ensure_packed_qkv_grad_views()
+        if (
+            self._packed_qkv_weight is None
+            or self._packed_qkv_weight.shape != (self.d_model, self._qkv_width)
+            or self._packed_qkv_weight.dtype != self.Wq.data.dtype
+        ):
+            self._packed_qkv_weight = xp.empty(
+                (self.d_model, self._qkv_width), dtype=self.Wq.data.dtype
+            )
+        q_end = self._q_width
+        k_end = q_end + self._kv_width
+        self._packed_qkv_weight[:, :q_end] = self.Wq.data
+        self._packed_qkv_weight[:, q_end:k_end] = self.Wk.data
+        self._packed_qkv_weight[:, k_end:] = self.Wv.data
+        self._packed_qkv_valid = True
+
+    def _get_packed_qkv_weight(self):
+        if not self._packed_qkv_valid or self._packed_qkv_weight is None:
+            self.refresh_compute_buffers()
+        return self._packed_qkv_weight
 
     @classmethod
     def clear_caches(cls):
@@ -510,27 +723,63 @@ class GQAAttention:
 
     def _projection_backward(self, x, dq, dk, dv, cache):
         b, t, _ = x.shape
-        dq_pre = rope_backward(dq, cache["q_rope_cache"])
-        dk_pre = rope_backward(dk, cache["k_rope_cache"])
-
         x2 = x.reshape(-1, self.d_model)
-        dq2 = dq_pre.reshape(-1, self.n_q_heads * self.d_head)
-        dk2 = dk_pre.reshape(-1, self.n_kv_heads * self.d_head)
-        dv2 = dv.reshape(-1, self.n_kv_heads * self.d_head)
-        if is_bfloat16_dtype(x.dtype):
-            dq2 = dq2.astype(x.dtype, copy=False)
-            dk2 = dk2.astype(x.dtype, copy=False)
-            dv2 = dv2.astype(x.dtype, copy=False)
 
-        self.Wq.grad += x2.T @ dq2
-        self.Wk.grad += x2.T @ dk2
-        self.Wv.grad += x2.T @ dv2
+        if _packed_qkv_enabled():
+            self._ensure_packed_qkv_grad_views()
+            dqkv2 = None
+            if is_bfloat16_dtype(x.dtype):
+                with performance_scope("attention.qkv_projection.backward.fused_rope_pack"):
+                    dqkv2 = _fused_inverse_rope_pack_bf16(
+                        dq,
+                        dk,
+                        dv,
+                        cache["q_rope_cache"],
+                        seq_len=t,
+                        d_head=self.d_head,
+                    )
 
-        dx2 = (
-            dq2 @ self.Wq.data.T
-            + dk2 @ self.Wk.data.T
-            + dv2 @ self.Wv.data.T
-        )
+            if dqkv2 is None:
+                # Portable/reference fallback: preserve the 0052 semantics.
+                dq_pre = rope_backward(dq, cache["q_rope_cache"])
+                dk_pre = rope_backward(dk, cache["k_rope_cache"])
+                dq2 = dq_pre.reshape(-1, self._q_width)
+                dk2 = dk_pre.reshape(-1, self._kv_width)
+                dv2 = dv.reshape(-1, self._kv_width)
+                if is_bfloat16_dtype(x.dtype):
+                    dq2 = dq2.astype(x.dtype, copy=False)
+                    dk2 = dk2.astype(x.dtype, copy=False)
+                    dv2 = dv2.astype(x.dtype, copy=False)
+                with performance_scope("attention.qkv_projection.backward.pack"):
+                    dqkv2 = xp.concatenate((dq2, dk2, dv2), axis=1)
+
+            with performance_scope("attention.qkv_projection.backward.wgrad"):
+                dw_packed = x2.T @ dqkv2
+            with performance_scope("attention.qkv_projection.backward.grad_accumulate"):
+                self._packed_qkv_grad += dw_packed
+
+            with performance_scope("attention.qkv_projection.backward.dx"):
+                dx2 = dqkv2 @ self._get_packed_qkv_weight().T
+        else:
+            dq_pre = rope_backward(dq, cache["q_rope_cache"])
+            dk_pre = rope_backward(dk, cache["k_rope_cache"])
+            dq2 = dq_pre.reshape(-1, self._q_width)
+            dk2 = dk_pre.reshape(-1, self._kv_width)
+            dv2 = dv.reshape(-1, self._kv_width)
+            if is_bfloat16_dtype(x.dtype):
+                dq2 = dq2.astype(x.dtype, copy=False)
+                dk2 = dk2.astype(x.dtype, copy=False)
+                dv2 = dv2.astype(x.dtype, copy=False)
+
+            self.Wq.grad += x2.T @ dq2
+            self.Wk.grad += x2.T @ dk2
+            self.Wv.grad += x2.T @ dv2
+
+            dx2 = (
+                dq2 @ self.Wq.data.T
+                + dk2 @ self.Wk.data.T
+                + dv2 @ self.Wv.data.T
+            )
         return dx2.reshape(b, t, self.d_model)
 
     def forward(self, x, return_cache=True):
@@ -544,15 +793,30 @@ class GQAAttention:
         # efficiently, but its generic N-D @ 2-D path currently fails on BF16.
         x2 = x.reshape(-1, self.d_model)
         with performance_scope("attention.qkv_projection.forward"):
-            q_pre = (x2 @ self.Wq.data).reshape(
-                b, t, self.n_q_heads, self.d_head
-            )
-            k_pre = (x2 @ self.Wk.data).reshape(
-                b, t, self.n_kv_heads, self.d_head
-            )
-            v = (x2 @ self.Wv.data).reshape(
-                b, t, self.n_kv_heads, self.d_head
-            )
+            if _packed_qkv_enabled():
+                with performance_scope("attention.qkv_projection.forward.packed_gemm"):
+                    qkv = x2 @ self._get_packed_qkv_weight()
+                q_end = self._q_width
+                k_end = q_end + self._kv_width
+                q_pre = qkv[:, :q_end].reshape(
+                    b, t, self.n_q_heads, self.d_head
+                )
+                k_pre = qkv[:, q_end:k_end].reshape(
+                    b, t, self.n_kv_heads, self.d_head
+                )
+                v = qkv[:, k_end:].reshape(
+                    b, t, self.n_kv_heads, self.d_head
+                )
+            else:
+                q_pre = (x2 @ self.Wq.data).reshape(
+                    b, t, self.n_q_heads, self.d_head
+                )
+                k_pre = (x2 @ self.Wk.data).reshape(
+                    b, t, self.n_kv_heads, self.d_head
+                )
+                v = (x2 @ self.Wv.data).reshape(
+                    b, t, self.n_kv_heads, self.d_head
+                )
 
         with performance_scope("attention.rope.forward"):
             q, q_rope_cache = rope_forward(q_pre, self.rope_base)

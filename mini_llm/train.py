@@ -198,6 +198,8 @@ class MiniTrainer:
         
         # Update parameters
         self.optimizer.step(lr=lr)
+        if hasattr(self.model, "refresh_compute_buffers"):
+            self.model.refresh_compute_buffers()
         self.optimizer.zero_grad()
         
         self.step += 1

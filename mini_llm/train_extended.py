@@ -615,6 +615,9 @@ class ExtendedTrainer:
         # Update parameters (only once per accumulated batch)
         with performance_scope("train.optimizer_step"):
             self.optimizer.step(lr=lr)
+        if hasattr(self.model, "refresh_compute_buffers"):
+            with performance_scope("train.refresh_compute_buffers"):
+                self.model.refresh_compute_buffers()
         with performance_scope("train.zero_grad"):
             self.optimizer.zero_grad()
         

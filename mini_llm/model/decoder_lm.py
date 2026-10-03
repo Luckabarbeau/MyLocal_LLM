@@ -106,6 +106,12 @@ class DecoderLanguageModel:
         """Zero out all gradients."""
         for p in self.parameters():
             p.zero_grad()
+
+    def refresh_compute_buffers(self):
+        """Refresh derived compute buffers after trainable weights change."""
+        for block in self.blocks:
+            if hasattr(block, "refresh_compute_buffers"):
+                block.refresh_compute_buffers()
     
     def forward(self, token_ids, finite_trace=None, return_cache=True):
         """

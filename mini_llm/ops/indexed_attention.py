@@ -14,6 +14,14 @@ import numpy as np
 from ..backend import xp, BACKEND_NAME, is_bfloat16_dtype, is_low_precision_dtype
 from ..performance_profiler import local_detail_scope
 from .attention_selection import KeySelectionPlan
+from .cublas_grouped import (
+    RowMajorGemmGroup,
+    RowMajorGemmProblem,
+    available as _cublas_grouped_available,
+    grouped_bf16_gemm as _cublas_grouped_bf16_gemm,
+    is_enabled as _cublas_grouped_local_enabled,
+    strict_enabled as _cublas_grouped_strict_enabled,
+)
 
 
 def _bf16_mixed_context_enabled(dtype):
@@ -2190,6 +2198,393 @@ def indexed_attention_backward(dcontext, cache):
 
 
 
+
+
+_LOCAL_GROUPED_STORE_MODULE = None
+_LOCAL_GROUPED_STORE_DISABLED = False
+
+
+def _get_local_grouped_store_module():
+    """Compile the tiny BF16 -> FP32 gradient scatter/reduction kernel."""
+    global _LOCAL_GROUPED_STORE_MODULE, _LOCAL_GROUPED_STORE_DISABLED
+    if BACKEND_NAME != "cupy" or _LOCAL_GROUPED_STORE_DISABLED:
+        return None
+    if _LOCAL_GROUPED_STORE_MODULE is not None:
+        return _LOCAL_GROUPED_STORE_MODULE
+    code = r"""
+    __device__ __forceinline__ float local_bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    extern "C" __global__
+    void local_grouped_store_grads(
+        const unsigned short* dq_tmp,
+        const unsigned short* dk_tmp,
+        const unsigned short* dv_tmp,
+        float* dq, float* dk, float* dv,
+        const long long* kv_map,
+        int batch, int q_heads, int kv_heads,
+        int q_count, int k_count, int d_head, int seq_len,
+        int q_start, int key_start, float scale) {
+        long long n_dq = (long long)batch * q_heads * q_count * d_head;
+        long long n_kv = (long long)batch * k_count * kv_heads * d_head;
+        long long n = n_dq > n_kv ? n_dq : n_kv;
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n; idx += (long long)blockDim.x * gridDim.x) {
+            if (idx < n_dq) {
+                long long t = idx;
+                int d = (int)(t % d_head); t /= d_head;
+                int q_local = (int)(t % q_count); t /= q_count;
+                int h = (int)(t % q_heads); t /= q_heads;
+                int b = (int)t;
+                long long dst = ((((long long)b * seq_len + (q_start + q_local))
+                                  * q_heads + h) * d_head + d);
+                dq[dst] = local_bf16_to_float(dq_tmp[idx]) * scale;
+            }
+            if (idx < n_kv) {
+                long long t = idx;
+                int d = (int)(t % d_head); t /= d_head;
+                int kvh = (int)(t % kv_heads); t /= kv_heads;
+                int k_local = (int)(t % k_count); t /= k_count;
+                int b = (int)t;
+                float sk = 0.0f;
+                float sv = 0.0f;
+                for (int h = 0; h < q_heads; ++h) {
+                    if ((int)kv_map[h] != kvh) continue;
+                    long long src = ((((long long)b * q_heads + h) * k_count
+                                      + k_local) * d_head + d);
+                    sk += local_bf16_to_float(dk_tmp[src]);
+                    sv += local_bf16_to_float(dv_tmp[src]);
+                }
+                long long dst = ((((long long)b * seq_len + (key_start + k_local))
+                                  * kv_heads + kvh) * d_head + d);
+                dk[dst] += sk * scale;
+                dv[dst] += sv;
+            }
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=("local_grouped_store_grads",),
+        )
+        module.get_function("local_grouped_store_grads")
+        _LOCAL_GROUPED_STORE_MODULE = module
+    except Exception:
+        if _cublas_grouped_strict_enabled():
+            raise
+        _LOCAL_GROUPED_STORE_DISABLED = True
+        return None
+    return _LOCAL_GROUPED_STORE_MODULE
+
+
+def _local_grouped_store_grads(
+    dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
+    q_start, key_start, scale,
+):
+    module = _get_local_grouped_store_module()
+    if module is None:
+        return False
+    batch, q_heads, q_count, d_head = map(int, dq_tmp.shape)
+    b2, h2, k_count, d2 = map(int, dk_tmp.shape)
+    if (b2, h2, d2) != (batch, q_heads, d_head) or dv_tmp.shape != dk_tmp.shape:
+        return False
+    if not all(is_bfloat16_dtype(a.dtype) for a in (dq_tmp, dk_tmp, dv_tmp)):
+        return False
+    if any(a.dtype != xp.float32 for a in (dq, dk, dv)):
+        return False
+    if not all(a.flags.c_contiguous for a in (dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map)):
+        return False
+    n_kv_heads = int(dk.shape[2])
+    n = max(int(dq_tmp.size), batch * k_count * n_kv_heads * d_head)
+    threads = 256
+    blocks = min((n + threads - 1) // threads, 65535)
+    module.get_function("local_grouped_store_grads")(
+        (blocks,), (threads,),
+        (
+            dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
+            np.int32(batch), np.int32(q_heads), np.int32(n_kv_heads),
+            np.int32(q_count), np.int32(k_count), np.int32(d_head),
+            np.int32(dq.shape[1]), np.int32(q_start), np.int32(key_start),
+            np.float32(scale),
+        ),
+    )
+    return True
+
+
+def _row_stride_elems(array, row_axis):
+    return int(array.strides[row_axis] // array.dtype.itemsize)
+
+
+def _local_grouped_matrix_layout_ready(x):
+    """Return whether one [B,T,H,D] tensor is safe for direct cuBLAS rows.
+
+    The grouped path fixes ``b`` and ``h`` for each GEMM, so it only requires
+    the innermost D elements of each token/head row to be contiguous.  The
+    batch/token/head strides may be larger than a compact tensor.  This is
+    important with packed QKV: after RoPE Q/K are compact, while V remains a
+    strided column view into the packed projection output.
+    """
+    if x.ndim != 4:
+        return False
+    itemsize = int(x.dtype.itemsize)
+    strides = tuple(int(s) for s in x.strides)
+    return (
+        itemsize > 0
+        and strides[-1] == itemsize
+        and all(s > 0 and (s % itemsize) == 0 for s in strides)
+    )
+
+
+def _local_grouped_fastpath_ready(q, k, v, bf16_pipeline):
+    return (
+        bf16_pipeline
+        and _cublas_grouped_local_enabled()
+        and _local_grouped_matrix_layout_ready(q)
+        and _local_grouped_matrix_layout_ready(k)
+        and _local_grouped_matrix_layout_ready(v)
+        and _cublas_grouped_available()
+    )
+
+
+def _local_grouped_forward(
+    q, k, v, window, scale, kv_map_host, query_chunk_size,
+    context_dtype, return_cache,
+):
+    """0053 grouped-cuBLAS local forward with zero Q/K/V packing."""
+    batch, query_length, n_q_heads, d_head = map(int, q.shape)
+    q_row = _row_stride_elems(q, 1)
+    k_row = _row_stride_elems(k, 1)
+    v_row = _row_stride_elems(v, 1)
+
+    chunks = []
+    score_groups = []
+    for q_start, q_end in _query_chunks(query_length, query_chunk_size):
+        key_start = max(0, q_start - window + 1)
+        key_end = q_end
+        q_count = q_end - q_start
+        k_count = key_end - key_start
+        scores = xp.empty((batch, n_q_heads, q_count, k_count), dtype=q.dtype)
+        probs = xp.empty_like(scores)
+        problems = []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = int(q.data.ptr) + b * int(q.strides[0]) + q_start * int(q.strides[1]) + h * int(q.strides[2])
+                b_ptr = int(k.data.ptr) + b * int(k.strides[0]) + key_start * int(k.strides[1]) + kvh * int(k.strides[2])
+                c_ptr = int(scores.data.ptr) + b * int(scores.strides[0]) + h * int(scores.strides[1])
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, k_count, d_head,
+                    q_row, k_row, k_count,
+                    False, True,
+                ))
+        score_groups.append(RowMajorGemmGroup(tuple(problems)))
+        chunks.append({
+            "q_start": q_start, "q_end": q_end,
+            "key_start": key_start, "key_end": key_end,
+            "q_count": q_count, "k_count": k_count,
+            "scores": scores, "probs": probs,
+        })
+
+    with local_detail_scope("local.grouped.score_gemm"):
+        if not _cublas_grouped_bf16_gemm(tuple(score_groups)):
+            return None
+
+    for chunk in chunks:
+        with local_detail_scope("local.grouped.softmax"):
+            out = _local_causal_softmax_forward_bf16_cuda(
+                chunk["scores"], chunk["probs"],
+                chunk["q_start"], chunk["key_start"], window, scale,
+            )
+            if out is None:
+                if _cublas_grouped_strict_enabled():
+                    raise RuntimeError("grouped local BF16 softmax fast path declined layout")
+                return None
+        del chunk["scores"]
+
+    context_tmps = []
+    context_groups = []
+    for chunk in chunks:
+        q_start = chunk["q_start"]
+        key_start = chunk["key_start"]
+        q_count = chunk["q_count"]
+        k_count = chunk["k_count"]
+        probs = chunk["probs"]
+        tmp = xp.empty((batch, n_q_heads, q_count, d_head), dtype=q.dtype)
+        context_tmps.append(tmp)
+        problems = []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = int(probs.data.ptr) + b * int(probs.strides[0]) + h * int(probs.strides[1])
+                b_ptr = int(v.data.ptr) + b * int(v.strides[0]) + key_start * int(v.strides[1]) + kvh * int(v.strides[2])
+                c_ptr = int(tmp.data.ptr) + b * int(tmp.strides[0]) + h * int(tmp.strides[1])
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, d_head, k_count,
+                    k_count, v_row, d_head,
+                    False, False,
+                ))
+        context_groups.append(RowMajorGemmGroup(tuple(problems)))
+
+    with local_detail_scope("local.grouped.context_gemm"):
+        if not _cublas_grouped_bf16_gemm(tuple(context_groups)):
+            return None
+
+    context_heads = xp.empty((batch, n_q_heads, query_length, d_head), dtype=context_dtype)
+    for chunk, tmp in zip(chunks, context_tmps):
+        with local_detail_scope("local.grouped.context_store"):
+            context_heads[:, :, chunk["q_start"]:chunk["q_end"], :] = tmp
+
+    context = context_heads.transpose(0, 2, 1, 3)
+    if not return_cache:
+        return context
+    return context, {
+        "q": q, "k": k, "v": v,
+        "window": window, "scale": scale,
+        "bf16_attention": True,
+        "bf16_tensorcore": True,
+        "bf16_pipeline": True,
+        "kv_head_indices_host": tuple(kv_map_host),
+        "kv_head_indices": xp.asarray(kv_map_host, dtype=xp.int64),
+        "chunks": tuple(chunks),
+        "query_chunk_size": query_chunk_size,
+        "grouped_cublas_local": True,
+    }
+
+
+def _local_grouped_backward(dcontext, cache):
+    """0053 grouped-cuBLAS local backward."""
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    batch, query_length, n_q_heads, d_head = map(int, q.shape)
+    n_kv_heads = int(k.shape[2])
+    kv_map_host = cache["kv_head_indices_host"]
+    kv_map = cache["kv_head_indices"]
+    scale = float(cache["scale"])
+    q_row = _row_stride_elems(q, 1)
+    k_row = _row_stride_elems(k, 1)
+    v_row = _row_stride_elems(v, 1)
+
+    with local_detail_scope("local.grouped.dcontext_cast"):
+        dc = xp.ascontiguousarray(dcontext.astype(q.dtype, copy=False))
+    dc_row = _row_stride_elems(dc, 1)
+    dq = xp.zeros(q.shape, dtype=xp.float32)
+    dk = xp.zeros(k.shape, dtype=xp.float32)
+    dv = xp.zeros(v.shape, dtype=xp.float32)
+
+    dprobs_groups = []
+    for chunk in cache["chunks"]:
+        q_start = chunk["q_start"]
+        key_start = chunk["key_start"]
+        q_count = chunk["q_count"]
+        k_count = chunk["k_count"]
+        dprobs = xp.empty_like(chunk["probs"])
+        chunk["dprobs"] = dprobs
+        problems = []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                a_ptr = int(dc.data.ptr) + b * int(dc.strides[0]) + q_start * int(dc.strides[1]) + h * int(dc.strides[2])
+                b_ptr = int(v.data.ptr) + b * int(v.strides[0]) + key_start * int(v.strides[1]) + kvh * int(v.strides[2])
+                c_ptr = int(dprobs.data.ptr) + b * int(dprobs.strides[0]) + h * int(dprobs.strides[1])
+                problems.append(RowMajorGemmProblem(
+                    a_ptr, b_ptr, c_ptr,
+                    q_count, k_count, d_head,
+                    dc_row, v_row, k_count,
+                    False, True,
+                ))
+        dprobs_groups.append(RowMajorGemmGroup(tuple(problems)))
+
+    with local_detail_scope("local.grouped.dprobs_gemm"):
+        if not _cublas_grouped_bf16_gemm(tuple(dprobs_groups)):
+            return None
+
+    for chunk in cache["chunks"]:
+        with local_detail_scope("local.grouped.softmax_backward"):
+            ds = _local_causal_softmax_backward_bf16_cuda(
+                chunk["dprobs"], chunk["probs"],
+                chunk["q_start"], chunk["key_start"], cache["window"],
+            )
+            if ds is None:
+                if _cublas_grouped_strict_enabled():
+                    raise RuntimeError("grouped local BF16 softmax backward declined layout")
+                return None
+            chunk["dscores"] = ds
+        del chunk["dprobs"]
+
+    grad_groups = []
+    work = []
+    for chunk in cache["chunks"]:
+        q_start = chunk["q_start"]
+        key_start = chunk["key_start"]
+        q_count = chunk["q_count"]
+        k_count = chunk["k_count"]
+        ds = chunk["dscores"]
+        probs = chunk["probs"]
+        dq_tmp = xp.empty((batch, n_q_heads, q_count, d_head), dtype=q.dtype)
+        dk_tmp = xp.empty((batch, n_q_heads, k_count, d_head), dtype=q.dtype)
+        dv_tmp = xp.empty_like(dk_tmp)
+        work.append((chunk, dq_tmp, dk_tmp, dv_tmp))
+
+        dq_problems = []
+        dk_problems = []
+        dv_problems = []
+        for b in range(batch):
+            for h in range(n_q_heads):
+                kvh = int(kv_map_host[h])
+                ds_ptr = int(ds.data.ptr) + b * int(ds.strides[0]) + h * int(ds.strides[1])
+                p_ptr = int(probs.data.ptr) + b * int(probs.strides[0]) + h * int(probs.strides[1])
+                q_ptr = int(q.data.ptr) + b * int(q.strides[0]) + q_start * int(q.strides[1]) + h * int(q.strides[2])
+                k_ptr = int(k.data.ptr) + b * int(k.strides[0]) + key_start * int(k.strides[1]) + kvh * int(k.strides[2])
+                dc_ptr = int(dc.data.ptr) + b * int(dc.strides[0]) + q_start * int(dc.strides[1]) + h * int(dc.strides[2])
+                dq_ptr = int(dq_tmp.data.ptr) + b * int(dq_tmp.strides[0]) + h * int(dq_tmp.strides[1])
+                dk_ptr = int(dk_tmp.data.ptr) + b * int(dk_tmp.strides[0]) + h * int(dk_tmp.strides[1])
+                dv_ptr = int(dv_tmp.data.ptr) + b * int(dv_tmp.strides[0]) + h * int(dv_tmp.strides[1])
+                dq_problems.append(RowMajorGemmProblem(
+                    ds_ptr, k_ptr, dq_ptr,
+                    q_count, d_head, k_count,
+                    k_count, k_row, d_head,
+                    False, False,
+                ))
+                dk_problems.append(RowMajorGemmProblem(
+                    ds_ptr, q_ptr, dk_ptr,
+                    k_count, d_head, q_count,
+                    k_count, q_row, d_head,
+                    True, False,
+                ))
+                dv_problems.append(RowMajorGemmProblem(
+                    p_ptr, dc_ptr, dv_ptr,
+                    k_count, d_head, q_count,
+                    k_count, dc_row, d_head,
+                    True, False,
+                ))
+        grad_groups.extend((
+            RowMajorGemmGroup(tuple(dq_problems)),
+            RowMajorGemmGroup(tuple(dk_problems)),
+            RowMajorGemmGroup(tuple(dv_problems)),
+        ))
+
+    with local_detail_scope("local.grouped.grad_gemm"):
+        if not _cublas_grouped_bf16_gemm(tuple(grad_groups)):
+            return None
+
+    for chunk, dq_tmp, dk_tmp, dv_tmp in work:
+        with local_detail_scope("local.grouped.grad_store"):
+            if not _local_grouped_store_grads(
+                dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
+                chunk["q_start"], chunk["key_start"], scale,
+            ):
+                return None
+        del chunk["dscores"]
+
+    return dq, dk, dv
+
+
 # ---------------------------------------------------------------------------
 # Specialized contiguous local-window attention
 # ---------------------------------------------------------------------------
@@ -2282,6 +2677,22 @@ def local_window_attention_forward(
         if keep_bf16_context
         else (xp.float32 if bf16_attention else q.dtype)
     )
+
+    # 0053: keep cuBLAS GEMM quality but dispatch all heterogeneous local
+    # chunks/heads through cublasGemmGroupedBatchedEx.  The helper reads
+    # Q/K/V directly from their native strided storage, so unlike the earlier
+    # experimental WMMA path it does not trade GEMM quality for fewer calls.
+    if _local_grouped_fastpath_ready(q, k, v, bf16_pipeline):
+        with local_detail_scope("local.grouped.forward"):
+            grouped = _local_grouped_forward(
+                q, k, v, window, scale, kv_map_host, query_chunk_size,
+                context_dtype, return_cache,
+            )
+        if grouped is not None:
+            return grouped
+        if _cublas_grouped_strict_enabled():
+            raise RuntimeError("0053 grouped local forward unexpectedly declined")
+
     context_heads = xp.empty(
         (batch, n_q_heads, query_length, d_head), dtype=context_dtype
     )
@@ -2482,6 +2893,15 @@ def local_window_attention_backward(dcontext, cache):
     q, k, v = cache["q"], cache["k"], cache["v"]
     if dcontext.shape != q.shape:
         raise ValueError("dcontext must have the same shape as q/context")
+
+    if cache.get("grouped_cublas_local", False):
+        with local_detail_scope("local.grouped.backward"):
+            grouped = _local_grouped_backward(dcontext, cache)
+        if grouped is None:
+            raise RuntimeError(
+                "0053 grouped local backward failed after grouped forward succeeded"
+            )
+        return grouped
 
     batch, query_length, n_q_heads, d_head = q.shape
     scale = cache["scale"]

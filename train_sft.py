@@ -178,6 +178,8 @@ def main():
             raise ValueError(f"Nonfinite SFT gradient at step {step + 1}")
 
         optimizer.step(lr=lr)
+        if hasattr(model, "refresh_compute_buffers"):
+            model.refresh_compute_buffers()
         optimizer.zero_grad()
         avg_loss = float(sum(losses) / len(losses))
         done = step + 1

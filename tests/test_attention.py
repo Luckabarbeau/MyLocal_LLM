@@ -106,3 +106,68 @@ def test_scaled_softmax_matches_direct_softmax_in_safe_range():
     direct = softmax_forward(x, axis=-1)
     scaled = softmax_forward(x / 32.0, axis=-1, logit_multiplier=32.0)
     assert bool(xp.all(xp.abs(direct - scaled) < 1e-6))
+
+
+def test_packed_qkv_matches_reference_forward_backward(monkeypatch):
+    attn = make_attention()
+    rng = np.random.default_rng(5200)
+    x = xp.asarray(rng.normal(size=(2, 5, 8)), dtype="float64")
+    dy = xp.asarray(rng.normal(size=(2, 5, 8)), dtype="float64")
+
+    monkeypatch.setenv("MINI_LLM_PACKED_QKV", "0")
+    y_ref, cache_ref = attn.forward(x)
+    attn.zero_grad()
+    dx_ref = attn.backward(dy, cache_ref)
+    grads_ref = [p.grad.copy() for p in (attn.Wq, attn.Wk, attn.Wv)]
+
+    attn.zero_grad()
+    monkeypatch.setenv("MINI_LLM_PACKED_QKV", "1")
+    attn.refresh_compute_buffers()
+    y_fast, cache_fast = attn.forward(x)
+    dx_fast = attn.backward(dy, cache_fast)
+    grads_fast = [p.grad.copy() for p in (attn.Wq, attn.Wk, attn.Wv)]
+
+    np.testing.assert_allclose(np.asarray(y_fast), np.asarray(y_ref), rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(dx_fast), np.asarray(dx_ref), rtol=1e-12, atol=1e-12)
+    for got, ref in zip(grads_fast, grads_ref):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(ref), rtol=1e-12, atol=1e-12)
+
+
+def test_packed_qkv_refresh_tracks_parameter_updates(monkeypatch):
+    attn = make_attention()
+    monkeypatch.setenv("MINI_LLM_PACKED_QKV", "1")
+    attn.refresh_compute_buffers()
+    before = attn._packed_qkv_weight.copy()
+
+    attn.Wq.data[...] += 0.25
+    attn.refresh_compute_buffers()
+    q_end = attn._q_width
+
+    assert bool(xp.all(attn._packed_qkv_weight[:, :q_end] == attn.Wq.data))
+    assert bool(xp.any(attn._packed_qkv_weight[:, :q_end] != before[:, :q_end]))
+
+
+def test_packed_qkv_parameter_grads_are_views_of_one_buffer(monkeypatch):
+    attn = make_attention()
+    monkeypatch.setenv("MINI_LLM_PACKED_QKV", "1")
+    attn.refresh_compute_buffers()
+
+    packed = np.asarray(attn._packed_qkv_grad)
+    q_grad = np.asarray(attn.Wq.grad)
+    k_grad = np.asarray(attn.Wk.grad)
+    v_grad = np.asarray(attn.Wv.grad)
+    assert np.shares_memory(q_grad, packed)
+    assert np.shares_memory(k_grad, packed)
+    assert np.shares_memory(v_grad, packed)
+
+    q_end = attn._q_width
+    k_end = q_end + attn._kv_width
+    attn.Wq.grad[...] = 1.0
+    attn.Wk.grad[...] = 2.0
+    attn.Wv.grad[...] = 3.0
+    np.testing.assert_array_equal(packed[:, :q_end], 1.0)
+    np.testing.assert_array_equal(packed[:, q_end:k_end], 2.0)
+    np.testing.assert_array_equal(packed[:, k_end:], 3.0)
+
+    attn.zero_grad()
+    assert float(np.max(np.abs(packed))) == 0.0

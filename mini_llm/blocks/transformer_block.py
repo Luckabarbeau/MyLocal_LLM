@@ -98,6 +98,11 @@ class TransformerBlock:
         """Zero out all gradients."""
         for p in self.parameters():
             p.zero_grad()
+
+    def refresh_compute_buffers(self):
+        """Refresh derived non-parameter buffers after optimizer updates."""
+        if hasattr(self.attention, "refresh_compute_buffers"):
+            self.attention.refresh_compute_buffers()
     
     def forward(self, x, finite_trace=None, layer_idx=None, return_cache=True):
         """

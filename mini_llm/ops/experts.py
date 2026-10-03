@@ -6,10 +6,23 @@ Two implementations:
 """
 
 from ..backend import xp
+import os
 from .routing_plan import RoutingPlan
 
 
 from .silu import silu, silu_prime
+
+
+def _fused_expert_gemm_enabled():
+    """Enable the checkpoint-compatible fused SwiGLU projection path.
+
+    The optimization packs the two independent gate/up matrices transiently
+    and evaluates them with one larger GEMM.  It can be disabled at runtime
+    for A/B performance checks without changing model parameters or
+    checkpoints.
+    """
+    raw = os.environ.get("MINI_LLM_FUSED_EXPERT_GEMM", "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 class ExpertFFN:
@@ -35,7 +48,9 @@ class ExpertFFN:
             dtype: Data type
         """
         from ..parameter import Parameter
-        
+
+        self.d_model = int(d_model)
+        self.d_ff = int(d_ff)
         std = input_std
         self.W_gate = Parameter(
             xp.asarray(rng.normal((d_model, d_ff), std=std, dtype=dtype)),
@@ -92,8 +107,18 @@ class ExpertFFN:
         # Increment forward call counter
         ExpertFFN._forward_call_count += 1
         
-        g = x @ self.W_gate.data
-        u = x @ self.W_up.data
+        if _fused_expert_gemm_enabled():
+            # W_gate and W_up remain independent Parameters so checkpoint and
+            # optimizer state layout stay unchanged.  Packing is only a
+            # transient contiguous copy; the larger GEMM amortizes launch
+            # overhead and gives cuBLAS more work per invocation.
+            w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
+            gate_up = x @ w_gate_up
+            g = gate_up[..., : self.d_ff]
+            u = gate_up[..., self.d_ff :]
+        else:
+            g = x @ self.W_gate.data
+            u = x @ self.W_up.data
         a = silu(g)
         h = a * u
         y = h @ self.W_down.data
@@ -144,10 +169,22 @@ class ExpertFFN:
         du = dh * a.reshape(-1, a.shape[-1])
         dg = da * silu_prime(g.reshape(-1, g.shape[-1]))
         
-        self.W_gate.grad += x_2d.T @ dg
-        self.W_up.grad += x_2d.T @ du
-        
-        dx = dg @ self.W_gate.data.T + du @ self.W_up.data.T
+        if _fused_expert_gemm_enabled():
+            # The concatenated d[G,U] matrix lets both parameter gradients be
+            # produced by one GEMM, and the same packed weights turn the two
+            # input-gradient GEMMs plus add into one GEMM.
+            dgate_up = xp.concatenate((dg, du), axis=-1)
+            dweight_gate_up = x_2d.T @ dgate_up
+            split = self.d_ff
+            self.W_gate.grad += dweight_gate_up[:, :split]
+            self.W_up.grad += dweight_gate_up[:, split:]
+
+            w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
+            dx = dgate_up @ w_gate_up.T
+        else:
+            self.W_gate.grad += x_2d.T @ dg
+            self.W_up.grad += x_2d.T @ du
+            dx = dg @ self.W_gate.data.T + du @ self.W_up.data.T
         dx = dx.reshape(dy.shape)
         
         return dx

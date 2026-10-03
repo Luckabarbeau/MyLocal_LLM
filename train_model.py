@@ -576,9 +576,32 @@ def main():
             checkpoint_path,
             param_names=param_names,
         )
+        # Copy checkpoint parameters into the already-allocated model and
+        # immediately drop each temporary backend copy.  On CuPy,
+        # load_checkpoint() materializes checkpoint arrays on the GPU, so
+        # retaining loaded_params would otherwise keep a second complete model
+        # resident throughout resumed training.
         for p in model.parameters():
-            if p.name in loaded_params:
-                p.data[...] = loaded_params[p.name]
+            loaded = loaded_params.pop(p.name, None)
+            if loaded is not None:
+                p.data[...] = loaded
+                del loaded
+        loaded_params.clear()
+        del loaded_params
+
+        # The optimizer created below initializes its FP32 master weights from
+        # the model parameters we just restored, which is exactly the desired
+        # checkpoint value.  The separately loaded checkpoint master-weight
+        # dictionary is therefore redundant and can be released before the
+        # trainer allocates its own optimizer state.
+        if optimizer_state is not None:
+            optimizer_state.pop("master_weights", None)
+
+        # Return now-unreferenced CuPy blocks to the device before constructing
+        # the trainer.  NumPy has no memory-pool API, so this is a no-op there.
+        get_pool = getattr(xp, "get_default_memory_pool", None)
+        if get_pool is not None:
+            get_pool().free_all_blocks()
 
         stored_optimizer_state = optimizer_state
         start_step = training_state.get("step", 0) if training_state else 0
@@ -703,6 +726,7 @@ def main():
         )
         m_dict = stored_optimizer_state["m"]
         v_dict = stored_optimizer_state.get("v", {})
+        saved_m_names = set(m_dict)
         param_to_idx = {
             p.name: i for i, p in enumerate(trainer.model.parameters())
         }
@@ -710,8 +734,10 @@ def main():
         for p in trainer.model.parameters():
             if p.name in m_dict and p.name in v_dict:
                 idx = param_to_idx[p.name]
-                m_arr = xp.asarray(m_dict[p.name])
-                v_arr = xp.asarray(v_dict[p.name])
+                # Pop before copying so each temporary checkpoint array becomes
+                # reclaimable as soon as this parameter has been restored.
+                m_arr = xp.asarray(m_dict.pop(p.name))
+                v_arr = xp.asarray(v_dict.pop(p.name))
                 if m_arr.shape == trainer.optimizer.m[idx].shape:
                     trainer.optimizer.m[idx][...] = m_arr
                     trainer.optimizer.v[idx][...] = v_arr
@@ -721,9 +747,10 @@ def main():
                         f"WARNING: Shape mismatch for {p.name}: "
                         f"stored={m_arr.shape}, current={trainer.optimizer.m[idx].shape}"
                     )
+                del m_arr, v_arr
         print(f"Restored optimizer state for {restored_count} parameters")
         missing = [
-            p.name for p in trainer.model.parameters() if p.name not in m_dict
+            p.name for p in trainer.model.parameters() if p.name not in saved_m_names
         ]
         if missing:
             suffix = "..." if len(missing) > 5 else ""
@@ -731,6 +758,19 @@ def main():
                 f"WARNING: {len(missing)} parameters not found in saved optimizer "
                 f"state: {missing[:5]}{suffix}"
             )
+
+        # No checkpoint optimizer arrays are needed after the in-place restore.
+        # Clearing both the nested dictionaries and their parent removes the
+        # duplicate GPU state before the first forward pass.
+        m_dict.clear()
+        v_dict.clear()
+        stored_optimizer_state.clear()
+        stored_optimizer_state = None
+        optimizer_state = None
+        del m_dict, v_dict
+        get_pool = getattr(xp, "get_default_memory_pool", None)
+        if get_pool is not None:
+            get_pool().free_all_blocks()
 
     if rng_states is not None:
         trainer.train_rng.bit_generator.state = rng_states["train"]

@@ -10,6 +10,7 @@ indices (which would synchronize repeatedly under CuPy).
 """
 
 from ..backend import xp, asnumpy
+from ..performance_profiler import moe_detail_scope
 
 
 class RoutingPlan:
@@ -75,17 +76,21 @@ class RoutingPlan:
         #   token = assignment // k
         #   slot  = assignment % k
         # so avoid constructing repeat()/tile() arrays before the sort.
-        order = xp.argsort(expert_ids_flat)
-        expert_sorted = expert_ids_flat[order]
-        token_sorted = order // k
-        slot_sorted = order % k
-        weights_sorted = weights_flat[order]
+        with moe_detail_scope("moe.plan.sort"):
+            order = xp.argsort(expert_ids_flat)
+        with moe_detail_scope("moe.plan.permute"):
+            expert_sorted = expert_ids_flat[order]
+            token_sorted = order // k
+            slot_sorted = order % k
+            weights_sorted = weights_flat[order]
 
         # Compute all expert sizes in one backend operation, then perform ONE
         # tiny host transfer.  The old implementation called .item() once per
         # expert, causing repeated CuPy synchronization.
-        counts = xp.bincount(expert_ids_flat, minlength=n_experts)
-        counts_host = asnumpy(counts)
+        with moe_detail_scope("moe.plan.counts"):
+            counts = xp.bincount(expert_ids_flat, minlength=n_experts)
+        with moe_detail_scope("moe.plan.host_counts"):
+            counts_host = asnumpy(counts)
 
         offsets = [0]
         sizes = []

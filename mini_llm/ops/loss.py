@@ -1,5 +1,234 @@
-from ..backend import xp, scalar, is_low_precision_dtype, is_bfloat16_dtype
+from ..backend import xp, scalar, is_low_precision_dtype, is_bfloat16_dtype, BACKEND_NAME
 import os
+
+import numpy as np
+
+
+_FUSED_BF16_CE_MODULE = None
+_FUSED_BF16_CE_DISABLED = False
+
+
+def _fused_bf16_ce_enabled(dtype):
+    raw = os.environ.get("MINI_LLM_FUSED_BF16_CE", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
+
+def _get_fused_bf16_ce_module():
+    """Compile the BF16 cross-entropy CUDA kernels lazily.
+
+    The kernels intentionally avoid CUDA headers. BF16 values are read/written
+    through their 16-bit IEEE storage representation, while max/sum/log and
+    gradient arithmetic remain FP32.
+    """
+    global _FUSED_BF16_CE_MODULE, _FUSED_BF16_CE_DISABLED
+    if BACKEND_NAME != "cupy" or _FUSED_BF16_CE_DISABLED:
+        return None
+    if _FUSED_BF16_CE_MODULE is not None:
+        return _FUSED_BF16_CE_MODULE
+
+    code = r"""
+    __device__ __forceinline__ float bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    __device__ __forceinline__ unsigned short float_to_bf16(float x) {
+        union { unsigned int u; float f; } v;
+        v.f = x;
+        unsigned int bits = v.u;
+        // Round-to-nearest-even before truncating the low 16 mantissa bits.
+        unsigned int lsb = (bits >> 16) & 1u;
+        bits += 0x7fffu + lsb;
+        return (unsigned short)(bits >> 16);
+    }
+
+    extern "C" __global__
+    void bf16_cross_entropy_fwd(
+        const unsigned short* logits,
+        const int* targets,
+        const float* loss_mask,
+        unsigned short* probs,
+        float* work,
+        float* row_losses,
+        int rows,
+        int vocab,
+        int has_mask) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        const unsigned short* z = logits + ((long long)row) * vocab;
+        unsigned short* p = probs + ((long long)row) * vocab;
+        float* w = work + ((long long)row) * vocab;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x) {
+            float value = bf16_to_float(z[j]);
+            local_max = fmaxf(local_max, value);
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x) {
+            float e = expf(bf16_to_float(z[j]) - row_max);
+            w[j] = e;
+            local_sum += e;
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float row_sum = sh[0];
+        float inv_sum = 1.0f / row_sum;
+
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x) {
+            p[j] = float_to_bf16(w[j] * inv_sum);
+        }
+
+        if (threadIdx.x == 0) {
+            int target = targets[row];
+            float target_logit = bf16_to_float(z[target]);
+            float loss = logf(row_sum) + row_max - target_logit;
+            if (has_mask) loss *= loss_mask[row];
+            row_losses[row] = loss;
+        }
+    }
+
+    extern "C" __global__
+    void bf16_cross_entropy_bwd(
+        unsigned short* probs_and_grad,
+        const int* targets,
+        const float* loss_mask,
+        int rows,
+        int vocab,
+        float inv_normalizer,
+        int has_mask) {
+        long long total = ((long long)rows) * vocab;
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < total; idx += stride) {
+            int row = (int)(idx / vocab);
+            int col = (int)(idx - ((long long)row) * vocab);
+            float g = bf16_to_float(probs_and_grad[idx]);
+            if (col == targets[row]) g -= 1.0f;
+            if (has_mask) g *= loss_mask[row];
+            g *= inv_normalizer;
+            probs_and_grad[idx] = float_to_bf16(g);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=("bf16_cross_entropy_fwd", "bf16_cross_entropy_bwd"),
+        )
+        module.get_function("bf16_cross_entropy_fwd")
+        module.get_function("bf16_cross_entropy_bwd")
+        _FUSED_BF16_CE_MODULE = module
+    except Exception:
+        strict = os.environ.get("MINI_LLM_FUSED_BF16_CE_STRICT", "0").strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _FUSED_BF16_CE_DISABLED = True
+        return None
+    return _FUSED_BF16_CE_MODULE
+
+
+def _fused_bf16_cross_entropy_forward(flat_logits, flat_targets, mask_f32, token_chunk):
+    module = _get_fused_bf16_ce_module()
+    if module is None or not flat_logits.flags.c_contiguous:
+        return None
+
+    n, vocab = map(int, flat_logits.shape)
+    # Training data targets may still be NumPy host arrays even when logits
+    # live on CuPy. NumPy.ndarray.astype(xp.int32) remains a NumPy array, so
+    # dtype/contiguity checks alone are not sufficient before RawKernel launch.
+    # Force the target indices onto the active backend/device unconditionally.
+    targets_i32 = xp.asarray(flat_targets, dtype=xp.int32).reshape(-1)
+    if not targets_i32.flags.c_contiguous:
+        targets_i32 = xp.ascontiguousarray(targets_i32)
+    probs_bf16 = xp.empty(flat_logits.shape, dtype=flat_logits.dtype)
+    row_losses = xp.empty((n,), dtype=xp.float32)
+    work_rows = min(int(token_chunk), n)
+    work_f32 = xp.empty((work_rows, vocab), dtype=xp.float32)
+    if mask_f32 is None:
+        mask_arg = xp.empty((1,), dtype=xp.float32)
+        has_mask = 0
+    else:
+        mask_arg = mask_f32
+        has_mask = 1
+
+    threads = 256
+    kernel = module.get_function("bf16_cross_entropy_fwd")
+    for start in range(0, n, token_chunk):
+        end = min(start + token_chunk, n)
+        rows = end - start
+        kernel(
+            (rows,), (threads,),
+            (
+                flat_logits[start:end],
+                targets_i32[start:end],
+                mask_arg if mask_f32 is None else mask_arg[start:end],
+                probs_bf16[start:end],
+                work_f32[:rows],
+                row_losses[start:end],
+                np.int32(rows),
+                np.int32(vocab),
+                np.int32(has_mask),
+            ),
+            shared_mem=threads * 4,
+        )
+    return probs_bf16, targets_i32, row_losses
+
+
+def _fused_bf16_cross_entropy_backward(probs_bf16, targets_i32, mask_f32, normalizer_count, token_chunk):
+    module = _get_fused_bf16_ce_module()
+    if module is None:
+        return False
+    flat = probs_bf16.reshape(-1, probs_bf16.shape[-1])
+    n, vocab = map(int, flat.shape)
+    if mask_f32 is None:
+        mask_arg = xp.empty((1,), dtype=xp.float32)
+        has_mask = 0
+    else:
+        mask_arg = mask_f32
+        has_mask = 1
+    threads = 256
+    kernel = module.get_function("bf16_cross_entropy_bwd")
+    inv_normalizer = np.float32(1.0 / float(normalizer_count))
+    for start in range(0, n, token_chunk):
+        end = min(start + token_chunk, n)
+        rows = end - start
+        total = rows * vocab
+        blocks = min(65535, max(1, (total + threads - 1) // threads))
+        kernel(
+            (blocks,), (threads,),
+            (
+                flat[start:end],
+                targets_i32[start:end],
+                mask_arg if mask_f32 is None else mask_arg[start:end],
+                np.int32(rows),
+                np.int32(vocab),
+                inv_normalizer,
+                np.int32(has_mask),
+            ),
+        )
+    return True
 
 
 def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False):
@@ -23,7 +252,6 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
         # for large vocabularies.
         raw_chunk = os.environ.get("MINI_LLM_LOSS_TOKEN_CHUNK", "512")
         token_chunk = max(1, min(n, int(raw_chunk)))
-        probs_bf16 = xp.empty(flat_logits.shape, dtype=logits.dtype)
 
         if loss_mask is None:
             mask_f32 = None
@@ -39,6 +267,25 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             if normalizer_count <= 0.0:
                 raise ValueError("loss_mask must select at least one target token")
 
+        if _fused_bf16_ce_enabled(logits.dtype):
+            fused = _fused_bf16_cross_entropy_forward(
+                flat_logits, flat_targets, mask_f32, token_chunk
+            )
+            if fused is not None:
+                probs_bf16, targets_i32, row_losses = fused
+                loss_f32 = xp.sum(row_losses) / normalizer_count
+                return (loss_f32 if return_device_loss else scalar(loss_f32)), {
+                    "probs_bf16": probs_bf16,
+                    "targets": targets_i32,
+                    "original_shape": logits.shape,
+                    "n": n,
+                    "loss_mask_f32": mask_f32,
+                    "normalizer_count": normalizer_count,
+                    "token_chunk": token_chunk,
+                    "fused_bf16_ce": True,
+                }
+
+        probs_bf16 = xp.empty(flat_logits.shape, dtype=logits.dtype)
         loss_sum = xp.asarray(0.0, dtype="float32")
         for start in range(0, n, token_chunk):
             end = min(start + token_chunk, n)
@@ -164,13 +411,17 @@ def cross_entropy_backward(cache):
     normalizer_count = float(cache.get("normalizer_count", n))
 
     if probs_bf16 is not None:
-        # Reuse the BF16 probability buffer itself as d_logits.  Each token
-        # chunk is promoted to FP32 for target subtraction, masking and 1/N
-        # normalization, then stored back in BF16. DecoderLanguageModel already
-        # feeds BF16 d_logits to the large output GEMM, so this removes a full
-        # FP32 d_logits allocation without changing the compute dtype of that GEMM.
-        flat = probs_bf16.reshape(n, -1)
+        # Reuse the BF16 probability buffer itself as d_logits.
         token_chunk = int(cache.get("token_chunk", 512))
+        if cache.get("fused_bf16_ce", False):
+            if _fused_bf16_cross_entropy_backward(
+                probs_bf16, targets, loss_mask_f32, normalizer_count, token_chunk
+            ):
+                return probs_bf16.reshape(original_shape)
+
+        # Vectorized fallback: promote each token chunk to FP32 for target
+        # subtraction, masking and normalization, then store back in BF16.
+        flat = probs_bf16.reshape(n, -1)
         for start in range(0, n, token_chunk):
             end = min(start + token_chunk, n)
             work = flat[start:end].astype("float32", copy=True)

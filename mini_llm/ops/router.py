@@ -12,6 +12,7 @@ straight-through estimator (fixed selection during gradient computation).
 
 from ..backend import xp, resolve_dtype, is_low_precision_dtype
 from .topk import selected_topk_softmax_forward, selected_topk_softmax_backward
+from ..performance_profiler import moe_detail_scope
 
 
 class Router:
@@ -85,16 +86,18 @@ class Router:
         # Flatten leading dimensions so BF16 uses CuPy's supported 2-D GEMM
         # path rather than its generic N-D batched tensordot implementation.
         x_2d = x.reshape(-1, self.d_model)
-        logits = (x_2d @ self.W_router_param.data).reshape(
-            batch_size, seq_len, self.n_experts
-        ) + self.b_router_param.data
-        
+        with moe_detail_scope("moe.router.logits"):
+            logits = (x_2d @ self.W_router_param.data).reshape(
+                batch_size, seq_len, self.n_experts
+            ) + self.b_router_param.data
+
         # Top-K selection and selected softmax are shared with the context
         # router.  The helper preserves the original deterministic argsort and
         # FP32 routing math for FP16/BF16 inputs.
-        output_weights, expert_indices, topk_cache = selected_topk_softmax_forward(
-            logits, self.k, output_dtype=x.dtype
-        )
+        with moe_detail_scope("moe.router.topk"):
+            output_weights, expert_indices, topk_cache = selected_topk_softmax_forward(
+                logits, self.k, output_dtype=x.dtype
+            )
         # Backward only needs the input and the reusable selected-softmax
         # cache.  Do not retain duplicate logits/indices/weights that are
         # already represented inside topk_cache.
@@ -131,7 +134,8 @@ class Router:
         
         # Reuse the same selected-softmax Jacobian/scatter primitive used by
         # the context router.  Top-K identities remain fixed locally.
-        dlogits = selected_topk_softmax_backward(dweights, cache["topk_cache"])
+        with moe_detail_scope("moe.router.topk_bwd"):
+            dlogits = selected_topk_softmax_backward(dweights, cache["topk_cache"])
         dlogits_compute = (
             dlogits.astype(x.dtype, copy=False)
             if is_low_precision_dtype(x.dtype) else dlogits
@@ -140,12 +144,15 @@ class Router:
         # Gradient through logits = x @ W + b. Keep the GEMM strictly 2-D for
         # CuPy BF16 compatibility, then restore the original token layout.
         dlogits_2d = dlogits_compute.reshape(-1, self.n_experts)
-        dx = (dlogits_2d @ self.W_router_param.data.T).reshape(x.shape)
+        with moe_detail_scope("moe.router.dx_gemm"):
+            dx = (dlogits_2d @ self.W_router_param.data.T).reshape(x.shape)
 
         # Accumulate parameter gradients. GEMM stays in branch compute dtype;
         # Parameter.grad itself is FP32 for low-precision parameters.
         x_2d = x.reshape(-1, self.d_model)
-        self.W_router_param.grad += x_2d.T @ dlogits_2d
-        self.b_router_param.grad += xp.sum(dlogits, axis=(0, 1))
+        with moe_detail_scope("moe.router.wgrad_gemm"):
+            self.W_router_param.grad += x_2d.T @ dlogits_2d
+        with moe_detail_scope("moe.router.bgrad"):
+            self.b_router_param.grad += xp.sum(dlogits, axis=(0, 1))
         
         return dx

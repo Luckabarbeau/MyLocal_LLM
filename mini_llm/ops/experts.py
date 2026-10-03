@@ -5,12 +5,156 @@ Two implementations:
 2. Sparse (optimized): True token-to-expert dispatch
 """
 
-from ..backend import xp
+from ..backend import xp, BACKEND_NAME, is_bfloat16_dtype
 import os
+import numpy as np
 from .routing_plan import RoutingPlan
+from ..performance_profiler import moe_detail_scope
 
 
 from .silu import silu, silu_prime
+
+
+_FUSED_SWIGLU_MODULE = None
+_FUSED_SWIGLU_DISABLED = False
+
+
+def _fused_swiglu_enabled(dtype):
+    raw = os.environ.get("MINI_LLM_FUSED_SWIGLU", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
+
+def _get_fused_swiglu_module():
+    """Compile header-free BF16 SwiGLU CUDA kernels lazily."""
+    global _FUSED_SWIGLU_MODULE, _FUSED_SWIGLU_DISABLED
+    if BACKEND_NAME != "cupy" or _FUSED_SWIGLU_DISABLED:
+        return None
+    if _FUSED_SWIGLU_MODULE is not None:
+        return _FUSED_SWIGLU_MODULE
+
+    code = r"""
+    __device__ __forceinline__ float bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    __device__ __forceinline__ unsigned short float_to_bf16(float x) {
+        union { unsigned int u; float f; } v;
+        v.f = x;
+        unsigned int bits = v.u;
+        unsigned int lsb = (bits >> 16) & 1u;
+        bits += 0x7fffu + lsb;
+        return (unsigned short)(bits >> 16);
+    }
+
+    __device__ __forceinline__ float sigmoidf_stable(float x) {
+        return 1.0f / (1.0f + expf(-x));
+    }
+
+    extern "C" __global__
+    void bf16_swiglu_fwd(
+        const unsigned short* g,
+        const unsigned short* u,
+        unsigned short* h,
+        long long n) {
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            float gf = bf16_to_float(g[idx]);
+            float uf = bf16_to_float(u[idx]);
+            float s = sigmoidf_stable(gf);
+            h[idx] = float_to_bf16((gf * s) * uf);
+        }
+    }
+
+    extern "C" __global__
+    void bf16_swiglu_bwd(
+        const unsigned short* dh,
+        const unsigned short* g,
+        const unsigned short* u,
+        unsigned short* dg,
+        unsigned short* du,
+        long long n) {
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            float dhf = bf16_to_float(dh[idx]);
+            float gf = bf16_to_float(g[idx]);
+            float uf = bf16_to_float(u[idx]);
+            float s = sigmoidf_stable(gf);
+            float a = gf * s;
+            float silu_prime = s + gf * s * (1.0f - s);
+            dg[idx] = float_to_bf16((dhf * uf) * silu_prime);
+            du[idx] = float_to_bf16(dhf * a);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=("bf16_swiglu_fwd", "bf16_swiglu_bwd"),
+        )
+        module.get_function("bf16_swiglu_fwd")
+        module.get_function("bf16_swiglu_bwd")
+        _FUSED_SWIGLU_MODULE = module
+    except Exception:
+        strict = os.environ.get("MINI_LLM_FUSED_SWIGLU_STRICT", "0").strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _FUSED_SWIGLU_DISABLED = True
+        return None
+    return _FUSED_SWIGLU_MODULE
+
+
+def _fused_swiglu_forward(g, u):
+    if not _fused_swiglu_enabled(g.dtype):
+        return None
+    if g.shape != u.shape or not g.flags.c_contiguous or not u.flags.c_contiguous:
+        return None
+    module = _get_fused_swiglu_module()
+    if module is None:
+        return None
+    h = xp.empty_like(g)
+    n = int(g.size)
+    if n == 0:
+        return h
+    threads = 256
+    blocks = min(65535, max(1, (n + threads - 1) // threads))
+    module.get_function("bf16_swiglu_fwd")((blocks,), (threads,), (
+        g, u, h, np.int64(n)
+    ))
+    return h
+
+
+def _fused_swiglu_backward(dh, g, u):
+    if not _fused_swiglu_enabled(g.dtype) or not is_bfloat16_dtype(dh.dtype):
+        return None
+    if dh.dtype != g.dtype or u.dtype != g.dtype:
+        return None
+    if dh.shape != g.shape or u.shape != g.shape:
+        return None
+    if not dh.flags.c_contiguous or not g.flags.c_contiguous or not u.flags.c_contiguous:
+        return None
+    module = _get_fused_swiglu_module()
+    if module is None:
+        return None
+    dg = xp.empty_like(g)
+    du = xp.empty_like(u)
+    n = int(g.size)
+    if n == 0:
+        return dg, du
+    threads = 256
+    blocks = min(65535, max(1, (n + threads - 1) // threads))
+    module.get_function("bf16_swiglu_bwd")((blocks,), (threads,), (
+        dh, g, u, dg, du, np.int64(n)
+    ))
+    return dg, du
 
 
 def _fused_expert_gemm_enabled():
@@ -112,16 +256,24 @@ class ExpertFFN:
             # optimizer state layout stay unchanged.  Packing is only a
             # transient contiguous copy; the larger GEMM amortizes launch
             # overhead and gives cuBLAS more work per invocation.
-            w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
-            gate_up = x @ w_gate_up
+            with moe_detail_scope("moe.expert.pack_gate_up"):
+                w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
+            with moe_detail_scope("moe.expert.gate_up_gemm"):
+                gate_up = x @ w_gate_up
             g = gate_up[..., : self.d_ff]
             u = gate_up[..., self.d_ff :]
         else:
-            g = x @ self.W_gate.data
-            u = x @ self.W_up.data
-        a = silu(g)
-        h = a * u
-        y = h @ self.W_down.data
+            with moe_detail_scope("moe.expert.gate_gemm"):
+                g = x @ self.W_gate.data
+            with moe_detail_scope("moe.expert.up_gemm"):
+                u = x @ self.W_up.data
+        with moe_detail_scope("moe.expert.swiglu"):
+            h = _fused_swiglu_forward(g, u)
+            if h is None:
+                a = silu(g)
+                h = a * u
+        with moe_detail_scope("moe.expert.down_gemm"):
+            y = h @ self.W_down.data
         
         if not return_cache:
             return y
@@ -153,38 +305,70 @@ class ExpertFFN:
         x = cache["x"]
         g = cache["g"]
         u = cache["u"]
-        # Recompute the two cheap elementwise forward intermediates instead
-        # of retaining them in the long-lived training cache.
-        a = silu(g)
-        h = a * u
+        # Recompute only the down-projection input.  The fused BF16 path
+        # produces H directly from cached G/U and avoids materializing A.
+        with moe_detail_scope("moe.expert.recompute"):
+            h = _fused_swiglu_forward(g, u)
+            fused_swiglu = h is not None
+            if not fused_swiglu:
+                a = silu(g)
+                h = a * u
 
         dy_2d = dy.reshape(-1, dy.shape[-1])
         x_2d = x.reshape(-1, x.shape[-1])
         h_2d = h.reshape(-1, h.shape[-1])
-        
-        self.W_down.grad += h_2d.T @ dy_2d
-        
-        dh = dy_2d @ self.W_down.data.T
-        da = dh * u.reshape(-1, u.shape[-1])
-        du = dh * a.reshape(-1, a.shape[-1])
-        dg = da * silu_prime(g.reshape(-1, g.shape[-1]))
+
+        with moe_detail_scope("moe.expert.down_wgrad"):
+            self.W_down.grad += h_2d.T @ dy_2d
+
+        with moe_detail_scope("moe.expert.down_dx"):
+            dh = dy_2d @ self.W_down.data.T
+        with moe_detail_scope("moe.expert.swiglu_bwd"):
+            fused_grads = (
+                _fused_swiglu_backward(
+                    dh,
+                    g.reshape(dh.shape),
+                    u.reshape(dh.shape),
+                )
+                if fused_swiglu
+                else None
+            )
+            if fused_grads is not None:
+                dg, du = fused_grads
+            else:
+                if fused_swiglu:
+                    a = silu(g)
+                da = dh * u.reshape(-1, u.shape[-1])
+                du = dh * a.reshape(-1, a.shape[-1])
+                dg = da * silu_prime(g.reshape(-1, g.shape[-1]))
         
         if _fused_expert_gemm_enabled():
             # The concatenated d[G,U] matrix lets both parameter gradients be
             # produced by one GEMM, and the same packed weights turn the two
             # input-gradient GEMMs plus add into one GEMM.
-            dgate_up = xp.concatenate((dg, du), axis=-1)
-            dweight_gate_up = x_2d.T @ dgate_up
-            split = self.d_ff
-            self.W_gate.grad += dweight_gate_up[:, :split]
-            self.W_up.grad += dweight_gate_up[:, split:]
+            with moe_detail_scope("moe.expert.pack_dgate_up"):
+                dgate_up = xp.concatenate((dg, du), axis=-1)
+            with moe_detail_scope("moe.expert.gate_up_wgrad"):
+                dweight_gate_up = x_2d.T @ dgate_up
+                split = self.d_ff
+                self.W_gate.grad += dweight_gate_up[:, :split]
+                self.W_up.grad += dweight_gate_up[:, split:]
 
-            w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
-            dx = dgate_up @ w_gate_up.T
+            with moe_detail_scope("moe.expert.pack_weights_bwd"):
+                w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
+            with moe_detail_scope("moe.expert.gate_up_dx"):
+                dx = dgate_up @ w_gate_up.T
         else:
-            self.W_gate.grad += x_2d.T @ dg
-            self.W_up.grad += x_2d.T @ du
-            dx = dg @ self.W_gate.data.T + du @ self.W_up.data.T
+            with moe_detail_scope("moe.expert.gate_wgrad"):
+                self.W_gate.grad += x_2d.T @ dg
+            with moe_detail_scope("moe.expert.up_wgrad"):
+                self.W_up.grad += x_2d.T @ du
+            with moe_detail_scope("moe.expert.gate_dx"):
+                dx_gate = dg @ self.W_gate.data.T
+            with moe_detail_scope("moe.expert.up_dx"):
+                dx_up = du @ self.W_up.data.T
+            with moe_detail_scope("moe.expert.dx_add"):
+                dx = dx_gate + dx_up
         dx = dx.reshape(dy.shape)
         
         return dx
@@ -285,7 +469,8 @@ class Experts:
         # Total assignments = N * k
         
         # Prepare output: [N, D]
-        y_flat = xp.zeros((N, d_model), dtype=x.dtype)
+        with moe_detail_scope("moe.dispatch.fwd_alloc"):
+            y_flat = xp.zeros((N, d_model), dtype=x.dtype)
         
         # Cache for expert outputs and caches (to avoid recomputation in backward)
         expert_outputs = {}  # exp_idx -> {"outputs": [...], "token_indices": [...], "weights": [...]}
@@ -306,12 +491,14 @@ class Experts:
             
             if len(token_indices) > 0:
                 # Gather tokens: [n_assigned, D]
-                expert_x = x_flat[token_indices]
-                
+                with moe_detail_scope("moe.dispatch.fwd_gather"):
+                    expert_x = x_flat[token_indices]
+
                 # Forward through this expert.  Reference inference does not
                 # retain activations or routed outputs needed only by backward.
                 if return_cache:
-                    expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
+                    with moe_detail_scope("moe.expert.forward_total"):
+                        expert_out, expert_cache = self.experts[exp_idx].forward(expert_x)
                     expert_outputs[exp_idx] = {
                         "outputs": expert_out,
                         "token_indices": token_indices,
@@ -319,15 +506,18 @@ class Experts:
                     }
                     expert_caches[exp_idx] = expert_cache
                 else:
-                    expert_out = self.experts[exp_idx].forward(
-                        expert_x, return_cache=False
-                    )
-                
+                    with moe_detail_scope("moe.expert.forward_total"):
+                        expert_out = self.experts[exp_idx].forward(
+                            expert_x, return_cache=False
+                        )
+
                 # Weight and accumulate to output.  token_indices are unique
                 # within a single expert because top-k cannot select the same
                 # expert twice for one token, so atomics are unnecessary.
-                weighted_out = expert_weights[:, xp.newaxis] * expert_out
-                y_flat[token_indices] += weighted_out
+                with moe_detail_scope("moe.dispatch.fwd_weight"):
+                    weighted_out = expert_weights[:, xp.newaxis] * expert_out
+                with moe_detail_scope("moe.dispatch.fwd_scatter"):
+                    y_flat[token_indices] += weighted_out
         
         # Reshape: [N, D] -> [B, T, D]
         y = y_flat.reshape(batch_size, seq_len, d_model)
@@ -376,10 +566,11 @@ class Experts:
         weights_flat = weights.reshape(N, k)
         expert_indices_flat = expert_indices.reshape(N, k)
 
-        dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
-        dweights_flat = (
-            xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
-        )
+        with moe_detail_scope("moe.dispatch.bwd_alloc"):
+            dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
+            dweights_flat = (
+                xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
+            )
 
         expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
@@ -414,7 +605,8 @@ class Experts:
 
             # Raw dy is needed for dL/d(router weight).  The expert parameter
             # gradient receives dy multiplied by the selected routing weight.
-            raw_expert_dy = dy_flat[token_indices]
+            with moe_detail_scope("moe.dispatch.bwd_gather"):
+                raw_expert_dy = dy_flat[token_indices]
 
             if exp_idx in expert_outputs and exp_idx in expert_caches:
                 expert_out = expert_outputs[exp_idx]["outputs"]
@@ -430,20 +622,24 @@ class Experts:
                 #   dL/dw_s = dot(dL/dy, E_s(x)).
                 # The cached output order is exactly the routing-plan order for
                 # this expert, so no token search / xp.where is necessary.
-                dweight_values = xp.sum(
-                    raw_expert_dy * expert_out, axis=-1
-                )
-                dweights_flat[token_indices, slot_indices] = dweight_values
+                with moe_detail_scope("moe.dispatch.router_wgrad"):
+                    dweight_values = xp.sum(
+                        raw_expert_dy * expert_out, axis=-1
+                    )
+                    dweights_flat[token_indices, slot_indices] = dweight_values
 
-            expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
-            expert_dx = self.experts[exp_idx].backward(
-                expert_dy, expert_cache
-            )
+            with moe_detail_scope("moe.dispatch.bwd_weight"):
+                expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
+            with moe_detail_scope("moe.expert.backward_total"):
+                expert_dx = self.experts[exp_idx].backward(
+                    expert_dy, expert_cache
+                )
 
             # top-k selection contains each expert at most once per token, so
             # token_indices are unique within this expert.  The expert loop is
             # serialized on the same stream; atomics are unnecessary here.
-            dx_flat[token_indices] += expert_dx
+            with moe_detail_scope("moe.dispatch.bwd_scatter"):
+                dx_flat[token_indices] += expert_dx
 
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
 

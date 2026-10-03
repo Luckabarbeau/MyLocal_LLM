@@ -4,6 +4,7 @@ from ..backend import xp
 from ..ops.router import Router
 from ..ops.experts import Experts
 from ..ops.routing_plan import RoutingPlan
+from ..performance_profiler import moe_detail_scope
 
 
 class MoE:
@@ -97,29 +98,35 @@ class MoE:
             y: Output tensor of shape (B, T, d_model)
             cache: Dictionary containing intermediate values for backward pass
         """
-        # Router computes expert weights and selects top-k
-        weights, expert_indices, router_cache = self.router.forward(x)
-        
-        # Create routing plan once for all expert dispatch
+        # Router computes expert weights and selects top-k.  Fine-grained MoE
+        # profiling uses CUDA events and therefore does not synchronize each
+        # sub-operation when MINI_LLM_MOE_DETAIL_PROFILE=1.
+        with moe_detail_scope("moe.router.forward"):
+            weights, expert_indices, router_cache = self.router.forward(x)
+
+        # Create routing plan once for all expert dispatch.
         k = weights.shape[-1]
-        routing_plan = RoutingPlan.from_router_outputs(
-            expert_indices, weights, k, n_experts=self.n_experts
-        )
-        
-        # Experts compute weighted combination
-        if return_cache:
-            y, experts_cache = self.experts.forward(
-                x, weights, expert_indices, routing_plan
+        with moe_detail_scope("moe.plan.build"):
+            routing_plan = RoutingPlan.from_router_outputs(
+                expert_indices, weights, k, n_experts=self.n_experts
             )
+
+        # Experts compute weighted combination.
+        if return_cache:
+            with moe_detail_scope("moe.experts.forward"):
+                y, experts_cache = self.experts.forward(
+                    x, weights, expert_indices, routing_plan
+                )
             cache = {
                 "router_cache": router_cache,
                 "experts_cache": experts_cache,
             }
             return y, cache
 
-        return self.experts.forward(
-            x, weights, expert_indices, routing_plan, return_cache=False
-        )
+        with moe_detail_scope("moe.experts.forward"):
+            return self.experts.forward(
+                x, weights, expert_indices, routing_plan, return_cache=False
+            )
 
     def backward(self, dy, cache):
         """Backward pass through experts and router.
@@ -133,9 +140,11 @@ class MoE:
         # Reuse the routing plan, expert outputs, and activation caches from
         # forward.  This avoids both expert recomputation and a second expert
         # dispatch loop solely for dL/d(router weights).
-        dx_experts, dweights = self.experts.backward(
-            dy, experts_cache, return_dweights=True
-        )
+        with moe_detail_scope("moe.experts.backward"):
+            dx_experts, dweights = self.experts.backward(
+                dy, experts_cache, return_dweights=True
+            )
 
-        dx_router = self.router.backward(dweights, router_cache)
+        with moe_detail_scope("moe.router.backward"):
+            dx_router = self.router.backward(dweights, router_cache)
         return dx_experts + dx_router

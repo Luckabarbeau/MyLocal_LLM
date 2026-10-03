@@ -24,6 +24,154 @@ _LOCAL_SOFTMAX_MODULE = None
 _LOCAL_SOFTMAX_DISABLED = False
 
 
+_RETRIEVAL_SCATTER_MODULE = None
+_RETRIEVAL_SCATTER_DISABLED = False
+
+
+def _direct_retrieval_scatter_enabled():
+    """Use direct CUDA scatter kernels for block retrieval attention."""
+    raw = os.environ.get("MINI_LLM_DIRECT_RETRIEVAL_SCATTER", "0").strip().lower()
+    return BACKEND_NAME == "cupy" and raw not in {"0", "false", "off", "no"}
+
+
+def _get_retrieval_scatter_module():
+    global _RETRIEVAL_SCATTER_MODULE, _RETRIEVAL_SCATTER_DISABLED
+    if not _direct_retrieval_scatter_enabled() or _RETRIEVAL_SCATTER_DISABLED:
+        return None
+    if _RETRIEVAL_SCATTER_MODULE is not None:
+        return _RETRIEVAL_SCATTER_MODULE
+    code = r"""
+    extern "C" __global__
+    void retrieval_route_scatter_f32(
+        const float* src, float* dst,
+        const long long* query_positions, const bool* query_valid,
+        int batch, int routes, int heads, int stride, int d_head, int seq_len) {
+        long long n = (long long)batch * routes * heads * stride * d_head;
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n; idx += (long long)blockDim.x * gridDim.x) {
+            long long t = idx;
+            int d = (int)(t % d_head); t /= d_head;
+            int s = (int)(t % stride); t /= stride;
+            int h = (int)(t % heads); t /= heads;
+            int r = (int)(t % routes); t /= routes;
+            int b = (int)t;
+            long long rs = (long long)r * stride + s;
+            if (!query_valid[rs]) continue;
+            long long qpos = query_positions[rs];
+            if (qpos < 0 || qpos >= seq_len) continue;
+            long long dst_idx = ((((long long)b * seq_len + qpos) * heads + h) * d_head + d);
+            dst[dst_idx] = src[idx];
+        }
+    }
+
+    extern "C" __global__
+    void retrieval_kv_scatter_add_f32(
+        const float* dk_src, const float* dv_src,
+        float* dk_dst, float* dv_dst,
+        const long long* key_indices, const long long* kv_map,
+        int batch, int routes, int heads, int keys, int d_head,
+        int seq_len, int n_kv_heads) {
+        long long n = (long long)batch * routes * heads * keys * d_head;
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n; idx += (long long)blockDim.x * gridDim.x) {
+            long long t = idx;
+            int d = (int)(t % d_head); t /= d_head;
+            int kslot = (int)(t % keys); t /= keys;
+            int h = (int)(t % heads); t /= heads;
+            int r = (int)(t % routes); t /= routes;
+            int b = (int)t;
+            long long key_idx = key_indices[(((long long)b * routes + r) * heads + h) * keys + kslot];
+            long long kvh = kv_map[h];
+            if (key_idx < 0 || key_idx >= seq_len || kvh < 0 || kvh >= n_kv_heads) continue;
+            long long dst_idx = ((((long long)b * seq_len + key_idx) * n_kv_heads + kvh) * d_head + d);
+            atomicAdd(dk_dst + dst_idx, dk_src[idx]);
+            atomicAdd(dv_dst + dst_idx, dv_src[idx]);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=("retrieval_route_scatter_f32", "retrieval_kv_scatter_add_f32"),
+        )
+        module.get_function("retrieval_route_scatter_f32")
+        module.get_function("retrieval_kv_scatter_add_f32")
+        _RETRIEVAL_SCATTER_MODULE = module
+    except Exception:
+        strict = os.environ.get("MINI_LLM_DIRECT_RETRIEVAL_SCATTER_STRICT", "0").strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _RETRIEVAL_SCATTER_DISABLED = True
+        return None
+    return _RETRIEVAL_SCATTER_MODULE
+
+
+def _retrieval_route_scatter_f32(src, dst, query_positions, query_valid):
+    module = _get_retrieval_scatter_module()
+    if module is None or src.dtype != xp.float32 or dst.dtype != xp.float32:
+        return False
+    if not src.flags.c_contiguous or not dst.flags.c_contiguous:
+        return False
+    if query_positions.dtype != xp.int64 or query_valid.dtype != xp.bool_:
+        return False
+    if not query_positions.flags.c_contiguous or not query_valid.flags.c_contiguous:
+        return False
+    if src.ndim != 5 or dst.ndim != 4:
+        return False
+    batch, routes, heads, stride, d_head = map(int, src.shape)
+    if (int(dst.shape[0]), int(dst.shape[2]), int(dst.shape[3])) != (batch, heads, d_head):
+        return False
+    if tuple(query_positions.shape) != (routes, stride) or tuple(query_valid.shape) != (routes, stride):
+        return False
+    n = int(src.size)
+    if n == 0:
+        return True
+    threads = 256
+    blocks = min((n + threads - 1) // threads, 65535)
+    module.get_function("retrieval_route_scatter_f32")(
+        (blocks,), (threads,),
+        (src, dst, query_positions, query_valid,
+         np.int32(batch), np.int32(routes), np.int32(heads), np.int32(stride),
+         np.int32(d_head), np.int32(dst.shape[1])),
+    )
+    return True
+
+
+def _retrieval_kv_scatter_add_f32(dk_src, dv_src, dk_dst, dv_dst, key_indices, kv_map):
+    module = _get_retrieval_scatter_module()
+    arrays = (dk_src, dv_src, dk_dst, dv_dst)
+    if module is None or any(a.dtype != xp.float32 for a in arrays):
+        return False
+    if any(not a.flags.c_contiguous for a in arrays):
+        return False
+    if key_indices.dtype != xp.int64 or kv_map.dtype != xp.int64:
+        return False
+    if not key_indices.flags.c_contiguous or not kv_map.flags.c_contiguous:
+        return False
+    if dk_src.shape != dv_src.shape or dk_dst.shape != dv_dst.shape:
+        return False
+    if dk_src.ndim != 5 or dk_dst.ndim != 4:
+        return False
+    batch, routes, heads, keys, d_head = map(int, dk_src.shape)
+    if tuple(key_indices.shape) != (batch, routes, heads, keys) or tuple(kv_map.shape) != (heads,):
+        return False
+    if int(dk_dst.shape[0]) != batch or int(dk_dst.shape[3]) != d_head:
+        return False
+    n = int(dk_src.size)
+    if n == 0:
+        return True
+    threads = 256
+    blocks = min((n + threads - 1) // threads, 65535)
+    module.get_function("retrieval_kv_scatter_add_f32")(
+        (blocks,), (threads,),
+        (dk_src, dv_src, dk_dst, dv_dst, key_indices, kv_map,
+         np.int32(batch), np.int32(routes), np.int32(heads), np.int32(keys),
+         np.int32(d_head), np.int32(dk_dst.shape[1]), np.int32(dk_dst.shape[2])),
+    )
+    return True
+
+
 def _fused_local_softmax_enabled():
     raw = os.environ.get("MINI_LLM_FUSED_LOCAL_SOFTMAX", "1").strip().lower()
     return BACKEND_NAME == "cupy" and raw not in {"0", "false", "off", "no"}
@@ -1870,14 +2018,17 @@ def block_retrieval_attention_forward(
             else probs
         )
     context_routes = xp.matmul(probs_compute, v_compute)
-    # [B,R,H,S,D] -> [B,R,S,H,D]
-    context_route_tokens = context_routes.transpose(0, 1, 3, 2, 4)
-    flat_valid = query_valid.reshape(-1)
-    flat_positions = query_positions.reshape(-1)[flat_valid]
-    flat_context = context_route_tokens.reshape(
-        batch, n_routes * routing_stride, n_q_heads, d_head
-    )[:, flat_valid, :, :]
-    context[:, flat_positions, :, :] = flat_context
+    if not _retrieval_route_scatter_f32(
+        context_routes, context, query_positions, query_valid
+    ):
+        # [B,R,H,S,D] -> [B,R,S,H,D]
+        context_route_tokens = context_routes.transpose(0, 1, 3, 2, 4)
+        flat_valid = query_valid.reshape(-1)
+        flat_positions = query_positions.reshape(-1)[flat_valid]
+        flat_context = context_route_tokens.reshape(
+            batch, n_routes * routing_stride, n_q_heads, d_head
+        )[:, flat_valid, :, :]
+        context[:, flat_positions, :, :] = flat_context
 
     if not return_cache:
         return context
@@ -1989,30 +2140,30 @@ def block_retrieval_attention_backward(dcontext, cache):
     dk_selected = xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
 
     # Routes own disjoint query ranges, so Q gradients can be assigned without
-    # a scatter-add.  Invalid padded positions from a short final route are
-    # filtered before assignment.
-    dq_route_tokens = dq_routes.transpose(0, 1, 3, 2, 4).reshape(
-        batch, n_routes * routing_stride, n_q_heads, d_head
-    )
-    flat_valid = query_valid.reshape(-1)
-    flat_positions = query_positions.reshape(-1)[flat_valid]
-    dq[:, flat_positions, :, :] = dq_route_tokens[:, flat_valid, :, :]
+    # a scatter-add.  The CUDA fast path indexes the regular route tensor
+    # directly and avoids CuPy boolean-mask scans entirely.
+    if not _retrieval_route_scatter_f32(
+        dq_routes, dq, query_positions, query_valid
+    ):
+        dq_route_tokens = dq_routes.transpose(0, 1, 3, 2, 4).reshape(
+            batch, n_routes * routing_stride, n_q_heads, d_head
+        )
+        flat_valid = query_valid.reshape(-1)
+        flat_positions = query_positions.reshape(-1)[flat_valid]
+        dq[:, flat_positions, :, :] = dq_route_tokens[:, flat_valid, :, :]
 
     # K/V may be selected by several routes or query heads, so accumulation is
-    # genuinely irregular.  Crucially, the query dimension has already been
-    # reduced by GEMM: scatter volume is [B,R,H,K,D], not [B,H,Q,K,D].
-    scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
-    scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
-    xp.add.at(
-        dk,
-        (scatter_batch, key_indices, scatter_kv),
-        dk_selected.astype(grad_dtype, copy=False),
-    )
-    xp.add.at(
-        dv,
-        (scatter_batch, key_indices, scatter_kv),
-        dv_selected.astype(grad_dtype, copy=False),
-    )
+    # genuinely irregular.  The CUDA path performs both FP32 atomic scatter
+    # adds in one launch instead of two generic ``xp.add.at`` calls.
+    dk_selected_grad = dk_selected.astype(grad_dtype, copy=False)
+    dv_selected_grad = dv_selected.astype(grad_dtype, copy=False)
+    if not _retrieval_kv_scatter_add_f32(
+        dk_selected_grad, dv_selected_grad, dk, dv, key_indices, kv_map
+    ):
+        scatter_batch = xp.broadcast_to(batch_ids, key_indices.shape)
+        scatter_kv = xp.broadcast_to(kv_ids, key_indices.shape)
+        xp.add.at(dk, (scatter_batch, key_indices, scatter_kv), dk_selected_grad)
+        xp.add.at(dv, (scatter_batch, key_indices, scatter_kv), dv_selected_grad)
 
     if cache["weight_mode"] == "logit_bias":
         # One block logit prior is shared by all exact tokens in that block and

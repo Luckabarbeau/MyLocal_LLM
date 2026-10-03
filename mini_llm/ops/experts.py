@@ -157,6 +157,31 @@ def _fused_swiglu_backward(dh, g, u):
     return dg, du
 
 
+def _concurrent_experts_enabled(dtype):
+    """Whether to overlap independent sparse experts on CUDA streams.
+
+    This path is deliberately BF16/CuPy-only.  Experts have disjoint
+    parameters, so their FFN math and parameter-gradient updates can execute
+    independently.  Token/output scatters remain on the caller stream after
+    explicit event waits because top-k experts may target the same token.
+    """
+    raw = os.environ.get("MINI_LLM_CONCURRENT_EXPERTS", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no", ""}
+    )
+
+
+def _concurrent_expert_stream_count(n_experts):
+    raw = os.environ.get("MINI_LLM_EXPERT_STREAMS", "2").strip()
+    try:
+        count = int(raw)
+    except ValueError:
+        count = 2
+    return max(1, min(int(n_experts), count))
+
+
 def _fused_expert_gemm_enabled():
     """Enable the checkpoint-compatible fused SwiGLU projection path.
 
@@ -401,6 +426,10 @@ class Experts:
         self.d_model = d_model
         self.d_ff = d_ff
         self.n_experts = n_experts
+        # Lazily-created non-blocking CUDA streams used only by the opt-in
+        # concurrent-expert path.  Keeping them on the Experts instance avoids
+        # stream creation in the hot loop.
+        self._expert_streams = []
         
         # Create n_experts ExpertFFN layers
         self.experts = []
@@ -438,6 +467,207 @@ class Experts:
         # The counter is shared across all instances via class variable
         return ExpertFFN.get_forward_count()
 
+    def _get_expert_streams(self):
+        """Return a persistent pool of non-blocking CUDA streams."""
+        count = _concurrent_expert_stream_count(self.n_experts)
+        if len(self._expert_streams) != count:
+            self._expert_streams = [
+                xp.cuda.Stream(non_blocking=True) for _ in range(count)
+            ]
+        return self._expert_streams
+
+    @staticmethod
+    def _record_ready_event():
+        """Record all caller-stream work that expert streams must depend on."""
+        event = xp.cuda.Event()
+        event.record()
+        return event
+
+    @staticmethod
+    def _wait_for_expert_events(events):
+        """Make the caller stream depend on every launched expert stream."""
+        current = xp.cuda.get_current_stream()
+        for event in events:
+            current.wait_event(event)
+
+    def _forward_concurrent(
+        self, x, weights, expert_indices, routing_plan, return_cache
+    ):
+        """Sparse expert forward with independent experts overlapped on streams.
+
+        Only expert-local gather + FFN work is concurrent.  The weighted token
+        scatter is intentionally performed on the caller stream after waiting
+        for every expert event because different top-k experts can contribute
+        to the same output token.
+        """
+        batch_size, seq_len, d_model = x.shape
+        k = weights.shape[-1]
+        N = batch_size * seq_len
+        x_flat = x.reshape(N, d_model)
+
+        with moe_detail_scope("moe.dispatch.fwd_alloc"):
+            y_flat = xp.zeros((N, d_model), dtype=x.dtype)
+
+        streams = self._get_expert_streams()
+        ready = self._record_ready_event()
+        for stream in streams:
+            stream.wait_event(ready)
+
+        pending = []
+        expert_outputs = {}
+        expert_caches = {}
+
+        for exp_idx in range(self.n_experts):
+            token_indices, slot_indices, expert_weights = (
+                routing_plan.get_expert_assignments(exp_idx)
+            )
+            if routing_plan.get_assignment_count(exp_idx) == 0:
+                continue
+
+            stream = streams[exp_idx % len(streams)]
+            with stream:
+                with moe_detail_scope("moe.dispatch.fwd_gather"):
+                    expert_x = x_flat[token_indices]
+                if return_cache:
+                    with moe_detail_scope("moe.expert.forward_total"):
+                        expert_out, expert_cache = self.experts[exp_idx].forward(
+                            expert_x
+                        )
+                else:
+                    with moe_detail_scope("moe.expert.forward_total"):
+                        expert_out = self.experts[exp_idx].forward(
+                            expert_x, return_cache=False
+                        )
+                    expert_cache = None
+                done = xp.cuda.Event()
+                done.record()
+
+            pending.append(
+                (exp_idx, token_indices, expert_weights, expert_out, expert_cache, done)
+            )
+
+        self._wait_for_expert_events([item[-1] for item in pending])
+
+        # Preserve the existing deterministic serialized scatter semantics.
+        for exp_idx, token_indices, expert_weights, expert_out, expert_cache, _ in pending:
+            if return_cache:
+                expert_outputs[exp_idx] = {
+                    "outputs": expert_out,
+                    "token_indices": token_indices,
+                    "weights": expert_weights,
+                }
+                expert_caches[exp_idx] = expert_cache
+            with moe_detail_scope("moe.dispatch.fwd_weight"):
+                weighted_out = expert_weights[:, xp.newaxis] * expert_out
+            with moe_detail_scope("moe.dispatch.fwd_scatter"):
+                y_flat[token_indices] += weighted_out
+
+        y = y_flat.reshape(batch_size, seq_len, d_model)
+        if not return_cache:
+            return y
+        return y, {
+            "x": x,
+            "weights": weights,
+            "expert_indices": expert_indices,
+            "y": y,
+            "expert_outputs": expert_outputs,
+            "expert_caches": expert_caches,
+            "routing_plan": routing_plan,
+        }
+
+    def _backward_concurrent(self, dy, cache, return_dweights):
+        """Sparse expert backward with independent expert math overlapped.
+
+        Each expert owns disjoint parameters, so its weight-gradient updates are
+        safe on a private stream.  Token dX and router-weight scatters remain on
+        the caller stream after event waits, avoiding cross-stream write races.
+        """
+        x = cache["x"]
+        weights = cache["weights"]
+        expert_indices = cache["expert_indices"]
+        routing_plan = cache.get("routing_plan")
+        if routing_plan is None:
+            # Legacy caches keep the original serial implementation.
+            return None
+
+        batch_size, seq_len, d_model = x.shape
+        N = batch_size * seq_len
+        k = weights.shape[-1]
+        dy_flat = dy.reshape(N, d_model)
+
+        with moe_detail_scope("moe.dispatch.bwd_alloc"):
+            dx_flat = xp.zeros((N, d_model), dtype=x.dtype)
+            dweights_flat = (
+                xp.zeros((N, k), dtype=dy.dtype) if return_dweights else None
+            )
+
+        expert_outputs = cache.get("expert_outputs", {})
+        expert_caches = cache.get("expert_caches", {})
+        active_experts = [
+            exp_idx
+            for exp_idx in range(self.n_experts)
+            if routing_plan.get_assignment_count(exp_idx) > 0
+        ]
+        if any(
+            exp_idx not in expert_outputs or exp_idx not in expert_caches
+            for exp_idx in active_experts
+        ):
+            # New optimized forward always caches these.  Retain the serial
+            # fallback for any old/hand-built cache used by tests or tools.
+            return None
+
+        streams = self._get_expert_streams()
+        ready = self._record_ready_event()
+        for stream in streams:
+            stream.wait_event(ready)
+
+        pending = []
+        for exp_idx in active_experts:
+            token_indices, slot_indices, expert_weights = (
+                routing_plan.get_expert_assignments(exp_idx)
+            )
+            expert_out = expert_outputs[exp_idx]["outputs"]
+            expert_cache = expert_caches[exp_idx]
+            stream = streams[exp_idx % len(streams)]
+            with stream:
+                with moe_detail_scope("moe.dispatch.bwd_gather"):
+                    raw_expert_dy = dy_flat[token_indices]
+
+                if return_dweights:
+                    with moe_detail_scope("moe.dispatch.router_wgrad"):
+                        dweight_values = xp.sum(
+                            raw_expert_dy * expert_out, axis=-1
+                        )
+                else:
+                    dweight_values = None
+
+                with moe_detail_scope("moe.dispatch.bwd_weight"):
+                    expert_dy = raw_expert_dy * expert_weights[:, xp.newaxis]
+                with moe_detail_scope("moe.expert.backward_total"):
+                    expert_dx = self.experts[exp_idx].backward(
+                        expert_dy, expert_cache
+                    )
+                done = xp.cuda.Event()
+                done.record()
+
+            pending.append(
+                (token_indices, slot_indices, dweight_values, expert_dx, done)
+            )
+
+        self._wait_for_expert_events([item[-1] for item in pending])
+
+        for token_indices, slot_indices, dweight_values, expert_dx, _ in pending:
+            if return_dweights:
+                with moe_detail_scope("moe.dispatch.router_wgrad_scatter"):
+                    dweights_flat[token_indices, slot_indices] = dweight_values
+            with moe_detail_scope("moe.dispatch.bwd_scatter"):
+                dx_flat[token_indices] += expert_dx
+
+        dx = dx_flat.reshape(batch_size, seq_len, d_model)
+        if return_dweights:
+            return dx, dweights_flat.reshape(batch_size, seq_len, k)
+        return dx
+
     def forward(self, x, weights, expert_indices, routing_plan: RoutingPlan = None, n_experts: int = None, return_cache=True):
         """
         Forward pass through experts with true sparse token-to-expert dispatch.
@@ -467,22 +697,28 @@ class Experts:
         
         # For each (token, slot) pair, we have: token_idx, expert_idx, weight
         # Total assignments = N * k
-        
+
+        # Determine n_experts and build the routing plan before allocating the
+        # serial output buffer so the concurrent path does not allocate it twice.
+        if n_experts is None:
+            n_experts = self.n_experts
+        if routing_plan is None:
+            routing_plan = RoutingPlan.from_router_outputs(
+                expert_indices, weights, k, n_experts=self.n_experts
+            )
+
+        if _concurrent_experts_enabled(x.dtype):
+            return self._forward_concurrent(
+                x, weights, expert_indices, routing_plan, return_cache
+            )
+
         # Prepare output: [N, D]
         with moe_detail_scope("moe.dispatch.fwd_alloc"):
             y_flat = xp.zeros((N, d_model), dtype=x.dtype)
-        
+
         # Cache for expert outputs and caches (to avoid recomputation in backward)
         expert_outputs = {}  # exp_idx -> {"outputs": [...], "token_indices": [...], "weights": [...]}
         expert_caches = {}   # exp_idx -> cache from expert.forward()
-        
-        # Determine n_experts
-        if n_experts is None:
-            n_experts = self.n_experts
-        
-        # If routing plan not provided, create it
-        if routing_plan is None:
-            routing_plan = RoutingPlan.from_router_outputs(expert_indices, weights, k, n_experts=self.n_experts)
         
         # Group assignments by expert using the routing plan
         for exp_idx in range(self.n_experts):
@@ -575,6 +811,13 @@ class Experts:
         expert_outputs = cache.get("expert_outputs", {})
         expert_caches = cache.get("expert_caches", {})
         routing_plan = cache.get("routing_plan")
+
+        if _concurrent_experts_enabled(x.dtype):
+            concurrent = self._backward_concurrent(
+                dy, cache, return_dweights=return_dweights
+            )
+            if concurrent is not None:
+                return concurrent
 
         # Fallback metadata is built lazily only for legacy caches.  The normal
         # optimized path always receives a RoutingPlan from forward.

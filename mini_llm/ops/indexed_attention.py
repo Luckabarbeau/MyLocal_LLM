@@ -703,6 +703,279 @@ def _query_chunks(query_length, query_chunk_size):
         yield start, min(start + int(query_chunk_size), int(query_length))
 
 
+
+
+_INDEXED_SOFTMAX_MODULE = None
+_INDEXED_SOFTMAX_DISABLED = False
+
+
+def _fused_indexed_softmax_enabled():
+    """Use fused CUDA masked-softmax kernels for indexed attention paths."""
+    raw = os.environ.get("MINI_LLM_FUSED_INDEXED_SOFTMAX", "0").strip().lower()
+    return BACKEND_NAME == "cupy" and raw not in {"0", "false", "off", "no"}
+
+
+def _get_indexed_softmax_module():
+    """Compile generic FP32 masked-softmax CUDA kernels lazily.
+
+    The kernels accept a compact broadcast mask rather than materializing a
+    score-sized boolean tensor.  Shapes up to five dimensions cover every
+    indexed-attention layout currently used by the model:
+
+      generic/dilated/global: [B,H,Q,K]
+      block retrieval:        [B,R,H,Q,K]
+
+    Softmax reductions stay FP32 and empty rows return exact zeros, matching
+    :func:`_masked_softmax_forward`.
+    """
+    global _INDEXED_SOFTMAX_MODULE, _INDEXED_SOFTMAX_DISABLED
+    if not _fused_indexed_softmax_enabled() or _INDEXED_SOFTMAX_DISABLED:
+        return None
+    if _INDEXED_SOFTMAX_MODULE is not None:
+        return _INDEXED_SOFTMAX_MODULE
+
+    code = r"""
+    __device__ __forceinline__ long long mask_offset_5d(
+        long long row, int col,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        int i3 = (int)(row % d3); row /= d3;
+        int i2 = (int)(row % d2); row /= d2;
+        int i1 = (int)(row % d1); row /= d1;
+        int i0 = (int)row;
+        long long s4 = 1;
+        long long s3 = (long long)m4;
+        long long s2 = (long long)m3 * s3;
+        long long s1 = (long long)m2 * s2;
+        long long s0 = (long long)m1 * s1;
+        return (long long)(m0 == 1 ? 0 : i0) * s0
+             + (long long)(m1 == 1 ? 0 : i1) * s1
+             + (long long)(m2 == 1 ? 0 : i2) * s2
+             + (long long)(m3 == 1 ? 0 : i3) * s3
+             + (long long)(m4 == 1 ? 0 : col) * s4;
+    }
+
+    extern "C" __global__
+    void indexed_masked_softmax_fwd_f32(
+        const float* scores, const unsigned char* mask, float* probs,
+        long long rows, int k_len, float logit_multiplier,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        const float* s = scores + row * k_len;
+        float* p = probs + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        int any_valid = 0;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            if (mask[mo]) {
+                local_max = fmaxf(local_max, s[j]);
+                any_valid = 1;
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        // Use the second half of shared memory for a validity reduction.
+        float* sh_valid = sh + blockDim.x;
+        sh_valid[threadIdx.x] = (float)any_valid;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh_valid[threadIdx.x] += sh_valid[threadIdx.x + stride];
+            __syncthreads();
+        }
+        if (sh_valid[0] == 0.0f) {
+            for (int j = threadIdx.x; j < k_len; j += blockDim.x) p[j] = 0.0f;
+            return;
+        }
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            float value = 0.0f;
+            if (mask[mo]) value = expf((s[j] - row_max) * logit_multiplier);
+            p[j] = value;
+            local_sum += value;
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) p[j] *= inv;
+    }
+
+    extern "C" __global__
+    void indexed_masked_softmax_bwd_f32(
+        const float* dprobs, const float* probs,
+        const unsigned char* mask, float* dscores,
+        long long rows, int k_len,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        const float* dp = dprobs + row * k_len;
+        const float* p = probs + row * k_len;
+        float* ds = dscores + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            if (mask[mo]) local_sum += dp[j] * p[j];
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            ds[j] = mask[mo] ? p[j] * (dp[j] - correction) : 0.0f;
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=(
+                "indexed_masked_softmax_fwd_f32",
+                "indexed_masked_softmax_bwd_f32",
+            ),
+        )
+        module.get_function("indexed_masked_softmax_fwd_f32")
+        module.get_function("indexed_masked_softmax_bwd_f32")
+        _INDEXED_SOFTMAX_MODULE = module
+    except Exception:
+        strict = os.environ.get(
+            "MINI_LLM_FUSED_INDEXED_SOFTMAX_STRICT", "0"
+        ).strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _INDEXED_SOFTMAX_DISABLED = True
+        return None
+    return _INDEXED_SOFTMAX_MODULE
+
+
+def _indexed_softmax_layout(scores, valid_mask):
+    """Return the compact 5-D broadcast descriptor used by CUDA kernels."""
+    if scores.ndim < 2 or scores.ndim > 5:
+        return None
+    if valid_mask.ndim > scores.ndim:
+        return None
+    score_shape = (1,) * (5 - scores.ndim) + tuple(map(int, scores.shape))
+    mask_shape_raw = (1,) * (scores.ndim - valid_mask.ndim) + tuple(
+        map(int, valid_mask.shape)
+    )
+    mask_shape = (1,) * (5 - scores.ndim) + mask_shape_raw
+    for d, m in zip(score_shape, mask_shape):
+        if m not in (1, d):
+            return None
+    # Last axis is the key axis. A singleton is allowed for route-valid masks.
+    return score_shape, mask_shape
+
+
+def _masked_softmax_forward_cuda(scores, valid_mask, logit_multiplier=1.0):
+    module = _get_indexed_softmax_module()
+    if module is None or scores.dtype != xp.float32:
+        return None
+    if not scores.flags.c_contiguous:
+        return None
+    layout = _indexed_softmax_layout(scores, valid_mask)
+    if layout is None:
+        return None
+    score_shape, mask_shape = layout
+    mask = valid_mask.astype(bool, copy=False)
+    if not mask.flags.c_contiguous:
+        mask = xp.ascontiguousarray(mask)
+    k_len = int(scores.shape[-1])
+    rows = int(scores.size // k_len)
+    if rows == 0 or k_len == 0:
+        return xp.zeros_like(scores, dtype=xp.float32)
+    probs = xp.empty_like(scores, dtype=xp.float32)
+    threads = 256
+    # One block per row. Current indexed layouts stay well below CUDA's 1-D
+    # grid limit; retain a defensive fallback for pathological shapes.
+    if rows > 2147483647:
+        return None
+    module.get_function("indexed_masked_softmax_fwd_f32")(
+        (rows,), (threads,),
+        (
+            scores, mask, probs,
+            np.int64(rows), np.int32(k_len), np.float32(logit_multiplier),
+            np.int32(score_shape[1]), np.int32(score_shape[2]), np.int32(score_shape[3]),
+            np.int32(mask_shape[0]), np.int32(mask_shape[1]), np.int32(mask_shape[2]),
+            np.int32(mask_shape[3]), np.int32(mask_shape[4]),
+        ),
+        shared_mem=threads * 2 * 4,
+    )
+    return probs
+
+
+def _masked_softmax_backward_cuda(dprobs, probs, valid_mask):
+    module = _get_indexed_softmax_module()
+    if module is None or dprobs.dtype != xp.float32 or probs.dtype != xp.float32:
+        return None
+    if dprobs.shape != probs.shape:
+        return None
+    if not dprobs.flags.c_contiguous or not probs.flags.c_contiguous:
+        return None
+    layout = _indexed_softmax_layout(probs, valid_mask)
+    if layout is None:
+        return None
+    score_shape, mask_shape = layout
+    mask = valid_mask.astype(bool, copy=False)
+    if not mask.flags.c_contiguous:
+        mask = xp.ascontiguousarray(mask)
+    k_len = int(probs.shape[-1])
+    rows = int(probs.size // k_len)
+    if rows == 0 or k_len == 0:
+        return xp.zeros_like(probs, dtype=xp.float32)
+    dscores = xp.empty_like(probs, dtype=xp.float32)
+    threads = 256
+    if rows > 2147483647:
+        return None
+    module.get_function("indexed_masked_softmax_bwd_f32")(
+        (rows,), (threads,),
+        (
+            dprobs, probs, mask, dscores,
+            np.int64(rows), np.int32(k_len),
+            np.int32(score_shape[1]), np.int32(score_shape[2]), np.int32(score_shape[3]),
+            np.int32(mask_shape[0]), np.int32(mask_shape[1]), np.int32(mask_shape[2]),
+            np.int32(mask_shape[3]), np.int32(mask_shape[4]),
+        ),
+        shared_mem=threads * 4,
+    )
+    return dscores
+
+
+def _masked_softmax_backward(dprobs, probs, valid_mask):
+    """Masked softmax Jacobian with an optional fused CUDA fast path."""
+    fused = _masked_softmax_backward_cuda(dprobs, probs, valid_mask)
+    if fused is not None:
+        return fused
+    dscores = _softmax_backward(dprobs, probs)
+    return xp.where(valid_mask, dscores, 0.0)
+
 def _masked_softmax_forward(scores, valid_mask, logit_multiplier=1.0):
     """Stable softmax that returns exactly zero for rows with no valid keys."""
     work = (
@@ -711,6 +984,9 @@ def _masked_softmax_forward(scores, valid_mask, logit_multiplier=1.0):
         else scores
     )
     valid_mask = valid_mask.astype(bool, copy=False)
+    fused = _masked_softmax_forward_cuda(work, valid_mask, logit_multiplier)
+    if fused is not None:
+        return fused
     has_valid = xp.any(valid_mask, axis=-1, keepdims=True)
     neg_inf = xp.asarray(-xp.inf, dtype=work.dtype)
     masked = xp.where(valid_mask, work, neg_inf)
@@ -724,6 +1000,282 @@ def _masked_softmax_forward(scores, valid_mask, logit_multiplier=1.0):
     safe_denom = xp.where(has_valid, denom, 1.0)
     return exp_scores / safe_denom
 
+
+
+_INDEXED_BF16_PIPELINE_MODULE = None
+_INDEXED_BF16_PIPELINE_DISABLED = False
+
+
+def _bf16_indexed_pipeline_enabled(dtype):
+    """Use BF16 storage around regular indexed-attention Tensor-Core GEMMs.
+
+    This path is intended for regular sparse patterns (currently dilated and
+    global-sparse attention) where each attention product can be expressed as
+    a small number of large 2-D BF16 GEMMs.  Softmax reductions remain FP32
+    inside CUDA while score/probability/score-gradient matrices stay BF16.
+    """
+    raw = os.environ.get(
+        "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE", "0"
+    ).strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
+
+def _get_indexed_bf16_pipeline_module():
+    global _INDEXED_BF16_PIPELINE_MODULE, _INDEXED_BF16_PIPELINE_DISABLED
+    if BACKEND_NAME != "cupy" or _INDEXED_BF16_PIPELINE_DISABLED:
+        return None
+    if _INDEXED_BF16_PIPELINE_MODULE is not None:
+        return _INDEXED_BF16_PIPELINE_MODULE
+
+    code = r"""
+    __device__ __forceinline__ float bf16_to_float(unsigned short x) {
+        union { unsigned int u; float f; } v;
+        v.u = ((unsigned int)x) << 16;
+        return v.f;
+    }
+
+    __device__ __forceinline__ unsigned short float_to_bf16(float x) {
+        union { unsigned int u; float f; } v;
+        v.f = x;
+        unsigned int bits = v.u;
+        unsigned int lsb = (bits >> 16) & 1u;
+        bits += 0x7fffu + lsb;
+        return (unsigned short)(bits >> 16);
+    }
+
+    __device__ __forceinline__ long long mask_offset_5d_bf16(
+        long long row, int col,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        int i3 = (int)(row % d3); row /= d3;
+        int i2 = (int)(row % d2); row /= d2;
+        int i1 = (int)(row % d1); row /= d1;
+        int i0 = (int)row;
+        long long s4 = 1;
+        long long s3 = (long long)m4;
+        long long s2 = (long long)m3 * s3;
+        long long s1 = (long long)m2 * s2;
+        long long s0 = (long long)m1 * s1;
+        return (long long)(m0 == 1 ? 0 : i0) * s0
+             + (long long)(m1 == 1 ? 0 : i1) * s1
+             + (long long)(m2 == 1 ? 0 : i2) * s2
+             + (long long)(m3 == 1 ? 0 : i3) * s3
+             + (long long)(m4 == 1 ? 0 : col);
+    }
+
+    extern "C" __global__
+    void indexed_masked_softmax_fwd_bf16(
+        const unsigned short* scores, const unsigned char* mask,
+        unsigned short* probs,
+        long long rows, int k_len, float score_scale,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        const unsigned short* s = scores + row * k_len;
+        unsigned short* p = probs + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        int any_valid = 0;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d_bf16(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            if (mask[mo]) {
+                local_max = fmaxf(local_max, bf16_to_float(s[j]) * score_scale);
+                any_valid = 1;
+            }
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float* sh_valid = sh + blockDim.x;
+        sh_valid[threadIdx.x] = (float)any_valid;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh_valid[threadIdx.x] += sh_valid[threadIdx.x + stride];
+            __syncthreads();
+        }
+        if (sh_valid[0] == 0.0f) {
+            for (int j = threadIdx.x; j < k_len; j += blockDim.x)
+                p[j] = (unsigned short)0;
+            return;
+        }
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d_bf16(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            if (mask[mo]) {
+                float value = bf16_to_float(s[j]) * score_scale;
+                local_sum += expf(value - row_max);
+            }
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d_bf16(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            float out = 0.0f;
+            if (mask[mo]) {
+                float value = bf16_to_float(s[j]) * score_scale;
+                out = expf(value - row_max) * inv;
+            }
+            p[j] = float_to_bf16(out);
+        }
+    }
+
+    extern "C" __global__
+    void indexed_masked_softmax_bwd_bf16(
+        const unsigned short* dprobs, const unsigned short* probs,
+        const unsigned char* mask, unsigned short* dscores,
+        long long rows, int k_len,
+        int d1, int d2, int d3,
+        int m0, int m1, int m2, int m3, int m4) {
+        long long row = (long long)blockIdx.x;
+        if (row >= rows) return;
+        const unsigned short* dp = dprobs + row * k_len;
+        const unsigned short* p = probs + row * k_len;
+        unsigned short* ds = dscores + row * k_len;
+        extern __shared__ float sh[];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d_bf16(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            if (mask[mo])
+                local_sum += bf16_to_float(dp[j]) * bf16_to_float(p[j]);
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            long long mo = mask_offset_5d_bf16(
+                row, j, d1, d2, d3, m0, m1, m2, m3, m4);
+            float out = 0.0f;
+            if (mask[mo]) {
+                float pf = bf16_to_float(p[j]);
+                out = pf * (bf16_to_float(dp[j]) - correction);
+            }
+            ds[j] = float_to_bf16(out);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code,
+            options=("--std=c++11",),
+            name_expressions=(
+                "indexed_masked_softmax_fwd_bf16",
+                "indexed_masked_softmax_bwd_bf16",
+            ),
+        )
+        module.get_function("indexed_masked_softmax_fwd_bf16")
+        module.get_function("indexed_masked_softmax_bwd_bf16")
+        _INDEXED_BF16_PIPELINE_MODULE = module
+    except Exception:
+        strict = os.environ.get(
+            "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE_STRICT", "0"
+        ).strip().lower()
+        if strict not in {"0", "false", "off", "no"}:
+            raise
+        _INDEXED_BF16_PIPELINE_DISABLED = True
+        return None
+    return _INDEXED_BF16_PIPELINE_MODULE
+
+
+def _masked_softmax_forward_bf16_cuda(scores, valid_mask, score_scale):
+    if not _bf16_indexed_pipeline_enabled(scores.dtype):
+        return None
+    module = _get_indexed_bf16_pipeline_module()
+    if module is None or not scores.flags.c_contiguous:
+        return None
+    layout = _indexed_softmax_layout(scores, valid_mask)
+    if layout is None:
+        return None
+    score_shape, mask_shape = layout
+    mask = valid_mask.astype(bool, copy=False)
+    if not mask.flags.c_contiguous:
+        mask = xp.ascontiguousarray(mask)
+    k_len = int(scores.shape[-1])
+    rows = int(scores.size // k_len)
+    if rows == 0 or k_len == 0:
+        return xp.zeros_like(scores)
+    if rows > 2147483647:
+        return None
+    probs = xp.empty_like(scores)
+    threads = 256
+    module.get_function("indexed_masked_softmax_fwd_bf16")(
+        (rows,), (threads,),
+        (
+            scores, mask, probs,
+            np.int64(rows), np.int32(k_len), np.float32(score_scale),
+            np.int32(score_shape[1]), np.int32(score_shape[2]), np.int32(score_shape[3]),
+            np.int32(mask_shape[0]), np.int32(mask_shape[1]), np.int32(mask_shape[2]),
+            np.int32(mask_shape[3]), np.int32(mask_shape[4]),
+        ),
+        shared_mem=threads * 2 * 4,
+    )
+    return probs
+
+
+def _masked_softmax_backward_bf16_cuda(dprobs, probs, valid_mask):
+    if not _bf16_indexed_pipeline_enabled(probs.dtype):
+        return None
+    module = _get_indexed_bf16_pipeline_module()
+    if module is None:
+        return None
+    if dprobs.dtype != probs.dtype or dprobs.shape != probs.shape:
+        return None
+    if not dprobs.flags.c_contiguous or not probs.flags.c_contiguous:
+        return None
+    layout = _indexed_softmax_layout(probs, valid_mask)
+    if layout is None:
+        return None
+    score_shape, mask_shape = layout
+    mask = valid_mask.astype(bool, copy=False)
+    if not mask.flags.c_contiguous:
+        mask = xp.ascontiguousarray(mask)
+    k_len = int(probs.shape[-1])
+    rows = int(probs.size // k_len)
+    if rows == 0 or k_len == 0:
+        return xp.zeros_like(probs)
+    if rows > 2147483647:
+        return None
+    dscores = xp.empty_like(probs)
+    threads = 256
+    module.get_function("indexed_masked_softmax_bwd_bf16")(
+        (rows,), (threads,),
+        (
+            dprobs, probs, mask, dscores,
+            np.int64(rows), np.int32(k_len),
+            np.int32(score_shape[1]), np.int32(score_shape[2]), np.int32(score_shape[3]),
+            np.int32(mask_shape[0]), np.int32(mask_shape[1]), np.int32(mask_shape[2]),
+            np.int32(mask_shape[3]), np.int32(mask_shape[4]),
+        ),
+        shared_mem=threads * 4,
+    )
+    return dscores
 
 def _softmax_backward(dprobs, probs):
     correction = xp.sum(dprobs * probs, axis=-1, keepdims=True)
@@ -1021,8 +1573,7 @@ def indexed_attention_backward(dcontext, cache):
 
         # probs is zero at every invalid key, so the softmax Jacobian gives an
         # exactly zero score gradient there (including completely empty rows).
-        dscores = _softmax_backward(dprobs, probs_chunk)
-        dscores = xp.where(chunk_valid, dscores, 0.0)
+        dscores = _masked_softmax_backward(dprobs, probs_chunk, chunk_valid)
         if dlogit_bias is not None:
             dlogit_bias[:, :, q_start:q_end, :] = dscores
 
@@ -1578,17 +2129,9 @@ def dilated_attention_forward(
 ):
     """Specialized exact fixed-phase dilated causal attention.
 
-    The generic indexed implementation treats every selected token as an
-    arbitrary gather.  Fixed dilation has much more structure: queries can be
-    split by ``t % dilation`` and each phase attends to a contiguous causal
-    window in a downsampled K/V sequence.  This implementation exploits that
-    structure while preserving exactly the visibility of
-    :func:`build_dilated_causal_plan`.
-
-    For a query ``t = r + m*d`` the visible keys live in residue
-    ``(r-offset) mod d``.  In reduced coordinates they form an ordinary
-    trailing window ending at ``m`` or ``m-1`` depending on whether the phase
-    crosses the sequence origin.
+    The BF16 indexed-pipeline fast path keeps QK scores, probabilities, dP and
+    dS in BF16 storage around 2-D Tensor-Core GEMMs.  Max/sum/exp and the
+    softmax Jacobian remain FP32 inside fused CUDA kernels.
     """
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
@@ -1622,6 +2165,10 @@ def dilated_attention_forward(
     )
     q_heads = q.transpose(0, 2, 1, 3)
     bf16_attention = is_bfloat16_dtype(q.dtype)
+    bf16_pipeline = (
+        _bf16_indexed_pipeline_enabled(q.dtype)
+        and _get_indexed_bf16_pipeline_module() is not None
+    )
     context_dtype = xp.float32 if bf16_attention else q.dtype
     context_heads = xp.zeros(
         (batch, n_q_heads, query_length, d_head), dtype=context_dtype
@@ -1630,7 +2177,6 @@ def dilated_attention_forward(
     chunk_caches = [] if return_cache else None
 
     for query_residue in range(dilation):
-        # Empty residue classes occur when dilation exceeds sequence length.
         phase_length = (query_length - 1 - query_residue) // dilation + 1
         if phase_length <= 0:
             continue
@@ -1639,7 +2185,6 @@ def dilated_attention_forward(
         if key_phase_length <= 0:
             continue
 
-        # If r < offset, t-offset lies in the previous reduced-sequence cell.
         alignment_shift = 0 if query_residue >= offset else -1
         phase_chunk = _resolve_dilated_query_chunk_size(
             phase_length, query_chunk_size
@@ -1648,9 +2193,7 @@ def dilated_attention_forward(
         for phase_start, phase_end in _query_chunks(phase_length, phase_chunk):
             max_key_end = phase_end + alignment_shift
             key_end = min(key_phase_length, max(0, max_key_end))
-            key_start = max(
-                0, phase_start + alignment_shift - key_slots + 1
-            )
+            key_start = max(0, phase_start + alignment_shift - key_slots + 1)
 
             q_token_slice = slice(
                 query_residue + phase_start * dilation,
@@ -1660,22 +2203,11 @@ def dilated_attention_forward(
             q_chunk = q_heads[:, :, q_token_slice, :]
 
             if key_end <= key_start:
-                # No historical token exists yet for this phase (possible for
-                # non-zero offsets at the very beginning of a sequence).
                 if return_cache:
-                    chunk_caches.append(
-                        (
-                            query_residue,
-                            phase_start,
-                            phase_end,
-                            key_residue,
-                            key_start,
-                            key_end,
-                            None,
-                            None,
-                            alignment_shift,
-                        )
-                    )
+                    chunk_caches.append((
+                        query_residue, phase_start, phase_end, key_residue,
+                        key_start, key_end, None, None, alignment_shift,
+                    ))
                 continue
 
             key_token_slice = slice(
@@ -1685,14 +2217,7 @@ def dilated_attention_forward(
             )
             k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
             k_heads = k_span.transpose(0, 2, 1, 3)
-            if bf16_attention:
-                q_score = q_chunk.astype("float32") * scale
-                k_score = k_heads.astype("float32")
-            else:
-                q_score = q_chunk * (scale * score_prescale)
-                k_score = k_heads
 
-            scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
             q_indices = xp.arange(phase_start, phase_end, dtype=xp.int64)[:, None]
             k_indices = xp.arange(key_start, key_end, dtype=xp.int64)[None, :]
             max_keys = q_indices + alignment_shift
@@ -1700,41 +2225,76 @@ def dilated_attention_forward(
                 (k_indices <= max_keys)
                 & (k_indices >= (max_keys - key_slots + 1))
             )[None, None, :, :]
-            probs_chunk = _masked_softmax_forward(
-                scores, valid, logit_multiplier=(1.0 / score_prescale)
-            )
-            del scores, k_score, k_heads, k_span
 
+            if bf16_pipeline:
+                q_count = phase_end - phase_start
+                k_count = key_end - key_start
+                scores_bf16 = xp.empty(
+                    (batch, n_q_heads, q_count, k_count), dtype=q.dtype
+                )
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        q2d = xp.ascontiguousarray(q_chunk[bidx, hidx])
+                        k2d = xp.ascontiguousarray(k_heads[bidx, hidx])
+                        scores_bf16[bidx, hidx] = q2d @ k2d.T
+                probs_chunk = _masked_softmax_forward_bf16_cuda(
+                    scores_bf16, valid, scale
+                )
+                if probs_chunk is None:
+                    raise RuntimeError(
+                        "BF16 indexed softmax declined an internally generated "
+                        "dilated-attention layout"
+                    )
+                del scores_bf16
+            else:
+                if bf16_attention:
+                    q_score = q_chunk.astype("float32") * scale
+                    k_score = k_heads.astype("float32")
+                else:
+                    q_score = q_chunk * (scale * score_prescale)
+                    k_score = k_heads
+                scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+                probs_chunk = _masked_softmax_forward(
+                    scores, valid, logit_multiplier=(1.0 / score_prescale)
+                )
+                del scores, k_score
+
+            del k_heads, k_span
             v_span = xp.take(v[:, key_token_slice, :, :], kv_map, axis=2)
             v_heads = v_span.transpose(0, 2, 1, 3)
-            if bf16_attention:
-                probs_compute = probs_chunk
-                v_compute = v_heads.astype("float32")
-            else:
-                probs_compute = (
-                    probs_chunk.astype(q.dtype, copy=False)
-                    if is_low_precision_dtype(q.dtype)
-                    else probs_chunk
+            if bf16_pipeline:
+                q_count = phase_end - phase_start
+                context_bf16 = xp.empty(
+                    (batch, n_q_heads, q_count, d_head), dtype=q.dtype
                 )
-                v_compute = v_heads
-            context_heads[:, :, q_token_slice, :] = xp.matmul(
-                probs_compute, v_compute
-            )
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        p2d = xp.ascontiguousarray(probs_chunk[bidx, hidx])
+                        v2d = xp.ascontiguousarray(v_heads[bidx, hidx])
+                        context_bf16[bidx, hidx] = p2d @ v2d
+                context_heads[:, :, q_token_slice, :] = context_bf16
+            else:
+                if bf16_attention:
+                    probs_compute = probs_chunk
+                    v_compute = v_heads.astype("float32")
+                else:
+                    probs_compute = (
+                        probs_chunk.astype(q.dtype, copy=False)
+                        if is_low_precision_dtype(q.dtype)
+                        else probs_chunk
+                    )
+                    v_compute = v_heads
+                context_heads[:, :, q_token_slice, :] = xp.matmul(
+                    probs_compute, v_compute
+                )
 
             if return_cache:
-                chunk_caches.append(
-                    (
-                        query_residue,
-                        phase_start,
-                        phase_end,
-                        key_residue,
-                        key_start,
-                        key_end,
-                        _cache_probs_for_backward(probs_chunk, q.dtype),
-                        valid,
-                        alignment_shift,
-                    )
-                )
+                chunk_caches.append((
+                    query_residue, phase_start, phase_end, key_residue,
+                    key_start, key_end,
+                    _cache_probs_for_backward(probs_chunk, q.dtype),
+                    valid, alignment_shift,
+                ))
 
     context = context_heads.transpose(0, 2, 1, 3)
     if not return_cache:
@@ -1749,6 +2309,7 @@ def dilated_attention_forward(
         "key_slots": key_slots,
         "scale": scale,
         "bf16_attention": bf16_attention,
+        "bf16_pipeline": bf16_pipeline,
         "kv_head_indices": kv_map,
         "kv_head_indices_host": kv_map_host,
         "chunks": chunk_caches,
@@ -1767,6 +2328,7 @@ def dilated_attention_backward(dcontext, cache):
     dilation = cache["dilation"]
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
+    bf16_pipeline = cache.get("bf16_pipeline", False)
     kv_map = cache["kv_head_indices"]
     kv_map_host = cache["kv_head_indices_host"]
 
@@ -1782,15 +2344,8 @@ def dilated_attention_backward(dcontext, cache):
     ]
 
     for (
-        query_residue,
-        phase_start,
-        phase_end,
-        key_residue,
-        key_start,
-        key_end,
-        probs_chunk,
-        valid,
-        alignment_shift,
+        query_residue, phase_start, phase_end, key_residue,
+        key_start, key_end, probs_chunk, valid, alignment_shift,
     ) in cache["chunks"]:
         if probs_chunk is None:
             continue
@@ -1806,47 +2361,93 @@ def dilated_attention_backward(dcontext, cache):
         )
         q_chunk = q_heads[:, :, q_token_slice, :]
         dcontext_chunk = dcontext_heads[:, :, q_token_slice, :]
-
         v_span = xp.take(v[:, key_token_slice, :, :], kv_map, axis=2)
         v_heads = v_span.transpose(0, 2, 1, 3)
-        if bf16_attention:
-            dcontext_compute = dcontext_chunk.astype("float32")
-            q_compute = q_chunk.astype("float32")
-            v_compute = v_heads.astype("float32")
-            probs_compute = _restore_cached_probs(probs_chunk, True)
+
+        if bf16_pipeline:
+            q_count = phase_end - phase_start
+            k_count = key_end - key_start
+            dprobs = xp.empty(
+                (batch, n_q_heads, q_count, k_count), dtype=q.dtype
+            )
+            dv_heads = xp.empty(
+                (batch, n_q_heads, k_count, d_head), dtype=q.dtype
+            )
+            dc_bf16 = []
+            for bidx in range(batch):
+                dc_heads = []
+                for hidx in range(n_q_heads):
+                    dc2d = xp.ascontiguousarray(
+                        dcontext_chunk[bidx, hidx].astype(q.dtype, copy=False)
+                    )
+                    dc_heads.append(dc2d)
+                    v2d = xp.ascontiguousarray(v_heads[bidx, hidx])
+                    p2d = xp.ascontiguousarray(probs_chunk[bidx, hidx])
+                    dprobs[bidx, hidx] = dc2d @ v2d.T
+                    dv_heads[bidx, hidx] = p2d.T @ dc2d
+                dc_bf16.append(dc_heads)
+            dscores = _masked_softmax_backward_bf16_cuda(
+                dprobs, probs_chunk, valid
+            )
+            if dscores is None:
+                raise RuntimeError(
+                    "BF16 indexed backward softmax declined an internally "
+                    "generated dilated-attention layout"
+                )
+
+            k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
+            k_heads = k_span.transpose(0, 2, 1, 3)
+            dk_heads = xp.empty(
+                (batch, n_q_heads, k_count, d_head), dtype=q.dtype
+            )
+            for bidx in range(batch):
+                for hidx in range(n_q_heads):
+                    ds2d = xp.ascontiguousarray(dscores[bidx, hidx])
+                    q2d = xp.ascontiguousarray(q_chunk[bidx, hidx])
+                    k2d = xp.ascontiguousarray(k_heads[bidx, hidx])
+                    dq_heads[bidx, hidx, q_token_slice, :] = (
+                        (ds2d @ k2d).astype(grad_dtype) * scale
+                    )
+                    dk_heads[bidx, hidx] = ds2d.T @ q2d
+            dk_heads = dk_heads.astype(grad_dtype) * scale
+            dv_heads = dv_heads.astype(grad_dtype)
         else:
-            dcontext_compute = dcontext_chunk
-            q_compute = q_chunk
-            v_compute = v_heads
-            probs_compute = (
-                probs_chunk.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_chunk
-            )
+            if bf16_attention:
+                dcontext_compute = dcontext_chunk.astype("float32")
+                q_compute = q_chunk.astype("float32")
+                v_compute = v_heads.astype("float32")
+                probs_compute = _restore_cached_probs(probs_chunk, True)
+            else:
+                dcontext_compute = dcontext_chunk
+                q_compute = q_chunk
+                v_compute = v_heads
+                probs_compute = (
+                    probs_chunk.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else probs_chunk
+                )
 
-        dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
-        dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-        dscores = _softmax_backward(dprobs, probs_compute)
-        dscores = xp.where(valid, dscores, 0.0)
-        dscores_compute = (
-            dscores.astype("float32", copy=False)
-            if bf16_attention
-            else (
-                dscores.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else dscores
+            dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
+            dv_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+            dscores = _masked_softmax_backward(dprobs, probs_compute, valid)
+            dscores_compute = (
+                dscores.astype("float32", copy=False)
+                if bf16_attention
+                else (
+                    dscores.astype(q.dtype, copy=False)
+                    if is_low_precision_dtype(q.dtype)
+                    else dscores
+                )
             )
-        )
-
-        k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
-        k_heads = k_span.transpose(0, 2, 1, 3)
-        k_compute = k_heads.astype("float32") if bf16_attention else k_heads
-        dq_heads[:, :, q_token_slice, :] = (
-            xp.matmul(dscores_compute, k_compute) * scale
-        )
-        dk_heads = (
-            xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
-        )
+            k_span = xp.take(k[:, key_token_slice, :, :], kv_map, axis=2)
+            k_heads = k_span.transpose(0, 2, 1, 3)
+            k_compute = k_heads.astype("float32") if bf16_attention else k_heads
+            dq_heads[:, :, q_token_slice, :] = (
+                xp.matmul(dscores_compute, k_compute) * scale
+            )
+            dk_heads = (
+                xp.matmul(dscores_compute.swapaxes(-1, -2), q_compute) * scale
+            )
 
         for kvh, head_group in enumerate(q_heads_for_kv):
             if not head_group:
@@ -1880,11 +2481,10 @@ def global_sparse_attention_forward(
 ):
     """Specialized fixed-anchor whole-prefix sparse attention.
 
-    Global anchors are absolute positions ``offset + n * stride``.  Every query
-    sees anchors at or before its own position and, when ``include_current`` is
-    true, also sees its current exact token whenever that token is not already
-    an anchor.  Unlike the generic indexed path, anchor K/V tensors are gathered
-    only once per head group and reused by all queries.
+    With ``MINI_LLM_FUSED_BF16_INDEXED_PIPELINE=1`` the regular anchor branch
+    uses 2-D BF16 Tensor-Core GEMMs and BF16 score/probability storage around a
+    fused FP32 softmax kernel.  The single exact-current slot remains a tiny
+    FP32 elementwise branch and is folded into the same BF16 softmax matrix.
     """
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError("q, k, and v must have shape (B,T,H,Dh)")
@@ -1912,35 +2512,26 @@ def global_sparse_attention_forward(
         kv_head_indices, n_q_heads, n_kv_heads
     )
 
-    # stride=1, offset=0 is ordinary full causal attention.  Reuse the already
-    # optimized contiguous local kernel instead of materializing a full anchor
-    # implementation here.
     if stride == 1:
         if offset != 0:
             raise ValueError("stride=1 requires offset=0")
         if return_cache:
             context, local_cache = local_window_attention_forward(
-                q,
-                k,
-                v,
-                key_length,
-                kv_head_indices=kv_map_host,
-                scale=scale,
-                return_cache=True,
+                q, k, v, key_length,
+                kv_head_indices=kv_map_host, scale=scale, return_cache=True,
             )
             return context, {"fallback_local": local_cache}
         return local_window_attention_forward(
-            q,
-            k,
-            v,
-            key_length,
-            kv_head_indices=kv_map_host,
-            scale=scale,
-            return_cache=False,
+            q, k, v, key_length,
+            kv_head_indices=kv_map_host, scale=scale, return_cache=False,
         )
 
-    q_heads = q.transpose(0, 2, 1, 3)  # [B,Hq,T,D]
+    q_heads = q.transpose(0, 2, 1, 3)
     bf16_attention = is_bfloat16_dtype(q.dtype)
+    bf16_pipeline = (
+        _bf16_indexed_pipeline_enabled(q.dtype)
+        and _get_indexed_bf16_pipeline_module() is not None
+    )
     context_dtype = xp.float32 if bf16_attention else q.dtype
     score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
 
@@ -1954,63 +2545,79 @@ def global_sparse_attention_forward(
         if not return_cache:
             return context
         return context, {
-            "q": q,
-            "k": k,
-            "v": v,
-            "stride": stride,
-            "offset": offset,
-            "include_current": include_current,
-            "anchors": anchors,
-            "probs": None,
-            "valid": None,
-            "scale": scale,
-            "bf16_attention": bf16_attention,
-            "kv_head_indices": kv_map,
-            "kv_head_indices_host": kv_map_host,
+            "q": q, "k": k, "v": v, "stride": stride, "offset": offset,
+            "include_current": include_current, "anchors": anchors,
+            "probs": None, "valid": None, "scale": scale,
+            "bf16_attention": bf16_attention, "bf16_pipeline": bf16_pipeline,
+            "kv_head_indices": kv_map, "kv_head_indices_host": kv_map_host,
         }
 
-    if bf16_attention:
-        q_score = q_heads.astype("float32") * scale
-    else:
-        q_score = q_heads * (scale * score_prescale)
-
-    score_parts = []
-    if n_anchors:
-        k_anchor = xp.take(k[:, offset:key_length:stride, :, :], kv_map, axis=2)
-        k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
-        k_score = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
-        score_parts.append(xp.matmul(q_score, k_score.swapaxes(-1, -2)))
-    else:
-        k_anchor_heads = None
-
+    k_anchor_heads = None
     current_k_heads = None
-    if add_current:
-        current_k = xp.take(k, kv_map, axis=2)
-        current_k_heads = current_k.transpose(0, 2, 1, 3)
-        current_k_score = (
-            current_k_heads.astype("float32") if bf16_attention else current_k_heads
+    if bf16_pipeline:
+        scores = xp.empty(
+            (batch, n_q_heads, query_length, n_slots), dtype=q.dtype
         )
-        current_scores = xp.sum(q_score * current_k_score, axis=-1, keepdims=True)
-        score_parts.append(current_scores)
-
-    scores = score_parts[0] if len(score_parts) == 1 else xp.concatenate(score_parts, axis=-1)
+        slot = 0
+        if n_anchors:
+            k_anchor = xp.take(k[:, offset:key_length:stride, :, :], kv_map, axis=2)
+            k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+            for bidx in range(batch):
+                for hidx in range(n_q_heads):
+                    q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
+                    k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
+                    scores[bidx, hidx, :, :n_anchors] = q2d @ k2d.T
+            slot = n_anchors
+        if add_current:
+            current_k = xp.take(k, kv_map, axis=2)
+            current_k_heads = current_k.transpose(0, 2, 1, 3)
+            # Only one slot per query; keeping this tiny branch in FP32 avoids
+            # introducing a custom diagonal-dot kernel.
+            current_scores = xp.sum(
+                q_heads.astype("float32") * current_k_heads.astype("float32"),
+                axis=-1,
+            )
+            scores[..., slot] = current_scores.astype(q.dtype)
+    else:
+        if bf16_attention:
+            q_score = q_heads.astype("float32") * scale
+        else:
+            q_score = q_heads * (scale * score_prescale)
+        score_parts = []
+        if n_anchors:
+            k_anchor = xp.take(k[:, offset:key_length:stride, :, :], kv_map, axis=2)
+            k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+            k_score = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
+            score_parts.append(xp.matmul(q_score, k_score.swapaxes(-1, -2)))
+        if add_current:
+            current_k = xp.take(k, kv_map, axis=2)
+            current_k_heads = current_k.transpose(0, 2, 1, 3)
+            current_k_score = current_k_heads.astype("float32") if bf16_attention else current_k_heads
+            score_parts.append(xp.sum(q_score * current_k_score, axis=-1, keepdims=True))
+        scores = score_parts[0] if len(score_parts) == 1 else xp.concatenate(score_parts, axis=-1)
 
     queries = xp.arange(query_length, dtype=xp.int64)[:, None]
     valid_parts = []
     if n_anchors:
-        anchor_valid = anchors[None, :] <= queries
-        valid_parts.append(anchor_valid)
+        valid_parts.append(anchors[None, :] <= queries)
     if add_current:
         positions = xp.arange(query_length, dtype=xp.int64)
         on_phase = (positions >= offset) & (((positions - offset) % stride) == 0)
-        current_valid = (~on_phase)[:, None]
-        valid_parts.append(current_valid)
+        valid_parts.append((~on_phase)[:, None])
     valid_2d = valid_parts[0] if len(valid_parts) == 1 else xp.concatenate(valid_parts, axis=1)
     valid = valid_2d[None, None, :, :]
 
-    probs = _masked_softmax_forward(
-        scores, valid, logit_multiplier=(1.0 / score_prescale)
-    )
+    if bf16_pipeline:
+        probs = _masked_softmax_forward_bf16_cuda(scores, valid, scale)
+        if probs is None:
+            raise RuntimeError(
+                "BF16 indexed softmax declined an internally generated "
+                "global-sparse layout"
+            )
+    else:
+        probs = _masked_softmax_forward(
+            scores, valid, logit_multiplier=(1.0 / score_prescale)
+        )
     del scores
 
     context_heads = xp.zeros(
@@ -2021,55 +2628,50 @@ def global_sparse_attention_forward(
         probs_anchor = probs[..., :n_anchors]
         v_anchor = xp.take(v[:, offset:key_length:stride, :, :], kv_map, axis=2)
         v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
-        v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
-        probs_compute = (
-            probs_anchor
-            if bf16_attention
-            else (
+        if bf16_pipeline:
+            for bidx in range(batch):
+                for hidx in range(n_q_heads):
+                    p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
+                    v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
+                    context_heads[bidx, hidx] += (
+                        p2d @ v2d
+                    ).astype(context_dtype)
+        else:
+            v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
+            probs_compute = probs_anchor if bf16_attention else (
                 probs_anchor.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_anchor
+                if is_low_precision_dtype(q.dtype) else probs_anchor
             )
-        )
-        context_heads += xp.matmul(probs_compute, v_compute)
+            context_heads += xp.matmul(probs_compute, v_compute)
         slot = n_anchors
 
     if add_current:
         probs_current = probs[..., slot]
         current_v = xp.take(v, kv_map, axis=2)
         current_v_heads = current_v.transpose(0, 2, 1, 3)
-        current_v_compute = (
-            current_v_heads.astype("float32") if bf16_attention else current_v_heads
-        )
-        probs_current_compute = (
-            probs_current
-            if bf16_attention
-            else (
-                probs_current.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_current
+        if bf16_pipeline:
+            context_heads += (
+                probs_current.astype("float32")[..., None]
+                * current_v_heads.astype("float32")
             )
-        )
-        context_heads += probs_current_compute[..., None] * current_v_compute
+        else:
+            current_v_compute = current_v_heads.astype("float32") if bf16_attention else current_v_heads
+            probs_current_compute = probs_current if bf16_attention else (
+                probs_current.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype) else probs_current
+            )
+            context_heads += probs_current_compute[..., None] * current_v_compute
 
     context = context_heads.transpose(0, 2, 1, 3)
     if not return_cache:
         return context
-
     return context, {
-        "q": q,
-        "k": k,
-        "v": v,
-        "stride": stride,
-        "offset": offset,
-        "include_current": include_current,
-        "anchors": anchors,
-        "probs": _cache_probs_for_backward(probs, q.dtype),
-        "valid": valid,
-        "scale": scale,
-        "bf16_attention": bf16_attention,
-        "kv_head_indices": kv_map,
-        "kv_head_indices_host": kv_map_host,
+        "q": q, "k": k, "v": v, "stride": stride, "offset": offset,
+        "include_current": include_current, "anchors": anchors,
+        "probs": _cache_probs_for_backward(probs, q.dtype), "valid": valid,
+        "scale": scale, "bf16_attention": bf16_attention,
+        "bf16_pipeline": bf16_pipeline,
+        "kv_head_indices": kv_map, "kv_head_indices_host": kv_map_host,
     }
 
 
@@ -2092,7 +2694,7 @@ def global_sparse_attention_backward(dcontext, cache):
     valid = cache["valid"]
     scale = cache["scale"]
     bf16_attention = cache["bf16_attention"]
-    probs_f32 = _restore_cached_probs(probs, bf16_attention)
+    bf16_pipeline = cache.get("bf16_pipeline", False)
     kv_map = cache["kv_head_indices"]
     kv_map_host = cache["kv_head_indices_host"]
 
@@ -2105,91 +2707,128 @@ def global_sparse_attention_backward(dcontext, cache):
 
     q_heads = q.transpose(0, 2, 1, 3)
     dcontext_heads = dcontext.transpose(0, 2, 1, 3)
-    q_compute = q_heads.astype("float32") if bf16_attention else q_heads
-    dcontext_compute = (
-        dcontext_heads.astype("float32") if bf16_attention else dcontext_heads
-    )
     n_anchors = int(anchors.shape[0])
     add_current = bool(include_current)
 
-    dprobs_parts = []
-    v_anchor_heads = None
-    if n_anchors:
-        v_anchor = xp.take(v[:, offset:v.shape[1]:stride, :, :], kv_map, axis=2)
-        v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
-        v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
-        dprobs_parts.append(xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2)))
-    current_v_heads = None
-    if add_current:
-        current_v = xp.take(v, kv_map, axis=2)
-        current_v_heads = current_v.transpose(0, 2, 1, 3)
-        current_v_compute = (
-            current_v_heads.astype("float32") if bf16_attention else current_v_heads
-        )
-        dprobs_parts.append(
-            xp.sum(dcontext_compute * current_v_compute, axis=-1, keepdims=True)
-        )
-    dprobs = dprobs_parts[0] if len(dprobs_parts) == 1 else xp.concatenate(dprobs_parts, axis=-1)
-    dscores = _softmax_backward(dprobs, probs_f32)
-    dscores = xp.where(valid, dscores, 0.0)
-    dscores_compute = (
-        dscores.astype("float32", copy=False)
-        if bf16_attention
-        else (
-            dscores.astype(q.dtype, copy=False)
-            if is_low_precision_dtype(q.dtype)
-            else dscores
-        )
-    )
+    if bf16_pipeline:
+        dprobs = xp.empty(probs.shape, dtype=q.dtype)
+        slot = 0
+        dc_bf16 = dcontext_heads.astype(q.dtype, copy=False)
+        v_anchor_heads = None
+        current_v_heads = None
+        if n_anchors:
+            v_anchor = xp.take(v[:, offset:v.shape[1]:stride, :, :], kv_map, axis=2)
+            v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
+            for bidx in range(batch):
+                for hidx in range(n_q_heads):
+                    dc2d = xp.ascontiguousarray(dc_bf16[bidx, hidx])
+                    v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
+                    dprobs[bidx, hidx, :, :n_anchors] = dc2d @ v2d.T
+            slot = n_anchors
+        if add_current:
+            current_v = xp.take(v, kv_map, axis=2)
+            current_v_heads = current_v.transpose(0, 2, 1, 3)
+            dcurrent = xp.sum(
+                dcontext_heads.astype("float32") * current_v_heads.astype("float32"),
+                axis=-1,
+            )
+            dprobs[..., slot] = dcurrent.astype(q.dtype)
+        dscores = _masked_softmax_backward_bf16_cuda(dprobs, probs, valid)
+        if dscores is None:
+            raise RuntimeError(
+                "BF16 indexed backward softmax declined an internally "
+                "generated global-sparse layout"
+            )
+    else:
+        probs_f32 = _restore_cached_probs(probs, bf16_attention)
+        q_compute = q_heads.astype("float32") if bf16_attention else q_heads
+        dcontext_compute = dcontext_heads.astype("float32") if bf16_attention else dcontext_heads
+        dprobs_parts = []
+        v_anchor_heads = None
+        if n_anchors:
+            v_anchor = xp.take(v[:, offset:v.shape[1]:stride, :, :], kv_map, axis=2)
+            v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
+            v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
+            dprobs_parts.append(xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2)))
+        current_v_heads = None
+        if add_current:
+            current_v = xp.take(v, kv_map, axis=2)
+            current_v_heads = current_v.transpose(0, 2, 1, 3)
+            current_v_compute = current_v_heads.astype("float32") if bf16_attention else current_v_heads
+            dprobs_parts.append(xp.sum(dcontext_compute * current_v_compute, axis=-1, keepdims=True))
+        dprobs = dprobs_parts[0] if len(dprobs_parts) == 1 else xp.concatenate(dprobs_parts, axis=-1)
+        dscores = _masked_softmax_backward(dprobs, probs_f32, valid)
 
     dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
     dk_anchor_heads = None
     dv_anchor_heads = None
     slot = 0
     if n_anchors:
-        ds_anchor = dscores_compute[..., :n_anchors]
-        k_anchor = xp.take(k[:, offset:k.shape[1]:stride, :, :], kv_map, axis=2)
-        k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
-        k_compute = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
-        dq_heads += xp.matmul(ds_anchor, k_compute) * scale
-        dk_anchor_heads = xp.matmul(ds_anchor.swapaxes(-1, -2), q_compute) * scale
-
-        probs_anchor = probs_f32[..., :n_anchors]
-        probs_compute = (
-            probs_anchor
-            if bf16_attention
-            else (
-                probs_anchor.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_anchor
+        if bf16_pipeline:
+            ds_anchor = dscores[..., :n_anchors]
+            probs_anchor = probs[..., :n_anchors]
+            k_anchor = xp.take(k[:, offset:k.shape[1]:stride, :, :], kv_map, axis=2)
+            k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+            dk_anchor_heads = xp.empty(
+                (batch, n_q_heads, n_anchors, d_head), dtype=grad_dtype
             )
-        )
-        dv_anchor_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
+            dv_anchor_heads = xp.empty_like(dk_anchor_heads)
+            for bidx in range(batch):
+                for hidx in range(n_q_heads):
+                    ds2d = xp.ascontiguousarray(ds_anchor[bidx, hidx])
+                    p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
+                    q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
+                    k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
+                    dc2d = xp.ascontiguousarray(
+                        dcontext_heads[bidx, hidx].astype(q.dtype, copy=False)
+                    )
+                    dq_heads[bidx, hidx] += (ds2d @ k2d).astype(grad_dtype) * scale
+                    dk_anchor_heads[bidx, hidx] = (ds2d.T @ q2d).astype(grad_dtype) * scale
+                    dv_anchor_heads[bidx, hidx] = (p2d.T @ dc2d).astype(grad_dtype)
+        else:
+            probs_f32 = _restore_cached_probs(probs, bf16_attention)
+            dscores_compute = dscores.astype("float32", copy=False) if bf16_attention else (
+                dscores.astype(q.dtype, copy=False) if is_low_precision_dtype(q.dtype) else dscores
+            )
+            q_compute = q_heads.astype("float32") if bf16_attention else q_heads
+            dcontext_compute = dcontext_heads.astype("float32") if bf16_attention else dcontext_heads
+            ds_anchor = dscores_compute[..., :n_anchors]
+            k_anchor = xp.take(k[:, offset:k.shape[1]:stride, :, :], kv_map, axis=2)
+            k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
+            k_compute = k_anchor_heads.astype("float32") if bf16_attention else k_anchor_heads
+            dq_heads += xp.matmul(ds_anchor, k_compute) * scale
+            dk_anchor_heads = xp.matmul(ds_anchor.swapaxes(-1, -2), q_compute) * scale
+            probs_anchor = probs_f32[..., :n_anchors]
+            probs_compute = probs_anchor if bf16_attention else (
+                probs_anchor.astype(q.dtype, copy=False)
+                if is_low_precision_dtype(q.dtype) else probs_anchor
+            )
+            dv_anchor_heads = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
         slot = n_anchors
 
     dk_current_heads = None
     dv_current_heads = None
     if add_current:
-        ds_current = dscores_compute[..., slot]
+        if bf16_pipeline:
+            ds_current = dscores[..., slot].astype("float32")
+            probs_current = probs[..., slot].astype("float32")
+            q_compute_current = q_heads.astype("float32")
+            dc_compute_current = dcontext_heads.astype("float32")
+        else:
+            probs_f32 = _restore_cached_probs(probs, bf16_attention)
+            dscores_compute = dscores.astype("float32", copy=False) if bf16_attention else (
+                dscores.astype(q.dtype, copy=False) if is_low_precision_dtype(q.dtype) else dscores
+            )
+            ds_current = dscores_compute[..., slot]
+            probs_current = probs_f32[..., slot]
+            q_compute_current = q_heads.astype("float32") if bf16_attention else q_heads
+            dc_compute_current = dcontext_heads.astype("float32") if bf16_attention else dcontext_heads
         current_k = xp.take(k, kv_map, axis=2)
         current_k_heads = current_k.transpose(0, 2, 1, 3)
-        current_k_compute = (
-            current_k_heads.astype("float32") if bf16_attention else current_k_heads
-        )
+        current_k_compute = current_k_heads.astype("float32") if bf16_attention else current_k_heads
         dq_heads += ds_current[..., None] * current_k_compute * scale
-        dk_current_heads = ds_current[..., None] * q_compute * scale
-
-        probs_current = probs_f32[..., slot]
-        probs_current_compute = (
-            probs_current
-            if bf16_attention
-            else (
-                probs_current.astype(q.dtype, copy=False)
-                if is_low_precision_dtype(q.dtype)
-                else probs_current
-            )
-        )
-        dv_current_heads = probs_current_compute[..., None] * dcontext_compute
+        dk_current_heads = ds_current[..., None] * q_compute_current * scale
+        dv_current_heads = probs_current[..., None] * dc_compute_current
 
     q_heads_for_kv = [
         tuple(i for i, source in enumerate(kv_map_host) if source == kvh)
@@ -2205,13 +2844,8 @@ def global_sparse_attention_backward(dcontext, cache):
             else:
                 dk_native = xp.sum(dk_anchor_heads[:, head_group, :, :], axis=1)
                 dv_native = xp.sum(dv_anchor_heads[:, head_group, :, :], axis=1)
-            dk[:, offset:k.shape[1]:stride, kvh, :] += dk_native.astype(
-                grad_dtype, copy=False
-            )
-            dv[:, offset:v.shape[1]:stride, kvh, :] += dv_native.astype(
-                grad_dtype, copy=False
-            )
-
+            dk[:, offset:k.shape[1]:stride, kvh, :] += dk_native.astype(grad_dtype, copy=False)
+            dv[:, offset:v.shape[1]:stride, kvh, :] += dv_native.astype(grad_dtype, copy=False)
         if add_current:
             if len(head_group) == 1:
                 dk_native = dk_current_heads[:, head_group[0], :, :]
@@ -2222,8 +2856,7 @@ def global_sparse_attention_backward(dcontext, cache):
             dk[:, :, kvh, :] += dk_native.astype(grad_dtype, copy=False)
             dv[:, :, kvh, :] += dv_native.astype(grad_dtype, copy=False)
 
-    dq = dq_heads.transpose(0, 2, 1, 3)
-    return dq, dk, dv
+    return dq_heads.transpose(0, 2, 1, 3), dk, dv
 
 # ---------------------------------------------------------------------------
 # Specialized block-retrieval attention
@@ -2500,8 +3133,7 @@ def block_retrieval_attention_backward(dcontext, cache):
 
     dprobs = xp.matmul(dcontext_compute, v_compute.swapaxes(-1, -2))
     dv_selected = xp.matmul(probs_compute.swapaxes(-1, -2), dcontext_compute)
-    dscores = _softmax_backward(dprobs, probs_f32)
-    dscores = xp.where(valid_q, dscores, 0.0)
+    dscores = _masked_softmax_backward(dprobs, probs_f32, valid_q)
     dscores_compute = (
         dscores.astype("float32", copy=False)
         if bf16_attention

@@ -29,3 +29,15 @@ class Linear:
         self.W.grad += x2.T @ dy2
         dx2 = dy2 @ self.W.data.T
         return dx2.reshape(x.shape)
+
+    def backward_input(self, dy, cache):
+        """Backward only into the input when this projection is frozen.
+
+        Router-only post-training needs the gradient through the large LM head
+        but never updates its ~50M weights. Avoiding ``x.T @ dy`` saves one large
+        gradient GEMM and a full output-head gradient write per microbatch.
+        """
+        x = cache["x"]
+        dy2 = dy.reshape(-1, dy.shape[-1])
+        dx2 = dy2 @ self.W.data.T
+        return dx2.reshape(x.shape)

@@ -20,6 +20,7 @@ from .indexed_attention import (
     global_sparse_attention_backward,
 )
 from .retrieval_attention import ContextRetrievalAttention
+from .hierarchical_memory import TerminalLandmarkAttention
 from ..performance_profiler import performance_scope
 from ..config import (
     AttentionLayerConfig,
@@ -232,7 +233,8 @@ class GQAAttention:
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
         input_std, output_std, rng, rope_base=10_000.0,
-        name="attention", dtype="float32", attention_config=None
+        name="attention", dtype="float32", attention_config=None,
+        terminal_memory_config=None,
     ):
         if n_q_heads * d_head != d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
@@ -254,6 +256,9 @@ class GQAAttention:
         self.attention_config = attention_config
         self._static_head_groups = []
         self._retrieval_groups = []
+        self.terminal_memory = None
+        self._terminal_memory_head_indices = ()
+        self._terminal_memory_group_name = None
 
         self.Wq = matrix_parameter(
             (d_model, n_q_heads * d_head), input_std, rng, f"{name}.Wq", dtype=dtype
@@ -288,10 +293,50 @@ class GQAAttention:
                 self.attention_config, rng, input_std, name, dtype
             )
 
+        self._terminal_init_name = name
+        self._terminal_init_dtype = dtype
+        self._terminal_init_std = input_std
+        if terminal_memory_config is not None:
+            self.configure_terminal_memory(terminal_memory_config, rng)
+
+    def configure_terminal_memory(self, terminal_memory_config, rng):
+        """Attach 0058C memory parameters after base-model initialization.
+
+        DecoderLanguageModel calls this only after every pre-existing base
+        parameter has been initialized, preserving checkpoint/RNG compatibility.
+        """
+        if self.terminal_memory is not None:
+            return
+        if not self._retrieval_groups:
+            raise ValueError(
+                "terminal Landmark memory requires at least one retrieval-head group"
+            )
+        if len(self._retrieval_groups) != 1:
+            raise ValueError(
+                "0058C currently supports one retrieval-head group in the memory layer"
+            )
+        terminal_group = self._retrieval_groups[0]
+        head_indices = tuple(terminal_group["head_indices"])
+        if len(head_indices) != int(terminal_memory_config.read_heads):
+            raise ValueError(
+                "memory read_heads must equal retrieval heads in memory-aware layer"
+            )
+        self._terminal_memory_head_indices = head_indices
+        self._terminal_memory_group_name = terminal_group["name"]
+        self.terminal_memory = TerminalLandmarkAttention(
+            d_model=self.d_model, d_head=self.d_head,
+            n_query_heads=len(head_indices), config=terminal_memory_config,
+            rng=rng, input_std=self._terminal_init_std, rope_base=self.rope_base,
+            name=f"{self._terminal_init_name}.terminal_memory",
+            dtype=self._terminal_init_dtype,
+        )
+
     def parameters(self):
         params = [self.Wq, self.Wk, self.Wv, self.Wo]
         for group in self._retrieval_groups:
             params.extend(group["module"].parameters())
+        if self.terminal_memory is not None:
+            params.extend(self.terminal_memory.parameters())
         return params
 
     def _configure_attention_patterns(self, attention_config, rng, input_std, name, dtype):
@@ -481,7 +526,7 @@ class GQAAttention:
             )
         return self._causal_mask_cache[t]
 
-    def _mixed_context_forward(self, x, q, k, v, return_cache):
+    def _mixed_context_forward(self, x, q, k, v, return_cache, terminal_memory=None):
         b, t, _, _ = q.shape
         keep_bf16_context = _bf16_mixed_context_enabled(q.dtype)
         context_dtype = (
@@ -693,6 +738,39 @@ class GQAAttention:
                 context[:, :, head_indices, :] = subset
                 routing[group["name"]] = group_routing
 
+        if terminal_memory is not None and self.terminal_memory is not None:
+            head_indices = self._terminal_memory_head_indices
+            q_subset = q[:, :, head_indices, :]
+            kv_head_indices = tuple(index // self.group_size for index in head_indices)
+            with performance_scope("attention.terminal_memory.forward"):
+                if return_cache:
+                    terminal_context, terminal_cache = self.terminal_memory.forward(
+                        q_subset, k, v, kv_head_indices, terminal_memory,
+                        return_cache=True,
+                    )
+                else:
+                    terminal_context = self.terminal_memory.forward(
+                        q_subset, k, v, kv_head_indices, terminal_memory,
+                        return_cache=False,
+                    )
+                    terminal_cache = None
+            if terminal_context is not None:
+                rows = xp.asarray(terminal_memory.terminal_rows, dtype=xp.int64)
+                valid_batches = xp.nonzero(terminal_memory.route_valid)[0]
+                if valid_batches.size:
+                    heads = xp.asarray(head_indices, dtype=xp.int64)
+                    context[
+                        valid_batches[:, None], rows[valid_batches, None], heads[None, :], :
+                    ] = terminal_context[valid_batches]
+                if return_cache:
+                    group_caches.append({
+                        "kind": "terminal_landmark",
+                        "head_indices": head_indices,
+                        "memory": terminal_memory,
+                        "cache": terminal_cache,
+                        "overridden_group": self._terminal_memory_group_name,
+                    })
+
         return context, group_caches, routing
 
     def _mixed_context_backward(self, dcontext, cache):
@@ -706,7 +784,35 @@ class GQAAttention:
         for group_cache in cache["pattern_caches"]:
             head_indices = group_cache["head_indices"]
             dsubset = dcontext[:, :, head_indices, :]
-            if group_cache["kind"] in {"indexed", "local_window", "dilated_window", "global_sparse"}:
+            if group_cache["kind"] == "retrieval":
+                terminal_entry = next(
+                    (entry for entry in cache["pattern_caches"]
+                     if entry.get("kind") == "terminal_landmark"
+                     and entry.get("overridden_group") == group_cache.get("name")),
+                    None,
+                )
+                if terminal_entry is not None:
+                    dsubset = xp.array(dsubset, copy=True)
+                    mem = terminal_entry["memory"]
+                    rows = xp.asarray(mem.terminal_rows, dtype=xp.int64)
+                    valid_batches = xp.nonzero(mem.route_valid)[0]
+                    if valid_batches.size:
+                        dsubset[valid_batches, rows[valid_batches], :, :] = 0
+            if group_cache["kind"] == "terminal_landmark":
+                mem = group_cache["memory"]
+                rows = xp.asarray(mem.terminal_rows, dtype=xp.int64)
+                dterm = xp.zeros((dcontext.shape[0], len(head_indices), self.d_head), dtype=dcontext.dtype)
+                valid_batches = xp.nonzero(mem.route_valid)[0]
+                if valid_batches.size:
+                    heads = xp.asarray(head_indices, dtype=xp.int64)
+                    dterm[valid_batches] = dcontext[
+                        valid_batches[:, None], rows[valid_batches, None], heads[None, :], :
+                    ]
+                with performance_scope("attention.terminal_memory.backward"):
+                    dq_sub, dk_sub, dv_sub = self.terminal_memory.backward(
+                        dterm, group_cache["cache"], mem
+                    )
+            elif group_cache["kind"] in {"indexed", "local_window", "dilated_window", "global_sparse"}:
                 topology_kind = group_cache.get("topology_kind", "indexed")
                 with performance_scope(f"attention.{topology_kind}.backward"):
                     with performance_scope(f"attention.{topology_kind}.kernel.backward"):
@@ -800,7 +906,7 @@ class GQAAttention:
             )
         return dx2.reshape(b, t, self.d_model)
 
-    def forward(self, x, return_cache=True, position_ids=None):
+    def forward(self, x, return_cache=True, position_ids=None, terminal_memory=None):
         if x.ndim != 3:
             raise ValueError("attention input must have shape [B,T,D].")
         b, t, d_model = x.shape
@@ -857,7 +963,7 @@ class GQAAttention:
 
         if self.attention_config is not None:
             context, pattern_caches, routing = self._mixed_context_forward(
-                x, q, k, v, return_cache
+                x, q, k, v, return_cache, terminal_memory=terminal_memory
             )
             merged = context.reshape(b, t, self.n_q_heads * self.d_head)
             merged_compute = (

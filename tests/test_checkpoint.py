@@ -8,7 +8,7 @@ import pytest
 
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.config import ModelConfig
-from mini_llm.checkpoint import save_checkpoint, load_checkpoint
+from mini_llm.checkpoint import save_checkpoint, load_checkpoint, initialize_matching_parameters
 
 
 def make_test_model():
@@ -144,3 +144,35 @@ class TestCheckpointResume:
             # Verify all parameters were loaded
             assert set(loaded_params.keys()) == set(all_params.keys()), \
                 f"Expected {list(all_params.keys())}, got {list(loaded_params.keys())}"
+
+
+def test_streaming_initialize_matching_parameters_allows_new_memory_tensors(tmp_path):
+    base_cfg = ModelConfig(
+        tokenizer_vocab_size=64, context_length=8, n_layers=1, d_model=16,
+        n_q_heads=2, n_kv_heads=1, d_head=8, n_experts=2, top_k=1, d_ff=24,
+        dtype="float64",
+    )
+    source = DecoderLanguageModel(base_cfg, rng_seed=101, dtype="float64")
+    saved = {p.name: p.data.copy() for p in source.parameters()}
+    save_checkpoint(tmp_path, saved)
+
+    target = DecoderLanguageModel(base_cfg, rng_seed=202, dtype="float64")
+    loaded, missing, elements = initialize_matching_parameters(
+        tmp_path, target.parameters()
+    )
+    assert not missing
+    assert len(loaded) == len(saved)
+    assert elements == sum(arr.size for arr in saved.values())
+    for p in target.parameters():
+        np.testing.assert_array_equal(p.data, saved[p.name])
+
+
+def test_streaming_initialize_matching_parameters_reports_missing(tmp_path):
+    model = make_test_model()
+    params = {p.name: p.data.copy() for p in model.parameters()}
+    removed = next(iter(params))
+    params.pop(removed)
+    save_checkpoint(tmp_path, params)
+    fresh = make_test_model()
+    _, missing, _ = initialize_matching_parameters(tmp_path, fresh.parameters())
+    assert removed in missing

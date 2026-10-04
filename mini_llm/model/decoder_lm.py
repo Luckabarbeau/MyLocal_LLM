@@ -14,6 +14,7 @@ from mini_llm.ops.loss import (
 from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.hierarchical_memory import (
     ActiveContext,
+    TerminalMemoryContext,
     HierarchicalMemoryRouter,
     ExternalMemoryReader,
 )
@@ -108,6 +109,7 @@ class DecoderLanguageModel:
         # therefore initialize only these new, small router parameters.
         self.memory_router = None
         self.memory_reader = None
+        self.memory_attention_layer = None
         if config.memory_context.enabled:
             self.memory_router = HierarchicalMemoryRouter(
                 d_model=config.d_model,
@@ -117,17 +119,30 @@ class DecoderLanguageModel:
                 name="memory_router",
                 dtype=self.dtype,
             )
-            self.memory_reader = ExternalMemoryReader(
-                d_model=config.d_model,
-                d_head=config.d_head,
-                config=config.memory_context,
-                rng=rng,
-                input_std=config.init_std,
-                output_std=config.residual_init_std,
-                rope_base=config.rope_base,
-                name="memory_reader",
-                dtype=self.dtype,
-            )
+            if config.memory_context.integration_mode == "pretransformer_read":
+                self.memory_reader = ExternalMemoryReader(
+                    d_model=config.d_model,
+                    d_head=config.d_head,
+                    config=config.memory_context,
+                    rng=rng,
+                    input_std=config.init_std,
+                    output_std=config.residual_init_std,
+                    rope_base=config.rope_base,
+                    name="memory_reader",
+                    dtype=self.dtype,
+                )
+            else:
+                layer = int(config.memory_context.memory_attention_layer)
+                if layer < 0:
+                    layer += len(self.blocks)
+                if not (0 <= layer < len(self.blocks)):
+                    raise ValueError("memory_attention_layer is outside model depth")
+                self.memory_attention_layer = layer
+                # Attach only after all base-model parameters were initialized so
+                # existing 4k checkpoint arrays retain their exact RNG sequence.
+                self.blocks[layer].attention.configure_terminal_memory(
+                    config.memory_context, rng
+                )
     
     def parameters(self):
         """Return all trainable parameters."""
@@ -143,6 +158,28 @@ class DecoderLanguageModel:
             params.extend(self.memory_reader.parameters())
         return params
     
+    def memory_parameters(self):
+        """Return only the 0058C trainable retrieval subsystem parameters."""
+        if not self.hierarchical_memory_enabled:
+            return []
+        params = list(self.memory_router.parameters())
+        if self.config.memory_context.integration_mode == "terminal_landmark":
+            layer = self.blocks[self.memory_attention_layer].attention
+            if layer.terminal_memory is not None:
+                params.extend(layer.terminal_memory.parameters())
+        elif self.memory_reader is not None:
+            params.extend(self.memory_reader.parameters())
+        return params
+
+    def optimization_parameters(self):
+        """Parameter set used by the optimizer for the configured training phase."""
+        if (
+            self.hierarchical_memory_enabled
+            and self.config.memory_context.memory_training == "router_only"
+        ):
+            return self.memory_parameters()
+        return self.parameters()
+
     def zero_grad(self):
         """Zero out all gradients."""
         for p in self.parameters():
@@ -158,7 +195,7 @@ class DecoderLanguageModel:
     def hierarchical_memory_enabled(self):
         return self.memory_router is not None
 
-    def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
+    def _pretransformer_context_forward(self, token_ids, memory_metadata=None):
         """Build the dense window after one causal per-position memory read.
 
         Source layout is ``[historical store][dense training window]``.  For
@@ -298,6 +335,7 @@ class DecoderLanguageModel:
             route_valid=route_valid,
         )
         cache = {
+            "mode": "pretransformer_read",
             "source_token_ids": source_ids,
             "history_ids": history_ids,
             "query_source_ids": query_source_ids,
@@ -313,7 +351,7 @@ class DecoderLanguageModel:
         }
         return active, cache
 
-    def _hierarchical_context_backward(self, dactive, cache):
+    def _pretransformer_context_backward(self, dactive, cache):
         """Backpropagate dense-window, reader, router, and embedding paths."""
         cfg = self.config.memory_context
         history_ids = cache.pop("history_ids")
@@ -371,57 +409,229 @@ class DecoderLanguageModel:
             dweights,
         )
 
+    def _terminal_landmark_context_forward(self, token_ids, memory_metadata=None):
+        """0058C: route once from the full working window, keep exact old K/V.
+
+        Source layout is ``[old external store][working 4k]``. ``memory_length``
+        denotes the total causal horizon, so the external store has
+        ``memory_length - target_length`` rows.  No historical row is inserted
+        into the Transformer sequence; selected exact embeddings are retained
+        only for the terminal attention override in the configured layer.
+        """
+        cfg = self.config.memory_context
+        source_ids = xp.asarray(token_ids)
+        if source_ids.ndim != 2 or int(source_ids.shape[1]) != int(cfg.source_input_length):
+            raise ValueError(
+                f"terminal Landmark memory requires [B,{cfg.source_input_length}] source IDs"
+            )
+        batch = int(source_ids.shape[0])
+        history_length = int(cfg.distant_memory_length)
+        working_length = int(cfg.target_length)
+        history_ids = source_ids[:, :history_length]
+        working_ids = source_ids[:, history_length:]
+
+        if memory_metadata is None:
+            history_valid_starts = xp.zeros((batch,), dtype=xp.int64)
+            target_valid_lengths = xp.full((batch,), working_length, dtype=xp.int64)
+        else:
+            history_valid_starts = xp.asarray(
+                memory_metadata.get(
+                    "history_valid_starts", xp.zeros((batch,), dtype=xp.int64)
+                ), dtype=xp.int64,
+            )
+            target_valid_lengths = xp.asarray(
+                memory_metadata.get(
+                    "target_valid_lengths", xp.full((batch,), working_length, dtype=xp.int64)
+                ), dtype=xp.int64,
+            )
+        if history_valid_starts.shape != (batch,) or target_valid_lengths.shape != (batch,):
+            raise ValueError("hierarchical memory metadata batch shape mismatch")
+        terminal_rows = xp.maximum(target_valid_lengths - 1, 0)
+
+        with performance_scope("memory_context.working_embedding.forward"):
+            working_x = self.embedding.W.data[working_ids]
+        selected_blocks = xp.zeros((batch, int(cfg.top_k_blocks)), dtype=xp.int64)
+        selected_valid = xp.zeros(selected_blocks.shape, dtype=bool)
+        route_weights = xp.zeros(selected_blocks.shape, dtype=working_x.dtype)
+        gate_scores = xp.zeros(selected_blocks.shape, dtype="float32")
+        route_valid = xp.zeros((batch,), dtype=bool)
+        router_cache = None
+        terminal_memory = None
+
+        if cfg.memory_training != "disabled":
+            with performance_scope("memory_context.history_embedding.forward"):
+                history_x = self.embedding.W.data[history_ids]
+            with performance_scope("memory_context.router.forward"):
+                (
+                    route_weights, selected_blocks, gate_scores,
+                    selected_valid, route_valid, router_cache,
+                ) = self.memory_router.forward_terminal(
+                    history_x, working_x,
+                    history_valid_starts=history_valid_starts,
+                    terminal_rows=terminal_rows,
+                )
+            if bool(xp.any(route_valid & (target_valid_lengths != working_length))):
+                raise ValueError(
+                    "a terminal Landmark route may only be active for a complete "
+                    "working window; otherwise padded future rows could enter the router query"
+                )
+
+            # Reopen only K*block_size exact historical tokens. This is the only
+            # full-resolution old-memory tensor retained through the deep trunk.
+            block_size = int(cfg.block_size)
+            offsets = xp.arange(block_size, dtype=xp.int64)
+            selected_positions = (
+                selected_blocks[..., None] * block_size + offsets
+            ).reshape(batch, -1)
+            safe_positions = xp.where(
+                xp.repeat(selected_valid, block_size, axis=-1),
+                selected_positions,
+                0,
+            )
+            batch_ids = xp.arange(batch, dtype=xp.int64)[:, None]
+            selected_token_ids = history_ids[batch_ids, safe_positions]
+            with performance_scope("memory_context.history_gather.forward"):
+                selected_embeddings = self.embedding.W.data[selected_token_ids]
+            terminal_memory = TerminalMemoryContext(
+                selected_embeddings=selected_embeddings,
+                selected_token_ids=selected_token_ids,
+                selected_position_ids=safe_positions,
+                selected_blocks=selected_blocks,
+                gate_scores=gate_scores,
+                route_weights=route_weights,
+                selected_valid=selected_valid,
+                route_valid=route_valid,
+                terminal_rows=terminal_rows,
+            )
+            del history_x
+
+        working_positions = xp.broadcast_to(
+            xp.arange(history_length, history_length + working_length, dtype=xp.int64)[None, :],
+            (batch, working_length),
+        )
+        active = ActiveContext(
+            embeddings=working_x,
+            token_ids=working_ids,
+            position_ids=working_positions,
+            source_indices=working_positions,
+            target_start=0,
+            target_end=working_length,
+            selected_blocks=selected_blocks,
+            route_weights=route_weights,
+            selected_valid=selected_valid,
+            route_valid=route_valid,
+            terminal_memory=terminal_memory,
+        )
+        cache = {
+            "mode": "terminal_landmark",
+            "history_ids": history_ids,
+            "working_ids": working_ids,
+            "history_valid_starts": history_valid_starts,
+            "router_cache": router_cache,
+            "terminal_memory": terminal_memory,
+            "target_slice": (0, working_length),
+        }
+        return active, cache
+
+    def _terminal_landmark_context_backward(self, dworking, cache):
+        """Finish embedding/router backward after the 4k Transformer trunk."""
+        working_ids = cache.pop("working_ids")
+        history_ids = cache.pop("history_ids")
+        terminal_memory = cache.pop("terminal_memory")
+        router_cache = cache.pop("router_cache")
+        cache.pop("history_valid_starts", None)
+
+        dworking_total = dworking
+        if terminal_memory is not None and router_cache is not None:
+            dgate = terminal_memory.d_gate_scores
+            if dgate is None:
+                dgate = xp.zeros(terminal_memory.gate_scores.shape, dtype="float32")
+            with performance_scope("memory_context.router.backward"):
+                dhistory_router, dworking_router = self.memory_router.backward_terminal(
+                    dgate, router_cache
+                )
+            dworking_total = dworking_total + dworking_router.astype(
+                dworking_total.dtype, copy=False
+            )
+            if self.config.memory_context.memory_training != "router_only":
+                with performance_scope("memory_context.embedding.backward"):
+                    self.embedding.backward(dhistory_router, {"token_ids": history_ids})
+                    if terminal_memory.d_selected_embeddings is not None:
+                        self.embedding.backward(
+                            terminal_memory.d_selected_embeddings,
+                            {"token_ids": terminal_memory.selected_token_ids},
+                        )
+        if self.config.memory_context.memory_training != "router_only":
+            with performance_scope("memory_context.embedding.backward"):
+                self.embedding.backward(dworking_total, {"token_ids": working_ids})
+
+    def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
+        if self.config.memory_context.integration_mode == "terminal_landmark":
+            return self._terminal_landmark_context_forward(
+                token_ids, memory_metadata=memory_metadata
+            )
+        return self._pretransformer_context_forward(
+            token_ids, memory_metadata=memory_metadata
+        )
+
+    def _hierarchical_context_backward(self, dactive, cache):
+        if cache.get("mode") == "terminal_landmark":
+            cache.pop("mode", None)
+            return self._terminal_landmark_context_backward(dactive, cache)
+        cache.pop("mode", None)
+        return self._pretransformer_context_backward(dactive, cache)
+
     def memory_routing_diagnostics(self, cache):
-        """Return compact causal per-position memory-router diagnostics."""
+        """Return compact memory-router diagnostics for 0058A/B or 0058C."""
         memory_cache = cache.get("memory_context_cache")
         if memory_cache is None:
             return None
-        selected = memory_cache["selected_blocks"]
-        weights = memory_cache["route_weights"].astype("float32", copy=False)
-        selected_valid = memory_cache["selected_valid"]
-        route_valid = memory_cache["route_valid"]
+        selected = memory_cache.get("selected_blocks")
+        if selected is None:
+            terminal_memory = memory_cache.get("terminal_memory")
+            if terminal_memory is None:
+                return None
+            selected = terminal_memory.selected_blocks
+            weights = terminal_memory.route_weights.astype("float32", copy=False)
+            selected_valid = terminal_memory.selected_valid
+            route_valid = terminal_memory.route_valid
+            terminal_mode = True
+        else:
+            weights = memory_cache["route_weights"].astype("float32", copy=False)
+            selected_valid = memory_cache["selected_valid"]
+            route_valid = memory_cache["route_valid"]
+            terminal_mode = selected.ndim == 2
         cfg = self.config.memory_context
 
         probs = xp.maximum(weights, xp.asarray(1e-12, dtype=weights.dtype))
         entropy = -xp.sum(
             xp.where(selected_valid, weights * xp.log(probs), 0.0), axis=-1
         )
-        valid_rows = route_valid[None, :]
-        valid_count = xp.maximum(xp.sum(valid_rows), 1)
-        entropy_mean = xp.sum(entropy * valid_rows) / (
-            valid_count * int(selected.shape[0])
-        )
+        valid_count = xp.maximum(xp.sum(route_valid), 1)
+        entropy_mean = xp.sum(entropy * route_valid.astype("float32")) / valid_count
 
-        block_centers = (
-            selected.astype("float32") + 0.5
-        ) * int(cfg.block_size)
-        current_boundaries = (
-            int(cfg.memory_length)
-            + xp.arange(int(selected.shape[1]), dtype="float32")
-            + 1.0
-        )[None, :, None]
-        distance = current_boundaries - block_centers
-        valid_selected = selected_valid
-        valid_selected_count = xp.maximum(xp.sum(valid_selected), 1)
-        source_distance_mean = (
-            xp.sum(xp.where(valid_selected, distance, 0.0))
-            / valid_selected_count
-        )
+        block_centers = (selected.astype("float32") + 0.5) * int(cfg.block_size)
+        if terminal_mode:
+            current = float(cfg.distant_memory_length + cfg.target_length)
+            distance = current - block_centers
+        else:
+            current_boundaries = (
+                int(cfg.memory_length)
+                + xp.arange(int(selected.shape[1]), dtype="float32")
+                + 1.0
+            )[None, :, None]
+            distance = current_boundaries - block_centers
+        valid_selected_count = xp.maximum(xp.sum(selected_valid), 1)
+        source_distance_mean = xp.sum(
+            xp.where(selected_valid, distance, 0.0)
+        ) / valid_selected_count
 
-        if bool(xp.any(valid_selected)):
-            flattened = selected[valid_selected]
-            histogram = xp.bincount(
-                flattened, minlength=int(cfg.searchable_blocks)
-            )
+        if bool(xp.any(selected_valid)):
+            flattened = selected[selected_valid]
+            histogram = xp.bincount(flattened, minlength=int(cfg.searchable_blocks))
             unique_blocks = xp.unique(flattened).size
-            recent_cut = max(
-                0,
-                int(cfg.searchable_blocks)
-                - max(1, int(cfg.searchable_blocks) // 4),
-            )
-            recent_fraction = xp.mean(
-                (flattened >= recent_cut).astype("float32")
-            )
+            recent_cut = max(0, int(cfg.searchable_blocks) - max(1, int(cfg.searchable_blocks) // 4))
+            recent_fraction = xp.mean((flattened >= recent_cut).astype("float32"))
         else:
             histogram = xp.zeros((int(cfg.searchable_blocks),), dtype=xp.int64)
             unique_blocks = 0
@@ -432,13 +642,8 @@ class DecoderLanguageModel:
         sorted_valid = xp.take_along_axis(selected_valid, sort_order, axis=-1)
         duplicate_mask = (
             (xp.diff(sorted_selected, axis=-1) == 0)
-            & sorted_valid[..., 1:]
-            & sorted_valid[..., :-1]
+            & sorted_valid[..., 1:] & sorted_valid[..., :-1]
         )
-        duplicate_count = xp.sum(duplicate_mask)
-
-        router_cache = memory_cache["router_cache"]
-        scores = router_cache.get("scores")
         result = {
             "selected_blocks": selected,
             "weights": weights,
@@ -450,18 +655,17 @@ class DecoderLanguageModel:
             "entropy_mean": entropy_mean,
             "source_distance_mean": source_distance_mean,
             "recent_quartile_fraction": recent_fraction,
-            "duplicate_count": duplicate_count,
+            "duplicate_count": xp.sum(duplicate_mask),
             "unique_blocks": unique_blocks,
         }
-        if scores is not None:
+        router_cache = memory_cache.get("router_cache")
+        if router_cache is not None and router_cache.get("scores") is not None:
+            scores = router_cache["scores"].astype("float32", copy=False)
             candidate_mask = router_cache.get("candidate_mask")
-            score_work = scores.astype("float32", copy=False)
             if candidate_mask is not None:
-                score_values = score_work[
-                    xp.broadcast_to(candidate_mask, score_work.shape)
-                ]
+                score_values = scores[xp.broadcast_to(candidate_mask, scores.shape)]
             else:
-                score_values = score_work.reshape(-1)
+                score_values = scores.reshape(-1)
             if score_values.size:
                 result.update({
                     "score_mean": xp.mean(score_values),
@@ -469,6 +673,29 @@ class DecoderLanguageModel:
                     "score_min": xp.min(score_values),
                     "score_max": xp.max(score_values),
                 })
+        terminal_memory = memory_cache.get("terminal_memory")
+        if terminal_memory is not None:
+            valid = terminal_memory.route_valid.astype("float32")
+            denom = xp.maximum(xp.sum(valid), 1.0)
+            if terminal_memory.attention_history_mass is not None:
+                per_batch = xp.mean(
+                    terminal_memory.attention_history_mass.astype("float32"), axis=1
+                )
+                result["history_attention_mass_mean"] = xp.sum(per_batch * valid) / denom
+            if terminal_memory.attention_block_probs is not None:
+                per_batch = xp.max(
+                    terminal_memory.attention_block_probs.astype("float32"), axis=(1, 2)
+                )
+                result["max_block_attention_mean"] = xp.sum(per_batch * valid) / denom
+            if terminal_memory.attention_max_token_prob is not None:
+                per_batch = xp.max(
+                    terminal_memory.attention_max_token_prob.astype("float32"), axis=(1, 2)
+                )
+                result["max_within_block_token_prob_mean"] = xp.sum(per_batch * valid) / denom
+            if terminal_memory.d_gate_scores is not None:
+                result["gate_grad_norm"] = xp.sqrt(
+                    xp.sum(terminal_memory.d_gate_scores.astype("float32") ** 2)
+                )
         return result
 
     def forward_body(
@@ -484,6 +711,7 @@ class DecoderLanguageModel:
         """
         memory_context_cache = None
         target_slice = None
+        terminal_memory = None
         if self.hierarchical_memory_enabled:
             if position_ids is not None:
                 raise ValueError(
@@ -497,6 +725,14 @@ class DecoderLanguageModel:
             x = active.embeddings
             effective_position_ids = active.position_ids
             target_slice = (active.target_start, active.target_end)
+            if (
+                self.config.memory_context.integration_mode == "terminal_landmark"
+                and self.config.memory_context.memory_training == "router_only"
+            ):
+                # Post-training router optimization materializes only the one
+                # terminal vocabulary row whose loss is allowed to train memory.
+                target_slice = (active.target_end - 1, active.target_end)
+            terminal_memory = active.terminal_memory
             embed_cache = None
             if finite_trace is not None:
                 finite_trace.append(
@@ -517,10 +753,25 @@ class DecoderLanguageModel:
         # residual inputs in hierarchical mode.  Top-level routing is performed
         # exactly once and is never rerun independently for each block replay.
         checkpoint_blocks = bool(return_cache and activation_checkpoint)
+        router_only = bool(
+            return_cache
+            and self.hierarchical_memory_enabled
+            and self.config.memory_context.integration_mode == "terminal_landmark"
+            and self.config.memory_context.memory_training == "router_only"
+        )
+        # In router-only post-training, layers below the memory-aware layer are
+        # frozen and cannot receive gradient from any optimized parameter. Run
+        # them inference-style and retain caches only from the injection layer
+        # onward. This is the same recompute/cache-lifetime principle already
+        # used elsewhere in the repository, applied at a coarser layer boundary.
+        cache_start_layer = (
+            int(self.memory_attention_layer) if router_only else 0
+        )
         block_caches = [] if (return_cache and not checkpoint_blocks) else None
         block_checkpoints = [] if checkpoint_blocks else None
         for i, block in enumerate(self.blocks):
-            if checkpoint_blocks:
+            retain_block = bool(return_cache and i >= cache_start_layer)
+            if checkpoint_blocks and retain_block:
                 block_checkpoints.append(x)
                 with performance_scope(f"model.layer{i}.forward"):
                     x = block.forward(
@@ -529,14 +780,20 @@ class DecoderLanguageModel:
                         layer_idx=i,
                         return_cache=False,
                         position_ids=effective_position_ids,
+                        terminal_memory=(
+                            terminal_memory if i == self.memory_attention_layer else None
+                        ),
                     )
-            elif return_cache:
+            elif retain_block and not checkpoint_blocks:
                 with performance_scope(f"model.layer{i}.forward"):
                     x, block_cache = block.forward(
                         x,
                         finite_trace=finite_trace,
                         layer_idx=i,
                         position_ids=effective_position_ids,
+                        terminal_memory=(
+                            terminal_memory if i == self.memory_attention_layer else None
+                        ),
                     )
                 block_caches.append(block_cache)
             else:
@@ -547,6 +804,9 @@ class DecoderLanguageModel:
                         layer_idx=i,
                         return_cache=False,
                         position_ids=effective_position_ids,
+                        terminal_memory=(
+                            terminal_memory if i == self.memory_attention_layer else None
+                        ),
                     )
 
         with performance_scope("model.final_norm.forward"):
@@ -567,11 +827,13 @@ class DecoderLanguageModel:
         cache = {
             "final_norm_cache": final_norm_cache,
             "activation_checkpoint": "block" if checkpoint_blocks else "none",
+            "block_cache_start_layer": cache_start_layer,
         }
         if checkpoint_blocks:
             cache["block_checkpoints"] = block_checkpoints
             # Replay must use exactly the same explicit source positions.
             cache["position_ids"] = effective_position_ids
+            cache["terminal_memory"] = terminal_memory
         else:
             cache["block_caches"] = block_caches
 
@@ -608,7 +870,13 @@ class DecoderLanguageModel:
             target_slice = None
             if self.hierarchical_memory_enabled:
                 cfg = self.config.memory_context
-                target_slice = (0, int(cfg.target_length))
+                if (
+                    cfg.integration_mode == "terminal_landmark"
+                    and cfg.memory_training == "router_only"
+                ):
+                    target_slice = (int(cfg.target_length) - 1, int(cfg.target_length))
+                else:
+                    target_slice = (0, int(cfg.target_length))
 
         head_for_logits = head_input
         if target_slice is not None:
@@ -725,7 +993,11 @@ class DecoderLanguageModel:
 
         dx = xp.empty_like(flat_x)
         W = self.output_proj.W.data
-        W_grad = self.output_proj.W.grad
+        router_only = (
+            self.hierarchical_memory_enabled
+            and self.config.memory_context.memory_training == "router_only"
+        )
+        W_grad = None if router_only else self.output_proj.W.grad
         for start in range(0, n, chunk_tokens):
             end = min(start + chunk_tokens, n)
             x_chunk = flat_x[start:end]
@@ -740,7 +1012,8 @@ class DecoderLanguageModel:
                     grad_scale=grad_scale,
                 )
             with performance_scope("model.output_projection.chunk_backward"):
-                W_grad += x_chunk.T @ d_logits
+                if W_grad is not None:
+                    W_grad += x_chunk.T @ d_logits
                 dx[start:end] = d_logits @ W.T
             del logits, d_logits
 
@@ -807,16 +1080,22 @@ class DecoderLanguageModel:
         if checkpoint_mode == "block":
             block_checkpoints = cache.pop("block_checkpoints")
             position_ids = cache.pop("position_ids", None)
-            if len(block_checkpoints) != len(self.blocks):
+            terminal_memory = cache.pop("terminal_memory", None)
+            cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
+            expected = len(self.blocks) - cache_start_layer
+            if len(block_checkpoints) != expected:
                 raise ValueError(
-                    "block activation checkpoint count does not match model depth"
+                    "block activation checkpoint count does not match retained depth"
                 )
-            for original_idx in range(len(self.blocks) - 1, -1, -1):
+            for original_idx in range(len(self.blocks) - 1, cache_start_layer - 1, -1):
                 block_input = block_checkpoints.pop()
                 with performance_scope(f"model.layer{original_idx}.recompute"):
                     recomputed_output, block_cache = self.blocks[original_idx].forward(
                         block_input, finite_trace=None, layer_idx=original_idx,
                         return_cache=True, position_ids=position_ids,
+                        terminal_memory=(
+                            terminal_memory if original_idx == self.memory_attention_layer else None
+                        ),
                     )
                 # The backward only needs the reconstructed cache; dropping the
                 # replay output before launching backward minimizes transient VRAM.
@@ -824,13 +1103,32 @@ class DecoderLanguageModel:
                 with performance_scope(f"model.layer{original_idx}.backward"):
                     dx = self.blocks[original_idx].backward(dx, block_cache)
                 del block_cache
+                if (
+                    self.hierarchical_memory_enabled
+                    and self.config.memory_context.memory_training == "router_only"
+                    and original_idx == self.memory_attention_layer
+                ):
+                    break
         elif checkpoint_mode == "none":
             block_caches = cache.pop("block_caches")
-            for original_idx in range(len(self.blocks) - 1, -1, -1):
+            cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
+            expected = len(self.blocks) - cache_start_layer
+            if len(block_caches) != expected:
+                raise ValueError("block cache count does not match retained depth")
+            for original_idx in range(len(self.blocks) - 1, cache_start_layer - 1, -1):
                 block_cache = block_caches.pop()
                 with performance_scope(f"model.layer{original_idx}.backward"):
                     dx = self.blocks[original_idx].backward(dx, block_cache)
                 del block_cache
+                if (
+                    self.hierarchical_memory_enabled
+                    and self.config.memory_context.memory_training == "router_only"
+                    and original_idx == self.memory_attention_layer
+                ):
+                    # Earlier frozen blocks cannot influence any optimized 0058C
+                    # parameter.  Stop-gradient here avoids 11 unnecessary block
+                    # backward passes when the memory-aware layer is the final one.
+                    break
         else:
             raise ValueError(f"unknown activation checkpoint mode: {checkpoint_mode!r}")
 
@@ -854,7 +1152,15 @@ class DecoderLanguageModel:
         )
         output_proj_cache = cache.pop("output_proj_cache")
         with performance_scope("model.output_projection.backward"):
-            dx = self.output_proj.backward(d_logits_compute, output_proj_cache)
+            if (
+                self.hierarchical_memory_enabled
+                and self.config.memory_context.memory_training == "router_only"
+            ):
+                dx = self.output_proj.backward_input(
+                    d_logits_compute, output_proj_cache
+                )
+            else:
+                dx = self.output_proj.backward(d_logits_compute, output_proj_cache)
         del output_proj_cache, d_logits_compute
 
         target_slice = cache.pop("output_proj_target_slice", None)

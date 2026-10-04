@@ -38,7 +38,8 @@ class TransformerBlock:
         eps: float = 1e-6,
         name: str = "block",
         dtype: str = "float32",
-        attention_config=None
+        attention_config=None,
+        terminal_memory_config=None,
     ):
         """Initialize the Transformer block."""
         self.d_model = d_model
@@ -66,7 +67,8 @@ class TransformerBlock:
             rng=rng,
             name=f"{name}.attention",
             dtype=dtype,
-            attention_config=attention_config
+            attention_config=attention_config,
+            terminal_memory_config=terminal_memory_config,
         )
         
         # Second RMSNorm (input to MoE)
@@ -106,7 +108,7 @@ class TransformerBlock:
     
     def forward(
         self, x, finite_trace=None, layer_idx=None, return_cache=True,
-        position_ids=None,
+        position_ids=None, terminal_memory=None,
     ):
         """
         Forward pass through the Transformer block.
@@ -145,22 +147,20 @@ class TransformerBlock:
         )
         if return_cache:
             with performance_scope("block.attention.forward"):
-                if position_ids is None:
-                    attn_out, attn_cache = self.attention.forward(norm1_compute)
-                else:
-                    attn_out, attn_cache = self.attention.forward(
-                        norm1_compute, position_ids=position_ids
-                    )
+                kwargs = {}
+                if position_ids is not None:
+                    kwargs["position_ids"] = position_ids
+                if terminal_memory is not None:
+                    kwargs["terminal_memory"] = terminal_memory
+                attn_out, attn_cache = self.attention.forward(norm1_compute, **kwargs)
         else:
             with performance_scope("block.attention.forward"):
-                if position_ids is None:
-                    attn_out = self.attention.forward(
-                        norm1_compute, return_cache=False
-                    )
-                else:
-                    attn_out = self.attention.forward(
-                        norm1_compute, return_cache=False, position_ids=position_ids
-                    )
+                kwargs = {"return_cache": False}
+                if position_ids is not None:
+                    kwargs["position_ids"] = position_ids
+                if terminal_memory is not None:
+                    kwargs["terminal_memory"] = terminal_memory
+                attn_out = self.attention.forward(norm1_compute, **kwargs)
             attn_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))

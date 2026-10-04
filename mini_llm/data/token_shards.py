@@ -790,6 +790,7 @@ def create_hierarchical_memory_minibatch(
     pad_token_id: Optional[int] = None,
     document_aware: bool = False,
     return_metadata: bool = False,
+    min_history_tokens: int = 0,
 ):
     """Sample one coherent document/fragment for hierarchical memory training.
 
@@ -811,6 +812,7 @@ def create_hierarchical_memory_minibatch(
     memory_length = int(memory_length)
     target_length = int(target_length)
     batch_size = int(batch_size)
+    min_history_tokens = max(0, int(min_history_tokens))
     if memory_length <= 0 or target_length <= 0 or batch_size <= 0:
         raise ValueError("batch_size, memory_length, and target_length must be positive")
 
@@ -842,17 +844,39 @@ def create_hierarchical_memory_minibatch(
         target_source_starts = np.empty(batch_size, dtype=np.int64)
 
         for batch_idx in range(batch_size):
-            doc_start, doc_end = _sample_document_span(document_index, rng)
-            pair_count = int(doc_end - doc_start - 1)
-            if pair_count <= 0:
-                raise RuntimeError("document sampler returned a span without labels")
+            required_pairs = target_length + min_history_tokens
+            doc_start = doc_end = None
+            for _ in range(64):
+                candidate_start, candidate_end = _sample_document_span(document_index, rng)
+                if candidate_end - candidate_start - 1 >= required_pairs:
+                    doc_start, doc_end = candidate_start, candidate_end
+                    break
+                if min_history_tokens == 0:
+                    doc_start, doc_end = candidate_start, candidate_end
+                    break
+            if doc_start is None:
+                # Deterministic fallback across the sidecar. Router-only mode
+                # should fail loudly if the shard contains no useful long sample.
+                previous = 0
+                for end_value in document_index.ends:
+                    end = int(end_value)
+                    if end - previous - 1 >= required_pairs:
+                        doc_start, doc_end = previous, end
+                        break
+                    previous = end
+                if doc_start is None:
+                    raise ValueError(
+                        "packed shard contains no document long enough for "
+                        f"target_length={target_length} and min_history_tokens={min_history_tokens}"
+                    )
 
+            pair_count = int(doc_end - doc_start - 1)
             if pair_count >= target_length:
-                # Pick only starts with a complete dense target window.  This
-                # keeps the normal 4k path dense for long documents while short
-                # documents remain usable through the explicit loss mask below.
                 max_target_start = doc_end - target_length - 1
-                target_start = int(rng.integers(doc_start, max_target_start + 1))
+                min_target_start = min(
+                    max_target_start, doc_start + min_history_tokens
+                )
+                target_start = int(rng.integers(min_target_start, max_target_start + 1))
                 valid_targets = target_length
             else:
                 target_start = int(doc_start)

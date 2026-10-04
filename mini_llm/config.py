@@ -3,18 +3,20 @@ import math
 
 @dataclass(frozen=True)
 class MemoryContextConfig:
-    """Causal external-memory configuration for hierarchical context.
+    """Hierarchical long-memory configuration.
 
-    ``memory_length`` is the maximum historical store preceding the dense
-    training window.  ``recent_length`` defines the causal working-history
-    horizon: for a prediction boundary ``t`` the router may inspect the most
-    recent history, but may retrieve only blocks ending at or before
-    ``t - recent_length``.  The selected blocks are *not* concatenated into the
-    Transformer sequence.  They are reopened through one sparse exact-token
-    external-memory read and injected into the current training-window rows.
+    In the 0058C ``terminal_landmark`` path ``memory_length`` is the total
+    causal horizon ending at the current working window. ``target_length``
+    rows form the ordinary dense Transformer working window; the preceding
+    ``memory_length - target_length`` rows are a same-document external store.
+    The router pools the recent working context once, selects old blocks, and
+    exact tokens from those blocks become K/V only for the terminal query of
+    one configurable attention layer. They never become deep Transformer query
+    rows. Dense LM training still supervises the complete working window in
+    ``joint`` mode; ``router_only`` post-training projects and backpropagates
+    only the terminal next-token objective.
 
-    Consequently the expensive Transformer length is ``target_length`` and is
-    independent of both ``memory_length`` and the number of retrieved tokens.
+    ``pretransformer_read`` remains solely as the 0058A/B comparison path.
     """
 
     enabled: bool = False
@@ -29,7 +31,18 @@ class MemoryContextConfig:
     history_pooling: str = "mean"
     router_weight_scale: float = 1.0
 
-    # Exact-token external-memory read.  The router selection is shared across
+    # 0058C memory integration.  ``pretransformer_read`` preserves the 0058A/B
+    # comparison path. ``terminal_landmark`` keeps the 4k working sequence
+    # untouched and exposes exact routed historical K/V only to the terminal
+    # query in one configurable Transformer attention layer.
+    integration_mode: str = "pretransformer_read"
+    memory_attention_layer: int = -1
+    memory_training: str = "joint"
+    min_router_history_blocks: int = 1
+
+    # Exact-token memory adapter.  In terminal-landmark mode these are the
+    # historical K/V heads used by the retrieval heads in the memory-aware
+    # layer.  The old pre-Transformer reader also reuses these sizing fields.
     # these heads; GQA keeps the memory K/V projection deliberately small.
     read_heads: int = 4
     read_kv_heads: int = 1
@@ -51,12 +64,17 @@ class MemoryContextConfig:
             "read_heads": self.read_heads,
             "read_kv_heads": self.read_kv_heads,
             "read_query_chunk": self.read_query_chunk,
+            "min_router_history_blocks": self.min_router_history_blocks,
         }
         for name, value in positive.items():
             if int(value) != value or int(value) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if self.recent_length > self.memory_length:
             raise ValueError("recent_length must not exceed memory_length")
+        if self.integration_mode == "terminal_landmark" and self.target_length >= self.memory_length:
+            raise ValueError(
+                "terminal_landmark requires target_length < memory_length"
+            )
         if self.target_length > self.recent_length:
             raise ValueError(
                 "0058A requires target_length <= recent_length so target rows "
@@ -66,6 +84,14 @@ class MemoryContextConfig:
             raise ValueError("router_query_length must not exceed recent_length")
         if self.read_heads % self.read_kv_heads != 0:
             raise ValueError("read_heads must be divisible by read_kv_heads")
+        if self.integration_mode not in {"pretransformer_read", "terminal_landmark"}:
+            raise ValueError(
+                "integration_mode must be 'pretransformer_read' or 'terminal_landmark'"
+            )
+        if self.memory_training not in {"joint", "router_only", "disabled"}:
+            raise ValueError("memory_training must be 'joint', 'router_only', or 'disabled'")
+        if int(self.min_router_history_blocks) > int(self.searchable_blocks):
+            raise ValueError("min_router_history_blocks exceeds searchable memory blocks")
         if self.query_pooling not in {"mean", "last", "learned"}:
             raise ValueError("query_pooling must be 'mean', 'last', or 'learned'")
         if self.history_pooling not in {"mean", "first", "last", "learned"}:
@@ -82,19 +108,21 @@ class MemoryContextConfig:
         if self.enabled:
             if self.memory_length < self.block_size:
                 raise ValueError("enabled memory context requires at least one memory block")
-            if self.memory_length % self.block_size != 0:
-                raise ValueError("memory_length must be divisible by block_size")
+            if self.distant_memory_length % self.block_size != 0:
+                raise ValueError("external searchable memory must be divisible by block_size")
             if self.searchable_blocks < self.top_k_blocks:
                 raise ValueError("top_k_blocks exceeds the number of complete memory blocks")
 
     @property
     def distant_memory_length(self) -> int:
-        """Compatibility alias for the maximum historical token store."""
+        """Number of tokens physically stored outside the 4k working window."""
+        if self.integration_mode == "terminal_landmark":
+            return int(self.memory_length) - int(self.target_length)
         return int(self.memory_length)
 
     @property
     def searchable_blocks(self) -> int:
-        return int(self.memory_length) // int(self.block_size)
+        return int(self.distant_memory_length) // int(self.block_size)
 
     @property
     def retrieved_length(self) -> int:
@@ -108,7 +136,14 @@ class MemoryContextConfig:
 
     @property
     def source_input_length(self) -> int:
-        """Historical store plus the dense autoregressive training window."""
+        """Input rows consumed by one hierarchical-memory sample.
+
+        In 0058C terminal-landmark mode ``memory_length`` is the *total causal
+        horizon*, including the current working window.  The sampler still reads
+        one additional corpus token to provide the terminal next-token label.
+        """
+        if self.integration_mode == "terminal_landmark":
+            return int(self.memory_length)
         return int(self.memory_length) + int(self.target_length)
 
 
@@ -262,7 +297,12 @@ class ModelConfig:
                 total += d
             read_q = int(memory.read_heads) * int(self.d_head)
             read_kv = int(memory.read_kv_heads) * int(self.d_head)
-            total += d * read_q + 2 * d * read_kv + read_q * d
+            if memory.integration_mode == "terminal_landmark":
+                # RMSNorm scale + compact historical K/V adapter. The terminal
+                # query reuses the selected Transformer's existing Q projection.
+                total += d + 2 * d * read_kv
+            else:
+                total += d * read_q + 2 * d * read_kv + read_q * d
 
         return int(total)
 
@@ -624,12 +664,12 @@ class ModelConfig:
 
     @classmethod
     def _wide_500m_memory_context(cls, memory_length: int):
-        """Wide ~500M trunk with causal per-token external memory.
+        """Wide ~500M trunk with terminal Landmark-gated external memory.
 
-        ``memory_length`` changes only the addressable historical store.  The
-        Transformer processes the same dense 4k training window for all memory
-        horizons; per-position routed history is read sparsely before the trunk.
-        The direct 0057A long-context presets remain available for comparison.
+        ``memory_length`` is the total causal horizon.  The final 4k tokens are
+        the ordinary dense Transformer working window; preceding same-document
+        tokens form the searchable store.  Only the terminal prediction invokes
+        learned long-memory routing, while the base LM remains densely trained.
         """
         memory_length = int(memory_length)
         if memory_length not in {16_384, 32_768, 65_536}:
@@ -647,15 +687,18 @@ class ModelConfig:
             query_pooling="mean",
             history_pooling="mean",
             router_weight_scale=1.0,
-            read_heads=4,
+            integration_mode="terminal_landmark",
+            memory_attention_layer=-1,
+            memory_training="joint",
+            read_heads=2,
             read_kv_heads=1,
             read_query_chunk=64,
             reader_weight_eps=1e-8,
             reader_residual_scale=1.0,
         )
 
-        # 0058A keeps only the dense neighboring training window in the deep
-        # trunk.  Long history is external memory, so attention geometry is
+        # 0058C keeps only the dense neighboring training window in the deep
+        # trunk. Long history is external K/V memory, so attention geometry is
         # based on 4k regardless of the 16k/32k/64k addressable horizon.
         base = cls._wide_500m_sparse_context(4_096)
         return cls(

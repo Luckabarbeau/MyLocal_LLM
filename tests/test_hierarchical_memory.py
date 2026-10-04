@@ -2,8 +2,13 @@ import dataclasses
 import numpy as np
 
 from mini_llm.backend import RandomStream, asnumpy, xp
-from mini_llm.checkpoint import load_checkpoint, save_checkpoint
-from mini_llm.config import MemoryContextConfig, ModelConfig
+from mini_llm.checkpoint import (
+    initialize_matching_parameters, load_checkpoint, save_checkpoint,
+)
+from mini_llm.config import (
+    MemoryContextConfig, ModelConfig, AttentionLayerConfig,
+    LocalAttentionConfig, RetrievalAttentionConfig, ContextRouterConfig,
+)
 from mini_llm.data.token_shards import (
     build_packed_document_index,
     create_hierarchical_memory_minibatch,
@@ -59,7 +64,7 @@ def test_memory_presets_keep_deep_active_length_fixed():
     assert {cfg.memory_context.active_length for cfg in configs} == {4096}
     assert {cfg.context_length for cfg in configs} == {4096}
     assert [cfg.memory_context.memory_length for cfg in configs] == [16384, 32768, 65536]
-    assert [cfg.memory_context.searchable_blocks for cfg in configs] == [128, 256, 512]
+    assert [cfg.memory_context.searchable_blocks for cfg in configs] == [96, 224, 480]
     assert {cfg.memory_context.target_length for cfg in configs} == {4096}
     assert {cfg.memory_context.router_query_length for cfg in configs} == {4096}
     assert len({cfg.estimated_parameter_count() for cfg in configs}) == 1
@@ -641,3 +646,428 @@ def test_causal_query_pool_mean_ignores_left_padding_per_batch():
     # Padding rows receive no query-pool gradient.
     np.testing.assert_allclose(dx[0, :2], 0.0, rtol=0, atol=0)
     np.testing.assert_allclose(dx[1, :1], 0.0, rtol=0, atol=0)
+
+
+
+def _tiny_terminal_landmark_config(memory_training="joint", top_k_blocks=1):
+    layer_router = ContextRouterConfig(
+        history_block_size=2,
+        routing_stride=1,
+        query_window=2,
+        router_dim=2,
+        top_k_blocks=1,
+        exclude_recent_tokens=2,
+        query_pooling="mean",
+        history_pooling="mean",
+        num_queries=1,
+    )
+    attention = AttentionLayerConfig(
+        heads=(
+            LocalAttentionConfig(window=4),
+            RetrievalAttentionConfig(layer_router, group="far"),
+        )
+    )
+    memory = MemoryContextConfig(
+        enabled=True,
+        memory_length=8,
+        recent_length=4,
+        target_length=4,
+        block_size=2,
+        top_k_blocks=top_k_blocks,
+        router_query_length=4,
+        router_dim=3,
+        query_pooling="mean",
+        history_pooling="mean",
+        integration_mode="terminal_landmark",
+        memory_attention_layer=-1,
+        memory_training=memory_training,
+        read_heads=1,
+        read_kv_heads=1,
+    )
+    return ModelConfig(
+        tokenizer_vocab_size=32,
+        context_length=4,
+        n_layers=1,
+        d_model=8,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=4,
+        n_experts=2,
+        top_k=1,
+        d_ff=16,
+        dtype="float64",
+        attention_layers=(attention,),
+        memory_context=memory,
+    )
+
+
+def _terminal_metadata(history_start=0, valid=4):
+    return {
+        "history_valid_starts": np.asarray([history_start], dtype=np.int64),
+        "target_valid_lengths": np.asarray([valid], dtype=np.int64),
+        "target_loss_mask": np.asarray([[1.0] * valid + [0.0] * (4 - valid)], dtype=np.float32),
+    }
+
+
+def test_terminal_landmark_preset_memory_length_is_total_horizon():
+    cfg = ModelConfig.wide_500m_memory_64k().memory_context
+    assert cfg.integration_mode == "terminal_landmark"
+    assert cfg.memory_length == 65536
+    assert cfg.distant_memory_length == 61440
+    assert cfg.source_input_length == 65536
+    assert cfg.active_length == 4096
+    assert cfg.searchable_blocks == 480
+
+
+def test_terminal_landmark_router_runs_once_and_reopens_exact_blocks():
+    model = DecoderLanguageModel(_tiny_terminal_landmark_config(), rng_seed=7)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    active, cache = model._hierarchical_context_forward(
+        source, memory_metadata=_terminal_metadata()
+    )
+    mem = active.terminal_memory
+    assert active.embeddings.shape == (1, 4, 8)
+    assert mem.selected_blocks.shape == (1, 1)
+    assert mem.gate_scores.shape == (1, 1)
+    assert mem.selected_embeddings.shape == (1, 2, 8)
+    block = int(asnumpy(mem.selected_blocks)[0, 0])
+    expected_ids = asnumpy(source)[0, block * 2:block * 2 + 2]
+    np.testing.assert_array_equal(asnumpy(mem.selected_token_ids)[0], expected_ids)
+    assert cache["mode"] == "terminal_landmark"
+
+
+def test_terminal_landmark_only_terminal_loss_trains_memory_system():
+    cfg = _tiny_terminal_landmark_config()
+    model = DecoderLanguageModel(cfg, rng_seed=9)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int32)
+
+    hidden, cache = model.forward_body(
+        source, memory_metadata=_terminal_metadata(), return_cache=True
+    )
+    # Exclude the terminal next-token label: the routed memory has no path to
+    # any earlier prediction and every 0058C memory gradient must be zero.
+    loss, loss_cache = model.chunked_lm_head_loss_forward(
+        hidden, targets, chunk_tokens=2,
+        loss_mask=xp.asarray([[1, 1, 1, 0]], dtype=xp.float32),
+        target_slice=cache["target_slice"],
+    )
+    model.zero_grad()
+    dx = model.chunked_lm_head_backward(loss_cache)
+    model.backward_body(dx, cache)
+    memory_grads = [
+        asnumpy(p.grad) for p in model.parameters()
+        if p.name.startswith("memory_router.") or ".terminal_memory." in p.name
+    ]
+    assert memory_grads
+    assert all(np.count_nonzero(g) == 0 for g in memory_grads)
+
+    # Restoring only the terminal target produces a non-zero retrieval gradient.
+    hidden, cache = model.forward_body(
+        source, memory_metadata=_terminal_metadata(), return_cache=True
+    )
+    loss, loss_cache = model.chunked_lm_head_loss_forward(
+        hidden, targets, chunk_tokens=2,
+        loss_mask=xp.asarray([[0, 0, 0, 1]], dtype=xp.float32),
+        target_slice=cache["target_slice"],
+    )
+    model.zero_grad()
+    dx = model.chunked_lm_head_backward(loss_cache)
+    model.backward_body(dx, cache)
+    norms = {
+        p.name: np.linalg.norm(asnumpy(p.grad)) for p in model.parameters()
+        if p.name.startswith("memory_router.") or ".terminal_memory." in p.name
+    }
+    assert norms["memory_router.W_query"] > 0.0
+    assert norms["blocks.0.attention.terminal_memory.W_v"] > 0.0
+
+
+def test_terminal_landmark_unselected_history_token_does_not_change_output():
+    cfg = _tiny_terminal_landmark_config()
+    model = DecoderLanguageModel(cfg, rng_seed=13)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    meta = _terminal_metadata()
+    hidden_a, cache_a = model.forward_body(source, memory_metadata=meta, return_cache=True)
+    selected = int(asnumpy(cache_a["memory_context_cache"]["terminal_memory"].selected_blocks)[0, 0])
+    unselected = 1 - selected
+    changed = source.copy()
+    changed[:, unselected * 2] = 15
+    hidden_b, _ = model.forward_body(changed, memory_metadata=meta, return_cache=True)
+    # Only the router block summaries could alter the selected identity. Choose
+    # a tiny perturbation test only when top-1 remains stable.
+    _, cache_b = model.forward_body(changed, memory_metadata=meta, return_cache=True)
+    selected_b = int(asnumpy(cache_b["memory_context_cache"]["terminal_memory"].selected_blocks)[0, 0])
+    if selected_b == selected:
+        np.testing.assert_allclose(
+            asnumpy(hidden_a[:, -1]), asnumpy(hidden_b[:, -1]), rtol=1e-12, atol=1e-12
+        )
+
+
+def test_terminal_landmark_checkpoint_replay_matches_full_cache():
+    cfg = _tiny_terminal_landmark_config()
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int32)
+    meta = _terminal_metadata()
+    a = DecoderLanguageModel(cfg, rng_seed=21)
+    b = DecoderLanguageModel(cfg, rng_seed=21)
+
+    def run(model, checkpoint):
+        model.zero_grad()
+        h, cache = model.forward_body(
+            source, memory_metadata=meta, return_cache=True,
+            activation_checkpoint=checkpoint,
+        )
+        loss, lc = model.chunked_lm_head_loss_forward(
+            h, targets, chunk_tokens=2, target_slice=cache["target_slice"]
+        )
+        dx = model.chunked_lm_head_backward(lc)
+        model.backward_body(dx, cache)
+        return loss, {p.name: asnumpy(p.grad).copy() for p in model.parameters()}
+
+    la, ga = run(a, False)
+    lb, gb = run(b, True)
+    assert abs(la - lb) < 1e-10
+    for name in ga:
+        np.testing.assert_allclose(ga[name], gb[name], rtol=2e-8, atol=2e-9)
+
+
+
+def test_terminal_landmark_selected_history_token_changes_terminal_output():
+    cfg = _tiny_terminal_landmark_config()
+    model = DecoderLanguageModel(cfg, rng_seed=17)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    meta = _terminal_metadata()
+    hidden_a, cache_a = model.forward_body(source, memory_metadata=meta, return_cache=True)
+    selected = int(asnumpy(cache_a["memory_context_cache"]["terminal_memory"].selected_blocks)[0, 0])
+    changed = source.copy()
+    changed[:, selected * 2] = 15
+    hidden_b, cache_b = model.forward_body(changed, memory_metadata=meta, return_cache=True)
+    selected_b = int(asnumpy(cache_b["memory_context_cache"]["terminal_memory"].selected_blocks)[0, 0])
+    if selected_b == selected:
+        assert not np.allclose(
+            asnumpy(hidden_a[:, -1]), asnumpy(hidden_b[:, -1]), rtol=1e-10, atol=1e-12
+        )
+
+
+def test_terminal_landmark_router_gate_gradient_matches_finite_difference():
+    # Select every old block so the finite difference never crosses a discrete
+    # top-k identity boundary. This isolates the differentiable Landmark gate.
+    cfg = _tiny_terminal_landmark_config(top_k_blocks=2)
+    model = DecoderLanguageModel(cfg, rng_seed=23)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int32)
+    mask = xp.asarray([[0, 0, 0, 1]], dtype=xp.float32)
+    meta = _terminal_metadata()
+
+    model.zero_grad()
+    logits, cache = model.forward(source, memory_metadata=meta, return_cache=True)
+    loss, lc = model.compute_loss(logits, targets, loss_mask=mask)
+    model.backward(model.backward_loss(lc), cache)
+    p = next(p for p in model.parameters() if p.name == "memory_router.W_query")
+    analytic = float(asnumpy(p.grad)[0, 0])
+
+    original = float(asnumpy(p.data)[0, 0])
+    eps = 1e-6
+    losses = []
+    for delta in (+eps, -eps):
+        p.data[0, 0] = original + delta
+        logits = model.forward(source, memory_metadata=meta, return_cache=False)
+        value, _ = model.compute_loss(logits, targets, loss_mask=mask)
+        losses.append(float(value))
+    p.data[0, 0] = original
+    numerical = (losses[0] - losses[1]) / (2.0 * eps)
+    np.testing.assert_allclose(analytic, numerical, rtol=2e-3, atol=2e-7)
+
+
+def test_router_only_projects_one_terminal_row_and_freezes_lm_head_gradient():
+    cfg = _tiny_terminal_landmark_config(memory_training="router_only")
+    model = DecoderLanguageModel(cfg, rng_seed=29)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    meta = _terminal_metadata()
+    logits, cache = model.forward(source, memory_metadata=meta, return_cache=True)
+    assert logits.shape == (1, 1, cfg.tokenizer_vocab_size)
+    targets = xp.asarray([[9]], dtype=xp.int32)
+    model.zero_grad()
+    _, lc = model.compute_loss(logits, targets)
+    model.backward(model.backward_loss(lc), cache)
+    assert np.count_nonzero(asnumpy(model.output_proj.W.grad)) == 0
+    optimized_names = {p.name for p in model.optimization_parameters()}
+    assert optimized_names
+    assert all(
+        name.startswith("memory_router.") or ".terminal_memory." in name
+        for name in optimized_names
+    )
+
+
+def test_document_sampler_can_require_real_old_history_for_router_only():
+    eos = 99
+    # One document has enough room for a 4-token working window plus >=4 old
+    # tokens. The short document must not be chosen when min_history_tokens=4.
+    shard = np.asarray([1, 2, 3, eos, 10, 11, 12, 13, 14, 15, 16, 17, 18, eos])
+    index = build_packed_document_index(shard, eos)
+    inputs, labels, meta = create_hierarchical_memory_minibatch(
+        shard, batch_size=4, memory_length=6, target_length=4,
+        rng=np.random.default_rng(5), eos_token_id=eos, document_index=index,
+        document_aware=True, return_metadata=True, min_history_tokens=4,
+    )
+    assert np.all(meta["target_source_starts"] >= 8)
+    assert np.all(meta["target_valid_lengths"] == 4)
+    assert np.all(meta["history_valid_starts"] <= 2)
+
+
+
+def test_terminal_landmark_memory_value_gradient_matches_finite_difference():
+    cfg = _tiny_terminal_landmark_config(top_k_blocks=2)
+    model = DecoderLanguageModel(cfg, rng_seed=37)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int32)
+    mask = xp.asarray([[0, 0, 0, 1]], dtype=xp.float32)
+    meta = _terminal_metadata()
+
+    model.zero_grad()
+    logits, cache = model.forward(source, memory_metadata=meta, return_cache=True)
+    _, lc = model.compute_loss(logits, targets, loss_mask=mask)
+    model.backward(model.backward_loss(lc), cache)
+    p = next(p for p in model.parameters() if p.name.endswith("terminal_memory.W_v"))
+    analytic = float(asnumpy(p.grad)[0, 0])
+
+    original = float(asnumpy(p.data)[0, 0])
+    eps = 1e-6
+    losses = []
+    for delta in (+eps, -eps):
+        p.data[0, 0] = original + delta
+        logits = model.forward(source, memory_metadata=meta, return_cache=False)
+        value, _ = model.compute_loss(logits, targets, loss_mask=mask)
+        losses.append(float(value))
+    p.data[0, 0] = original
+    numerical = (losses[0] - losses[1]) / (2.0 * eps)
+    np.testing.assert_allclose(analytic, numerical, rtol=2e-3, atol=2e-7)
+
+
+
+def test_terminal_landmark_parameters_roundtrip_checkpoint(tmp_path):
+    model = DecoderLanguageModel(_tiny_terminal_landmark_config(), rng_seed=41)
+    params = {p.name: p.data for p in model.parameters()}
+    save_checkpoint(tmp_path, params)
+    loaded, _, _ = load_checkpoint(
+        tmp_path, param_names=[p.name for p in model.parameters()], skip_optimizer=True
+    )
+    names = [
+        "memory_router.W_query",
+        "memory_router.W_history",
+        "blocks.0.attention.terminal_memory.norm.gamma",
+        "blocks.0.attention.terminal_memory.W_k",
+        "blocks.0.attention.terminal_memory.W_v",
+    ]
+    for name in names:
+        assert name in loaded
+        np.testing.assert_allclose(asnumpy(loaded[name]), asnumpy(params[name]))
+
+
+
+def test_terminal_memory_initialization_preserves_backbone_rng_sequence():
+    mem_cfg = _tiny_terminal_landmark_config()
+    disabled = dataclasses.replace(mem_cfg.memory_context, enabled=False)
+    base_cfg = dataclasses.replace(mem_cfg, memory_context=disabled)
+    memory_model = DecoderLanguageModel(mem_cfg, rng_seed=53)
+    base_model = DecoderLanguageModel(base_cfg, rng_seed=53)
+    base_params = {p.name: asnumpy(p.data) for p in base_model.parameters()}
+    for p in memory_model.parameters():
+        if p.name in base_params:
+            np.testing.assert_array_equal(asnumpy(p.data), base_params[p.name])
+
+
+def test_router_only_retains_backward_state_only_from_memory_layer():
+    one = _tiny_terminal_landmark_config(memory_training="router_only")
+    two = dataclasses.replace(
+        one,
+        n_layers=2,
+        attention_layers=(one.attention_layers[0], one.attention_layers[0]),
+        memory_context=dataclasses.replace(
+            one.memory_context, memory_attention_layer=-1
+        ),
+    )
+    model = DecoderLanguageModel(two, rng_seed=59)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+
+    _, cache = model.forward_body(
+        source, memory_metadata=_terminal_metadata(), return_cache=True,
+        activation_checkpoint=False,
+    )
+    assert cache["block_cache_start_layer"] == 1
+    assert len(cache["block_caches"]) == 1
+
+    _, cache = model.forward_body(
+        source, memory_metadata=_terminal_metadata(), return_cache=True,
+        activation_checkpoint=True,
+    )
+    assert cache["block_cache_start_layer"] == 1
+    assert len(cache["block_checkpoints"]) == 1
+
+
+def test_terminal_landmark_grouped_probabilities_are_normalized_and_diagnostic():
+    cfg = _tiny_terminal_landmark_config(top_k_blocks=2)
+    model = DecoderLanguageModel(cfg, rng_seed=61)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    _, cache = model.forward_body(
+        source, memory_metadata=_terminal_metadata(), return_cache=True
+    )
+    mem = cache["memory_context_cache"]["terminal_memory"]
+    assert mem is not None
+    block_probs = asnumpy(mem.attention_block_probs)
+    history_mass = asnumpy(mem.attention_history_mass)
+    assert np.all(history_mass >= 0.0)
+    assert np.all(history_mass <= 1.0 + 1e-12)
+    np.testing.assert_allclose(
+        block_probs.sum(axis=-1), history_mass, rtol=1e-12, atol=1e-12
+    )
+    diagnostics = model.memory_routing_diagnostics(cache)
+    assert "history_attention_mass_mean" in diagnostics
+    assert "max_block_attention_mean" in diagnostics
+    assert "max_within_block_token_prob_mean" in diagnostics
+
+
+def test_router_only_two_layer_backward_works_with_truncated_cache():
+    one = _tiny_terminal_landmark_config(memory_training="router_only", top_k_blocks=2)
+    two = dataclasses.replace(
+        one,
+        n_layers=2,
+        attention_layers=(one.attention_layers[0], one.attention_layers[0]),
+        memory_context=dataclasses.replace(one.memory_context, memory_attention_layer=-1),
+    )
+    model = DecoderLanguageModel(two, rng_seed=67)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    target = xp.asarray([[9]], dtype=xp.int32)
+    model.zero_grad()
+    logits, cache = model.forward(
+        source, memory_metadata=_terminal_metadata(), return_cache=True
+    )
+    assert cache["block_cache_start_layer"] == 1
+    assert len(cache["block_caches"]) == 1
+    loss, loss_cache = model.compute_loss(logits, target)
+    model.backward(model.backward_loss(loss_cache), cache)
+    assert np.isfinite(float(loss))
+    assert np.linalg.norm(asnumpy(next(
+        p for p in model.parameters() if p.name == "memory_router.W_query"
+    ).grad)) > 0.0
+
+
+def test_backbone_checkpoint_streams_into_terminal_memory_model(tmp_path):
+    mem_cfg = _tiny_terminal_landmark_config()
+    base_cfg = dataclasses.replace(
+        mem_cfg, memory_context=dataclasses.replace(mem_cfg.memory_context, enabled=False)
+    )
+    base = DecoderLanguageModel(base_cfg, rng_seed=71)
+    save_checkpoint(tmp_path, {p.name: p.data for p in base.parameters()})
+    memory = DecoderLanguageModel(mem_cfg, rng_seed=72)
+    loaded, missing, _ = initialize_matching_parameters(tmp_path, memory.parameters())
+    expected_missing = {
+        p.name for p in memory.parameters()
+        if p.name.startswith("memory_router.") or ".terminal_memory." in p.name
+    }
+    assert set(missing) == expected_missing
+    assert set(loaded) == {p.name for p in base.parameters()}
+    base_values = {p.name: asnumpy(p.data) for p in base.parameters()}
+    for p in memory.parameters():
+        if p.name in base_values:
+            np.testing.assert_array_equal(asnumpy(p.data), base_values[p.name])

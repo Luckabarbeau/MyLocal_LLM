@@ -161,7 +161,7 @@ class ExtendedTrainer:
             if self.seq_length != expected_source:
                 raise ValueError(
                     "hierarchical-memory trainer seq_length must equal "
-                    f"memory_length + target_length ({expected_source}), got "
+                    f"the configured source_input_length ({expected_source}), got "
                     f"{self.seq_length}"
                 )
             self.active_seq_length = int(self.memory_context.active_length)
@@ -239,8 +239,32 @@ class ExtendedTrainer:
         
         # Initialize optimizer with weight decay
         # Loss scaling is handled entirely by the trainer
+        self.optimization_parameters = list(model.optimization_parameters())
+        optimized_ids = {id(p) for p in self.optimization_parameters}
+        self.frozen_parameters = [
+            p for p in model.parameters() if id(p) not in optimized_ids
+        ]
+        # Only a subset of frozen tensors participates in router-only backward.
+        # Earlier frozen blocks run inference-style, output-projection backward
+        # skips W-grad, and embedding backward is disabled. Clearing every ~500M
+        # frozen gradient buffer each step would therefore be a multi-GiB memory
+        # write for no mathematical benefit.
+        self.frozen_backward_parameters = self.frozen_parameters
+        if (
+            self.memory_context is not None
+            and self.memory_context.integration_mode == "terminal_landmark"
+            and self.memory_context.memory_training == "router_only"
+        ):
+            layer = int(model.memory_attention_layer)
+            relevant = []
+            for block in model.blocks[layer:]:
+                relevant.extend(block.parameters())
+            relevant.extend(model.final_norm.parameters())
+            self.frozen_backward_parameters = [
+                p for p in relevant if id(p) not in optimized_ids
+            ]
         self.optimizer = AdamW(
-            model.parameters(),
+            self.optimization_parameters,
             lr=peak_lr,
             weight_decay=weight_decay,
             numerical_debug=numerical_debug,
@@ -331,19 +355,40 @@ class ExtendedTrainer:
             cfg = self.memory_context
             print("  Causal external memory routing: enabled")
             print("  Document-aware sampling:       enabled (EOS-bounded)")
-            print(f"  Historical memory store:     {cfg.memory_length:,} tokens")
-            print(f"  Memory block size:           {cfg.block_size:,}")
-            print(f"  Searchable memory blocks:    {cfg.searchable_blocks:,}")
-            print(f"  Retrieved blocks/row:        {cfg.top_k_blocks:,}")
-            print(f"  Retrieved exact tokens/row:  {cfg.retrieved_length:,}")
-            print(f"  Recent router history:       {cfg.recent_length:,}")
-            print(f"  Dense training window:       {cfg.target_length:,}")
-            print(f"  Active Transformer length:   {cfg.active_length:,}")
-            print(f"  Router query length:         {cfg.router_query_length:,}")
-            print(f"  Router dimension:            {cfg.router_dim:,}")
-            print(f"  Memory reader heads/KV:      {cfg.read_heads}/{cfg.read_kv_heads}")
-            print(f"  Memory read query chunk:     {cfg.read_query_chunk:,}")
-            print(f"  Source sample input length:  {cfg.source_input_length:,}")
+            if cfg.integration_mode == "terminal_landmark":
+                print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
+                print(f"  External searchable history:   {cfg.distant_memory_length:,} tokens")
+                print(f"  Dense working window:          {cfg.target_length:,} tokens")
+                print(f"  Active Transformer length:     {cfg.active_length:,}")
+                print(f"  Memory block size:             {cfg.block_size:,}")
+                print(f"  Searchable memory blocks:      {cfg.searchable_blocks:,}")
+                print(f"  Terminal routed blocks:        {cfg.top_k_blocks:,}")
+                print(f"  Terminal exact K/V tokens:     {cfg.retrieved_length:,}")
+                print(f"  Router query length:           {cfg.router_query_length:,}")
+                print(f"  Router dimension:              {cfg.router_dim:,}")
+                print(f"  Memory-aware layer:            {cfg.memory_attention_layer}")
+                print(f"  Memory retrieval heads/KV:     {cfg.read_heads}/{cfg.read_kv_heads}")
+                print("  Router-supervised rows/sample: 1 (terminal only)")
+            else:
+                print(f"  Historical memory store:       {cfg.memory_length:,} tokens")
+                print(f"  Memory block size:             {cfg.block_size:,}")
+                print(f"  Searchable memory blocks:      {cfg.searchable_blocks:,}")
+                print(f"  Retrieved blocks/row:          {cfg.top_k_blocks:,}")
+                print(f"  Retrieved exact tokens/row:    {cfg.retrieved_length:,}")
+                print(f"  Recent router history:         {cfg.recent_length:,}")
+                print(f"  Dense training window:         {cfg.target_length:,}")
+                print(f"  Active Transformer length:     {cfg.active_length:,}")
+                print(f"  Router query length:           {cfg.router_query_length:,}")
+                print(f"  Router dimension:              {cfg.router_dim:,}")
+                print(f"  Memory reader heads/KV:        {cfg.read_heads}/{cfg.read_kv_heads}")
+            print(f"  Source sample input length:    {cfg.source_input_length:,}")
+            print(f"  Memory training mode:          {cfg.memory_training}")
+            if cfg.memory_training == "router_only":
+                print(
+                    f"  Optimized memory params:     "
+                    f"{sum(int(p.data.size) for p in self.optimization_parameters):,}"
+                )
+                print("  Backbone backward:           truncated at memory layer")
         if self.lm_head_chunk_tokens > 0:
             print(
                 f"  LM head: chunked/recomputed "
@@ -576,13 +621,20 @@ class ExtendedTrainer:
             inputs, targets, metadata = create_hierarchical_memory_minibatch(
                 shard_data,
                 self.batch_size,
-                self.memory_context.memory_length,
+                self.memory_context.distant_memory_length,
                 self.memory_context.target_length,
                 rng=self.train_rng,
                 eos_token_id=self.eos_token_id,
                 document_index=document_index,
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
+                min_history_tokens=(
+                    self.memory_context.min_router_history_blocks
+                    * self.memory_context.block_size
+                    if self.memory_context.integration_mode == "terminal_landmark"
+                    and self.memory_context.memory_training == "router_only"
+                    else 0
+                ),
             )
 
         self.tokens_processed += self.batch_size * self.seq_length
@@ -628,13 +680,20 @@ class ExtendedTrainer:
             inputs, targets, metadata = create_hierarchical_memory_minibatch(
                 shard_data,
                 self.batch_size,
-                self.memory_context.memory_length,
+                self.memory_context.distant_memory_length,
                 self.memory_context.target_length,
                 rng=self.val_rng,
                 eos_token_id=self.eos_token_id,
                 document_index=document_index,
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
+                min_history_tokens=(
+                    self.memory_context.min_router_history_blocks
+                    * self.memory_context.block_size
+                    if self.memory_context.integration_mode == "terminal_landmark"
+                    and self.memory_context.memory_training == "router_only"
+                    else 0
+                ),
             )
 
         if return_metadata:
@@ -723,6 +782,8 @@ class ExtendedTrainer:
                 None if batch_metadata is None
                 else batch_metadata.get("target_loss_mask")
             )
+            loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
+            targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
             
             # Forward pass (no gradient tracking needed)
             logits, _ = self.model.forward(
@@ -737,6 +798,36 @@ class ExtendedTrainer:
         loss_array = xp.asarray(losses, dtype="float32")
         return float(xp.mean(loss_array))
     
+    def _effective_loss_mask(self, batch_metadata, loss_mask):
+        """Restrict post-training router optimization to one terminal label."""
+        if (
+            self.memory_context is None
+            or self.memory_context.memory_training != "router_only"
+        ):
+            return loss_mask
+        lengths = batch_metadata.get("target_valid_lengths") if batch_metadata else None
+        if lengths is None:
+            lengths = np.full(self.batch_size, self.target_seq_length, dtype=np.int64)
+        mask = np.zeros((self.batch_size, self.target_seq_length), dtype=np.float32)
+        for b, length in enumerate(np.asarray(lengths, dtype=np.int64)):
+            if length > 0:
+                mask[b, int(length) - 1] = 1.0
+        return mask
+
+    def _loss_targets_and_mask(self, targets, loss_mask):
+        """Match labels to the terminal-only LM-head slice in router-only mode."""
+        if (
+            self.memory_context is None
+            or self.memory_context.memory_training != "router_only"
+        ):
+            return targets, loss_mask
+        # Router-only sampling requires a complete 4k working window, so the
+        # causally correct router target is always the final next-token label.
+        targets = targets[:, -1:]
+        if loss_mask is not None:
+            loss_mask = loss_mask[:, -1:]
+        return targets, loss_mask
+
     def train_step(self) -> Tuple[float, float]:
         """
         Perform one training step with gradient accumulation.
@@ -783,6 +874,8 @@ class ExtendedTrainer:
                 None if batch_metadata is None
                 else batch_metadata.get("target_loss_mask")
             )
+            loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
+            targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
             
             # Forward pass.  0056 can stop before the vocabulary projection so
             # the LM head is evaluated in bounded token tiles instead of one
@@ -823,6 +916,17 @@ class ExtendedTrainer:
                 diag = self.model.memory_routing_diagnostics(cache)
                 if diag is not None:
                     unique_blocks = int(diag["unique_blocks"])
+                    extra = ""
+                    if "history_attention_mass_mean" in diag:
+                        extra += (
+                            f", history_mass="
+                            f"{_array_to_float(diag['history_attention_mass_mean']):.3f}"
+                        )
+                    if "max_block_attention_mean" in diag:
+                        extra += (
+                            f", max_block_mass="
+                            f"{_array_to_float(diag['max_block_attention_mean']):.3f}"
+                        )
                     print(
                         "Memory router: "
                         f"unique_blocks={unique_blocks}, "
@@ -831,6 +935,7 @@ class ExtendedTrainer:
                         f"entropy={_array_to_float(diag['entropy_mean']):.3f}, "
                         f"mean_source_distance="
                         f"{_array_to_float(diag['source_distance_mean']):,.0f} tokens"
+                        f"{extra}"
                     )
 
             if not chunked_head:
@@ -946,13 +1051,13 @@ class ExtendedTrainer:
             raise ValueError(f"NaN/Inf loss detected at step {self.step}!")
         # Scale down gradients by loss_scale to cancel out the scaling
         if self.loss_scale != 1.0:
-            for p in self.model.parameters():
+            for p in self.optimization_parameters:
                 if p.grad is not None:
                     p.grad[...] = p.grad / self.loss_scale
         
         # Divide gradients by grad_accum_steps for proper averaging
         if self.grad_accum_steps > 1:
-            for p in self.model.parameters():
+            for p in self.optimization_parameters:
                 if p.grad is not None:
                     p.grad[...] = p.grad / self.grad_accum_steps
         
@@ -960,7 +1065,7 @@ class ExtendedTrainer:
         # Now returns (norm_backend, scale, is_finite) tuple
         with performance_scope("train.grad_clip"):
             grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
-                self.model.parameters(), max_norm=self.grad_clip
+                self.optimization_parameters, max_norm=self.grad_clip
             )
         
         if not is_finite:
@@ -978,11 +1083,23 @@ class ExtendedTrainer:
             self.optimizer.step(lr=lr)
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_optimizer_step")
-        if hasattr(self.model, "refresh_compute_buffers"):
+        refresh_backbone_buffers = not (
+            self.memory_context is not None
+            and self.memory_context.memory_training == "router_only"
+        )
+        if refresh_backbone_buffers and hasattr(self.model, "refresh_compute_buffers"):
             with performance_scope("train.refresh_compute_buffers"):
                 self.model.refresh_compute_buffers()
         with performance_scope("train.zero_grad"):
             self.optimizer.zero_grad()
+            # Handwritten backward still computes some input gradients through
+            # the frozen terminal block in router-only mode. Clear any incidental
+            # frozen parameter accumulation once per optimizer step so it cannot
+            # grow across the post-training run.
+            if self.frozen_backward_parameters:
+                for p in self.frozen_backward_parameters:
+                    if p.grad is not None:
+                        p.grad[...] = 0
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_zero_grad")
         
@@ -999,8 +1116,14 @@ class ExtendedTrainer:
             active_tokens = (
                 self.batch_size * self.active_seq_length * self.grad_accum_steps
             )
+            supervised_per_sequence = (
+                1
+                if self.memory_context is not None
+                and self.memory_context.memory_training == "router_only"
+                else self.target_seq_length
+            )
             target_tokens = (
-                self.batch_size * self.target_seq_length * self.grad_accum_steps
+                self.batch_size * supervised_per_sequence * self.grad_accum_steps
             )
             print()
             print(
@@ -1049,15 +1172,15 @@ class ExtendedTrainer:
             "step": self.optimizer.step_index,  # Use correct attribute name
             "master_weights": {
                 p.name: self.optimizer.master_weights[i]
-                for i, p in enumerate(self.model.parameters())
+                for i, p in enumerate(self.optimizer.parameters)
             },
             "m": {
                 p.name: self.optimizer.m[i]
-                for i, p in enumerate(self.model.parameters())
+                for i, p in enumerate(self.optimizer.parameters)
             },
             "v": {
                 p.name: self.optimizer.v[i]
-                for i, p in enumerate(self.model.parameters())
+                for i, p in enumerate(self.optimizer.parameters)
             },
         }
         
@@ -1125,10 +1248,13 @@ class ExtendedTrainer:
                 * int(self.memory_context.active_length)
                 * self.grad_accum_steps
             )
+            supervised_rows = (
+                1
+                if self.memory_context.memory_training == "router_only"
+                else int(self.memory_context.target_length)
+            )
             target_tokens_per_optimizer_step = (
-                self.batch_size
-                * int(self.memory_context.target_length)
-                * self.grad_accum_steps
+                self.batch_size * supervised_rows * self.grad_accum_steps
             )
         else:
             active_tokens_per_optimizer_step = source_tokens_per_optimizer_step

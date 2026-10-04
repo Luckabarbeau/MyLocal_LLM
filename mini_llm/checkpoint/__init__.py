@@ -115,27 +115,7 @@ def load_checkpoint(
     for npy_file in params_path.glob("*.npy"):
         name = npy_file.stem
         if param_names is None or name in param_names:
-            arr = np.load(npy_file)
-            # NumPy serializes ml_dtypes.bfloat16 as a 2-byte void dtype
-            # (|V2). Recover the BF16 interpretation before transferring to
-            # CuPy; otherwise CuPy sees UnstructuredVoid<2> and cannot use the
-            # values in arithmetic or assignments. Model parameters are never
-            # intentionally stored as raw void arrays, so |V2 is unambiguous
-            # here.
-            if arr.dtype.kind == "V" and arr.dtype.itemsize == 2:
-                try:
-                    import ml_dtypes
-                except ImportError as exc:
-                    raise RuntimeError(
-                        "Checkpoint contains BF16 parameters but ml-dtypes is "
-                        "not installed. Install it with: python -m pip install ml-dtypes"
-                    ) from exc
-                arr = arr.view(ml_dtypes.bfloat16)
-            # Convert to CuPy array if using CuPy backend
-            if BACKEND_NAME == "cupy":
-                import cupy
-                arr = cupy.asarray(arr)
-            model_params[name] = arr
+            model_params[name] = _load_parameter_array(npy_file)
     
     # Load optimizer state (convert NumPy back to appropriate type if needed)
     optimizer_state = None
@@ -196,6 +176,62 @@ def load_checkpoint(
     print(f"Checkpoint loaded from {path}")
     return model_params, optimizer_state, training_state
 
+
+
+def _load_parameter_array(npy_file: Path):
+    """Load one serialized parameter and restore BF16/backend representation."""
+    arr = np.load(npy_file)
+    # NumPy serializes ml_dtypes.bfloat16 as a two-byte void dtype.
+    if arr.dtype.kind == "V" and arr.dtype.itemsize == 2:
+        try:
+            import ml_dtypes
+        except ImportError as exc:
+            raise RuntimeError(
+                "Checkpoint contains BF16 parameters but ml-dtypes is not installed. "
+                "Install it with: python -m pip install ml-dtypes"
+            ) from exc
+        arr = arr.view(ml_dtypes.bfloat16)
+    if BACKEND_NAME == "cupy":
+        import cupy
+        arr = cupy.asarray(arr)
+    return arr
+
+
+def initialize_matching_parameters(path: Union[str, Path], parameters):
+    """Stream matching checkpoint tensors directly into existing Parameters.
+
+    Unlike :func:`load_checkpoint`, this function never materializes the whole
+    checkpoint in a dictionary.  It is intended for 0058C ``--init-from`` where
+    a ~500M 4k backbone initializes a slightly larger memory model and keeping a
+    second full set of device arrays would be wasteful.
+
+    Returns ``(loaded_names, missing_names, loaded_elements)``. Shape mismatches
+    fail immediately because a same-name/different-shape tensor cannot be a safe
+    weights-only initialization.
+    """
+    params_path = Path(path) / "model_params"
+    if not params_path.is_dir():
+        raise FileNotFoundError(f"checkpoint parameter directory not found: {params_path}")
+
+    loaded = []
+    missing = []
+    loaded_elements = 0
+    for parameter in parameters:
+        npy_file = params_path / f"{parameter.name}.npy"
+        if not npy_file.exists():
+            missing.append(parameter.name)
+            continue
+        arr = _load_parameter_array(npy_file)
+        if tuple(arr.shape) != tuple(parameter.data.shape):
+            raise ValueError(
+                f"checkpoint shape mismatch for {parameter.name}: "
+                f"checkpoint={arr.shape}, model={parameter.data.shape}"
+            )
+        parameter.data[...] = arr
+        loaded.append(parameter.name)
+        loaded_elements += int(parameter.data.size)
+        del arr
+    return loaded, missing, loaded_elements
 
 def count_parameters(model_params: Dict[str, np.ndarray]) -> int:
     """Count total trainable parameters."""

@@ -179,6 +179,15 @@ def parse_args():
         help="Resume training from checkpoint directory",
     )
     parser.add_argument(
+        "--init-from",
+        default=None,
+        help=(
+            "Initialize matching model weights from a checkpoint but start a "
+            "fresh optimizer/training run. Intended for loading a trained 4k "
+            "backbone into a 0058C memory preset."
+        ),
+    )
+    parser.add_argument(
         "--log-file",
         default=None,
         help="CSV log file path",
@@ -461,6 +470,8 @@ def generate_shards_for_training(
 
 def main():
     args = parse_args()
+    if args.resume_from and args.init_from:
+        raise ValueError("--resume-from and --init-from are mutually exclusive")
 
     np.random.seed(args.seed)
     xp.random.seed(args.seed)
@@ -521,6 +532,8 @@ def main():
         "MINI_LLM_MEMORY_READ_HEADS": "read_heads",
         "MINI_LLM_MEMORY_READ_KV_HEADS": "read_kv_heads",
         "MINI_LLM_MEMORY_READ_QUERY_CHUNK": "read_query_chunk",
+        "MINI_LLM_MEMORY_ATTENTION_LAYER": "memory_attention_layer",
+        "MINI_LLM_MEMORY_MIN_ROUTER_HISTORY_BLOCKS": "min_router_history_blocks",
     }
     for env_name, field_name in override_map.items():
         raw = os.environ.get(env_name)
@@ -529,6 +542,12 @@ def main():
     residual_scale_raw = os.environ.get("MINI_LLM_MEMORY_READER_RESIDUAL_SCALE")
     if residual_scale_raw is not None:
         memory_overrides["reader_residual_scale"] = float(residual_scale_raw)
+    integration_raw = os.environ.get("MINI_LLM_MEMORY_INTEGRATION")
+    if integration_raw is not None:
+        memory_overrides["integration_mode"] = integration_raw.strip().lower()
+    training_raw = os.environ.get("MINI_LLM_MEMORY_TRAINING")
+    if training_raw is not None:
+        memory_overrides["memory_training"] = training_raw.strip().lower()
     enable_raw = os.environ.get("MINI_LLM_HIERARCHICAL_MEMORY")
     if enable_raw is not None:
         memory_overrides["enabled"] = enable_raw.strip().lower() not in {
@@ -665,6 +684,12 @@ def main():
     if config.memory_context.enabled:
         mc = config.memory_context
         print(f"Memory horizon: {mc.memory_length:,}")
+        print(f"External searchable history: {mc.distant_memory_length:,}")
+        print(f"Memory integration: {mc.integration_mode}")
+        if mc.integration_mode == "terminal_landmark":
+            layer = mc.memory_attention_layer if mc.memory_attention_layer >= 0 else config.n_layers + mc.memory_attention_layer
+            print(f"Memory-aware Transformer layer: {layer}")
+            print("Router-supervised positions/sample: 1 (terminal target only)")
         print(f"Active Transformer length: {mc.active_length:,}")
         print(f"Source sample input length: {run_context_length:,}")
     else:
@@ -681,14 +706,16 @@ def main():
             f"Active tokens/microbatch: "
             f"{args.batch_size * config.memory_context.active_length:,}"
         )
+        router_only = config.memory_context.memory_training == "router_only"
+        supervised_per_sequence = 1 if router_only else config.memory_context.target_length
         print(
-            f"Target tokens/microbatch: "
-            f"{args.batch_size * config.memory_context.target_length:,}"
+            f"Supervised tokens/microbatch: "
+            f"{args.batch_size * supervised_per_sequence:,}"
         )
         print(f"Source tokens/optimizer step: {source_tokens_per_optimizer_step:,}")
         print(
-            f"Target tokens/optimizer step: "
-            f"{effective_sequences * config.memory_context.target_length:,}"
+            f"Supervised tokens/optimizer step: "
+            f"{effective_sequences * supervised_per_sequence:,}"
         )
     else:
         print(f"Tokens/microbatch: {source_tokens_per_microbatch:,}")
@@ -714,29 +741,80 @@ def main():
         print(f"  External-memory parameters: {estimated_params - base_params:,}")
     if args.precision == "bf16-mixed":
         gib = 1024 ** 3
+        optimized_estimate = estimated_params
+        if (
+            config.memory_context.enabled
+            and config.memory_context.memory_training == "router_only"
+        ):
+            disabled_memory = dataclasses.replace(config.memory_context, enabled=False)
+            base_estimate = dataclasses.replace(
+                config, memory_context=disabled_memory
+            ).estimated_parameter_count()
+            optimized_estimate = estimated_params - base_estimate
+        # Parameter currently allocates an FP32 gradient buffer for every model
+        # tensor at construction time, including frozen router-only backbone
+        # weights.  Router-only saves optimizer state/GEMMs and activation caches,
+        # but do not under-report this persistent gradient-buffer allocation.
         gpu_param_grad = estimated_params * (2 + 4) / gib
         print(
-            "  BF16 weights + FP32 gradients: "
+            "  BF16 weights + allocated FP32 gradients: "
             f"~{gpu_param_grad:.2f} GiB GPU before activations/workspaces"
         )
+        if optimized_estimate != estimated_params:
+            print(
+                f"  Router-only optimized parameters: {optimized_estimate:,} "
+                "(optimizer state allocated only for this subset)"
+            )
         offload_mode = os.environ.get(
             "MINI_LLM_OPTIMIZER_OFFLOAD", "none"
         ).strip().lower()
         if offload_mode == "full":
-            host_state = estimated_params * 12 / gib
+            host_state = optimized_estimate * 12 / gib
             print(
                 "  Full optimizer offload state: "
                 f"~{host_state:.2f} GiB host RAM"
             )
         elif offload_mode == "moments":
-            host_state = estimated_params * 8 / gib
-            gpu_master = estimated_params * 4 / gib
+            host_state = optimized_estimate * 8 / gib
+            gpu_master = optimized_estimate * 4 / gib
             print(
                 "  Moment offload state: "
                 f"~{host_state:.2f} GiB host + {gpu_master:.2f} GiB GPU master"
             )
 
     model = setup_model(config, dtype=model_dtype)
+
+    if args.init_from:
+        init_path = Path(args.init_from)
+        print(f"Initializing matching weights from checkpoint: {init_path}")
+        from mini_llm.checkpoint import initialize_matching_parameters
+
+        loaded_names, missing, loaded_elements = initialize_matching_parameters(
+            init_path, model.parameters()
+        )
+        memory_missing = [
+            name for name in missing
+            if name.startswith("memory_router.") or ".terminal_memory." in name
+        ]
+        unexpected_missing = [name for name in missing if name not in memory_missing]
+        print(
+            f"  Loaded {len(loaded_names)} parameter tensors "
+            f"({loaded_elements:,} elements) using streaming initialization"
+        )
+        if memory_missing:
+            print(
+                f"  Initialized {len(memory_missing)} new 0058C memory tensors "
+                "from the requested model preset"
+            )
+        if unexpected_missing:
+            preview = ", ".join(unexpected_missing[:8])
+            raise ValueError(
+                "--init-from checkpoint is missing non-memory backbone parameters: "
+                + preview
+            )
+        get_pool = getattr(xp, "get_default_memory_pool", None)
+        if get_pool is not None:
+            get_pool().free_all_blocks()
 
     if args.resume_from:
         print(f"Resuming from checkpoint: {checkpoint_path}")
@@ -888,9 +966,8 @@ def main():
         trainer.optimizer.step_index = int(
             stored_optimizer_state.get("step", start_step)
         )
-        param_to_idx = {
-            p.name: i for i, p in enumerate(trainer.model.parameters())
-        }
+        optimizer_params = list(trainer.optimizer.parameters)
+        param_to_idx = {p.name: i for i, p in enumerate(optimizer_params)}
 
         # 0055C: restore exact FP32 master weights as well as moments.  When
         # optimizer offload is active, load_checkpoint keeps these arrays on
@@ -898,7 +975,7 @@ def main():
         # copy.
         master_dict = stored_optimizer_state.get("master_weights", {})
         restored_masters = 0
-        for p in trainer.model.parameters():
+        for p in optimizer_params:
             value = master_dict.pop(p.name, None)
             if value is None:
                 continue
@@ -922,7 +999,7 @@ def main():
             v_dict = stored_optimizer_state.get("v", {})
             saved_m_names = set(m_dict)
             restored_count = 0
-            for p in trainer.model.parameters():
+            for p in optimizer_params:
                 if p.name in m_dict and p.name in v_dict:
                     idx = param_to_idx[p.name]
                     m_value = m_dict.pop(p.name)
@@ -937,7 +1014,7 @@ def main():
                     del m_value, v_value
             print(f"Restored optimizer state for {restored_count} parameters")
             missing = [
-                p.name for p in trainer.model.parameters() if p.name not in saved_m_names
+                p.name for p in optimizer_params if p.name not in saved_m_names
             ]
             if missing:
                 suffix = "..." if len(missing) > 5 else ""

@@ -6,6 +6,7 @@ memory-mapped binary files for efficient training.
 
 import mmap
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
@@ -621,19 +622,189 @@ def _create_minibatch_packed(
     return inputs, targets
 
 
+
+@dataclass(frozen=True)
+class PackedDocumentIndex:
+    """Document/fragment boundaries for one packed token shard.
+
+    ``ends`` stores exclusive ends.  Starts are implicit: zero for the first
+    span and ``ends[i-1]`` thereafter.  A physical shard boundary is treated as
+    an artificial document boundary.  This is conservative and causal: the
+    first/last span may be a fragment of a document split across shards, but it
+    can never contain tokens from two unrelated documents.
+    """
+
+    ends: np.ndarray
+    token_count: int
+    eos_token_id: int
+
+    def __post_init__(self):
+        ends = np.asarray(self.ends, dtype=np.int64)
+        if ends.ndim != 1 or ends.size == 0:
+            raise ValueError("packed document index must contain at least one span")
+        if int(ends[-1]) != int(self.token_count):
+            raise ValueError("packed document index does not cover the shard")
+        if np.any(ends[1:] <= ends[:-1]) or int(ends[0]) <= 0:
+            raise ValueError("packed document ends must be strictly increasing")
+        object.__setattr__(self, "ends", ends)
+
+    @property
+    def document_count(self) -> int:
+        return int(self.ends.size)
+
+    def span(self, index: int) -> Tuple[int, int]:
+        index = int(index)
+        if not 0 <= index < self.document_count:
+            raise IndexError(index)
+        start = 0 if index == 0 else int(self.ends[index - 1])
+        return start, int(self.ends[index])
+
+    def document_for_position(self, position: int) -> int:
+        position = int(position)
+        if not 0 <= position < int(self.token_count):
+            raise IndexError(position)
+        return int(np.searchsorted(self.ends, position, side="right"))
+
+
+def build_packed_document_index(
+    packed_tokens: np.ndarray,
+    eos_token_id: int,
+    *,
+    scan_chunk_tokens: int = 4 * 1024 * 1024,
+) -> PackedDocumentIndex:
+    """Index packed ``D1,EOS,D2,EOS,...`` data without a full-shard mask.
+
+    The scan is chunked deliberately: a 256 MiB uint16 shard should not create
+    a second 128 MiB boolean array merely to locate EOS markers.  Shard edges
+    are also boundaries, allowing existing packed shards whose writer split a
+    document across files to be used safely without retokenization.
+    """
+    if packed_tokens.ndim != 1:
+        raise ValueError("document indexing is defined for 1D packed shards")
+    total = int(len(packed_tokens))
+    if total <= 0:
+        raise ValueError("cannot index an empty packed shard")
+    scan_chunk_tokens = max(1, int(scan_chunk_tokens))
+    eos_token_id = int(eos_token_id)
+    pieces = []
+    for start in range(0, total, scan_chunk_tokens):
+        stop = min(total, start + scan_chunk_tokens)
+        chunk = np.asarray(packed_tokens[start:stop])
+        local = np.flatnonzero(chunk == eos_token_id)
+        if local.size:
+            pieces.append(local.astype(np.int64, copy=False) + start + 1)
+    if pieces:
+        ends = np.concatenate(pieces)
+        if int(ends[-1]) != total:
+            ends = np.concatenate((ends, np.asarray([total], dtype=np.int64)))
+    else:
+        ends = np.asarray([total], dtype=np.int64)
+    return PackedDocumentIndex(
+        ends=ends,
+        token_count=total,
+        eos_token_id=eos_token_id,
+    )
+
+
+def document_index_sidecar_path(shard_path: str | Path) -> Path:
+    path = Path(shard_path)
+    return path.with_name(path.name + ".docidx.npy")
+
+
+def load_or_build_packed_document_index(
+    shard_path: str | Path,
+    packed_tokens: np.ndarray,
+    eos_token_id: int,
+    *,
+    write_sidecar: bool = True,
+) -> PackedDocumentIndex:
+    """Load a compact EOS boundary sidecar or build it once for old shards."""
+    path = document_index_sidecar_path(shard_path)
+    total = int(len(packed_tokens))
+    if path.exists():
+        try:
+            ends = np.load(path, mmap_mode="r")
+            if (
+                ends.ndim == 1
+                and ends.size > 0
+                and int(ends[-1]) == total
+                and np.issubdtype(ends.dtype, np.integer)
+            ):
+                return PackedDocumentIndex(
+                    ends=ends,
+                    token_count=total,
+                    eos_token_id=int(eos_token_id),
+                )
+        except Exception:
+            # Stale/corrupt sidecars are cheap to reconstruct from the source.
+            pass
+
+    index = build_packed_document_index(packed_tokens, eos_token_id)
+    if write_sidecar:
+        tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
+        try:
+            with open(tmp, "wb") as handle:
+                np.save(handle, np.asarray(index.ends, dtype=np.int64))
+            os.replace(tmp, path)
+        except OSError:
+            # Read-only datasets are supported; the in-memory index remains valid.
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+    return index
+
+
+def _sample_document_span(
+    document_index: PackedDocumentIndex,
+    rng: np.random.Generator,
+) -> Tuple[int, int]:
+    """Choose a document approximately proportional to its token length."""
+    total = int(document_index.token_count)
+    # Rejection is only relevant for pathological one-token/empty fragments.
+    for _ in range(32):
+        anchor = int(rng.integers(0, total))
+        doc_idx = document_index.document_for_position(anchor)
+        start, end = document_index.span(doc_idx)
+        if end - start >= 2:
+            return start, end
+    # Deterministic fallback for shards dominated by tiny fragments.
+    previous = 0
+    for end_value in document_index.ends:
+        end = int(end_value)
+        if end - previous >= 2:
+            return previous, end
+        previous = end
+    raise ValueError("packed shard contains no document fragment with a next-token pair")
+
 def create_hierarchical_memory_minibatch(
     shard_data: np.ndarray,
     batch_size: int,
     memory_length: int,
     target_length: int,
     rng: Optional[np.random.Generator] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Sample one long source window but return labels only for its target tail.
+    *,
+    eos_token_id: Optional[int] = None,
+    document_index: Optional[PackedDocumentIndex] = None,
+    pad_token_id: Optional[int] = None,
+    document_aware: bool = False,
+    return_metadata: bool = False,
+):
+    """Sample one coherent document/fragment for hierarchical memory training.
 
-    ``memory_length`` is the number of pre-target input tokens.  The returned
-    source input therefore has ``memory_length + target_length`` rows while
-    labels contain only ``target_length`` next-token targets corresponding to
-    the final target-input rows.  No full-length target array is materialized.
+    0058B semantics for packed shards are document-aware:
+
+    * the dense training window never crosses EOS;
+    * historical memory is drawn only from the same document/fragment;
+    * available history shorter than ``memory_length`` is right-aligned in the
+      historical store and the unused prefix is explicitly marked invalid;
+    * documents shorter than the dense window are right-padded and accompanied
+      by ``target_loss_mask`` so unrelated documents are never used as filler.
+
+    ``document_aware=False`` preserves the 0058A contiguous-stream behavior for
+    direct callers and legacy tests.  ``ExtendedTrainer`` enables the new path
+    by default for hierarchical-memory models.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -645,6 +816,82 @@ def create_hierarchical_memory_minibatch(
 
     input_length = memory_length + target_length
     required_length = input_length + 1
+
+    if shard_data.ndim == 1 and document_aware:
+        if eos_token_id is None:
+            raise ValueError("document-aware packed sampling requires eos_token_id")
+        if document_index is None:
+            document_index = build_packed_document_index(shard_data, eos_token_id)
+        if int(document_index.token_count) != int(len(shard_data)):
+            raise ValueError("document index token count does not match shard")
+        if int(document_index.eos_token_id) != int(eos_token_id):
+            raise ValueError("document index EOS token does not match sampler EOS")
+
+        pad_id = int(eos_token_id if pad_token_id is None else pad_token_id)
+        source_inputs = np.full(
+            (batch_size, input_length), pad_id, dtype=shard_data.dtype
+        )
+        target_labels = np.full(
+            (batch_size, target_length), pad_id, dtype=shard_data.dtype
+        )
+        history_valid_starts = np.empty(batch_size, dtype=np.int64)
+        target_valid_lengths = np.empty(batch_size, dtype=np.int64)
+        target_loss_mask = np.zeros((batch_size, target_length), dtype=np.float32)
+        document_starts = np.empty(batch_size, dtype=np.int64)
+        document_ends = np.empty(batch_size, dtype=np.int64)
+        target_source_starts = np.empty(batch_size, dtype=np.int64)
+
+        for batch_idx in range(batch_size):
+            doc_start, doc_end = _sample_document_span(document_index, rng)
+            pair_count = int(doc_end - doc_start - 1)
+            if pair_count <= 0:
+                raise RuntimeError("document sampler returned a span without labels")
+
+            if pair_count >= target_length:
+                # Pick only starts with a complete dense target window.  This
+                # keeps the normal 4k path dense for long documents while short
+                # documents remain usable through the explicit loss mask below.
+                max_target_start = doc_end - target_length - 1
+                target_start = int(rng.integers(doc_start, max_target_start + 1))
+                valid_targets = target_length
+            else:
+                target_start = int(doc_start)
+                valid_targets = pair_count
+
+            history_start = max(doc_start, target_start - memory_length)
+            history_length = int(target_start - history_start)
+            history_dst_start = memory_length - history_length
+            if history_length:
+                source_inputs[
+                    batch_idx, history_dst_start:memory_length
+                ] = shard_data[history_start:target_start]
+
+            source_inputs[
+                batch_idx, memory_length:memory_length + valid_targets
+            ] = shard_data[target_start:target_start + valid_targets]
+            target_labels[batch_idx, :valid_targets] = shard_data[
+                target_start + 1:target_start + valid_targets + 1
+            ]
+            target_loss_mask[batch_idx, :valid_targets] = 1.0
+
+            history_valid_starts[batch_idx] = history_dst_start
+            target_valid_lengths[batch_idx] = valid_targets
+            document_starts[batch_idx] = doc_start
+            document_ends[batch_idx] = doc_end
+            target_source_starts[batch_idx] = target_start
+
+        metadata = {
+            "document_aware": True,
+            "history_valid_starts": history_valid_starts,
+            "target_valid_lengths": target_valid_lengths,
+            "target_loss_mask": target_loss_mask,
+            "document_starts": document_starts,
+            "document_ends": document_ends,
+            "target_source_starts": target_source_starts,
+        }
+        if return_metadata:
+            return source_inputs, target_labels, metadata
+        return source_inputs, target_labels
 
     if shard_data.ndim == 1:
         total_tokens = int(len(shard_data))
@@ -674,9 +921,15 @@ def create_hierarchical_memory_minibatch(
         raise ValueError("shard_data must be a 1D packed stream or 2D legacy shard")
 
     source_inputs = all_tokens[:, :-1]
-    # Row j predicts all_tokens[j+1].  Only rows beginning at memory_length are
-    # target-input rows, so their labels start one token later here.
     target_labels = all_tokens[
         :, memory_length + 1 : memory_length + target_length + 1
     ]
-    return source_inputs, target_labels
+    if not return_metadata:
+        return source_inputs, target_labels
+    metadata = {
+        "document_aware": False,
+        "history_valid_starts": np.zeros(batch_size, dtype=np.int64),
+        "target_valid_lengths": np.full(batch_size, target_length, dtype=np.int64),
+        "target_loss_mask": np.ones((batch_size, target_length), dtype=np.float32),
+    }
+    return source_inputs, target_labels, metadata

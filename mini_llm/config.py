@@ -3,28 +3,39 @@ import math
 
 @dataclass(frozen=True)
 class MemoryContextConfig:
-    """Top-level hierarchical memory routing configuration.
+    """Causal external-memory configuration for hierarchical context.
 
-    ``memory_length`` is the maximum *pre-target* history horizon.  The most
-    recent ``recent_length`` tokens are kept verbatim.  The preceding distant
-    history is searched in fixed blocks and only ``top_k_blocks`` are reopened
-    at full resolution for the deep Transformer.
+    ``memory_length`` is the maximum historical store preceding the dense
+    training window.  ``recent_length`` defines the causal working-history
+    horizon: for a prediction boundary ``t`` the router may inspect the most
+    recent history, but may retrieve only blocks ending at or before
+    ``t - recent_length``.  The selected blocks are *not* concatenated into the
+    Transformer sequence.  They are reopened through one sparse exact-token
+    external-memory read and injected into the current training-window rows.
 
-    The deep active length is therefore independent of ``memory_length`` when
-    the recent/target/retrieval budgets are fixed.
+    Consequently the expensive Transformer length is ``target_length`` and is
+    independent of both ``memory_length`` and the number of retrieved tokens.
     """
 
     enabled: bool = False
     memory_length: int = 65_536
     recent_length: int = 4_096
-    target_length: int = 1_024
+    target_length: int = 4_096
     block_size: int = 128
     top_k_blocks: int = 16
-    router_query_length: int = 512
+    router_query_length: int = 4_096
     router_dim: int = 64
-    query_pooling: str = "learned"
+    query_pooling: str = "mean"
     history_pooling: str = "mean"
     router_weight_scale: float = 1.0
+
+    # Exact-token external-memory read.  The router selection is shared across
+    # these heads; GQA keeps the memory K/V projection deliberately small.
+    read_heads: int = 4
+    read_kv_heads: int = 1
+    read_query_chunk: int = 64
+    reader_weight_eps: float = 1e-8
+    reader_residual_scale: float = 1.0
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -37,46 +48,53 @@ class MemoryContextConfig:
             "top_k_blocks": self.top_k_blocks,
             "router_query_length": self.router_query_length,
             "router_dim": self.router_dim,
+            "read_heads": self.read_heads,
+            "read_kv_heads": self.read_kv_heads,
+            "read_query_chunk": self.read_query_chunk,
         }
         for name, value in positive.items():
             if int(value) != value or int(value) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if self.recent_length > self.memory_length:
             raise ValueError("recent_length must not exceed memory_length")
+        if self.target_length > self.recent_length:
+            raise ValueError(
+                "0058A requires target_length <= recent_length so target rows "
+                "never age into the fixed historical memory store within one sample"
+            )
         if self.router_query_length > self.recent_length:
             raise ValueError("router_query_length must not exceed recent_length")
+        if self.read_heads % self.read_kv_heads != 0:
+            raise ValueError("read_heads must be divisible by read_kv_heads")
         if self.query_pooling not in {"mean", "last", "learned"}:
-            raise ValueError(
-                "query_pooling must be 'mean', 'last', or 'learned'"
-            )
+            raise ValueError("query_pooling must be 'mean', 'last', or 'learned'")
         if self.history_pooling not in {"mean", "first", "last", "learned"}:
-            raise ValueError(
-                "history_pooling must be 'mean', 'first', 'last', or 'learned'"
-            )
-        if not math.isfinite(float(self.router_weight_scale)):
-            raise ValueError("router_weight_scale must be finite")
+            raise ValueError("history_pooling must be 'mean', 'first', 'last', or 'learned'")
+        for name, value in {
+            "router_weight_scale": self.router_weight_scale,
+            "reader_weight_eps": self.reader_weight_eps,
+            "reader_residual_scale": self.reader_residual_scale,
+        }.items():
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{name} must be finite")
+        if float(self.reader_weight_eps) <= 0.0:
+            raise ValueError("reader_weight_eps must be positive")
         if self.enabled:
-            if self.distant_memory_length < self.block_size:
-                raise ValueError(
-                    "enabled memory context requires at least one distant block"
-                )
-            if self.distant_memory_length % self.block_size != 0:
-                raise ValueError(
-                    "distant memory length must be divisible by block_size so no "
-                    "pre-target history tokens fall into an unsearchable remainder"
-                )
+            if self.memory_length < self.block_size:
+                raise ValueError("enabled memory context requires at least one memory block")
+            if self.memory_length % self.block_size != 0:
+                raise ValueError("memory_length must be divisible by block_size")
             if self.searchable_blocks < self.top_k_blocks:
-                raise ValueError(
-                    "top_k_blocks exceeds the number of complete distant blocks"
-                )
+                raise ValueError("top_k_blocks exceeds the number of complete memory blocks")
 
     @property
     def distant_memory_length(self) -> int:
-        return int(self.memory_length) - int(self.recent_length)
+        """Compatibility alias for the maximum historical token store."""
+        return int(self.memory_length)
 
     @property
     def searchable_blocks(self) -> int:
-        return self.distant_memory_length // int(self.block_size)
+        return int(self.memory_length) // int(self.block_size)
 
     @property
     def retrieved_length(self) -> int:
@@ -84,11 +102,13 @@ class MemoryContextConfig:
 
     @property
     def active_length(self) -> int:
-        return self.retrieved_length + int(self.recent_length) + int(self.target_length)
+        # 0058A external memory is read into each current token; retrieved
+        # history is never appended to the deep Transformer sequence.
+        return int(self.target_length)
 
     @property
     def source_input_length(self) -> int:
-        """Number of input token IDs required before the next-token labels."""
+        """Historical store plus the dense autoregressive training window."""
         return int(self.memory_length) + int(self.target_length)
 
 
@@ -240,6 +260,9 @@ class ModelConfig:
                 total += d
             if memory.history_pooling == "learned":
                 total += d
+            read_q = int(memory.read_heads) * int(self.d_head)
+            read_kv = int(memory.read_kv_heads) * int(self.d_head)
+            total += d * read_q + 2 * d * read_kv + read_q * d
 
         return int(total)
 
@@ -601,12 +624,12 @@ class ModelConfig:
 
     @classmethod
     def _wide_500m_memory_context(cls, memory_length: int):
-        """Wide ~500M trunk with bounded ~7k active hierarchical context.
+        """Wide ~500M trunk with causal per-token external memory.
 
-        ``memory_length`` changes only the addressable pre-target horizon.  The
-        Transformer geometry is intentionally based on the ~7k active sequence,
-        not on the searchable history horizon.  The direct 0057A long-context
-        presets remain available separately for controlled comparisons.
+        ``memory_length`` changes only the addressable historical store.  The
+        Transformer processes the same dense 4k training window for all memory
+        horizons; per-position routed history is read sparsely before the trunk.
+        The direct 0057A long-context presets remain available for comparison.
         """
         memory_length = int(memory_length)
         if memory_length not in {16_384, 32_768, 65_536}:
@@ -616,20 +639,25 @@ class ModelConfig:
             enabled=True,
             memory_length=memory_length,
             recent_length=4_096,
-            target_length=1_024,
+            target_length=4_096,
             block_size=128,
             top_k_blocks=16,
-            router_query_length=512,
+            router_query_length=4_096,
             router_dim=64,
-            query_pooling="learned",
+            query_pooling="mean",
             history_pooling="mean",
             router_weight_scale=1.0,
+            read_heads=4,
+            read_kv_heads=1,
+            read_query_chunk=64,
+            reader_weight_eps=1e-8,
+            reader_residual_scale=1.0,
         )
 
-        # The trunk sees ~7,168 active tokens for every memory horizon.  Reuse
-        # the validated 8k sparse geometry rather than scaling dilation/global
-        # stride from the 16k/32k/64k addressable history.
-        base = cls._wide_500m_sparse_context(8_192)
+        # 0058A keeps only the dense neighboring training window in the deep
+        # trunk.  Long history is external memory, so attention geometry is
+        # based on 4k regardless of the 16k/32k/64k addressable horizon.
+        base = cls._wide_500m_sparse_context(4_096)
         return cls(
             tokenizer_vocab_size=base.tokenizer_vocab_size,
             context_length=memory.active_length,

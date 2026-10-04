@@ -12,12 +12,10 @@ from mini_llm.ops.loss import (
     chunked_bf16_cross_entropy_grad_inplace,
 )
 from mini_llm.ops.rmsnorm import RMSNorm
-from mini_llm.ops.context_blocks import block_token_indices
 from mini_llm.ops.hierarchical_memory import (
     ActiveContext,
     HierarchicalMemoryRouter,
-    router_weight_gate,
-    router_weight_gate_backward,
+    ExternalMemoryReader,
 )
 from mini_llm.performance_profiler import performance_scope
 
@@ -109,6 +107,7 @@ class DecoderLanguageModel:
         # Transformer remains unchanged.  Existing wide-500M checkpoints can
         # therefore initialize only these new, small router parameters.
         self.memory_router = None
+        self.memory_reader = None
         if config.memory_context.enabled:
             self.memory_router = HierarchicalMemoryRouter(
                 d_model=config.d_model,
@@ -116,6 +115,17 @@ class DecoderLanguageModel:
                 rng=rng,
                 input_std=config.init_std,
                 name="memory_router",
+                dtype=self.dtype,
+            )
+            self.memory_reader = ExternalMemoryReader(
+                d_model=config.d_model,
+                d_head=config.d_head,
+                config=config.memory_context,
+                rng=rng,
+                input_std=config.init_std,
+                output_std=config.residual_init_std,
+                rope_base=config.rope_base,
+                name="memory_reader",
                 dtype=self.dtype,
             )
     
@@ -129,6 +139,8 @@ class DecoderLanguageModel:
         params.extend(self.output_proj.parameters())
         if self.memory_router is not None:
             params.extend(self.memory_router.parameters())
+        if self.memory_reader is not None:
+            params.extend(self.memory_reader.parameters())
         return params
     
     def zero_grad(self):
@@ -146,13 +158,15 @@ class DecoderLanguageModel:
     def hierarchical_memory_enabled(self):
         return self.memory_router is not None
 
-    def _hierarchical_context_forward(self, token_ids):
-        """Search long history once and build the bounded active sequence.
+    def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
+        """Build the dense window after one causal per-position memory read.
 
-        ``memory_length`` is the complete pre-target history horizon.  The
-        router sees only distant history + recent *pre-target* context; target
-        tokens are structurally absent from the routing API, preventing future
-        leakage in memory selection.
+        Source layout is ``[historical store][dense training window]``.  For
+        training row ``j`` the router query is built from the causal history
+        ending at that row, while candidate historical blocks must end before
+        the configured recent-history horizon.  Selected old tokens are read
+        by indexed cross-attention and reduced to one residual vector per row;
+        they are never concatenated into the Transformer sequence.
         """
         cfg = self.config.memory_context
         source_ids = xp.asarray(token_ids)
@@ -168,207 +182,305 @@ class DecoderLanguageModel:
             )
 
         batch = int(source_ids.shape[0])
-        distant_end = int(cfg.distant_memory_length)
-        recent_end = int(cfg.memory_length)
-        target_end = recent_end + int(cfg.target_length)
+        memory_length = int(cfg.memory_length)
+        target_length = int(cfg.target_length)
+        recent_length = int(cfg.recent_length)
+        history_ids = source_ids[:, :memory_length]
+        target_ids = source_ids[:, memory_length:memory_length + target_length]
+        if memory_metadata is None:
+            history_valid_starts = xp.zeros((batch,), dtype=xp.int64)
+        else:
+            raw_history_valid_starts = memory_metadata.get("history_valid_starts")
+            if raw_history_valid_starts is None:
+                history_valid_starts = xp.zeros((batch,), dtype=xp.int64)
+            else:
+                history_valid_starts = xp.asarray(
+                    raw_history_valid_starts, dtype=xp.int64
+                )
+                if history_valid_starts.shape != (batch,):
+                    raise ValueError(
+                        "memory_metadata.history_valid_starts must have shape (batch,)"
+                    )
+                if bool(xp.any(history_valid_starts < 0)) or bool(
+                    xp.any(history_valid_starts > memory_length)
+                ):
+                    raise ValueError("history_valid_starts lie outside memory store")
 
-        history_ids = source_ids[:, :distant_end]
-        recent_ids = source_ids[:, distant_end:recent_end]
-        target_ids = source_ids[:, recent_end:target_end]
+        # Router queries for the dense target rows need at most the tail recent
+        # history plus the target rows themselves.  Avoid retaining/repooling
+        # the full 64k tensor for this causal sliding query.
+        query_prefix_start = max(0, memory_length - recent_length)
+        query_source_ids = source_ids[
+            :, query_prefix_start:memory_length + target_length
+        ]
+        query_prefix_length = memory_length - query_prefix_start
+        query_valid_starts = xp.maximum(
+            history_valid_starts - query_prefix_start, 0
+        )
+        # Row j predicts the token after target_ids[j], so its causal routing
+        # boundary includes target_ids[j] itself.
+        route_starts = (
+            query_prefix_length
+            + xp.arange(target_length, dtype=xp.int64)
+            + 1
+        )
+        # Absolute sample-local boundary before which blocks are old enough to
+        # retrieve.  This is the attention-like causal mask discussed in 0058A.
+        current_boundaries = (
+            memory_length + xp.arange(target_length, dtype=xp.int64) + 1
+        )
+        candidate_cutoffs = xp.maximum(
+            current_boundaries - recent_length, 0
+        )
 
-        # The long history representation is intentionally temporary.  Only
-        # cheap pooled/router state survives into the deep Transformer.
         with performance_scope("memory_context.history_embedding.forward"):
             history_x = self.embedding.W.data[history_ids]
-        with performance_scope("memory_context.recent_embedding.forward"):
-            recent_x = self.embedding.W.data[recent_ids]
+        with performance_scope("memory_context.query_embedding.forward"):
+            query_source_x = self.embedding.W.data[query_source_ids]
         with performance_scope("memory_context.router.forward"):
-            route_weights, selected_blocks, router_cache = self.memory_router.forward(
-                history_x, recent_x
+            (
+                route_weights,
+                selected_blocks,
+                selected_valid,
+                route_valid,
+                query_pooled,
+                router_cache,
+            ) = self.memory_router.forward(
+                history_x,
+                query_source_x,
+                route_starts,
+                candidate_cutoffs,
+                history_valid_starts=history_valid_starts,
+                query_valid_starts=query_valid_starts,
             )
 
         with performance_scope("memory_context.active_build.forward"):
-            selected_positions = block_token_indices(
-                selected_blocks, int(cfg.block_size)
-            )
-            flat_positions = selected_positions.reshape(batch, -1)
-            batch_ids = xp.arange(batch, dtype=xp.int64)[:, None]
-            retrieved_ids = source_ids[batch_ids, flat_positions]
-
-            # Reopen exact full-resolution embeddings only after block selection.
-            # A neutral-at-uniform differentiable gate carries the LM signal to
-            # selected router scores without replacing token content by summaries.
-            retrieved_exact = self.embedding.W.data[retrieved_ids].reshape(
-                batch, int(cfg.top_k_blocks), int(cfg.block_size), self.config.d_model
-            )
-            gate = router_weight_gate(
-                route_weights, int(cfg.top_k_blocks), cfg.router_weight_scale
-            )
-            retrieved_x = (
-                retrieved_exact * gate[:, :, None, None]
-            ).reshape(batch, int(cfg.retrieved_length), self.config.d_model)
-
             target_x = self.embedding.W.data[target_ids]
-            active_x = xp.concatenate((retrieved_x, recent_x, target_x), axis=1)
-            active_ids = xp.concatenate((retrieved_ids, recent_ids, target_ids), axis=1)
-
-            recent_positions = xp.broadcast_to(
-                xp.arange(distant_end, recent_end, dtype=xp.int64)[None, :],
-                (batch, int(cfg.recent_length)),
-            )
             target_positions = xp.broadcast_to(
-                xp.arange(recent_end, target_end, dtype=xp.int64)[None, :],
-                (batch, int(cfg.target_length)),
-            )
-            active_positions = xp.concatenate(
-                (flat_positions, recent_positions, target_positions), axis=1
+                xp.arange(
+                    memory_length,
+                    memory_length + target_length,
+                    dtype=xp.int64,
+                )[None, :],
+                (batch, target_length),
             )
 
-        # For the default mean history pool, no full history embedding tensor is
-        # retained by router_cache.  Dropping this local now lets the temporary
-        # 64k embedding allocation die before Transformer caches accumulate.
-        del history_x, retrieved_exact, target_x
+        with performance_scope("memory_context.reader.forward"):
+            memory_out, reader_cache = self.memory_reader.forward(
+                history_x,
+                target_x,
+                selected_blocks,
+                route_weights,
+                selected_valid,
+                history_position_ids=xp.arange(memory_length, dtype=xp.int64),
+                query_position_ids=target_positions,
+                return_cache=True,
+            )
 
-        target_start = int(cfg.retrieved_length) + int(cfg.recent_length)
-        target_stop = target_start + int(cfg.target_length)
+        with performance_scope("memory_context.active_build.forward"):
+            active_x = target_x + memory_out * float(cfg.reader_residual_scale)
+
+        # No full-resolution 64k embedding tensor is kept through the deep
+        # Transformer.  Reader K/V and compact probability/router caches remain;
+        # history embeddings are replayed cheaply for projection weight grads.
+        del history_x, query_source_x, target_x, memory_out, query_pooled
+
         active = ActiveContext(
             embeddings=active_x,
-            token_ids=active_ids,
-            position_ids=active_positions,
-            source_indices=active_positions,
-            target_start=target_start,
-            target_end=target_stop,
+            token_ids=target_ids,
+            position_ids=target_positions,
+            source_indices=target_positions,
+            target_start=0,
+            target_end=target_length,
             selected_blocks=selected_blocks,
             route_weights=route_weights,
+            selected_valid=selected_valid,
+            route_valid=route_valid,
         )
         cache = {
-            # Token IDs/source indices are cheap to retain and are sufficient to
-            # replay embedding lookup/scatter during handwritten backward.
             "source_token_ids": source_ids,
-            "selected_positions": flat_positions,
-            "route_weights": route_weights,
+            "history_ids": history_ids,
+            "query_source_ids": query_source_ids,
+            "target_ids": target_ids,
             "selected_blocks": selected_blocks,
+            "route_weights": route_weights,
+            "selected_valid": selected_valid,
+            "route_valid": route_valid,
+            "history_valid_starts": history_valid_starts,
             "router_cache": router_cache,
-            "target_slice": (target_start, target_stop),
+            "reader_cache": reader_cache,
+            "target_slice": (0, target_length),
         }
         return active, cache
 
     def _hierarchical_context_backward(self, dactive, cache):
-        """Scatter active-token and router gradients into the shared embedding."""
+        """Backpropagate dense-window, reader, router, and embedding paths."""
         cfg = self.config.memory_context
-        source_ids = cache.pop("source_token_ids")
-        selected_positions = cache.pop("selected_positions")
-        route_weights = cache.pop("route_weights")
+        history_ids = cache.pop("history_ids")
+        query_source_ids = cache.pop("query_source_ids")
+        target_ids = cache.pop("target_ids")
+        cache.pop("source_token_ids", None)
+        cache.pop("selected_blocks", None)
+        cache.pop("route_weights", None)
+        cache.pop("selected_valid", None)
+        cache.pop("route_valid", None)
+        cache.pop("history_valid_starts", None)
+        reader_cache = cache.pop("reader_cache")
         router_cache = cache.pop("router_cache")
 
-        batch = int(source_ids.shape[0])
-        retrieved_length = int(cfg.retrieved_length)
-        recent_length = int(cfg.recent_length)
-        target_length = int(cfg.target_length)
-        distant_end = int(cfg.distant_memory_length)
-        recent_end = int(cfg.memory_length)
+        # The active residual contains the target embedding directly plus the
+        # external-memory read.  Replay history embedding only now, after the
+        # deep Transformer has released its layer caches.
+        d_target_direct = dactive
+        d_reader_out = dactive * float(cfg.reader_residual_scale)
+        with performance_scope("memory_context.history_embedding.replay"):
+            history_x_replay = self.embedding.W.data[history_ids]
 
-        d_retrieved = dactive[:, :retrieved_length, :]
-        d_recent_active = dactive[
-            :, retrieved_length:retrieved_length + recent_length, :
-        ]
-        d_target = dactive[:, -target_length:, :]
-
-        batch_ids = xp.arange(batch, dtype=xp.int64)[:, None]
-        retrieved_ids = source_ids[batch_ids, selected_positions]
-        retrieved_exact = self.embedding.W.data[retrieved_ids].reshape(
-            batch, int(cfg.top_k_blocks), int(cfg.block_size), self.config.d_model
-        )
-        d_retrieved_blocks = d_retrieved.reshape(retrieved_exact.shape)
-        gate = router_weight_gate(
-            route_weights, int(cfg.top_k_blocks), cfg.router_weight_scale
-        )
-
-        # y = gate(w) * embedding.  The direct value path updates selected token
-        # embeddings; the scalar gate path trains the selected router logits.
-        exact_work = retrieved_exact.astype(d_retrieved_blocks.dtype, copy=False)
-        dgate = xp.sum(d_retrieved_blocks * exact_work, axis=(2, 3))
-        dweights_sorted = router_weight_gate_backward(
-            dgate, int(cfg.top_k_blocks), cfg.router_weight_scale
-        )
-        d_retrieved_exact = d_retrieved_blocks * gate[:, :, None, None].astype(
-            d_retrieved_blocks.dtype, copy=False
-        )
-
-        with performance_scope("memory_context.router.backward"):
-            d_history_router, d_recent_router = self.memory_router.backward(
-                dweights_sorted, router_cache
+        with performance_scope("memory_context.reader.backward"):
+            dhistory_reader, dtarget_reader, dweights = self.memory_reader.backward(
+                d_reader_out, reader_cache, history_x_replay
             )
-
-        history_ids = source_ids[:, :distant_end]
-        recent_ids = source_ids[:, distant_end:recent_end]
-        target_ids = source_ids[:, recent_end:recent_end + target_length]
+        with performance_scope("memory_context.router.backward"):
+            dhistory_router, dquery_source = self.memory_router.backward(
+                dweights,
+                router_cache,
+            )
 
         with performance_scope("memory_context.embedding.backward"):
-            self.embedding.backward(
-                d_retrieved_exact.reshape(batch, retrieved_length, self.config.d_model),
-                {"token_ids": retrieved_ids},
+            # Avoid a third full-history FP32 temporary at the 64k horizon.
+            dhistory_reader += dhistory_router.astype(
+                dhistory_reader.dtype, copy=False
             )
             self.embedding.backward(
-                d_history_router, {"token_ids": history_ids}
+                dhistory_reader,
+                {"token_ids": history_ids},
             )
             self.embedding.backward(
-                d_recent_active + d_recent_router, {"token_ids": recent_ids}
+                dquery_source, {"token_ids": query_source_ids}
             )
-            self.embedding.backward(d_target, {"token_ids": target_ids})
+            self.embedding.backward(
+                d_target_direct + dtarget_reader, {"token_ids": target_ids}
+            )
 
-        del retrieved_exact, d_retrieved_exact, d_history_router, d_recent_router
+        del (
+            history_x_replay,
+            dhistory_reader,
+            dhistory_router,
+            dquery_source,
+            dtarget_reader,
+            dweights,
+        )
 
     def memory_routing_diagnostics(self, cache):
-        """Return optional compact diagnostics before a hierarchical cache is consumed."""
+        """Return compact causal per-position memory-router diagnostics."""
         memory_cache = cache.get("memory_context_cache")
         if memory_cache is None:
             return None
         selected = memory_cache["selected_blocks"]
         weights = memory_cache["route_weights"].astype("float32", copy=False)
-        probs = xp.maximum(weights, xp.asarray(1e-12, dtype=weights.dtype))
-        entropy = -xp.sum(probs * xp.log(probs), axis=-1)
+        selected_valid = memory_cache["selected_valid"]
+        route_valid = memory_cache["route_valid"]
         cfg = self.config.memory_context
-        block_centers = (selected.astype("float32") + 0.5) * int(cfg.block_size)
-        distance = float(cfg.memory_length) - block_centers
-        histogram = xp.bincount(
-            selected.reshape(-1), minlength=int(cfg.searchable_blocks)
+
+        probs = xp.maximum(weights, xp.asarray(1e-12, dtype=weights.dtype))
+        entropy = -xp.sum(
+            xp.where(selected_valid, weights * xp.log(probs), 0.0), axis=-1
         )
-        sorted_selected = xp.sort(selected, axis=-1)
-        duplicate_count = xp.sum(xp.diff(sorted_selected, axis=-1) == 0)
-        recent_cut = max(0, int(cfg.searchable_blocks) - max(1, int(cfg.searchable_blocks) // 4))
-        recent_fraction = xp.mean((selected >= recent_cut).astype("float32"))
-        scores = memory_cache["router_cache"].get("scores")
+        valid_rows = route_valid[None, :]
+        valid_count = xp.maximum(xp.sum(valid_rows), 1)
+        entropy_mean = xp.sum(entropy * valid_rows) / (
+            valid_count * int(selected.shape[0])
+        )
+
+        block_centers = (
+            selected.astype("float32") + 0.5
+        ) * int(cfg.block_size)
+        current_boundaries = (
+            int(cfg.memory_length)
+            + xp.arange(int(selected.shape[1]), dtype="float32")
+            + 1.0
+        )[None, :, None]
+        distance = current_boundaries - block_centers
+        valid_selected = selected_valid
+        valid_selected_count = xp.maximum(xp.sum(valid_selected), 1)
+        source_distance_mean = (
+            xp.sum(xp.where(valid_selected, distance, 0.0))
+            / valid_selected_count
+        )
+
+        if bool(xp.any(valid_selected)):
+            flattened = selected[valid_selected]
+            histogram = xp.bincount(
+                flattened, minlength=int(cfg.searchable_blocks)
+            )
+            unique_blocks = xp.unique(flattened).size
+            recent_cut = max(
+                0,
+                int(cfg.searchable_blocks)
+                - max(1, int(cfg.searchable_blocks) // 4),
+            )
+            recent_fraction = xp.mean(
+                (flattened >= recent_cut).astype("float32")
+            )
+        else:
+            histogram = xp.zeros((int(cfg.searchable_blocks),), dtype=xp.int64)
+            unique_blocks = 0
+            recent_fraction = xp.asarray(0.0, dtype="float32")
+
+        sort_order = xp.argsort(selected, axis=-1)
+        sorted_selected = xp.take_along_axis(selected, sort_order, axis=-1)
+        sorted_valid = xp.take_along_axis(selected_valid, sort_order, axis=-1)
+        duplicate_mask = (
+            (xp.diff(sorted_selected, axis=-1) == 0)
+            & sorted_valid[..., 1:]
+            & sorted_valid[..., :-1]
+        )
+        duplicate_count = xp.sum(duplicate_mask)
+
+        router_cache = memory_cache["router_cache"]
+        scores = router_cache.get("scores")
         result = {
             "selected_blocks": selected,
             "weights": weights,
+            "route_valid": route_valid,
+            "selected_valid": selected_valid,
+            "valid_route_fraction": xp.mean(route_valid.astype("float32")),
+            "selected_slot_fraction": xp.mean(selected_valid.astype("float32")),
             "selected_block_histogram": histogram,
-            "entropy_mean": xp.mean(entropy),
-            "source_distance_mean": xp.mean(distance),
+            "entropy_mean": entropy_mean,
+            "source_distance_mean": source_distance_mean,
             "recent_quartile_fraction": recent_fraction,
             "duplicate_count": duplicate_count,
-            "unique_blocks": xp.unique(selected).size,
+            "unique_blocks": unique_blocks,
         }
         if scores is not None:
+            candidate_mask = router_cache.get("candidate_mask")
             score_work = scores.astype("float32", copy=False)
-            result.update({
-                "score_mean": xp.mean(score_work),
-                "score_std": xp.std(score_work),
-                "score_min": xp.min(score_work),
-                "score_max": xp.max(score_work),
-            })
+            if candidate_mask is not None:
+                score_values = score_work[
+                    xp.broadcast_to(candidate_mask, score_work.shape)
+                ]
+            else:
+                score_values = score_work.reshape(-1)
+            if score_values.size:
+                result.update({
+                    "score_mean": xp.mean(score_values),
+                    "score_std": xp.std(score_values),
+                    "score_min": xp.min(score_values),
+                    "score_max": xp.max(score_values),
+                })
         return result
 
     def forward_body(
         self, token_ids, finite_trace=None, return_cache=True,
-        activation_checkpoint=False, position_ids=None,
+        activation_checkpoint=False, position_ids=None, memory_metadata=None,
     ):
         """Run embedding/Transformer/final-norm without materializing logits.
 
-        0058 optionally performs one top-level long-memory search before this
-        deep trunk.  In that mode the Transformer receives only the bounded
-        active context, while ``position_ids`` preserve original source-time
-        distances for RoPE.
+        0058A optionally performs causal per-position external-memory reads
+        before the deep trunk.  The Transformer receives only the dense current
+        training window; explicit source positions preserve its location within
+        the long sample for RoPE.
         """
         memory_context_cache = None
         target_slice = None
@@ -380,7 +492,7 @@ class DecoderLanguageModel:
                 )
             with performance_scope("memory_context.forward"):
                 active, memory_context_cache = self._hierarchical_context_forward(
-                    token_ids
+                    token_ids, memory_metadata=memory_metadata
                 )
             x = active.embeddings
             effective_position_ids = active.position_ids
@@ -391,6 +503,10 @@ class DecoderLanguageModel:
                     ("memory_active_embedding", xp.all(xp.isfinite(x)))
                 )
         else:
+            if memory_metadata is not None:
+                raise ValueError(
+                    "memory_metadata is only valid for hierarchical-memory models"
+                )
             with performance_scope("model.embedding.forward"):
                 x, embed_cache = self.embedding.forward(token_ids)
             effective_position_ids = position_ids
@@ -468,7 +584,7 @@ class DecoderLanguageModel:
 
     def forward(
         self, token_ids, finite_trace=None, return_cache=True,
-        activation_checkpoint=False, position_ids=None,
+        activation_checkpoint=False, position_ids=None, memory_metadata=None,
     ):
         """Full decoder forward.
 
@@ -481,18 +597,18 @@ class DecoderLanguageModel:
                 token_ids, finite_trace=finite_trace, return_cache=True,
                 activation_checkpoint=activation_checkpoint,
                 position_ids=position_ids,
+                memory_metadata=memory_metadata,
             )
             target_slice = cache.get("target_slice")
         else:
             head_input = self.forward_body(
                 token_ids, finite_trace=finite_trace, return_cache=False,
-                position_ids=position_ids,
+                position_ids=position_ids, memory_metadata=memory_metadata,
             )
             target_slice = None
             if self.hierarchical_memory_enabled:
                 cfg = self.config.memory_context
-                start = int(cfg.retrieved_length) + int(cfg.recent_length)
-                target_slice = (start, start + int(cfg.target_length))
+                target_slice = (0, int(cfg.target_length))
 
         head_for_logits = head_input
         if target_slice is not None:

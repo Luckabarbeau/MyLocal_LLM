@@ -608,7 +608,7 @@ class CausalQueryPooler:
         clipped = xp.maximum(raw, 0)
         return clipped, valid
 
-    def forward(self, x, route_starts, window_metadata=None):
+    def forward(self, x, route_starts, window_metadata=None, valid_starts=None):
         if x.ndim != 3 or x.shape[-1] != self.d_model:
             raise ValueError("x must have shape (batch, seq_len, d_model)")
         if route_starts.ndim != 1:
@@ -625,6 +625,22 @@ class CausalQueryPooler:
 
         batch = x.shape[0]
         n_routes = int(route_starts.shape[0])
+        if valid_starts is None:
+            valid_starts_b = xp.zeros((batch,), dtype=route_starts.dtype)
+        else:
+            valid_starts_b = xp.asarray(valid_starts, dtype=route_starts.dtype)
+            if valid_starts_b.shape != (batch,):
+                raise ValueError("valid_starts must have shape (batch,)")
+            if bool(xp.any(valid_starts_b < 0)) or bool(
+                xp.any(valid_starts_b > x.shape[1])
+            ):
+                raise ValueError("valid_starts must lie inside the query source")
+            if route_starts.size and bool(
+                xp.any(valid_starts_b[:, None] >= route_starts[None, :])
+            ):
+                raise ValueError(
+                    "each causal query window must contain at least one valid token"
+                )
         if n_routes == 0:
             pooled = xp.zeros((batch, 0, self.d_model), dtype=x.dtype)
             return pooled, {
@@ -634,13 +650,63 @@ class CausalQueryPooler:
                 "valid": xp.zeros((0, self.query_window), dtype=bool),
             }
 
+        # Sliding means can be evaluated with prefix sums in O(B*T*D + B*R*D)
+        # rather than materializing [B,R,W,D] overlapping windows.  This is
+        # essential for 0058A where R and W can both be 4096.
+        if self.strategy == "mean":
+            with retrieval_router_detail_scope("router.qpool.mean_prefix"):
+                nominal_starts = xp.maximum(route_starts - self.query_window, 0)
+                starts = xp.maximum(
+                    nominal_starts[None, :], valid_starts_b[:, None]
+                )
+                counts_br = route_starts[None, :] - starts
+                if bool(xp.any(counts_br <= 0)):
+                    raise ValueError("mean query windows must contain at least one token")
+                work = (
+                    x.astype("float32", copy=False)
+                    if is_low_precision_dtype(x.dtype)
+                    else x
+                )
+                prefix = xp.cumsum(work, axis=1)
+                batch_ids = xp.arange(batch, dtype=xp.int64)[:, None]
+                end_ids = xp.broadcast_to(
+                    (route_starts - 1)[None, :], (batch, n_routes)
+                )
+                end_sum = prefix[batch_ids, end_ids, :]
+                before = starts - 1
+                safe_before = xp.maximum(before, 0)
+                start_sum = prefix[batch_ids, safe_before, :]
+                start_sum = xp.where(
+                    (before >= 0)[..., None], start_sum, 0.0
+                )
+                counts = counts_br.astype(work.dtype, copy=False)[..., None]
+                pooled_work = (end_sum - start_sum) / counts
+                pooled = (
+                    pooled_work.astype(x.dtype, copy=False)
+                    if is_low_precision_dtype(x.dtype)
+                    else pooled_work
+                )
+            return pooled, {
+                "x_shape": x.shape,
+                "route_starts": route_starts,
+                "starts": starts,
+                "counts": counts_br,
+                "prefix_mean": True,
+            }
+
         if window_metadata is None:
             with retrieval_router_detail_scope("router.qpool.indices"):
                 indices, valid = self._window_indices(route_starts)
+                if valid_starts is not None:
+                    valid = valid[None, :, :] & (
+                        indices[None, :, :] >= valid_starts_b[:, None, None]
+                    )
         else:
             indices, valid = window_metadata
-            expected = (n_routes, self.query_window)
-            if indices.shape != expected or valid.shape != expected:
+            expected_indices = (n_routes, self.query_window)
+            if indices.shape != expected_indices or valid.shape not in {
+                expected_indices, (batch, n_routes, self.query_window)
+            }:
                 raise ValueError("window_metadata has incompatible shape")
 
         if self.strategy == "last":
@@ -657,7 +723,7 @@ class CausalQueryPooler:
         # [B,T,D] and pools windows directly from x. The compact FP32 pooled
         # value is retained for the optional 0048C direct backward; the old
         # indices/valid metadata remains available for the reference fallback.
-        if self.strategy == "learned":
+        if self.strategy == "learned" and valid_starts is None:
             direct = _direct_learned_query_pool_forward(
                 x, route_starts, self.score_param.data, self.query_window
             )
@@ -680,21 +746,6 @@ class CausalQueryPooler:
             windows = x[:, indices, :]  # (B, R, W, D)
             valid_f = valid.astype(windows.dtype, copy=False)
 
-        if self.strategy == "mean":
-            with retrieval_router_detail_scope("router.qpool.mean_reduce"):
-                counts = xp.sum(valid_f, axis=1).reshape(1, n_routes, 1)
-                pooled = (
-                    xp.sum(windows * valid_f[None, :, :, None], axis=2) / counts
-                )
-            cache = {
-                "x_shape": x.shape,
-                "route_starts": route_starts,
-                "indices": indices,
-                "valid": valid,
-                "counts": counts,
-            }
-            return pooled, cache
-
         scale = 1.0 / math.sqrt(self.d_model)
         with retrieval_router_detail_scope("router.qpool.score_gemm"):
             windows_2d = windows.reshape(-1, self.d_model)
@@ -708,10 +759,11 @@ class CausalQueryPooler:
                 else scores
             )
             neg_inf = xp.asarray(-xp.inf, dtype=scores_work.dtype)
-            scores_work = xp.where(valid[None, :, :], scores_work, neg_inf)
+            valid_b = valid if valid.ndim == 3 else valid[None, :, :]
+            scores_work = xp.where(valid_b, scores_work, neg_inf)
             max_scores = xp.max(scores_work, axis=2, keepdims=True)
             exp_scores = xp.where(
-                valid[None, :, :], xp.exp(scores_work - max_scores), 0.0
+                valid_b, xp.exp(scores_work - max_scores), 0.0
             )
             alpha_work = exp_scores / xp.sum(exp_scores, axis=2, keepdims=True)
             alpha = (
@@ -748,6 +800,23 @@ class CausalQueryPooler:
         if n_routes == 0:
             return xp.zeros(x_shape, dtype=grad_dtype)
 
+        if self.strategy == "mean" and cache.get("prefix_mean", False):
+            with retrieval_router_detail_scope("router.qpool.bwd.mean_prefix"):
+                seq_len = int(x_shape[1])
+                starts = cache["starts"].astype(xp.int64, copy=False)
+                ends = route_starts.astype(xp.int64, copy=False)
+                counts = cache["counts"].astype(grad_dtype, copy=False)
+                contrib = dpooled.astype(grad_dtype, copy=False) / counts[..., None]
+                diff = xp.zeros((batch, seq_len + 1, d_model), dtype=grad_dtype)
+                # Route boundaries are unique, while clipped starts may coincide
+                # for very short histories. add.at handles both cases without a
+                # [B,R,W,D] temporary. Batch is normally one for long context.
+                for b in range(batch):
+                    xp.add.at(diff[b], starts[b], contrib[b])
+                    xp.add.at(diff[b], ends, -contrib[b])
+                dx = xp.cumsum(diff[:, :seq_len, :], axis=1)
+            return dx
+
         if self.strategy == "learned":
             direct_dx = _direct_learned_query_pool_backward(
                 dpooled, cache, self.score_param, self.query_window
@@ -774,45 +843,40 @@ class CausalQueryPooler:
 
         indices = cache["indices"]
         valid = cache["valid"]
-        if self.strategy == "mean":
-            with retrieval_router_detail_scope("router.qpool.bwd.direct"):
-                counts = cache["counts"]
-                dwindow = dpooled[:, :, None, :] / counts[:, :, None, :]
-                dwindow = dwindow * valid[None, :, :, None]
-        else:
-            with retrieval_router_detail_scope("router.qpool.bwd.gather"):
-                windows = cache["x"][:, indices, :]
-                alpha_work = cache["alpha_work"]
-                scale = cache["scale"]
-            with retrieval_router_detail_scope("router.qpool.bwd.direct"):
-                alpha_compute = (
-                    alpha_work.astype(dpooled.dtype, copy=False)
-                    if is_low_precision_dtype(dpooled.dtype)
-                    else alpha_work
-                )
-                dwindow = alpha_compute[..., None] * dpooled[:, :, None, :]
+        with retrieval_router_detail_scope("router.qpool.bwd.gather"):
+            windows = cache["x"][:, indices, :]
+            alpha_work = cache["alpha_work"]
+            scale = cache["scale"]
+        with retrieval_router_detail_scope("router.qpool.bwd.direct"):
+            alpha_compute = (
+                alpha_work.astype(dpooled.dtype, copy=False)
+                if is_low_precision_dtype(dpooled.dtype)
+                else alpha_work
+            )
+            dwindow = alpha_compute[..., None] * dpooled[:, :, None, :]
 
-            with retrieval_router_detail_scope("router.qpool.bwd.softmax"):
-                dpooled_work = dpooled.astype("float32", copy=False)
-                windows_work = windows.astype("float32", copy=False)
-                dalpha = xp.sum(
-                    windows_work * dpooled_work[:, :, None, :], axis=-1
-                )
-                correction = xp.sum(alpha_work * dalpha, axis=2, keepdims=True)
-                dscores = alpha_work * (dalpha - correction)
-                dscores = xp.where(valid[None, :, :], dscores, 0.0)
+        with retrieval_router_detail_scope("router.qpool.bwd.softmax"):
+            dpooled_work = dpooled.astype("float32", copy=False)
+            windows_work = windows.astype("float32", copy=False)
+            dalpha = xp.sum(
+                windows_work * dpooled_work[:, :, None, :], axis=-1
+            )
+            correction = xp.sum(alpha_work * dalpha, axis=2, keepdims=True)
+            dscores = alpha_work * (dalpha - correction)
+            valid_b = valid if valid.ndim == 3 else valid[None, :, :]
+            dscores = xp.where(valid_b, dscores, 0.0)
 
-            with retrieval_router_detail_scope("router.qpool.bwd.score_path"):
-                score_vector_work = self.score_param.data.astype(
-                    "float32", copy=False
-                )
-                score_path = dscores[..., None] * score_vector_work * scale
-                dwindow += score_path.astype(dwindow.dtype, copy=False)
-            with retrieval_router_detail_scope("router.qpool.bwd.score_wgrad"):
-                grad_score = xp.sum(
-                    dscores[..., None] * windows_work, axis=(0, 1, 2)
-                ) * scale
-                self.score_param.grad += grad_score
+        with retrieval_router_detail_scope("router.qpool.bwd.score_path"):
+            score_vector_work = self.score_param.data.astype(
+                "float32", copy=False
+            )
+            score_path = dscores[..., None] * score_vector_work * scale
+            dwindow += score_path.astype(dwindow.dtype, copy=False)
+        with retrieval_router_detail_scope("router.qpool.bwd.score_wgrad"):
+            grad_score = xp.sum(
+                dscores[..., None] * windows_work, axis=(0, 1, 2)
+            ) * scale
+            self.score_param.grad += grad_score
 
         with retrieval_router_detail_scope("router.qpool.bwd.scatter"):
             flat_indices = xp.broadcast_to(

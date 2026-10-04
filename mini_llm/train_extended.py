@@ -30,6 +30,7 @@ from mini_llm.data.token_shards import (
     map_token_shard,
     create_minibatch,
     create_hierarchical_memory_minibatch,
+    load_or_build_packed_document_index,
 )
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
@@ -89,6 +90,7 @@ class ExtendedTrainer:
         val_source_shards: Optional[Mapping[str, List[str]]] = None,
         source_weights: Optional[Mapping[str, float]] = None,
         profile_steps: int = 0,
+        eos_token_id: Optional[int] = None,
     ):
         """
         Initialize the extended trainer.
@@ -125,6 +127,8 @@ class ExtendedTrainer:
             profile_steps: Number of optimizer steps to run with synchronized
                 coarse performance profiling. Profiling is intentionally
                 intrusive and should normally be limited to 1-3 steps.
+            eos_token_id: Packed-shard EOS marker. Hierarchical-memory training
+                uses it to keep every sample inside one coherent document.
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -146,7 +150,13 @@ class ExtendedTrainer:
         self.memory_context = (
             model.config.memory_context if model.config.memory_context.enabled else None
         )
+        self.eos_token_id = None if eos_token_id is None else int(eos_token_id)
         if self.memory_context is not None:
+            if self.eos_token_id is None:
+                raise ValueError(
+                    "hierarchical-memory training requires eos_token_id for "
+                    "document-aware packed sampling"
+                )
             expected_source = int(self.memory_context.source_input_length)
             if self.seq_length != expected_source:
                 raise ValueError(
@@ -251,6 +261,9 @@ class ExtendedTrainer:
         # retained every shard encountered, eventually holding the whole token
         # dataset in process memory.
         self.shards = OrderedDict()
+        self.document_indices = OrderedDict()
+        self.val_document_indices = OrderedDict()
+        self.document_index_cache_size = max(8, self.shard_cache_size * 4)
         self.current_train_shard_idx = 0
         self.current_train_source_shard_idx = (
             {name: 0 for name in self.train_source_shards}
@@ -316,18 +329,20 @@ class ExtendedTrainer:
             print(f"  Sequence length: {self.seq_length}")
         else:
             cfg = self.memory_context
-            print("  Hierarchical memory routing: enabled")
-            print(f"  Addressable memory:          {cfg.memory_length:,} tokens")
-            print(f"  Distant searchable memory:  {cfg.distant_memory_length:,} tokens")
+            print("  Causal external memory routing: enabled")
+            print("  Document-aware sampling:       enabled (EOS-bounded)")
+            print(f"  Historical memory store:     {cfg.memory_length:,} tokens")
             print(f"  Memory block size:           {cfg.block_size:,}")
             print(f"  Searchable memory blocks:    {cfg.searchable_blocks:,}")
-            print(f"  Retrieved blocks:            {cfg.top_k_blocks:,}")
-            print(f"  Retrieved tokens:            {cfg.retrieved_length:,}")
-            print(f"  Recent context:              {cfg.recent_length:,}")
-            print(f"  Target tokens:               {cfg.target_length:,}")
+            print(f"  Retrieved blocks/row:        {cfg.top_k_blocks:,}")
+            print(f"  Retrieved exact tokens/row:  {cfg.retrieved_length:,}")
+            print(f"  Recent router history:       {cfg.recent_length:,}")
+            print(f"  Dense training window:       {cfg.target_length:,}")
             print(f"  Active Transformer length:   {cfg.active_length:,}")
             print(f"  Router query length:         {cfg.router_query_length:,}")
             print(f"  Router dimension:            {cfg.router_dim:,}")
+            print(f"  Memory reader heads/KV:      {cfg.read_heads}/{cfg.read_kv_heads}")
+            print(f"  Memory read query chunk:     {cfg.read_query_chunk:,}")
             print(f"  Source sample input length:  {cfg.source_input_length:,}")
         if self.lm_head_chunk_tokens > 0:
             print(
@@ -502,22 +517,37 @@ class ExtendedTrainer:
             self._close_mapped_shard(evicted)
 
         return shard
+
+    def _get_document_index(self, cache, cache_key, path, shard_data):
+        if shard_data.ndim != 1:
+            return None
+        if cache_key in cache:
+            index = cache.pop(cache_key)
+            cache[cache_key] = index
+            return index
+        index = load_or_build_packed_document_index(
+            path, shard_data, self.eos_token_id, write_sidecar=True
+        )
+        cache[cache_key] = index
+        while len(cache) > self.document_index_cache_size:
+            cache.popitem(last=False)
+        return index
     
-    def get_train_batch(self) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Get a random training batch.
-        
-        Uses persistent RNG for reproducibility (Issue #12).
+    def get_train_batch(self, return_metadata: bool = False):
+        """Get one reproducible training batch.
+
+        Hierarchical-memory batches are EOS/document bounded.  A compact
+        sidecar index is built lazily for existing packed shards, so no
+        retokenization or dataset regeneration is required.
         """
         if self.train_source_shards is not None:
             source = self._choose_source(self.train_rng)
             paths = self.train_source_shards[source]
             shard_idx = self.current_train_source_shard_idx[source]
+            cache_key = (source, shard_idx)
+            shard_path = paths[shard_idx]
             shard_data = self._get_cached_shard(
-                self.shards,
-                (source, shard_idx),
-                paths[shard_idx],
-                self.load_train_shard,
+                self.shards, cache_key, shard_path, self.load_train_shard,
             )
             self.current_train_source_shard_idx[source] = (
                 shard_idx + 1
@@ -525,50 +555,51 @@ class ExtendedTrainer:
             self.train_source_batch_counts[source] += 1
         else:
             shard_idx = self.current_train_shard_idx
+            cache_key = shard_idx
+            shard_path = self.train_shard_paths[shard_idx]
             shard_data = self._get_cached_shard(
-                self.shards,
-                shard_idx,
-                self.train_shard_paths[shard_idx],
-                self.load_train_shard,
+                self.shards, cache_key, shard_path, self.load_train_shard,
             )
             self.current_train_shard_idx = (
                 self.current_train_shard_idx + 1
             ) % len(self.train_shard_paths)
 
+        metadata = None
         if self.memory_context is None:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=self.train_rng
             )
         else:
-            inputs, targets = create_hierarchical_memory_minibatch(
+            document_index = self._get_document_index(
+                self.document_indices, cache_key, shard_path, shard_data
+            )
+            inputs, targets, metadata = create_hierarchical_memory_minibatch(
                 shard_data,
                 self.batch_size,
                 self.memory_context.memory_length,
                 self.memory_context.target_length,
                 rng=self.train_rng,
+                eos_token_id=self.eos_token_id,
+                document_index=document_index,
+                document_aware=(shard_data.ndim == 1),
+                return_metadata=True,
             )
 
-        # Preserve the historical counter as physical source tokens consumed.
-        # Performance reports separately expose target and active tokens/s.
         self.tokens_processed += self.batch_size * self.seq_length
-
+        if return_metadata:
+            return inputs, targets, metadata
         return inputs, targets
     
-    def get_val_batch(self) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Get a validation batch.
-        
-        Uses deterministic validation block selection (Issue #13).
-        """
+    def get_val_batch(self, return_metadata: bool = False):
+        """Get one validation batch using the same document-boundary semantics."""
         if self.val_source_shards is not None:
             source = self._choose_source(self.val_rng)
             paths = self.val_source_shards[source]
             shard_idx = self.current_val_source_shard_idx[source]
+            cache_key = (source, shard_idx)
+            shard_path = paths[shard_idx]
             shard_data = self._get_cached_shard(
-                self.val_shards,
-                (source, shard_idx),
-                paths[shard_idx],
-                self.load_val_shard,
+                self.val_shards, cache_key, shard_path, self.load_val_shard,
             )
             self.current_val_source_shard_idx[source] = (
                 shard_idx + 1
@@ -576,29 +607,38 @@ class ExtendedTrainer:
             self.val_source_batch_counts[source] += 1
         else:
             shard_idx = self.current_val_shard_idx
+            cache_key = shard_idx
+            shard_path = self.val_shard_paths[shard_idx]
             shard_data = self._get_cached_shard(
-                self.val_shards,
-                shard_idx,
-                self.val_shard_paths[shard_idx],
-                self.load_val_shard,
+                self.val_shards, cache_key, shard_path, self.load_val_shard,
             )
             self.current_val_shard_idx = (
                 self.current_val_shard_idx + 1
             ) % len(self.val_shard_paths)
 
+        metadata = None
         if self.memory_context is None:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=self.val_rng
             )
         else:
-            inputs, targets = create_hierarchical_memory_minibatch(
+            document_index = self._get_document_index(
+                self.val_document_indices, cache_key, shard_path, shard_data
+            )
+            inputs, targets, metadata = create_hierarchical_memory_minibatch(
                 shard_data,
                 self.batch_size,
                 self.memory_context.memory_length,
                 self.memory_context.target_length,
                 rng=self.val_rng,
+                eos_token_id=self.eos_token_id,
+                document_index=document_index,
+                document_aware=(shard_data.ndim == 1),
+                return_metadata=True,
             )
 
+        if return_metadata:
+            return inputs, targets, metadata
         return inputs, targets
     
     def _record_memory_snapshot(self, records, label):
@@ -676,11 +716,21 @@ class ExtendedTrainer:
         losses = []
         
         for _ in range(self.val_steps):
-            inputs, targets = self.get_val_batch()
+            inputs, targets, batch_metadata = self.get_val_batch(
+                return_metadata=True
+            )
+            loss_mask = (
+                None if batch_metadata is None
+                else batch_metadata.get("target_loss_mask")
+            )
             
             # Forward pass (no gradient tracking needed)
-            logits, _ = self.model.forward(inputs)
-            loss, _ = self.model.compute_loss(logits, targets)
+            logits, _ = self.model.forward(
+                inputs, memory_metadata=batch_metadata
+            )
+            loss, _ = self.model.compute_loss(
+                logits, targets, loss_mask=loss_mask
+            )
             losses.append(loss)  # loss is already a Python float from scalar()
         
         # Compute mean on backend array (only sync once at the end)
@@ -726,7 +776,13 @@ class ExtendedTrainer:
             
             # Get batch
             with performance_scope("train.data_batch"):
-                inputs, targets = self.get_train_batch()
+                inputs, targets, batch_metadata = self.get_train_batch(
+                    return_metadata=True
+                )
+            loss_mask = (
+                None if batch_metadata is None
+                else batch_metadata.get("target_loss_mask")
+            )
             
             # Forward pass.  0056 can stop before the vocabulary projection so
             # the LM head is evaluated in bounded token tiles instead of one
@@ -744,6 +800,7 @@ class ExtendedTrainer:
                         activation_checkpoint=(
                             self.activation_checkpoint == "block"
                         ),
+                        memory_metadata=batch_metadata,
                     )
             else:
                 with performance_scope("train.model_forward"):
@@ -752,6 +809,7 @@ class ExtendedTrainer:
                         activation_checkpoint=(
                             self.activation_checkpoint == "block"
                         ),
+                        memory_metadata=batch_metadata,
                     )
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_forward")
@@ -764,11 +822,12 @@ class ExtendedTrainer:
             ):
                 diag = self.model.memory_routing_diagnostics(cache)
                 if diag is not None:
-                    selected = diag["selected_blocks"]
-                    unique_blocks = int(xp.unique(selected).size)
+                    unique_blocks = int(diag["unique_blocks"])
                     print(
                         "Memory router: "
                         f"unique_blocks={unique_blocks}, "
+                        f"valid_routes="
+                        f"{100.0 * _array_to_float(diag['valid_route_fraction']):.1f}%, "
                         f"entropy={_array_to_float(diag['entropy_mean']):.3f}, "
                         f"mean_source_distance="
                         f"{_array_to_float(diag['source_distance_mean']):,.0f} tokens"
@@ -795,7 +854,8 @@ class ExtendedTrainer:
 
                 with performance_scope("train.loss_forward"):
                     loss_backend, loss_cache = self.model.compute_loss(
-                        logits, targets, return_device_loss=True
+                        logits, targets, loss_mask=loss_mask,
+                        return_device_loss=True
                     )
                 loss_sum_backend += loss_backend
                 if memory_active:
@@ -823,6 +883,7 @@ class ExtendedTrainer:
                         head_input,
                         targets,
                         chunk_tokens=self.lm_head_chunk_tokens,
+                        loss_mask=loss_mask,
                         return_device_loss=True,
                         finite_trace=finite_trace,
                         target_slice=target_slice,
@@ -872,7 +933,7 @@ class ExtendedTrainer:
             # old locals.  Without these deletes, the previous microbatch's
             # entire backward cache and CE gradient can stay alive during the
             # next microbatch forward, artificially doubling activation peak.
-            del cache, loss_cache, inputs, targets
+            del cache, loss_cache, inputs, targets, batch_metadata, loss_mask
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_microbatch_release")
 
@@ -1055,9 +1116,23 @@ class ExtendedTrainer:
         # already been synchronized at this boundary; perf_counter therefore
         # measures the completed optimizer step without adding another sync.
         recent_step_seconds = []
-        tokens_per_optimizer_step = (
+        source_tokens_per_optimizer_step = (
             self.batch_size * self.seq_length * self.grad_accum_steps
         )
+        if self.memory_context is not None:
+            active_tokens_per_optimizer_step = (
+                self.batch_size
+                * int(self.memory_context.active_length)
+                * self.grad_accum_steps
+            )
+            target_tokens_per_optimizer_step = (
+                self.batch_size
+                * int(self.memory_context.target_length)
+                * self.grad_accum_steps
+            )
+        else:
+            active_tokens_per_optimizer_step = source_tokens_per_optimizer_step
+            target_tokens_per_optimizer_step = source_tokens_per_optimizer_step
         
         for step in range(num_steps):
             # Train step
@@ -1085,14 +1160,37 @@ class ExtendedTrainer:
                 elapsed = time.time() - start_time
                 steps_per_sec = (self.step - start_step) / elapsed
                 lr = self.optimizer.lr
-                precise_tokens_per_sec = (
-                    tokens_per_optimizer_step / max(precise_step_seconds, 1e-12)
+                precise_source_tokens_per_sec = (
+                    source_tokens_per_optimizer_step
+                    / max(precise_step_seconds, 1e-12)
                 )
                 rolling_step_seconds = float(np.mean(recent_step_seconds))
-                rolling_tokens_per_sec = (
-                    tokens_per_optimizer_step / max(rolling_step_seconds, 1e-12)
+                rolling_source_tokens_per_sec = (
+                    source_tokens_per_optimizer_step
+                    / max(rolling_step_seconds, 1e-12)
                 )
-                
+                precise_active_tokens_per_sec = (
+                    active_tokens_per_optimizer_step
+                    / max(precise_step_seconds, 1e-12)
+                )
+                precise_target_tokens_per_sec = (
+                    target_tokens_per_optimizer_step
+                    / max(precise_step_seconds, 1e-12)
+                )
+
+                if self.memory_context is not None:
+                    throughput_text = (
+                        f"source_tok/s={precise_source_tokens_per_sec:,.0f}, "
+                        f"active_tok/s={precise_active_tokens_per_sec:,.0f}, "
+                        f"target_tok/s={precise_target_tokens_per_sec:,.0f}, "
+                        f"source_tok/s_10={rolling_source_tokens_per_sec:,.0f}"
+                    )
+                else:
+                    throughput_text = (
+                        f"tok/s={precise_source_tokens_per_sec:,.0f}, "
+                        f"tok/s_10={rolling_source_tokens_per_sec:,.0f}"
+                    )
+
                 print(
                     f"Step {self.step}/{num_steps + start_step}: "
                     f"loss={avg_loss:.4f}, "
@@ -1100,8 +1198,7 @@ class ExtendedTrainer:
                     f"grad_norm={grad_norm:.4f}, "
                     f"{steps_per_sec:.2f} steps/sec, "
                     f"step_time={precise_step_seconds * 1000.0:.1f} ms, "
-                    f"tok/s={precise_tokens_per_sec:,.0f}, "
-                    f"tok/s_10={rolling_tokens_per_sec:,.0f}"
+                    f"{throughput_text}"
                 )
                 
                 # Log to CSV
@@ -1113,8 +1210,10 @@ class ExtendedTrainer:
                     "val_loss": val_loss if val_loss is not None else "",
                     "steps_per_sec": steps_per_sec,
                     "step_time_ms": precise_step_seconds * 1000.0,
-                    "tokens_per_sec": precise_tokens_per_sec,
-                    "tokens_per_sec_rolling_10": rolling_tokens_per_sec,
+                    # Keep the historical CSV/API key source-based for backward
+                    # compatibility.  Dense-memory runs print all three rates.
+                    "tokens_per_sec": precise_source_tokens_per_sec,
+                    "tokens_per_sec_rolling_10": rolling_source_tokens_per_sec,
                 })
             
             # Save using the completed optimizer-step count.

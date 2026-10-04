@@ -9,7 +9,7 @@ identity itself.
 from ..backend import xp, is_low_precision_dtype
 
 
-def selected_topk_softmax_forward(logits, k, output_dtype=None):
+def selected_topk_softmax_forward(logits, k, output_dtype=None, candidate_mask=None):
     """Select the largest ``k`` logits and normalize only those entries.
 
     Args:
@@ -17,6 +17,11 @@ def selected_topk_softmax_forward(logits, k, output_dtype=None):
         k: Number of candidates to select.
         output_dtype: Optional dtype for the returned weights.  Selection and
             softmax are promoted to FP32 for low-precision logits.
+        candidate_mask: Optional boolean tensor broadcastable to ``logits``.
+            Ineligible candidates are never assigned probability.  Rows with
+            fewer than ``k`` eligible candidates keep fixed-width outputs with
+            zero weight in the padded selected slots; completely empty rows
+            therefore return all-zero weights.
 
     Returns:
         weights: Selected softmax weights, shape ``logits.shape[:-1] + (k,)``.
@@ -37,15 +42,40 @@ def selected_topk_softmax_forward(logits, k, output_dtype=None):
         else logits
     )
 
+    if candidate_mask is not None:
+        candidate_mask = xp.asarray(candidate_mask, dtype=bool)
+        try:
+            candidate_mask = xp.broadcast_to(candidate_mask, logits.shape)
+        except ValueError as exc:
+            raise ValueError("candidate_mask must be broadcastable to logits") from exc
+        ranked_logits = xp.where(candidate_mask, logits_work, -xp.inf)
+    else:
+        ranked_logits = logits_work
+
     # argsort is intentionally retained rather than argpartition so ties are
     # handled deterministically in exactly the same way as the original MoE
     # router implementation.
-    indices = xp.argsort(-logits_work, axis=-1)[..., :k]
-    selected_logits = xp.take_along_axis(logits_work, indices, axis=-1)
+    indices = xp.argsort(-ranked_logits, axis=-1)[..., :k]
+    selected_logits = xp.take_along_axis(ranked_logits, indices, axis=-1)
+    if candidate_mask is None:
+        selected_valid = xp.ones(indices.shape, dtype=bool)
+    else:
+        selected_valid = xp.take_along_axis(candidate_mask, indices, axis=-1)
 
-    selected_max = xp.max(selected_logits, axis=-1, keepdims=True)
-    exp_selected = xp.exp(selected_logits - selected_max)
-    weights_work = exp_selected / xp.sum(exp_selected, axis=-1, keepdims=True)
+    # A row may contain fewer than k eligible candidates (or none at all) near
+    # the beginning of a stream.  Masked selected softmax keeps a fixed-width
+    # tensor without leaking probability into padded/ineligible entries.
+    safe_logits = xp.where(selected_valid, selected_logits, 0.0)
+    row_has_value = xp.any(selected_valid, axis=-1, keepdims=True)
+    selected_max = xp.max(
+        xp.where(selected_valid, safe_logits, -xp.inf), axis=-1, keepdims=True
+    )
+    selected_max = xp.where(row_has_value, selected_max, 0.0)
+    exp_selected = xp.where(
+        selected_valid, xp.exp(safe_logits - selected_max), 0.0
+    )
+    denom = xp.sum(exp_selected, axis=-1, keepdims=True)
+    weights_work = xp.where(denom > 0.0, exp_selected / xp.maximum(denom, 1e-30), 0.0)
 
     if output_dtype is not None and is_low_precision_dtype(output_dtype):
         weights = weights_work.astype(output_dtype, copy=False)
@@ -55,6 +85,7 @@ def selected_topk_softmax_forward(logits, k, output_dtype=None):
     cache = {
         "indices": indices,
         "weights_work": weights_work,
+        "selected_valid": selected_valid,
         "logits_shape": logits.shape,
     }
     return weights, indices, cache

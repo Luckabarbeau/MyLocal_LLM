@@ -304,6 +304,22 @@ def load_tokenizer_file(path: Path):
         return SimpleBPETokenizer.load(str(path))
 
 
+def tokenizer_eos_id(tokenizer) -> int:
+    token = getattr(tokenizer, "eos_token", None)
+    if token is None:
+        raise ValueError("loaded tokenizer does not expose eos_token")
+    mapping = getattr(tokenizer, "token_to_id", None)
+    if isinstance(mapping, dict):
+        value = mapping.get(token)
+    elif getattr(tokenizer, "_tokenizer", None) is not None:
+        value = tokenizer._tokenizer.token_to_id(token)
+    else:
+        value = None
+    if value is None:
+        raise ValueError(f"tokenizer does not contain EOS token {token!r}")
+    return int(value)
+
+
 def discover_existing_shards(shard_dir: Path, val_ratio: float):
     """Discover canonical packed shards first, then legacy shard names."""
     train = sorted(shard_dir.glob("train_shard_*.bin"))
@@ -488,7 +504,8 @@ def main():
         checkpoint_path = None
         config = model_config_from_name(args.model)
 
-    # 0058: long addressable memory and deep Transformer context are distinct.
+    # 0058A: the long historical store is external memory.  Only the dense
+    # current training window enters the deep Transformer.
     # Canonical values live in ModelConfig; environment overrides are provided
     # for benchmark/curriculum sweeps without changing parameter shapes.
     memory_cfg = config.memory_context
@@ -501,11 +518,17 @@ def main():
         "MINI_LLM_MEMORY_TARGET_TOKENS": "target_length",
         "MINI_LLM_MEMORY_QUERY_TOKENS": "router_query_length",
         "MINI_LLM_MEMORY_ROUTER_DIM": "router_dim",
+        "MINI_LLM_MEMORY_READ_HEADS": "read_heads",
+        "MINI_LLM_MEMORY_READ_KV_HEADS": "read_kv_heads",
+        "MINI_LLM_MEMORY_READ_QUERY_CHUNK": "read_query_chunk",
     }
     for env_name, field_name in override_map.items():
         raw = os.environ.get(env_name)
         if raw is not None:
             memory_overrides[field_name] = int(raw)
+    residual_scale_raw = os.environ.get("MINI_LLM_MEMORY_READER_RESIDUAL_SCALE")
+    if residual_scale_raw is not None:
+        memory_overrides["reader_residual_scale"] = float(residual_scale_raw)
     enable_raw = os.environ.get("MINI_LLM_HIERARCHICAL_MEMORY")
     if enable_raw is not None:
         memory_overrides["enabled"] = enable_raw.strip().lower() not in {
@@ -522,8 +545,8 @@ def main():
                 "hierarchical-memory models. Use a wide-500m-memory-* preset or "
                 "MINI_LLM_MEMORY_LENGTH instead."
             )
-        # The data loader samples the complete pre-target horizon plus target
-        # inputs, while config.context_length records the bounded deep length.
+        # The loader samples a historical store plus the dense current window;
+        # config.context_length records only the bounded deep current length.
         run_context_length = int(memory_cfg.source_input_length)
         config = dataclasses.replace(
             config, context_length=int(memory_cfg.active_length)
@@ -591,6 +614,7 @@ def main():
         else:
             tokenizer_vocab_size = None
 
+    eos_token_id = None
     if tokenizer_path.exists():
         tokenizer = load_tokenizer_file(tokenizer_path)
         loaded_vocab_size = len(tokenizer)
@@ -605,6 +629,7 @@ def main():
                 f"{loaded_vocab_size} != {tokenizer_vocab_size}"
             )
         tokenizer_vocab_size = loaded_vocab_size
+        eos_token_id = tokenizer_eos_id(tokenizer)
     elif tokenizer_vocab_size is None:
         raise FileNotFoundError(
             f"tokenizer not found at {tokenizer_path}; pass --tokenizer-path explicitly"
@@ -686,7 +711,7 @@ def main():
             config, memory_context=disabled_memory
         ).estimated_parameter_count()
         print(f"  Base Transformer parameters: {base_params:,}")
-        print(f"  Memory-router parameters:    {estimated_params - base_params:,}")
+        print(f"  External-memory parameters: {estimated_params - base_params:,}")
     if args.precision == "bf16-mixed":
         gib = 1024 ** 3
         gpu_param_grad = estimated_params * (2 + 4) / gib
@@ -825,6 +850,7 @@ def main():
         train_source_shards=train_source_shards,
         val_source_shards=val_source_shards,
         source_weights=source_weights,
+        eos_token_id=eos_token_id,
     )
 
     trainer.step = start_step

@@ -26,7 +26,11 @@ from mini_llm.backend import xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
-from mini_llm.data.token_shards import map_token_shard, create_minibatch
+from mini_llm.data.token_shards import (
+    map_token_shard,
+    create_minibatch,
+    create_hierarchical_memory_minibatch,
+)
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
@@ -138,7 +142,23 @@ class ExtendedTrainer:
         self.source_weights = self._normalize_source_weights(source_weights)
         self._validate_mixed_sources()
         self.batch_size = batch_size
-        self.seq_length = seq_length
+        self.seq_length = int(seq_length)
+        self.memory_context = (
+            model.config.memory_context if model.config.memory_context.enabled else None
+        )
+        if self.memory_context is not None:
+            expected_source = int(self.memory_context.source_input_length)
+            if self.seq_length != expected_source:
+                raise ValueError(
+                    "hierarchical-memory trainer seq_length must equal "
+                    f"memory_length + target_length ({expected_source}), got "
+                    f"{self.seq_length}"
+                )
+            self.active_seq_length = int(self.memory_context.active_length)
+            self.target_seq_length = int(self.memory_context.target_length)
+        else:
+            self.active_seq_length = self.seq_length
+            self.target_seq_length = self.seq_length
         self.grad_accum_steps = grad_accum_steps
         self.grad_clip = grad_clip  # Store grad_clip parameter
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
@@ -186,6 +206,16 @@ class ExtendedTrainer:
             raise ValueError(
                 "MINI_LLM_ACTIVATION_CHECKPOINT must be 'none' or 'block'"
             )
+
+        router_diag_raw = os.environ.get(
+            "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS", "0"
+        ).strip().lower()
+        self.memory_router_diagnostics = router_diag_raw not in {
+            "0", "false", "off", "no", ""
+        }
+        self.memory_router_diagnostics_interval = max(
+            1, int(os.environ.get("MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL", "100"))
+        )
         self.shard_cache_size = max(1, int(shard_cache_size))
         if self.train_source_shards is not None:
             # Keep at least the current shard for each corpus mapped.  Memmaps
@@ -282,7 +312,23 @@ class ExtendedTrainer:
                     f"{len(self.val_source_shards[name])} val shards"
                 )
         print(f"  Batch size: {batch_size} (effective: {self.effective_batch_size})")
-        print(f"  Sequence length: {seq_length}")
+        if self.memory_context is None:
+            print(f"  Sequence length: {self.seq_length}")
+        else:
+            cfg = self.memory_context
+            print("  Hierarchical memory routing: enabled")
+            print(f"  Addressable memory:          {cfg.memory_length:,} tokens")
+            print(f"  Distant searchable memory:  {cfg.distant_memory_length:,} tokens")
+            print(f"  Memory block size:           {cfg.block_size:,}")
+            print(f"  Searchable memory blocks:    {cfg.searchable_blocks:,}")
+            print(f"  Retrieved blocks:            {cfg.top_k_blocks:,}")
+            print(f"  Retrieved tokens:            {cfg.retrieved_length:,}")
+            print(f"  Recent context:              {cfg.recent_length:,}")
+            print(f"  Target tokens:               {cfg.target_length:,}")
+            print(f"  Active Transformer length:   {cfg.active_length:,}")
+            print(f"  Router query length:         {cfg.router_query_length:,}")
+            print(f"  Router dimension:            {cfg.router_dim:,}")
+            print(f"  Source sample input length:  {cfg.source_input_length:,}")
         if self.lm_head_chunk_tokens > 0:
             print(
                 f"  LM head: chunked/recomputed "
@@ -290,7 +336,7 @@ class ExtendedTrainer:
             )
         if self.activation_checkpoint == "block":
             n_blocks = len(self.model.blocks)
-            rows = int(batch_size) * int(seq_length)
+            rows = int(batch_size) * int(self.active_seq_length)
             model_itemsize = int(self.model.embedding.W.data.dtype.itemsize)
             residual_itemsize = (
                 4
@@ -489,13 +535,23 @@ class ExtendedTrainer:
                 self.current_train_shard_idx + 1
             ) % len(self.train_shard_paths)
 
-        inputs, targets = create_minibatch(
-            shard_data, self.batch_size, self.seq_length, rng=self.train_rng
-        )
-        
-        # Issue #16: Track tokens processed
+        if self.memory_context is None:
+            inputs, targets = create_minibatch(
+                shard_data, self.batch_size, self.seq_length, rng=self.train_rng
+            )
+        else:
+            inputs, targets = create_hierarchical_memory_minibatch(
+                shard_data,
+                self.batch_size,
+                self.memory_context.memory_length,
+                self.memory_context.target_length,
+                rng=self.train_rng,
+            )
+
+        # Preserve the historical counter as physical source tokens consumed.
+        # Performance reports separately expose target and active tokens/s.
         self.tokens_processed += self.batch_size * self.seq_length
-        
+
         return inputs, targets
     
     def get_val_batch(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -530,10 +586,19 @@ class ExtendedTrainer:
                 self.current_val_shard_idx + 1
             ) % len(self.val_shard_paths)
 
-        inputs, targets = create_minibatch(
-            shard_data, self.batch_size, self.seq_length, rng=self.val_rng
-        )
-        
+        if self.memory_context is None:
+            inputs, targets = create_minibatch(
+                shard_data, self.batch_size, self.seq_length, rng=self.val_rng
+            )
+        else:
+            inputs, targets = create_hierarchical_memory_minibatch(
+                shard_data,
+                self.batch_size,
+                self.memory_context.memory_length,
+                self.memory_context.target_length,
+                rng=self.val_rng,
+            )
+
         return inputs, targets
     
     def _record_memory_snapshot(self, records, label):
@@ -691,6 +756,24 @@ class ExtendedTrainer:
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_forward")
 
+            if (
+                self.memory_router_diagnostics
+                and self.memory_context is not None
+                and accum_step == 0
+                and self.step % self.memory_router_diagnostics_interval == 0
+            ):
+                diag = self.model.memory_routing_diagnostics(cache)
+                if diag is not None:
+                    selected = diag["selected_blocks"]
+                    unique_blocks = int(xp.unique(selected).size)
+                    print(
+                        "Memory router: "
+                        f"unique_blocks={unique_blocks}, "
+                        f"entropy={_array_to_float(diag['entropy_mean']):.3f}, "
+                        f"mean_source_distance="
+                        f"{_array_to_float(diag['source_distance_mean']):,.0f} tokens"
+                    )
+
             if not chunked_head:
                 if finite_trace is not None:
                     final_ok = bool(finite_trace[-1][1].item())
@@ -735,14 +818,20 @@ class ExtendedTrainer:
                 # persistent probability cache is created.  Only the scalar loss
                 # and compact hidden representation survive forward.
                 with performance_scope("train.loss_forward"):
+                    target_slice = cache.get("target_slice")
                     loss_backend, loss_cache = self.model.chunked_lm_head_loss_forward(
                         head_input,
                         targets,
                         chunk_tokens=self.lm_head_chunk_tokens,
                         return_device_loss=True,
                         finite_trace=finite_trace,
+                        target_slice=target_slice,
                     )
                 loss_sum_backend += loss_backend
+                if target_slice is not None:
+                    # The loss cache owns a compact copy of target hidden rows;
+                    # release the full active final-normalized output now.
+                    del head_input
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_forward")
                     self._record_memory_snapshot(memory_records, "after_logits_release")
@@ -771,7 +860,9 @@ class ExtendedTrainer:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
                 with performance_scope("train.model_backward"):
                     self.model.backward_body(dx_head, cache)
-                del dx_head, head_input
+                del dx_head
+                if target_slice is None:
+                    del head_input
 
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_backward")
@@ -843,17 +934,31 @@ class ExtendedTrainer:
         if profile_active:
             synchronize()
             elapsed = time.perf_counter() - profile_wall_start
-            tokens = self.batch_size * self.seq_length * self.grad_accum_steps
+            source_tokens = self.batch_size * self.seq_length * self.grad_accum_steps
+            active_tokens = (
+                self.batch_size * self.active_seq_length * self.grad_accum_steps
+            )
+            target_tokens = (
+                self.batch_size * self.target_seq_length * self.grad_accum_steps
+            )
             print()
             print(
                 performance_report(
                     title=f"Performance profile: optimizer step {self.step}"
                 )
             )
-            print(
-                f"Profiled optimizer-step wall time: {elapsed:.3f}s; "
-                f"effective throughput: {tokens / max(elapsed, 1e-12):,.0f} tokens/s"
-            )
+            if self.memory_context is None:
+                print(
+                    f"Profiled optimizer-step wall time: {elapsed:.3f}s; "
+                    f"effective throughput: "
+                    f"{source_tokens / max(elapsed, 1e-12):,.0f} tokens/s"
+                )
+            else:
+                denom = max(elapsed, 1e-12)
+                print(f"Profiled optimizer-step wall time: {elapsed:.3f}s")
+                print(f"  target tokens/s:  {target_tokens / denom:,.0f}")
+                print(f"  active tokens/s:  {active_tokens / denom:,.0f}")
+                print(f"  source tokens/s:  {source_tokens / denom:,.0f}")
             print()
             self._profiled_steps += 1
             configure_performance_profiler(False)

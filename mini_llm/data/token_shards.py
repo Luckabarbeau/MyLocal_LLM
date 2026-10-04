@@ -619,3 +619,64 @@ def _create_minibatch_packed(
     targets = all_tokens[:, 1:]  # shape (batch_size, seq_length)
     
     return inputs, targets
+
+
+def create_hierarchical_memory_minibatch(
+    shard_data: np.ndarray,
+    batch_size: int,
+    memory_length: int,
+    target_length: int,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Sample one long source window but return labels only for its target tail.
+
+    ``memory_length`` is the number of pre-target input tokens.  The returned
+    source input therefore has ``memory_length + target_length`` rows while
+    labels contain only ``target_length`` next-token targets corresponding to
+    the final target-input rows.  No full-length target array is materialized.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    memory_length = int(memory_length)
+    target_length = int(target_length)
+    batch_size = int(batch_size)
+    if memory_length <= 0 or target_length <= 0 or batch_size <= 0:
+        raise ValueError("batch_size, memory_length, and target_length must be positive")
+
+    input_length = memory_length + target_length
+    required_length = input_length + 1
+
+    if shard_data.ndim == 1:
+        total_tokens = int(len(shard_data))
+        if total_tokens < required_length:
+            raise ValueError(
+                f"Packed token stream has {total_tokens} tokens, but need "
+                f"{required_length} for hierarchical memory sampling"
+            )
+        max_start = total_tokens - required_length
+        starts = rng.integers(0, max_start + 1, batch_size)
+        indices = starts[:, None] + np.arange(required_length)[None, :]
+        all_tokens = shard_data[indices]
+    elif shard_data.ndim == 2:
+        num_docs, context_len = map(int, shard_data.shape)
+        max_start = context_len - required_length
+        if max_start < 0:
+            raise ValueError(
+                f"context_len ({context_len}) must be >= hierarchical window "
+                f"length ({required_length})"
+            )
+        doc_ids = rng.integers(0, num_docs, batch_size)
+        starts = rng.integers(0, max_start + 1, batch_size)
+        offsets = np.arange(required_length)
+        indices = doc_ids[:, None] * context_len + (starts[:, None] + offsets)
+        all_tokens = shard_data.ravel()[indices]
+    else:
+        raise ValueError("shard_data must be a 1D packed stream or 2D legacy shard")
+
+    source_inputs = all_tokens[:, :-1]
+    # Row j predicts all_tokens[j+1].  Only rows beginning at memory_length are
+    # target-input rows, so their labels start one token later here.
+    target_labels = all_tokens[
+        :, memory_length + 1 : memory_length + target_length + 1
+    ]
+    return source_inputs, target_labels

@@ -155,6 +155,12 @@ def _fused_inverse_rope_pack_bf16(dq, dk, dv, rope_cache, *, seq_len, d_head):
         return None
     cos = rope_cache["cos"]
     sin = rope_cache["sin"]
+    # The 0052B fused kernel assumes one contiguous position table shared by
+    # every batch item (row % seq_len).  Hierarchical memory can have different
+    # selected source positions per sample, so use the exact vectorized
+    # rope_backward fallback for batch-specific explicit position tables.
+    if int(cos.shape[0]) != 1 or int(sin.shape[0]) != 1:
+        return None
     if not is_bfloat16_dtype(cos.dtype) or not is_bfloat16_dtype(sin.dtype):
         return None
     if not cos.flags.c_contiguous or not sin.flags.c_contiguous:
@@ -794,7 +800,7 @@ class GQAAttention:
             )
         return dx2.reshape(b, t, self.d_model)
 
-    def forward(self, x, return_cache=True):
+    def forward(self, x, return_cache=True, position_ids=None):
         if x.ndim != 3:
             raise ValueError("attention input must have shape [B,T,D].")
         b, t, d_model = x.shape
@@ -831,8 +837,12 @@ class GQAAttention:
                 )
 
         with performance_scope("attention.rope.forward"):
-            q, q_rope_cache = rope_forward(q_pre, self.rope_base)
-            k, k_rope_cache = rope_forward(k_pre, self.rope_base)
+            q, q_rope_cache = rope_forward(
+                q_pre, self.rope_base, position_ids=position_ids
+            )
+            k, k_rope_cache = rope_forward(
+                k_pre, self.rope_base, position_ids=position_ids
+            )
 
         # 0055A: with packed QKV, V is a narrow strided view into the much
         # larger packed projection.  Q and K already have independent RoPE

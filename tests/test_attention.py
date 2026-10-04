@@ -171,3 +171,38 @@ def test_packed_qkv_parameter_grads_are_views_of_one_buffer(monkeypatch):
 
     attn.zero_grad()
     assert float(np.max(np.abs(packed))) == 0.0
+
+
+def test_attention_explicit_sequential_positions_match_implicit_path():
+    attn = make_attention()
+    x = xp.asarray(np.random.default_rng(5801).normal(size=(2, 4, 8)), dtype="float64")
+    implicit, _ = attn.forward(x)
+    positions = xp.asarray(np.tile(np.arange(4, dtype=np.int64), (2, 1)))
+    explicit, _ = attn.forward(x, position_ids=positions)
+    np.testing.assert_allclose(
+        np.asarray(explicit), np.asarray(implicit), rtol=1e-12, atol=1e-12
+    )
+
+
+def test_attention_gapped_position_ids_backward_direction():
+    attn = make_attention()
+    rng = np.random.default_rng(5802)
+    x = xp.asarray(rng.normal(size=(1, 4, 8)), dtype="float64")
+    dy = xp.asarray(rng.normal(size=(1, 4, 8)), dtype="float64")
+    positions = xp.asarray([[2, 7, 11, 19]], dtype=xp.int64)
+    _, cache = attn.forward(x, position_ids=positions)
+    attn.zero_grad()
+    dx = attn.backward(dy, cache)
+
+    direction = xp.asarray(rng.normal(size=x.shape), dtype="float64")
+    direction /= xp.sqrt(xp.sum(direction * direction))
+    eps = 1e-6
+
+    def objective(z):
+        out, _ = attn.forward(z, position_ids=positions)
+        return float(xp.sum(out * dy))
+
+    fd = (objective(x + eps * direction) - objective(x - eps * direction)) / (2 * eps)
+    analytic = float(xp.sum(dx * direction))
+    rel = abs(fd - analytic) / (abs(fd) + abs(analytic) + 1e-12)
+    assert rel < 3e-6

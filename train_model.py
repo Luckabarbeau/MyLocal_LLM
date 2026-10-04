@@ -56,7 +56,9 @@ def parse_args():
             "moe-525m-context-4k", "moe-1b-context-4k",
             "wide-500m-context-4k", "wide-500m-context-8k",
             "wide-500m-context-16k", "wide-500m-context-32k",
-            "wide-500m-context-64k", "large",
+            "wide-500m-context-64k",
+            "wide-500m-memory-16k", "wide-500m-memory-32k",
+            "wide-500m-memory-64k", "large",
         ],
         default="mini",
         help="Model size configuration",
@@ -284,6 +286,12 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.wide_500m_context_32k()
     if name == "wide-500m-context-64k":
         return ModelConfig.wide_500m_context_64k()
+    if name == "wide-500m-memory-16k":
+        return ModelConfig.wide_500m_memory_16k()
+    if name == "wide-500m-memory-32k":
+        return ModelConfig.wide_500m_memory_32k()
+    if name == "wide-500m-memory-64k":
+        return ModelConfig.wide_500m_memory_64k()
     if name == "large":
         return ModelConfig.large()
     raise ValueError(f"unknown model preset: {name}")
@@ -480,11 +488,52 @@ def main():
         checkpoint_path = None
         config = model_config_from_name(args.model)
 
-    run_context_length = (
-        int(args.context_length)
-        if args.context_length is not None
-        else int(config.context_length)
-    )
+    # 0058: long addressable memory and deep Transformer context are distinct.
+    # Canonical values live in ModelConfig; environment overrides are provided
+    # for benchmark/curriculum sweeps without changing parameter shapes.
+    memory_cfg = config.memory_context
+    memory_overrides = {}
+    override_map = {
+        "MINI_LLM_MEMORY_LENGTH": "memory_length",
+        "MINI_LLM_MEMORY_BLOCK_SIZE": "block_size",
+        "MINI_LLM_MEMORY_TOP_K_BLOCKS": "top_k_blocks",
+        "MINI_LLM_MEMORY_RECENT_TOKENS": "recent_length",
+        "MINI_LLM_MEMORY_TARGET_TOKENS": "target_length",
+        "MINI_LLM_MEMORY_QUERY_TOKENS": "router_query_length",
+        "MINI_LLM_MEMORY_ROUTER_DIM": "router_dim",
+    }
+    for env_name, field_name in override_map.items():
+        raw = os.environ.get(env_name)
+        if raw is not None:
+            memory_overrides[field_name] = int(raw)
+    enable_raw = os.environ.get("MINI_LLM_HIERARCHICAL_MEMORY")
+    if enable_raw is not None:
+        memory_overrides["enabled"] = enable_raw.strip().lower() not in {
+            "0", "false", "off", "no", ""
+        }
+    if memory_overrides:
+        memory_cfg = dataclasses.replace(memory_cfg, **memory_overrides)
+        config = dataclasses.replace(config, memory_context=memory_cfg)
+
+    if memory_cfg.enabled:
+        if args.context_length is not None:
+            raise ValueError(
+                "--context-length is a direct-sequence control and is ambiguous for "
+                "hierarchical-memory models. Use a wide-500m-memory-* preset or "
+                "MINI_LLM_MEMORY_LENGTH instead."
+            )
+        # The data loader samples the complete pre-target horizon plus target
+        # inputs, while config.context_length records the bounded deep length.
+        run_context_length = int(memory_cfg.source_input_length)
+        config = dataclasses.replace(
+            config, context_length=int(memory_cfg.active_length)
+        )
+    else:
+        run_context_length = (
+            int(args.context_length)
+            if args.context_length is not None
+            else int(config.context_length)
+        )
 
     # Prefer context-independent packed shards.  Mixed pretraining keeps each
     # source physically separate and samples source names according to explicit
@@ -518,6 +567,9 @@ def main():
                 "wide-500m-context-16k",
                 "wide-500m-context-32k",
                 "wide-500m-context-64k",
+                "wide-500m-memory-16k",
+                "wide-500m-memory-32k",
+                "wide-500m-memory-64k",
             }:
                 raise RuntimeError(
                     f"{args.model} requires pre-generated packed shards. "
@@ -558,12 +610,13 @@ def main():
             f"tokenizer not found at {tokenizer_path}; pass --tokenizer-path explicitly"
         )
 
-    config = dataclasses.replace(
-        config,
-        tokenizer_vocab_size=int(tokenizer_vocab_size),
-        context_length=run_context_length,
-        dtype=model_dtype,
-    )
+    replace_kwargs = {
+        "tokenizer_vocab_size": int(tokenizer_vocab_size),
+        "dtype": model_dtype,
+    }
+    if not config.memory_context.enabled:
+        replace_kwargs["context_length"] = run_context_length
+    config = dataclasses.replace(config, **replace_kwargs)
 
     print("=" * 60)
     print("Extended Training Configuration")
@@ -584,15 +637,37 @@ def main():
         print(f"Shard directory: {shard_dir}")
     print(f"Training shards: {len(train_shards)}")
     print(f"Validation shards: {len(val_shards)}")
-    print(f"Context length: {run_context_length}")
+    if config.memory_context.enabled:
+        mc = config.memory_context
+        print(f"Memory horizon: {mc.memory_length:,}")
+        print(f"Active Transformer length: {mc.active_length:,}")
+        print(f"Source sample input length: {run_context_length:,}")
+    else:
+        print(f"Context length: {run_context_length}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.grad_accum_steps}x")
     effective_sequences = args.batch_size * args.grad_accum_steps
-    tokens_per_microbatch = args.batch_size * run_context_length
-    tokens_per_optimizer_step = effective_sequences * run_context_length
+    source_tokens_per_microbatch = args.batch_size * run_context_length
+    source_tokens_per_optimizer_step = effective_sequences * run_context_length
     print(f"Effective batch: {effective_sequences} sequences")
-    print(f"Tokens/microbatch: {tokens_per_microbatch:,}")
-    print(f"Tokens/optimizer step: {tokens_per_optimizer_step:,}")
+    if config.memory_context.enabled:
+        print(f"Source tokens/microbatch: {source_tokens_per_microbatch:,}")
+        print(
+            f"Active tokens/microbatch: "
+            f"{args.batch_size * config.memory_context.active_length:,}"
+        )
+        print(
+            f"Target tokens/microbatch: "
+            f"{args.batch_size * config.memory_context.target_length:,}"
+        )
+        print(f"Source tokens/optimizer step: {source_tokens_per_optimizer_step:,}")
+        print(
+            f"Target tokens/optimizer step: "
+            f"{effective_sequences * config.memory_context.target_length:,}"
+        )
+    else:
+        print(f"Tokens/microbatch: {source_tokens_per_microbatch:,}")
+        print(f"Tokens/optimizer step: {source_tokens_per_optimizer_step:,}")
     print(f"Training steps: {args.total_steps}")
     print(f"Learning rate: {args.peak_lr}")
     print(f"Warmup: {args.warmup_steps} steps")
@@ -605,6 +680,13 @@ def main():
         f"Preset parameter estimate: {estimated_params:,} "
         f"({estimated_params / 1e6:.1f}M)"
     )
+    if config.memory_context.enabled:
+        disabled_memory = dataclasses.replace(config.memory_context, enabled=False)
+        base_params = dataclasses.replace(
+            config, memory_context=disabled_memory
+        ).estimated_parameter_count()
+        print(f"  Base Transformer parameters: {base_params:,}")
+        print(f"  Memory-router parameters:    {estimated_params - base_params:,}")
     if args.precision == "bf16-mixed":
         gib = 1024 ** 3
         gpu_param_grad = estimated_params * (2 + 4) / gib

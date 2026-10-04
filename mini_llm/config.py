@@ -1,6 +1,106 @@
 from dataclasses import dataclass, field
 import math
 
+@dataclass(frozen=True)
+class MemoryContextConfig:
+    """Top-level hierarchical memory routing configuration.
+
+    ``memory_length`` is the maximum *pre-target* history horizon.  The most
+    recent ``recent_length`` tokens are kept verbatim.  The preceding distant
+    history is searched in fixed blocks and only ``top_k_blocks`` are reopened
+    at full resolution for the deep Transformer.
+
+    The deep active length is therefore independent of ``memory_length`` when
+    the recent/target/retrieval budgets are fixed.
+    """
+
+    enabled: bool = False
+    memory_length: int = 65_536
+    recent_length: int = 4_096
+    target_length: int = 1_024
+    block_size: int = 128
+    top_k_blocks: int = 16
+    router_query_length: int = 512
+    router_dim: int = 64
+    query_pooling: str = "learned"
+    history_pooling: str = "mean"
+    router_weight_scale: float = 1.0
+
+    def __post_init__(self):
+        if not isinstance(self.enabled, bool):
+            raise TypeError("memory context enabled must be a bool")
+        positive = {
+            "memory_length": self.memory_length,
+            "recent_length": self.recent_length,
+            "target_length": self.target_length,
+            "block_size": self.block_size,
+            "top_k_blocks": self.top_k_blocks,
+            "router_query_length": self.router_query_length,
+            "router_dim": self.router_dim,
+        }
+        for name, value in positive.items():
+            if int(value) != value or int(value) <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.recent_length > self.memory_length:
+            raise ValueError("recent_length must not exceed memory_length")
+        if self.router_query_length > self.recent_length:
+            raise ValueError("router_query_length must not exceed recent_length")
+        if self.query_pooling not in {"mean", "last", "learned"}:
+            raise ValueError(
+                "query_pooling must be 'mean', 'last', or 'learned'"
+            )
+        if self.history_pooling not in {"mean", "first", "last", "learned"}:
+            raise ValueError(
+                "history_pooling must be 'mean', 'first', 'last', or 'learned'"
+            )
+        if not math.isfinite(float(self.router_weight_scale)):
+            raise ValueError("router_weight_scale must be finite")
+        if self.enabled:
+            if self.distant_memory_length < self.block_size:
+                raise ValueError(
+                    "enabled memory context requires at least one distant block"
+                )
+            if self.distant_memory_length % self.block_size != 0:
+                raise ValueError(
+                    "distant memory length must be divisible by block_size so no "
+                    "pre-target history tokens fall into an unsearchable remainder"
+                )
+            if self.searchable_blocks < self.top_k_blocks:
+                raise ValueError(
+                    "top_k_blocks exceeds the number of complete distant blocks"
+                )
+
+    @property
+    def distant_memory_length(self) -> int:
+        return int(self.memory_length) - int(self.recent_length)
+
+    @property
+    def searchable_blocks(self) -> int:
+        return self.distant_memory_length // int(self.block_size)
+
+    @property
+    def retrieved_length(self) -> int:
+        return int(self.block_size) * int(self.top_k_blocks)
+
+    @property
+    def active_length(self) -> int:
+        return self.retrieved_length + int(self.recent_length) + int(self.target_length)
+
+    @property
+    def source_input_length(self) -> int:
+        """Number of input token IDs required before the next-token labels."""
+        return int(self.memory_length) + int(self.target_length)
+
+
+def _coerce_memory_context(value):
+    if value is None:
+        return MemoryContextConfig(enabled=False)
+    if isinstance(value, MemoryContextConfig):
+        return value
+    if isinstance(value, dict):
+        return MemoryContextConfig(**value)
+    raise TypeError("memory_context must be MemoryContextConfig-compatible")
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -39,7 +139,15 @@ class ModelConfig:
     # layer. Otherwise provide one AttentionLayerConfig per Transformer layer.
     attention_layers: tuple | None = None
 
+    # Optional top-level memory selector.  This is deliberately separate from
+    # per-layer sparse/retrieval attention: long addressable history is reduced
+    # to a bounded active sequence *before* the expensive Transformer trunk.
+    memory_context: MemoryContextConfig = field(default_factory=MemoryContextConfig)
+
     def __post_init__(self):
+        object.__setattr__(
+            self, "memory_context", _coerce_memory_context(self.memory_context)
+        )
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if self.n_q_heads % self.n_kv_heads != 0:
@@ -124,6 +232,14 @@ class ModelConfig:
                         total += d
                     if router.history_pooling == "learned":
                         total += d
+
+        memory = self.memory_context
+        if memory.enabled:
+            total += 2 * d * int(memory.router_dim)
+            if memory.query_pooling == "learned":
+                total += d
+            if memory.history_pooling == "learned":
+                total += d
 
         return int(total)
 
@@ -482,6 +598,70 @@ class ModelConfig:
     @classmethod
     def wide_500m_context_64k(cls):
         return cls._wide_500m_sparse_context(65_536)
+
+    @classmethod
+    def _wide_500m_memory_context(cls, memory_length: int):
+        """Wide ~500M trunk with bounded ~7k active hierarchical context.
+
+        ``memory_length`` changes only the addressable pre-target horizon.  The
+        Transformer geometry is intentionally based on the ~7k active sequence,
+        not on the searchable history horizon.  The direct 0057A long-context
+        presets remain available separately for controlled comparisons.
+        """
+        memory_length = int(memory_length)
+        if memory_length not in {16_384, 32_768, 65_536}:
+            raise ValueError("hierarchical memory presets support 16k/32k/64k")
+
+        memory = MemoryContextConfig(
+            enabled=True,
+            memory_length=memory_length,
+            recent_length=4_096,
+            target_length=1_024,
+            block_size=128,
+            top_k_blocks=16,
+            router_query_length=512,
+            router_dim=64,
+            query_pooling="learned",
+            history_pooling="mean",
+            router_weight_scale=1.0,
+        )
+
+        # The trunk sees ~7,168 active tokens for every memory horizon.  Reuse
+        # the validated 8k sparse geometry rather than scaling dilation/global
+        # stride from the 16k/32k/64k addressable history.
+        base = cls._wide_500m_sparse_context(8_192)
+        return cls(
+            tokenizer_vocab_size=base.tokenizer_vocab_size,
+            context_length=memory.active_length,
+            n_layers=base.n_layers,
+            d_model=base.d_model,
+            n_q_heads=base.n_q_heads,
+            n_kv_heads=base.n_kv_heads,
+            d_head=base.d_head,
+            n_experts=base.n_experts,
+            top_k=base.top_k,
+            d_ff=base.d_ff,
+            rope_base=base.rope_base,
+            rms_eps=base.rms_eps,
+            init_std=base.init_std,
+            init_cutoff=base.init_cutoff,
+            router_logit_std=base.router_logit_std,
+            dtype=base.dtype,
+            attention_layers=base.attention_layers,
+            memory_context=memory,
+        )
+
+    @classmethod
+    def wide_500m_memory_16k(cls):
+        return cls._wide_500m_memory_context(16_384)
+
+    @classmethod
+    def wide_500m_memory_32k(cls):
+        return cls._wide_500m_memory_context(32_768)
+
+    @classmethod
+    def wide_500m_memory_64k(cls):
+        return cls._wide_500m_memory_context(65_536)
 
     @classmethod
     def large(cls):

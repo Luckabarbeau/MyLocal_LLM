@@ -104,7 +104,10 @@ class TransformerBlock:
         if hasattr(self.attention, "refresh_compute_buffers"):
             self.attention.refresh_compute_buffers()
     
-    def forward(self, x, finite_trace=None, layer_idx=None, return_cache=True):
+    def forward(
+        self, x, finite_trace=None, layer_idx=None, return_cache=True,
+        position_ids=None,
+    ):
         """
         Forward pass through the Transformer block.
         
@@ -142,10 +145,22 @@ class TransformerBlock:
         )
         if return_cache:
             with performance_scope("block.attention.forward"):
-                attn_out, attn_cache = self.attention.forward(norm1_compute)
+                if position_ids is None:
+                    attn_out, attn_cache = self.attention.forward(norm1_compute)
+                else:
+                    attn_out, attn_cache = self.attention.forward(
+                        norm1_compute, position_ids=position_ids
+                    )
         else:
             with performance_scope("block.attention.forward"):
-                attn_out = self.attention.forward(norm1_compute, return_cache=False)
+                if position_ids is None:
+                    attn_out = self.attention.forward(
+                        norm1_compute, return_cache=False
+                    )
+                else:
+                    attn_out = self.attention.forward(
+                        norm1_compute, return_cache=False, position_ids=position_ids
+                    )
             attn_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))

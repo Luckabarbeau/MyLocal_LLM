@@ -438,3 +438,57 @@ class TestExtendedTrainerStepAccounting:
             rows = log_file.read_text().strip().splitlines()
             logged_steps = [int(row.split(",", 1)[0]) for row in rows[1:]]
             assert logged_steps == list(range(1, 11))
+
+
+def test_0056_chunked_lm_head_training_step(monkeypatch):
+    """The training-only 0056 path should run without materialized full logits."""
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "4")
+    model = make_model()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_shard = Path(tmpdir) / "train_shard_00000.bin"
+        val_shard = Path(tmpdir) / "val_shard_00000.bin"
+        create_dummy_shard(train_shard, num_tokens=4096)
+        create_dummy_shard(val_shard, num_tokens=1024)
+        trainer = ExtendedTrainer(
+            model=model,
+            train_shard_paths=[str(train_shard)],
+            val_shard_paths=[str(val_shard)],
+            batch_size=2,
+            seq_length=8,
+            grad_accum_steps=1,
+            total_steps=10,
+            warmup_steps=1,
+            rng_seed=44,
+        )
+        loss, grad_norm = trainer.train_step()
+        assert np.isfinite(loss)
+        assert np.isfinite(grad_norm)
+        assert trainer.lm_head_chunk_tokens == 4
+
+
+def test_block_activation_checkpoint_training_step(monkeypatch):
+    """0057 trainer wiring should execute one checkpointed training step."""
+    monkeypatch.setenv("MINI_LLM_ACTIVATION_CHECKPOINT", "block")
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "8")
+    model = make_model()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_shard = Path(tmpdir) / "train_shard_00000.bin"
+        val_shard = Path(tmpdir) / "val_shard_00000.bin"
+        create_dummy_shard(train_shard, num_tokens=4096)
+        create_dummy_shard(val_shard, num_tokens=512)
+        trainer = ExtendedTrainer(
+            model=model,
+            train_shard_paths=[str(train_shard)],
+            val_shard_paths=[str(val_shard)],
+            batch_size=1,
+            seq_length=16,
+            grad_accum_steps=1,
+            total_steps=4,
+            warmup_steps=1,
+            rng_seed=73,
+        )
+        assert trainer.activation_checkpoint == "block"
+        loss, grad_norm = trainer.train_step()
+        assert np.isfinite(loss)
+        assert np.isfinite(grad_norm)

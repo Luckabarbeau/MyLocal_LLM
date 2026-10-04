@@ -148,3 +148,37 @@ def test_bfloat16_cross_entropy_can_reuse_logits_storage(monkeypatch):
     grad = cross_entropy_backward(cache)
     assert bool(xp.shares_memory(grad, logits))
     assert bool(xp.all(xp.isfinite(grad)))
+
+
+def test_0056_chunked_loss_and_recomputed_grad_match_bf16_cache_path():
+    import ml_dtypes
+    from mini_llm.ops.loss import (
+        chunked_bf16_cross_entropy_loss,
+        chunked_bf16_cross_entropy_grad_inplace,
+    )
+
+    rng = np.random.default_rng(141)
+    logits_np = rng.normal(size=(7, 31)).astype(np.float32)
+    targets_np = rng.integers(0, 31, size=(7,), dtype=np.int64)
+
+    logits_ref = xp.asarray(logits_np, dtype=ml_dtypes.bfloat16)
+    logits_new = logits_ref.copy()
+    targets = xp.asarray(targets_np, dtype="int64")
+
+    loss_ref, cache = cross_entropy_forward(logits_ref.copy(), targets)
+    grad_ref = cross_entropy_backward(cache)
+
+    loss_new = chunked_bf16_cross_entropy_loss(
+        logits_new, targets, normalizer_count=7.0
+    )
+    grad_new = chunked_bf16_cross_entropy_grad_inplace(
+        logits_new, targets, normalizer_count=7.0
+    )
+
+    assert abs(float(loss_new) - float(loss_ref)) < 2e-3
+    np.testing.assert_allclose(
+        np.asarray(grad_new, dtype=np.float32),
+        np.asarray(grad_ref, dtype=np.float32),
+        rtol=1e-2,
+        atol=2e-4,
+    )

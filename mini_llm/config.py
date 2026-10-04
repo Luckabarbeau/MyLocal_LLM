@@ -87,6 +87,46 @@ class ModelConfig:
                         )
             object.__setattr__(self, "attention_layers", layers)
 
+    def estimated_parameter_count(self) -> int:
+        """Return the exact trainable-array element count for this config.
+
+        The calculation mirrors the explicit modules without allocating model
+        tensors.  This is useful for preflighting large MoE presets before
+        committing several GiB of GPU/host memory.
+        """
+        d = int(self.d_model)
+        kv_width = int(self.n_kv_heads) * int(self.d_head)
+
+        # Untied token embedding + output projection + final RMSNorm.
+        total = 2 * int(self.vocab_size) * d + d
+
+        for layer_index in range(int(self.n_layers)):
+            # Two RMSNorm scales per Transformer block.
+            total += 2 * d
+
+            # Q, K, V and output attention projections.  Q width equals d_model.
+            total += 2 * d * d + 2 * d * kv_width
+
+            # MoE router (weight+bias) and SwiGLU expert matrices.
+            total += d * int(self.n_experts) + int(self.n_experts)
+            total += int(self.n_experts) * 3 * d * int(self.d_ff)
+
+            if self.attention_layers is not None:
+                # Retrieval heads with the same group share one ContextRouter.
+                groups = {}
+                for head in self.attention_layers[layer_index].heads:
+                    if isinstance(head, RetrievalAttentionConfig):
+                        groups.setdefault(head.group, head.context_router)
+                for router in groups.values():
+                    total += d * int(router.num_queries) * int(router.router_dim)
+                    total += d * int(router.router_dim)
+                    if router.query_pooling == "learned":
+                        total += d
+                    if router.history_pooling == "learned":
+                        total += d
+
+        return int(total)
+
     @property
     def residual_init_std(self) -> float:
         return self.init_std / (2.0 * self.n_layers) ** 0.5
@@ -231,6 +271,217 @@ class ModelConfig:
             d_ff=1_536,
             attention_layers=tuple(layer_attention for _ in range(8)),
         )
+
+    @classmethod
+    def moe_525m_context_4k(cls):
+        """~525.6M-parameter 4k MoE scaling preset.
+
+        The active trunk is deliberately identical to ``medium_context_4k``:
+        8 layers, d_model=512, d_ff=1536 and top-2 routing.  Capacity is scaled
+        by increasing the expert pool from 6 to 24, so activation geometry and
+        per-token expert FLOPs remain close to the validated 185M model while
+        total parameter/state memory grows by ~2.8x.
+        """
+        base = cls.medium_context_4k()
+        return cls(
+            tokenizer_vocab_size=base.tokenizer_vocab_size,
+            context_length=base.context_length,
+            n_layers=base.n_layers,
+            d_model=base.d_model,
+            n_q_heads=base.n_q_heads,
+            n_kv_heads=base.n_kv_heads,
+            d_head=base.d_head,
+            n_experts=24,
+            top_k=base.top_k,
+            d_ff=base.d_ff,
+            rope_base=base.rope_base,
+            rms_eps=base.rms_eps,
+            init_std=base.init_std,
+            init_cutoff=base.init_cutoff,
+            router_logit_std=base.router_logit_std,
+            dtype=base.dtype,
+            attention_layers=base.attention_layers,
+        )
+
+    @classmethod
+    def moe_1b_context_4k(cls):
+        """~978.7M-parameter near-1B 4k MoE stress-test preset.
+
+        As with the 525M preset, the active top-2 path stays 512-wide and
+        8 layers deep.  Forty-eight experts raise total capacity to just under
+        one billion parameters without multiplying the routed activation size.
+        This preset is intended first as a memory/throughput scaling test; long
+        training should also monitor expert utilization because the current MoE
+        does not yet add an explicit load-balancing auxiliary loss.
+        """
+        base = cls.medium_context_4k()
+        return cls(
+            tokenizer_vocab_size=base.tokenizer_vocab_size,
+            context_length=base.context_length,
+            n_layers=base.n_layers,
+            d_model=base.d_model,
+            n_q_heads=base.n_q_heads,
+            n_kv_heads=base.n_kv_heads,
+            d_head=base.d_head,
+            n_experts=48,
+            top_k=base.top_k,
+            d_ff=base.d_ff,
+            rope_base=base.rope_base,
+            rms_eps=base.rms_eps,
+            init_std=base.init_std,
+            init_cutoff=base.init_cutoff,
+            router_logit_std=base.router_logit_std,
+            dtype=base.dtype,
+            attention_layers=base.attention_layers,
+        )
+
+    @classmethod
+    def _wide_500m_sparse_context(cls, context_length: int):
+        """~500M wide/deep sparse-context model with only six experts.
+
+        Unlike :meth:`moe_525m_context_4k`, this family spends its parameter
+        budget on a wider/deeper shared trunk instead of a larger expert pool:
+
+        - 12 Transformer layers (vs. 8)
+        - d_model=768 / 12 query heads / 3 KV heads
+        - d_ff=2304
+        - 6 experts, top-2 routing
+
+        The five context presets share *identical parameter shapes* and use the
+        same RoPE base so model weights are architecture-compatible across the
+        4k -> 8k -> 16k -> 32k -> 64k ladder.  Sparse attention work per token
+        is kept bounded as context grows: local and retrieval spans stay fixed,
+        while dilation and global-anchor stride grow with the requested context.
+        """
+        context_length = int(context_length)
+        if context_length not in {4_096, 8_192, 16_384, 32_768, 65_536}:
+            raise ValueError(
+                "wide 500M sparse-context presets support 4k/8k/16k/32k/64k"
+            )
+
+        # Bound *implementation* complexity as well as mathematical sparsity.
+        #
+        # The current dilated kernel decomposes work into one residue phase per
+        # dilation value.  Letting dilation grow to 256 at 64k therefore turns
+        # the 4-phase 4k fast path into hundreds of small launches even though
+        # the number of useful key slots stays small.  Keep the medium-range
+        # dilated span at <=8k and cap dilation at 32; the deterministic global
+        # and learned retrieval heads provide the truly long-range 16k-64k
+        # connectivity.
+        local_window = 1_024 if context_length <= 8_192 else (
+            512 if context_length <= 32_768 else 256
+        )
+        if context_length <= 4_096:
+            dilated_window, dilation = 4_096, 4
+        elif context_length <= 8_192:
+            dilated_window, dilation = 8_192, 8
+        elif context_length <= 16_384:
+            dilated_window, dilation = 8_192, 16
+        else:
+            dilated_window, dilation = 8_192, 32
+
+        # Keep ~64 global anchors across the full sequence.  Retrieval routing
+        # is refreshed progressively less often as context grows so the number
+        # of route decisions stays O(10^2), not proportional to every token.
+        global_stride = max(128, context_length // 64)
+        if context_length <= 8_192:
+            routing_stride = 128
+        elif context_length <= 16_384:
+            routing_stride = 256
+        elif context_length <= 32_768:
+            routing_stride = 512
+        else:
+            routing_stride = 1_024
+
+        # The learned query pool previously grew to 2048 tokens at 64k and
+        # materialized a large [B,R,W,D] gather in every layer (and again during
+        # checkpoint replay).  A bounded recent summary is sufficient for the
+        # route-selection role and avoids that superlinear orchestration cost.
+        query_window = 512 if context_length <= 16_384 else 1_024
+        exclude_recent = max(1_024, context_length // 16)
+
+        router = ContextRouterConfig(
+            history_block_size=128,
+            routing_stride=routing_stride,
+            query_window=query_window,
+            router_dim=32,
+            top_k_blocks=4,
+            exclude_recent_tokens=exclude_recent,
+            query_pooling="learned",
+            history_pooling="mean",
+            num_queries=2,
+            router_weight_mode="logit_bias",
+            router_weight_scale=1.0,
+        )
+
+        # 12 heads: 6 local, 2 dilated, 2 deterministic global, 2 learned
+        # retrieval.  The two global heads use complementary anchor phases.
+        # Dilated heads intentionally share one phase so the current grouped
+        # fast path can process both heads together efficiently.
+        layer_attention = AttentionLayerConfig(
+            heads=(
+                LocalAttentionConfig(window=local_window),
+                LocalAttentionConfig(window=local_window),
+                LocalAttentionConfig(window=local_window),
+                LocalAttentionConfig(window=local_window),
+                LocalAttentionConfig(window=local_window),
+                LocalAttentionConfig(window=local_window),
+                DilatedAttentionConfig(
+                    window=dilated_window, dilation=dilation, offset=0
+                ),
+                DilatedAttentionConfig(
+                    window=dilated_window, dilation=dilation, offset=0
+                ),
+                GlobalSparseAttentionConfig(
+                    stride=global_stride, offset=0, include_current=True
+                ),
+                GlobalSparseAttentionConfig(
+                    stride=global_stride,
+                    offset=global_stride // 2,
+                    include_current=True,
+                ),
+                RetrievalAttentionConfig(router, group="far"),
+                RetrievalAttentionConfig(router, group="far"),
+            )
+        )
+
+        return cls(
+            tokenizer_vocab_size=65_280,
+            context_length=context_length,
+            n_layers=12,
+            d_model=768,
+            n_q_heads=12,
+            n_kv_heads=3,
+            d_head=64,
+            n_experts=6,
+            top_k=2,
+            d_ff=2_304,
+            # Use one long-context-friendly base throughout the ladder.  This
+            # project trains these models from scratch; no post-hoc RoPE scaling
+            # is being applied.
+            rope_base=1_000_000.0,
+            attention_layers=tuple(layer_attention for _ in range(12)),
+        )
+
+    @classmethod
+    def wide_500m_context_4k(cls):
+        return cls._wide_500m_sparse_context(4_096)
+
+    @classmethod
+    def wide_500m_context_8k(cls):
+        return cls._wide_500m_sparse_context(8_192)
+
+    @classmethod
+    def wide_500m_context_16k(cls):
+        return cls._wide_500m_sparse_context(16_384)
+
+    @classmethod
+    def wide_500m_context_32k(cls):
+        return cls._wide_500m_sparse_context(32_768)
+
+    @classmethod
+    def wide_500m_context_64k(cls):
+        return cls._wide_500m_sparse_context(65_536)
 
     @classmethod
     def large(cls):

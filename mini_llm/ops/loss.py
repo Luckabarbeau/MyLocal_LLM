@@ -148,15 +148,123 @@ def _get_fused_bf16_ce_module():
             probs_and_grad[idx] = float_to_bf16(g);
         }
     }
+
+    // 0056 loss-only forward for a transient LM-head tile.  No persistent
+    // probability tensor or FP32 exp workspace is needed: exp() is recomputed
+    // after the row reduction rather than stored.
+    extern "C" __global__
+    void bf16_cross_entropy_loss_only(
+        const unsigned short* logits,
+        const int* targets,
+        const float* loss_mask,
+        float* row_losses,
+        int rows,
+        int vocab,
+        int has_mask) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        const unsigned short* z = logits + ((long long)row) * vocab;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x)
+            local_max = fmaxf(local_max, bf16_to_float(z[j]));
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x)
+            local_sum += expf(bf16_to_float(z[j]) - row_max);
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+
+        if (threadIdx.x == 0) {
+            float target_logit = bf16_to_float(z[targets[row]]);
+            float loss = logf(sh[0]) + row_max - target_logit;
+            if (has_mask) loss *= loss_mask[row];
+            row_losses[row] = loss;
+        }
+    }
+
+    // 0056 recompute-backward kernel.  It converts the transient logits tile
+    // directly into dL/dlogits in-place.  Probability values are explicitly
+    // rounded through BF16 before subtraction/scaling so the arithmetic matches
+    // the established persistent-BF16 CE cache as closely as possible.
+    extern "C" __global__
+    void bf16_cross_entropy_grad_from_logits(
+        unsigned short* logits_and_grad,
+        const int* targets,
+        const float* loss_mask,
+        int rows,
+        int vocab,
+        float inv_normalizer,
+        float grad_scale,
+        int has_mask) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        unsigned short* z = logits_and_grad + ((long long)row) * vocab;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x)
+            local_max = fmaxf(local_max, bf16_to_float(z[j]));
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x)
+            local_sum += expf(bf16_to_float(z[j]) - row_max);
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv_sum = 1.0f / sh[0];
+        float row_scale = inv_normalizer * grad_scale;
+        if (has_mask) row_scale *= loss_mask[row];
+        int target = targets[row];
+
+        for (int j = threadIdx.x; j < vocab; j += blockDim.x) {
+            float p = expf(bf16_to_float(z[j]) - row_max) * inv_sum;
+            // Match the established BF16 probability-cache rounding boundary.
+            p = bf16_to_float(float_to_bf16(p));
+            if (j == target) p -= 1.0f;
+            z[j] = float_to_bf16(p * row_scale);
+        }
+    }
     """
     try:
         module = xp.RawModule(
             code=code,
             options=("--std=c++11",),
-            name_expressions=("bf16_cross_entropy_fwd", "bf16_cross_entropy_bwd"),
+            name_expressions=(
+                "bf16_cross_entropy_fwd",
+                "bf16_cross_entropy_bwd",
+                "bf16_cross_entropy_loss_only",
+                "bf16_cross_entropy_grad_from_logits",
+            ),
         )
         module.get_function("bf16_cross_entropy_fwd")
         module.get_function("bf16_cross_entropy_bwd")
+        module.get_function("bf16_cross_entropy_loss_only")
+        module.get_function("bf16_cross_entropy_grad_from_logits")
         _FUSED_BF16_CE_MODULE = module
     except Exception:
         strict = os.environ.get("MINI_LLM_FUSED_BF16_CE_STRICT", "0").strip().lower()
@@ -253,6 +361,116 @@ def _fused_bf16_cross_entropy_backward(probs_bf16, targets_i32, mask_f32, normal
             ),
         )
     return True
+
+
+def chunked_bf16_cross_entropy_loss(logits, targets, *, loss_mask=None, normalizer_count=None):
+    """0056 loss-only CE for one transient BF16 LM-head tile.
+
+    Returns a device FP32 scalar and does not retain probabilities.  The CUDA
+    fast path allocates only per-row losses; logits may be discarded immediately
+    after this call.  ``normalizer_count`` is the global token/mask normalizer,
+    not the local tile size.
+    """
+    flat_logits = logits.reshape(-1, logits.shape[-1])
+    n, vocab = map(int, flat_logits.shape)
+    targets_i32 = xp.asarray(targets, dtype=xp.int32).reshape(-1)
+    if targets_i32.shape[0] != n:
+        raise ValueError("targets must have one entry per logits row")
+    if normalizer_count is None:
+        normalizer_count = float(n)
+    normalizer_count = float(normalizer_count)
+    if normalizer_count <= 0.0:
+        raise ValueError("normalizer_count must be positive")
+    mask_f32 = None if loss_mask is None else xp.asarray(loss_mask, dtype=xp.float32).reshape(-1)
+    if mask_f32 is not None and mask_f32.shape[0] != n:
+        raise ValueError("loss_mask must have one entry per logits row")
+
+    module = _get_fused_bf16_ce_module() if _fused_bf16_ce_enabled(logits.dtype) else None
+    if module is not None and flat_logits.flags.c_contiguous:
+        if not targets_i32.flags.c_contiguous:
+            targets_i32 = xp.ascontiguousarray(targets_i32)
+        row_losses = xp.empty((n,), dtype=xp.float32)
+        if mask_f32 is None:
+            mask_arg = xp.empty((1,), dtype=xp.float32)
+            has_mask = 0
+        else:
+            mask_arg = mask_f32
+            has_mask = 1
+        threads = 256
+        module.get_function("bf16_cross_entropy_loss_only")(
+            (n,), (threads,),
+            (
+                flat_logits, targets_i32, mask_arg, row_losses,
+                np.int32(n), np.int32(vocab), np.int32(has_mask),
+            ),
+            shared_mem=threads * 4,
+        )
+        return xp.sum(row_losses) / normalizer_count
+
+    # Portable/reference fallback.  The tile is deliberately small.
+    work = flat_logits.astype(xp.float32, copy=True)
+    rows = xp.arange(n)
+    max_logit = xp.max(work, axis=-1, keepdims=True)
+    work -= max_logit
+    target_shifted = work[rows, targets_i32].copy()
+    xp.exp(work, out=work)
+    denom = xp.sum(work, axis=-1)
+    per_token = xp.log(denom) - target_shifted
+    if mask_f32 is not None:
+        per_token *= mask_f32
+    return xp.sum(per_token) / normalizer_count
+
+
+def chunked_bf16_cross_entropy_grad_inplace(
+    logits, targets, *, loss_mask=None, normalizer_count=None, grad_scale=1.0
+):
+    """0056 overwrite one transient BF16 logits tile with dL/dlogits."""
+    flat = logits.reshape(-1, logits.shape[-1])
+    n, vocab = map(int, flat.shape)
+    targets_i32 = xp.asarray(targets, dtype=xp.int32).reshape(-1)
+    if normalizer_count is None:
+        normalizer_count = float(n)
+    normalizer_count = float(normalizer_count)
+    mask_f32 = None if loss_mask is None else xp.asarray(loss_mask, dtype=xp.float32).reshape(-1)
+
+    module = _get_fused_bf16_ce_module() if _fused_bf16_ce_enabled(logits.dtype) else None
+    if module is not None and flat.flags.c_contiguous:
+        if not targets_i32.flags.c_contiguous:
+            targets_i32 = xp.ascontiguousarray(targets_i32)
+        if mask_f32 is None:
+            mask_arg = xp.empty((1,), dtype=xp.float32)
+            has_mask = 0
+        else:
+            mask_arg = mask_f32
+            has_mask = 1
+        threads = 256
+        module.get_function("bf16_cross_entropy_grad_from_logits")(
+            (n,), (threads,),
+            (
+                flat, targets_i32, mask_arg,
+                np.int32(n), np.int32(vocab),
+                np.float32(1.0 / normalizer_count), np.float32(grad_scale),
+                np.int32(has_mask),
+            ),
+            shared_mem=threads * 4,
+        )
+        return flat.reshape(logits.shape)
+
+    # Reference fallback.  Preserve the BF16 probability rounding boundary.
+    work = flat.astype(xp.float32, copy=True)
+    rows = xp.arange(n)
+    max_logit = xp.max(work, axis=-1, keepdims=True)
+    work -= max_logit
+    xp.exp(work, out=work)
+    work /= xp.sum(work, axis=-1, keepdims=True)
+    if is_bfloat16_dtype(logits.dtype):
+        work = work.astype(logits.dtype).astype(xp.float32)
+    work[rows, targets_i32] -= 1.0
+    if mask_f32 is not None:
+        work *= mask_f32[:, None]
+    work *= float(grad_scale) / normalizer_count
+    flat[...] = work.astype(logits.dtype)
+    return flat.reshape(logits.shape)
 
 
 def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False):

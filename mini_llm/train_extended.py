@@ -162,6 +162,30 @@ class ExtendedTrainer:
         else:
             self.memory_profile_steps = max(0, int(memory_profile_steps_raw))
         self._memory_profiled_steps = 0
+
+        # 0056: training-only chunked/recomputed vocabulary head.  A value of
+        # zero preserves the historical full-logits path used by inference and
+        # reference tests.  Positive values bound the number of token rows whose
+        # [tokens, vocab] logits exist at once.
+        self.lm_head_chunk_tokens = max(
+            0, int(os.environ.get("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"))
+        )
+
+        # 0057: block-level activation checkpoint/recompute.  ``none`` keeps
+        # the established full backward caches.  ``block`` stores only each
+        # Transformer block input and replays that block once during backward.
+        # This is the intended long-context mode for 16k/32k/64k training.
+        self.activation_checkpoint = os.environ.get(
+            "MINI_LLM_ACTIVATION_CHECKPOINT", "none"
+        ).strip().lower()
+        if self.activation_checkpoint in {"0", "false", "off", "no", ""}:
+            self.activation_checkpoint = "none"
+        elif self.activation_checkpoint in {"1", "true", "on", "yes"}:
+            self.activation_checkpoint = "block"
+        if self.activation_checkpoint not in {"none", "block"}:
+            raise ValueError(
+                "MINI_LLM_ACTIVATION_CHECKPOINT must be 'none' or 'block'"
+            )
         self.shard_cache_size = max(1, int(shard_cache_size))
         if self.train_source_shards is not None:
             # Keep at least the current shard for each corpus mapped.  Memmaps
@@ -259,6 +283,27 @@ class ExtendedTrainer:
                 )
         print(f"  Batch size: {batch_size} (effective: {self.effective_batch_size})")
         print(f"  Sequence length: {seq_length}")
+        if self.lm_head_chunk_tokens > 0:
+            print(
+                f"  LM head: chunked/recomputed "
+                f"({self.lm_head_chunk_tokens} token rows/tile)"
+            )
+        if self.activation_checkpoint == "block":
+            n_blocks = len(self.model.blocks)
+            rows = int(batch_size) * int(seq_length)
+            model_itemsize = int(self.model.embedding.W.data.dtype.itemsize)
+            residual_itemsize = (
+                4
+                if n_blocks > 0 and getattr(self.model.blocks[0], "use_fp32_residual", False)
+                else model_itemsize
+            )
+            checkpoint_bytes = rows * int(self.model.config.d_model) * (
+                model_itemsize + max(0, n_blocks - 1) * residual_itemsize
+            )
+            print(
+                "  Activations: block checkpoint/recompute "
+                f"({n_blocks} block inputs, ~{checkpoint_bytes / (1024 ** 3):.2f} GiB retained)"
+            )
         if getattr(self.optimizer, "moments_offloaded", False):
             label = (
                 "Optimizer state"
@@ -618,66 +663,116 @@ class ExtendedTrainer:
             with performance_scope("train.data_batch"):
                 inputs, targets = self.get_train_batch()
             
-            # Forward pass.  Optional lightweight finite tracing records
-            # asynchronous GPU reductions at key layer boundaries.  There is
-            # only a host synchronization when the final logits are bad.
+            # Forward pass.  0056 can stop before the vocabulary projection so
+            # the LM head is evaluated in bounded token tiles instead of one
+            # batch-sized [B,T,V] allocation.
             trace_active = (
                 self.finite_trace_start >= 0
                 and self.finite_trace_start <= self.step <= self.finite_trace_end
             )
             finite_trace = [] if trace_active else None
-            with performance_scope("train.model_forward"):
-                logits, cache = self.model.forward(inputs, finite_trace=finite_trace)
+            chunked_head = self.lm_head_chunk_tokens > 0
+            if chunked_head:
+                with performance_scope("train.model_forward"):
+                    head_input, cache = self.model.forward_body(
+                        inputs, finite_trace=finite_trace,
+                        activation_checkpoint=(
+                            self.activation_checkpoint == "block"
+                        ),
+                    )
+            else:
+                with performance_scope("train.model_forward"):
+                    logits, cache = self.model.forward(
+                        inputs, finite_trace=finite_trace,
+                        activation_checkpoint=(
+                            self.activation_checkpoint == "block"
+                        ),
+                    )
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_forward")
 
-            if finite_trace is not None:
-                final_ok = bool(finite_trace[-1][1].item())
-                if not final_ok:
-                    print(f"\nFINITE TRACE FAILURE at optimizer step {self.step}, accumulation microstep {accum_step}")
-                    first_bad = None
-                    for label, ok_backend in finite_trace:
-                        ok = bool(ok_backend.item())
-                        state = "OK" if ok else "NONFINITE"
-                        print(f"  {label}: {state}")
-                        if first_bad is None and not ok:
-                            first_bad = label
-                    raise ValueError(
-                        f"Nonfinite forward tensor at step {self.step}, "
-                        f"microstep {accum_step}; first bad stage: {first_bad}"
-                    )
-            
-            # Numerical debug: check logits are finite
-            if not self._check_finite(logits, f"logits_step_{self.step}"):
-                raise ValueError(f"Nonfinite logits detected at step {self.step}!")
-            
-            with performance_scope("train.loss_forward"):
-                loss_backend, loss_cache = self.model.compute_loss(
-                    logits, targets, return_device_loss=True
-                )
-            loss_sum_backend += loss_backend
-            if memory_active:
-                self._record_memory_snapshot(memory_records, "after_loss_forward")
+            if not chunked_head:
+                if finite_trace is not None:
+                    final_ok = bool(finite_trace[-1][1].item())
+                    if not final_ok:
+                        print(f"\nFINITE TRACE FAILURE at optimizer step {self.step}, accumulation microstep {accum_step}")
+                        first_bad = None
+                        for label, ok_backend in finite_trace:
+                            ok = bool(ok_backend.item())
+                            state = "OK" if ok else "NONFINITE"
+                            print(f"  {label}: {state}")
+                            if first_bad is None and not ok:
+                                first_bad = label
+                        raise ValueError(
+                            f"Nonfinite forward tensor at step {self.step}, "
+                            f"microstep {accum_step}; first bad stage: {first_bad}"
+                        )
+                if not self._check_finite(logits, f"logits_step_{self.step}"):
+                    raise ValueError(f"Nonfinite logits detected at step {self.step}!")
 
-            # The loss cache owns everything needed for backward.  In ordinary
-            # BF16 CE this immediately releases the separate logits allocation;
-            # in 0055A in-place CE it merely drops the redundant Python alias.
-            del logits
-            if memory_active:
-                self._record_memory_snapshot(memory_records, "after_logits_release")
-            
-            # Backward pass - apply loss scaling to d_logits before backward
-            with performance_scope("train.loss_backward"):
-                d_logits = self.model.backward_loss(loss_cache)
-            if memory_active:
-                self._record_memory_snapshot(memory_records, "after_loss_backward")
-            
-            # Scale the gradient by loss_scale for mixed precision (trainer owns it)
-            if self.loss_scale != 1.0:
-                d_logits = d_logits * self.loss_scale
-            
-            with performance_scope("train.model_backward"):
-                self.model.backward(d_logits, cache)
+                with performance_scope("train.loss_forward"):
+                    loss_backend, loss_cache = self.model.compute_loss(
+                        logits, targets, return_device_loss=True
+                    )
+                loss_sum_backend += loss_backend
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_loss_forward")
+                del logits
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_logits_release")
+
+                with performance_scope("train.loss_backward"):
+                    d_logits = self.model.backward_loss(loss_cache)
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_loss_backward")
+                if self.loss_scale != 1.0:
+                    d_logits = d_logits * self.loss_scale
+                with performance_scope("train.model_backward"):
+                    self.model.backward(d_logits, cache)
+                del d_logits
+            else:
+                # The chunked head owns projection+CE.  No full logits tensor or
+                # persistent probability cache is created.  Only the scalar loss
+                # and compact hidden representation survive forward.
+                with performance_scope("train.loss_forward"):
+                    loss_backend, loss_cache = self.model.chunked_lm_head_loss_forward(
+                        head_input,
+                        targets,
+                        chunk_tokens=self.lm_head_chunk_tokens,
+                        return_device_loss=True,
+                        finite_trace=finite_trace,
+                    )
+                loss_sum_backend += loss_backend
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_loss_forward")
+                    self._record_memory_snapshot(memory_records, "after_logits_release")
+
+                if finite_trace is not None:
+                    final_ok = bool(finite_trace[-1][1].item())
+                    if not final_ok:
+                        first_bad = None
+                        print(f"\nFINITE TRACE FAILURE at optimizer step {self.step}, accumulation microstep {accum_step}")
+                        for label, ok_backend in finite_trace:
+                            ok = bool(ok_backend.item())
+                            state = "OK" if ok else "NONFINITE"
+                            print(f"  {label}: {state}")
+                            if first_bad is None and not ok:
+                                first_bad = label
+                        raise ValueError(
+                            f"Nonfinite forward tensor at step {self.step}, "
+                            f"microstep {accum_step}; first bad stage: {first_bad}"
+                        )
+
+                with performance_scope("train.loss_backward"):
+                    dx_head = self.model.chunked_lm_head_backward(
+                        loss_cache, grad_scale=self.loss_scale
+                    )
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_loss_backward")
+                with performance_scope("train.model_backward"):
+                    self.model.backward_body(dx_head, cache)
+                del dx_head, head_input
+
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_backward")
 
@@ -686,7 +781,7 @@ class ExtendedTrainer:
             # old locals.  Without these deletes, the previous microbatch's
             # entire backward cache and CE gradient can stay alive during the
             # next microbatch forward, artificially doubling activation peak.
-            del cache, loss_cache, d_logits, inputs, targets
+            del cache, loss_cache, inputs, targets
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_microbatch_release")
 

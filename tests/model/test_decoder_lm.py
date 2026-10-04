@@ -179,3 +179,92 @@ def test_decoder_lm_forward_without_cache_matches_training_forward():
 
     assert logits_forward_only.shape == logits_cached.shape
     assert xp.allclose(logits_forward_only, logits_cached, rtol=1e-12, atol=1e-12)
+
+
+def test_chunked_lm_head_matches_full_loss_and_gradients():
+    """0056 chunked/recomputed head should match the full float32 reference."""
+    config = ModelConfig.tiny_inspection()
+    full = DecoderLanguageModel(config, rng_seed=31, dtype="float32")
+    chunked = DecoderLanguageModel(config, rng_seed=31, dtype="float32")
+    rng = np.random.default_rng(32)
+    token_ids = xp.asarray(
+        rng.integers(0, config.vocab_size, size=(2, 7)), dtype="int64"
+    )
+    targets = xp.asarray(
+        rng.integers(0, config.vocab_size, size=(2, 7)), dtype="int64"
+    )
+
+    logits, full_cache = full.forward(token_ids)
+    full_loss, full_loss_cache = full.compute_loss(logits, targets)
+    d_logits = full.backward_loss(full_loss_cache)
+    full.zero_grad()
+    full.backward(d_logits, full_cache)
+
+    head, body_cache = chunked.forward_body(token_ids)
+    chunk_loss, chunk_loss_cache = chunked.chunked_lm_head_loss_forward(
+        head, targets, chunk_tokens=5
+    )
+    chunked.zero_grad()
+    dx = chunked.chunked_lm_head_backward(chunk_loss_cache)
+    chunked.backward_body(dx, body_cache)
+
+    assert np.isclose(chunk_loss, full_loss, rtol=2e-6, atol=2e-6)
+    for p_ref, p_new in zip(full.parameters(), chunked.parameters()):
+        assert p_ref.name == p_new.name
+        assert xp.allclose(p_new.grad, p_ref.grad, rtol=2e-5, atol=2e-6), p_ref.name
+
+
+def test_forward_body_plus_projection_matches_forward():
+    """0056 body split must not change the ordinary inference/training API."""
+    config = ModelConfig.tiny_inspection()
+    model = DecoderLanguageModel(config, rng_seed=33, dtype="float32")
+    token_ids = xp.asarray(
+        np.random.default_rng(34).integers(0, config.vocab_size, size=(1, 6)),
+        dtype="int64",
+    )
+    logits, _ = model.forward(token_ids)
+    head = model.forward_body(token_ids, return_cache=False)
+    logits_split, _ = model.output_proj.forward(head)
+    assert xp.allclose(logits_split, logits, rtol=1e-6, atol=1e-6)
+
+
+def test_block_activation_checkpoint_matches_regular_body_and_gradients():
+    """0057 block recomputation must preserve body outputs and parameter grads."""
+    config = ModelConfig(
+        tokenizer_vocab_size=128,
+        context_length=16,
+        n_layers=3,
+        d_model=32,
+        n_q_heads=4,
+        n_kv_heads=2,
+        d_head=8,
+        n_experts=3,
+        top_k=2,
+        d_ff=64,
+    )
+    reference = DecoderLanguageModel(config, rng_seed=71, dtype="float64")
+    checkpointed = DecoderLanguageModel(config, rng_seed=71, dtype="float64")
+    rng = np.random.default_rng(72)
+    token_ids = xp.asarray(
+        rng.integers(0, config.vocab_size, size=(2, 11)), dtype="int64"
+    )
+
+    head_ref, cache_ref = reference.forward_body(token_ids)
+    head_ckpt, cache_ckpt = checkpointed.forward_body(
+        token_ids, activation_checkpoint=True
+    )
+
+    assert xp.allclose(head_ckpt, head_ref, rtol=1e-12, atol=1e-12)
+    assert cache_ckpt["activation_checkpoint"] == "block"
+    assert "block_caches" not in cache_ckpt
+    assert len(cache_ckpt["block_checkpoints"]) == config.n_layers
+
+    dx = xp.asarray(rng.normal(size=head_ref.shape), dtype="float64")
+    reference.zero_grad()
+    checkpointed.zero_grad()
+    reference.backward_body(dx.copy(), cache_ref)
+    checkpointed.backward_body(dx.copy(), cache_ckpt)
+
+    for p_ref, p_ckpt in zip(reference.parameters(), checkpointed.parameters()):
+        assert p_ref.name == p_ckpt.name
+        assert xp.allclose(p_ckpt.grad, p_ref.grad, rtol=2e-10, atol=2e-11), p_ref.name

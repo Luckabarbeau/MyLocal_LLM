@@ -29,6 +29,7 @@ Usage:
 import argparse
 import dataclasses
 import json
+import os
 import time
 from pathlib import Path
 
@@ -50,7 +51,13 @@ def parse_args():
     # Model selection
     parser.add_argument(
         "--model",
-        choices=["micro", "mini", "small", "medium", "medium-context-4k", "large"],
+        choices=[
+            "micro", "mini", "small", "medium", "medium-context-4k",
+            "moe-525m-context-4k", "moe-1b-context-4k",
+            "wide-500m-context-4k", "wide-500m-context-8k",
+            "wide-500m-context-16k", "wide-500m-context-32k",
+            "wide-500m-context-64k", "large",
+        ],
         default="mini",
         help="Model size configuration",
     )
@@ -263,6 +270,20 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.medium()
     if name == "medium-context-4k":
         return ModelConfig.medium_context_4k()
+    if name == "moe-525m-context-4k":
+        return ModelConfig.moe_525m_context_4k()
+    if name == "moe-1b-context-4k":
+        return ModelConfig.moe_1b_context_4k()
+    if name == "wide-500m-context-4k":
+        return ModelConfig.wide_500m_context_4k()
+    if name == "wide-500m-context-8k":
+        return ModelConfig.wide_500m_context_8k()
+    if name == "wide-500m-context-16k":
+        return ModelConfig.wide_500m_context_16k()
+    if name == "wide-500m-context-32k":
+        return ModelConfig.wide_500m_context_32k()
+    if name == "wide-500m-context-64k":
+        return ModelConfig.wide_500m_context_64k()
     if name == "large":
         return ModelConfig.large()
     raise ValueError(f"unknown model preset: {name}")
@@ -488,9 +509,18 @@ def main():
             shard_dir, args.val_ratio
         )
         if not train_shards:
-            if args.model == "medium-context-4k":
+            if args.model in {
+                "medium-context-4k",
+                "moe-525m-context-4k",
+                "moe-1b-context-4k",
+                "wide-500m-context-4k",
+                "wide-500m-context-8k",
+                "wide-500m-context-16k",
+                "wide-500m-context-32k",
+                "wide-500m-context-64k",
+            }:
                 raise RuntimeError(
-                    "medium-context-4k requires pre-generated packed shards. "
+                    f"{args.model} requires pre-generated packed shards. "
                     "Run generate_packed_cosmopedia_shards.py or use "
                     "--mixed-shard-root."
                 )
@@ -557,13 +587,47 @@ def main():
     print(f"Context length: {run_context_length}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.grad_accum_steps}x")
-    print(f"Effective batch: {args.batch_size * args.grad_accum_steps}")
+    effective_sequences = args.batch_size * args.grad_accum_steps
+    tokens_per_microbatch = args.batch_size * run_context_length
+    tokens_per_optimizer_step = effective_sequences * run_context_length
+    print(f"Effective batch: {effective_sequences} sequences")
+    print(f"Tokens/microbatch: {tokens_per_microbatch:,}")
+    print(f"Tokens/optimizer step: {tokens_per_optimizer_step:,}")
     print(f"Training steps: {args.total_steps}")
     print(f"Learning rate: {args.peak_lr}")
     print(f"Warmup: {args.warmup_steps} steps")
     if args.profile_steps:
         print(f"Performance profiling: first {args.profile_steps} optimizer step(s)")
     print()
+
+    estimated_params = config.estimated_parameter_count()
+    print(
+        f"Preset parameter estimate: {estimated_params:,} "
+        f"({estimated_params / 1e6:.1f}M)"
+    )
+    if args.precision == "bf16-mixed":
+        gib = 1024 ** 3
+        gpu_param_grad = estimated_params * (2 + 4) / gib
+        print(
+            "  BF16 weights + FP32 gradients: "
+            f"~{gpu_param_grad:.2f} GiB GPU before activations/workspaces"
+        )
+        offload_mode = os.environ.get(
+            "MINI_LLM_OPTIMIZER_OFFLOAD", "none"
+        ).strip().lower()
+        if offload_mode == "full":
+            host_state = estimated_params * 12 / gib
+            print(
+                "  Full optimizer offload state: "
+                f"~{host_state:.2f} GiB host RAM"
+            )
+        elif offload_mode == "moments":
+            host_state = estimated_params * 8 / gib
+            gpu_master = estimated_params * 4 / gib
+            print(
+                "  Moment offload state: "
+                f"~{host_state:.2f} GiB host + {gpu_master:.2f} GiB GPU master"
+            )
 
     model = setup_model(config, dtype=model_dtype)
 

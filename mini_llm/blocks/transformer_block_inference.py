@@ -2,7 +2,9 @@
 
 
 import numpy as _np
-from mini_llm.backend import xp, BACKEND_NAME
+from mini_llm.backend import (
+    xp, BACKEND_NAME, resolve_dtype, is_low_precision_dtype,
+)
 from mini_llm.ops.attention_inference import GQAAttentionInference
 from mini_llm.ops.rmsnorm_inference import RMSNormInference
 
@@ -28,7 +30,9 @@ class TransformerBlockInference:
         n_experts: int,
         top_k: int,
         dtype: str = "float32",
-        max_context: int = None
+        max_context: int = None,
+        attention_config=None,
+        layer_idx: int = 0,
     ):
         """
         Initialize inference Transformer block.
@@ -50,6 +54,9 @@ class TransformerBlockInference:
         self.d_ff = d_ff
         self.n_experts = n_experts
         self.top_k = top_k
+        self.layer_idx = int(layer_idx)
+        self.compute_dtype = resolve_dtype(dtype)
+        self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
         
         # RMSNorms (weights shared with training)
         self.norm1 = RMSNormInference(d_model, dtype=dtype)
@@ -62,7 +69,8 @@ class TransformerBlockInference:
             n_kv_heads=n_kv_heads,
             d_head=d_head,
             dtype=dtype,
-            max_context=max_context
+            max_context=max_context,
+            attention_config=attention_config,
         )
         
         # MoE (weights shared with training)
@@ -88,11 +96,15 @@ class TransformerBlockInference:
             training_block.attention.Wq.data,
             training_block.attention.Wk.data,
             training_block.attention.Wv.data,
-            training_block.attention.Wo.data
+            training_block.attention.Wo.data,
+            training_attention=training_block.attention,
         )
         self.moe.set_weights(training_block.moe)
 
-    def prefill(self, x, k_cache, v_cache, start_pos):
+    def prefill(
+        self, x, k_cache, v_cache, start_pos, router_input_cache=None,
+        retrieval_route_cache=None,
+    ):
         """
         Prefill through this block.
         
@@ -105,31 +117,46 @@ class TransformerBlockInference:
         Returns:
             y: Output [B, T_prompt, D]
         """
-        # First residual branch: attention (return all positions)
+        # Match the training block's mixed-precision policy exactly: residual
+        # streams stay FP32 while only normalized branch inputs are cast back
+        # to the model compute dtype for tensor-core GEMMs.
+        if self.use_fp32_residual:
+            x = x.astype(xp.float32, copy=False)
         residual1 = x
         h = self.norm1.forward(x)
-        
-        # Ensure h is on the correct backend for attention operations
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
-        
-        a = self.attention.prefill(h, k_cache, v_cache, start_pos, return_all=True)
-        x = residual1 + a
-        
-        # Second residual branch: MoE
+
+        a = self.attention.prefill(
+            h, k_cache, v_cache, start_pos, return_all=True,
+            router_input_cache=router_input_cache,
+            retrieval_route_cache=retrieval_route_cache,
+            layer_idx=self.layer_idx,
+        )
+        a_residual = (
+            a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
+        )
+        x = residual1 + a_residual
+
         residual2 = x
         h = self.norm2.forward(x)
-        
-        # Ensure h is on the correct backend for MoE operations
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
-        
-        m = self.moe.prefill(h)
-        y = residual2 + m
-        
-        return y
 
-    def decode_one(self, x, k_cache, v_cache, start_pos):
+        m = self.moe.prefill(h)
+        m_residual = (
+            m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
+        )
+        return residual2 + m_residual
+
+    def decode_one(
+        self, x, k_cache, v_cache, start_pos, router_input_cache=None,
+        retrieval_route_cache=None,
+    ):
         """
         Decode one token through this block.
         
@@ -142,26 +169,34 @@ class TransformerBlockInference:
         Returns:
             y: Output [B, 1, D]
         """
-        # First residual branch: attention
+        if self.use_fp32_residual:
+            x = x.astype(xp.float32, copy=False)
+        residual1 = x
         h = self.norm1.forward(x)
-        
-        # Ensure h is on the correct backend for attention operations
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
-        
-        a = self.attention.decode_one(h, k_cache, v_cache, start_pos)
-        
-        x = x + a
-        
-        # Second residual branch: MoE
+
+        a = self.attention.decode_one(
+            h, k_cache, v_cache, start_pos,
+            router_input_cache=router_input_cache,
+            retrieval_route_cache=retrieval_route_cache,
+            layer_idx=self.layer_idx,
+        )
+        a_residual = (
+            a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
+        )
+        x = residual1 + a_residual
+
+        residual2 = x
         h = self.norm2.forward(x)
-        
-        # Ensure h is on the correct backend for MoE operations
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
-        
         m = self.moe.decode_one(h)
-        
-        y = x + m
-        
-        return y
+        m_residual = (
+            m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
+        )
+        return residual2 + m_residual

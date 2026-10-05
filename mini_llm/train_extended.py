@@ -333,6 +333,8 @@ class ExtendedTrainer:
         
         # Logging setup
         self._setup_logging()
+        self._setup_memory_metrics_logging()
+        self._last_step_memory_token_stats = None
         
         # Issue #13: Initialize deterministic validation block set
         self._init_validation_blocks()
@@ -488,6 +490,228 @@ class ExtendedTrainer:
         # For now, use the same as sampling - but could pre-compute specific blocks
         self._val_block_indices = None  # Dynamic sampling for flexibility
     
+    @staticmethod
+    def _history_diagnostic_edges(history_capacity: int) -> List[int]:
+        """Return stable history-length bins clipped to the configured horizon."""
+        history_capacity = max(0, int(history_capacity))
+        if history_capacity == 0:
+            return [0, 1]
+        anchors = (0, 4096, 8192, 16384, 32768, 49152, history_capacity)
+        edges = sorted({min(history_capacity, max(0, int(value))) for value in anchors})
+        if edges[0] != 0:
+            edges.insert(0, 0)
+        if edges[-1] != history_capacity:
+            edges.append(history_capacity)
+        if len(edges) == 1:
+            edges.append(history_capacity + 1)
+        return edges
+
+    def _empty_memory_token_stats(self) -> Optional[Dict[str, Any]]:
+        """Create a CPU-only accumulator for document-aware token accounting."""
+        if self.memory_context is None:
+            return None
+        history_capacity = int(self.memory_context.distant_memory_length)
+        edges = self._history_diagnostic_edges(history_capacity)
+        return {
+            "microbatches": 0,
+            "samples": 0,
+            "valid_history_tokens": 0,
+            "valid_source_tokens": 0,
+            "valid_active_tokens": 0,
+            "supervised_tokens": 0,
+            "history_sum": 0,
+            "history_min": None,
+            "history_max": 0,
+            "history_edges": edges,
+            "history_hist": [0] * (len(edges) - 1),
+        }
+
+    def _accumulate_memory_batch_token_stats(
+        self,
+        stats: Optional[Dict[str, Any]],
+        batch_metadata: Optional[Dict[str, Any]],
+        effective_loss_mask,
+    ) -> None:
+        """Account real same-document tokens without touching the GPU stream.
+
+        Hierarchical-memory tensors have a fixed padded capacity.  The sampler's
+        ``history_valid_starts`` and ``target_valid_lengths`` arrays are CPU
+        metadata and therefore let us measure semantic token coverage without
+        introducing a CUDA synchronization into training.
+        """
+        if stats is None or self.memory_context is None:
+            return
+
+        history_capacity = int(self.memory_context.distant_memory_length)
+        target_capacity = int(self.memory_context.target_length)
+        metadata = batch_metadata or {}
+
+        starts = np.asarray(
+            metadata.get(
+                "history_valid_starts",
+                np.zeros(self.batch_size, dtype=np.int64),
+            ),
+            dtype=np.int64,
+        )
+        target_lengths = np.asarray(
+            metadata.get(
+                "target_valid_lengths",
+                np.full(self.batch_size, target_capacity, dtype=np.int64),
+            ),
+            dtype=np.int64,
+        )
+        if starts.shape != (self.batch_size,):
+            raise ValueError("history_valid_starts must have shape (batch_size,)")
+        if target_lengths.shape != (self.batch_size,):
+            raise ValueError("target_valid_lengths must have shape (batch_size,)")
+
+        history_lengths = np.clip(history_capacity - starts, 0, history_capacity)
+        target_lengths = np.clip(target_lengths, 0, target_capacity)
+
+        stats["microbatches"] += 1
+        stats["samples"] += int(self.batch_size)
+        stats["valid_history_tokens"] += int(history_lengths.sum())
+        stats["valid_active_tokens"] += int(target_lengths.sum())
+        stats["valid_source_tokens"] += int(
+            history_lengths.sum() + target_lengths.sum()
+        )
+        stats["history_sum"] += int(history_lengths.sum())
+        batch_min = int(history_lengths.min()) if history_lengths.size else 0
+        batch_max = int(history_lengths.max()) if history_lengths.size else 0
+        stats["history_min"] = (
+            batch_min
+            if stats["history_min"] is None
+            else min(int(stats["history_min"]), batch_min)
+        )
+        stats["history_max"] = max(int(stats["history_max"]), batch_max)
+
+        if effective_loss_mask is None:
+            supervised = int(target_lengths.sum())
+        else:
+            supervised = int(np.count_nonzero(np.asarray(effective_loss_mask)))
+        stats["supervised_tokens"] += supervised
+
+        edges = np.asarray(stats["history_edges"], dtype=np.int64)
+        hist, _ = np.histogram(history_lengths, bins=edges)
+        for idx, count in enumerate(hist.tolist()):
+            stats["history_hist"][idx] += int(count)
+
+    @staticmethod
+    def _merge_memory_token_stats(
+        destination: Optional[Dict[str, Any]],
+        source: Optional[Dict[str, Any]],
+    ) -> None:
+        if destination is None or source is None:
+            return
+        for key in (
+            "microbatches",
+            "samples",
+            "valid_history_tokens",
+            "valid_source_tokens",
+            "valid_active_tokens",
+            "supervised_tokens",
+            "history_sum",
+        ):
+            destination[key] += int(source[key])
+        if source["history_min"] is not None:
+            destination["history_min"] = (
+                int(source["history_min"])
+                if destination["history_min"] is None
+                else min(int(destination["history_min"]), int(source["history_min"]))
+            )
+        destination["history_max"] = max(
+            int(destination["history_max"]), int(source["history_max"])
+        )
+        if destination["history_edges"] != source["history_edges"]:
+            raise ValueError("cannot merge memory token stats with different bins")
+        for idx, count in enumerate(source["history_hist"]):
+            destination["history_hist"][idx] += int(count)
+
+    @staticmethod
+    def _format_history_bin_label(lower: int, upper: int, is_last: bool) -> str:
+        def compact(value: int) -> str:
+            if value >= 1024 and value % 1024 == 0:
+                return f"{value // 1024}k"
+            return f"{value:,}"
+        closing = "]" if is_last else ")"
+        return f"{compact(lower)}-{compact(upper)}{closing}"
+
+    def _memory_metrics_log_path(self) -> Optional[Path]:
+        if self.log_file is None or self.memory_context is None:
+            return None
+        return self.log_file.with_name(
+            f"{self.log_file.stem}.memory{self.log_file.suffix or '.csv'}"
+        )
+
+    def _setup_memory_metrics_logging(self) -> None:
+        path = self._memory_metrics_log_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            return
+        edges = self._history_diagnostic_edges(
+            int(self.memory_context.distant_memory_length)
+        )
+        bin_headers = [
+            f"history_bin_{edges[i]}_{edges[i + 1]}"
+            for i in range(len(edges) - 1)
+        ]
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "step", "steps_in_interval", "samples",
+                "source_capacity_tokens", "valid_source_tokens",
+                "history_capacity_tokens", "valid_history_tokens",
+                "active_capacity_tokens", "valid_active_tokens",
+                "supervised_tokens", "history_utilization",
+                "history_mean_per_sample", "history_min_per_sample",
+                "history_max_per_sample", "source_capacity_tok_per_sec",
+                "valid_source_tok_per_sec", "valid_history_tok_per_sec",
+                "valid_active_tok_per_sec", "supervised_tok_per_sec",
+                *bin_headers,
+            ])
+
+    def _log_memory_metrics(
+        self,
+        stats: Optional[Dict[str, Any]],
+        *,
+        steps_in_interval: int,
+        elapsed_seconds: float,
+    ) -> None:
+        path = self._memory_metrics_log_path()
+        if path is None or stats is None or stats["samples"] <= 0:
+            return
+        history_capacity = int(self.memory_context.distant_memory_length)
+        active_capacity = int(self.memory_context.active_length)
+        source_capacity = int(self.seq_length)
+        samples = int(stats["samples"])
+        source_capacity_tokens = samples * source_capacity
+        history_capacity_tokens = samples * history_capacity
+        active_capacity_tokens = samples * active_capacity
+        denom = max(float(elapsed_seconds), 1e-12)
+        history_util = (
+            float(stats["valid_history_tokens"]) / history_capacity_tokens
+            if history_capacity_tokens > 0 else 0.0
+        )
+        history_mean = float(stats["history_sum"]) / samples
+        with open(path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                self.step, int(steps_in_interval), samples,
+                source_capacity_tokens, int(stats["valid_source_tokens"]),
+                history_capacity_tokens, int(stats["valid_history_tokens"]),
+                active_capacity_tokens, int(stats["valid_active_tokens"]),
+                int(stats["supervised_tokens"]), history_util, history_mean,
+                int(stats["history_min"] or 0), int(stats["history_max"]),
+                source_capacity_tokens / denom,
+                int(stats["valid_source_tokens"]) / denom,
+                int(stats["valid_history_tokens"]) / denom,
+                int(stats["valid_active_tokens"]) / denom,
+                int(stats["supervised_tokens"]) / denom,
+                *[int(value) for value in stats["history_hist"]],
+            ])
+
     def _setup_logging(self):
         """Initialize CSV logging."""
         if self.log_file:
@@ -850,6 +1074,7 @@ class ExtendedTrainer:
 
         memory_records = {}
         memory_active = self._memory_profiled_steps < self.memory_profile_steps
+        step_memory_token_stats = self._empty_memory_token_stats()
         if memory_active:
             self._record_memory_snapshot(memory_records, "step_start")
 
@@ -876,6 +1101,9 @@ class ExtendedTrainer:
             )
             loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
             targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+            self._accumulate_memory_batch_token_stats(
+                step_memory_token_stats, batch_metadata, loss_mask
+            )
             
             # Forward pass.  0056 can stop before the vocabulary projection so
             # the LM head is evaluated in bounded token tiles instead of one
@@ -1045,6 +1273,9 @@ class ExtendedTrainer:
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_grad_accum")
 
+        # Preserve exact CPU-side document coverage for train() diagnostics.
+        self._last_step_memory_token_stats = step_memory_token_stats
+
         # Average loss - only sync once at the end
         avg_loss = float(_array_to_float(loss_sum_backend / self.grad_accum_steps))
         if not np.isfinite(avg_loss):
@@ -1140,9 +1371,22 @@ class ExtendedTrainer:
             else:
                 denom = max(elapsed, 1e-12)
                 print(f"Profiled optimizer-step wall time: {elapsed:.3f}s")
-                print(f"  target tokens/s:  {target_tokens / denom:,.0f}")
-                print(f"  active tokens/s:  {active_tokens / denom:,.0f}")
-                print(f"  source tokens/s:  {source_tokens / denom:,.0f}")
+                print(f"  target capacity tokens/s: {target_tokens / denom:,.0f}")
+                print(f"  active capacity tokens/s: {active_tokens / denom:,.0f}")
+                print(f"  source capacity tokens/s: {source_tokens / denom:,.0f}")
+                if step_memory_token_stats is not None:
+                    print(
+                        f"  valid source tokens/s:    "
+                        f"{step_memory_token_stats['valid_source_tokens'] / denom:,.0f}"
+                    )
+                    print(
+                        f"  valid history tokens/s:   "
+                        f"{step_memory_token_stats['valid_history_tokens'] / denom:,.0f}"
+                    )
+                    print(
+                        f"  supervised tokens/s:      "
+                        f"{step_memory_token_stats['supervised_tokens'] / denom:,.0f}"
+                    )
             print()
             self._profiled_steps += 1
             configure_performance_profiler(False)
@@ -1239,6 +1483,9 @@ class ExtendedTrainer:
         # already been synchronized at this boundary; perf_counter therefore
         # measures the completed optimizer step without adding another sync.
         recent_step_seconds = []
+        memory_interval_stats = self._empty_memory_token_stats()
+        memory_interval_seconds = 0.0
+        memory_interval_steps = 0
         source_tokens_per_optimizer_step = (
             self.batch_size * self.seq_length * self.grad_accum_steps
         )
@@ -1266,6 +1513,12 @@ class ExtendedTrainer:
             loss, grad_norm = self.train_step()
             precise_step_seconds = time.perf_counter() - precise_step_start
             recent_step_seconds.append(precise_step_seconds)
+            if self.memory_context is not None:
+                self._merge_memory_token_stats(
+                    memory_interval_stats, self._last_step_memory_token_stats
+                )
+                memory_interval_seconds += precise_step_seconds
+                memory_interval_steps += 1
             if len(recent_step_seconds) > 10:
                 del recent_step_seconds[0]
             losses.append(loss)
@@ -1305,10 +1558,53 @@ class ExtendedTrainer:
                 )
 
                 if self.memory_context is not None:
+                    step_stats = self._last_step_memory_token_stats
+                    if step_stats is not None and step_stats["samples"] > 0:
+                        precise_valid_source_tokens_per_sec = (
+                            step_stats["valid_source_tokens"]
+                            / max(precise_step_seconds, 1e-12)
+                        )
+                        precise_valid_history_tokens_per_sec = (
+                            step_stats["valid_history_tokens"]
+                            / max(precise_step_seconds, 1e-12)
+                        )
+                        precise_valid_active_tokens_per_sec = (
+                            step_stats["valid_active_tokens"]
+                            / max(precise_step_seconds, 1e-12)
+                        )
+                        precise_supervised_tokens_per_sec = (
+                            step_stats["supervised_tokens"]
+                            / max(precise_step_seconds, 1e-12)
+                        )
+                        history_capacity_tokens = (
+                            step_stats["samples"]
+                            * int(self.memory_context.distant_memory_length)
+                        )
+                        history_utilization = (
+                            step_stats["valid_history_tokens"]
+                            / max(history_capacity_tokens, 1)
+                        )
+                        history_mean = (
+                            step_stats["history_sum"] / step_stats["samples"]
+                        )
+                    else:
+                        precise_valid_source_tokens_per_sec = 0.0
+                        precise_valid_history_tokens_per_sec = 0.0
+                        precise_valid_active_tokens_per_sec = 0.0
+                        precise_supervised_tokens_per_sec = 0.0
+                        history_utilization = 0.0
+                        history_mean = 0.0
                     throughput_text = (
+                        # ``source_tok/s`` is intentionally retained as the
+                        # historical fixed-capacity metric for compatibility.
                         f"source_tok/s={precise_source_tokens_per_sec:,.0f}, "
+                        f"valid_source_tok/s={precise_valid_source_tokens_per_sec:,.0f}, "
+                        f"valid_history_tok/s={precise_valid_history_tokens_per_sec:,.0f}, "
                         f"active_tok/s={precise_active_tokens_per_sec:,.0f}, "
-                        f"target_tok/s={precise_target_tokens_per_sec:,.0f}, "
+                        f"valid_active_tok/s={precise_valid_active_tokens_per_sec:,.0f}, "
+                        f"supervised_tok/s={precise_supervised_tokens_per_sec:,.0f}, "
+                        f"history/sample={history_mean:,.0f}, "
+                        f"history_util={100.0 * history_utilization:.1f}%, "
                         f"source_tok/s_10={rolling_source_tokens_per_sec:,.0f}"
                     )
                 else:
@@ -1326,7 +1622,49 @@ class ExtendedTrainer:
                     f"step_time={precise_step_seconds * 1000.0:.1f} ms, "
                     f"{throughput_text}"
                 )
-                
+
+                if (
+                    self.memory_context is not None
+                    and memory_interval_stats is not None
+                    and memory_interval_stats["samples"] > 0
+                ):
+                    samples = int(memory_interval_stats["samples"])
+                    history_capacity_tokens = (
+                        samples * int(self.memory_context.distant_memory_length)
+                    )
+                    interval_history_util = (
+                        memory_interval_stats["valid_history_tokens"]
+                        / max(history_capacity_tokens, 1)
+                    )
+                    interval_history_mean = (
+                        memory_interval_stats["history_sum"] / samples
+                    )
+                    edges = memory_interval_stats["history_edges"]
+                    hist_total = max(sum(memory_interval_stats["history_hist"]), 1)
+                    bin_parts = []
+                    for idx, count in enumerate(memory_interval_stats["history_hist"]):
+                        label = self._format_history_bin_label(
+                            int(edges[idx]), int(edges[idx + 1]),
+                            idx == len(memory_interval_stats["history_hist"]) - 1,
+                        )
+                        bin_parts.append(
+                            f"{label}={100.0 * int(count) / hist_total:.1f}%"
+                        )
+                    print(
+                        "  Memory coverage "
+                        f"({memory_interval_steps} steps/{samples} samples): "
+                        f"history/sample mean={interval_history_mean:,.0f}, "
+                        f"min={int(memory_interval_stats['history_min'] or 0):,}, "
+                        f"max={int(memory_interval_stats['history_max']):,}, "
+                        f"util={100.0 * interval_history_util:.1f}%"
+                    )
+                    print("  History distribution: " + ", ".join(bin_parts))
+                    self._log_memory_metrics(
+                        memory_interval_stats,
+                        steps_in_interval=memory_interval_steps,
+                        elapsed_seconds=memory_interval_seconds,
+                    )
+
                 # Log to CSV
                 self._log({
                     "step": self.step,
@@ -1341,6 +1679,10 @@ class ExtendedTrainer:
                     "tokens_per_sec": precise_source_tokens_per_sec,
                     "tokens_per_sec_rolling_10": rolling_source_tokens_per_sec,
                 })
+                if self.memory_context is not None:
+                    memory_interval_stats = self._empty_memory_token_stats()
+                    memory_interval_seconds = 0.0
+                    memory_interval_steps = 0
             
             # Save using the completed optimizer-step count.
             if self.step % self.save_interval == 0:

@@ -701,7 +701,7 @@ def main():
     source_tokens_per_optimizer_step = effective_sequences * run_context_length
     print(f"Effective batch: {effective_sequences} sequences")
     if config.memory_context.enabled:
-        print(f"Source tokens/microbatch: {source_tokens_per_microbatch:,}")
+        print(f"Source capacity tokens/microbatch: {source_tokens_per_microbatch:,}")
         print(
             f"Active tokens/microbatch: "
             f"{args.batch_size * config.memory_context.active_length:,}"
@@ -712,7 +712,7 @@ def main():
             f"Supervised tokens/microbatch: "
             f"{args.batch_size * supervised_per_sequence:,}"
         )
-        print(f"Source tokens/optimizer step: {source_tokens_per_optimizer_step:,}")
+        print(f"Source capacity tokens/optimizer step: {source_tokens_per_optimizer_step:,}")
         print(
             f"Supervised tokens/optimizer step: "
             f"{effective_sequences * supervised_per_sequence:,}"

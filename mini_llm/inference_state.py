@@ -1,7 +1,7 @@
 """Generation state for KV-cached autoregressive inference."""
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from mini_llm.backend import xp
@@ -28,10 +28,19 @@ class GenerationState:
     length: int
     max_length: int
     batch_size: int
-    
+    # For configurable sparse/retrieval attention, each layer keeps the
+    # normalized attention input used by ContextRouter.  This is inference
+    # state, not a backward cache; BF16 storage keeps the cost modest and lets
+    # route decisions be reconstructed exactly at routing boundaries.
+    router_input_cache: Optional[xp.ndarray] = None
+    # Latest learned retrieval decision per (layer, group).  A decision is
+    # reused for routing_stride consecutive decode positions.
+    retrieval_routes: dict = field(default_factory=dict)
+
     def reset(self):
         """Reset generation state without deallocating cache."""
         self.length = 0
+        self.retrieval_routes.clear()
     
     def remaining_capacity(self) -> int:
         """Remaining tokens that can be generated."""

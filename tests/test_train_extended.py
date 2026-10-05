@@ -492,3 +492,102 @@ def test_block_activation_checkpoint_training_step(monkeypatch):
         loss, grad_norm = trainer.train_step()
         assert np.isfinite(loss)
         assert np.isfinite(grad_norm)
+
+
+class TestMemoryCoverageDiagnostics:
+    """CPU-only accounting for real same-document memory usage."""
+
+    @staticmethod
+    def make_accounting_trainer(tmp_path=None):
+        from types import SimpleNamespace
+
+        trainer = object.__new__(ExtendedTrainer)
+        trainer.batch_size = 2
+        trainer.seq_length = 65_536
+        trainer.log_file = None if tmp_path is None else Path(tmp_path) / "train.csv"
+        trainer.step = 10
+        trainer.memory_context = SimpleNamespace(
+            distant_memory_length=61_440,
+            target_length=4_096,
+            active_length=4_096,
+        )
+        return trainer
+
+    def test_real_history_and_padding_are_counted_separately(self):
+        trainer = self.make_accounting_trainer()
+        stats = trainer._empty_memory_token_stats()
+        metadata = {
+            # Real history lengths are 2,048 and 50,000 tokens.
+            "history_valid_starts": np.asarray([59_392, 11_440], dtype=np.int64),
+            "target_valid_lengths": np.asarray([4_096, 3_000], dtype=np.int64),
+        }
+        mask = np.zeros((2, 4_096), dtype=np.float32)
+        mask[0, :4_096] = 1.0
+        mask[1, :3_000] = 1.0
+
+        trainer._accumulate_memory_batch_token_stats(stats, metadata, mask)
+
+        assert stats["samples"] == 2
+        assert stats["valid_history_tokens"] == 52_048
+        assert stats["valid_active_tokens"] == 7_096
+        assert stats["valid_source_tokens"] == 59_144
+        assert stats["supervised_tokens"] == 7_096
+        assert stats["history_sum"] == 52_048
+        assert stats["history_min"] == 2_048
+        assert stats["history_max"] == 50_000
+        assert sum(stats["history_hist"]) == 2
+        # One sample is in [0, 4k), the other in the final [48k, 60k] bin.
+        assert stats["history_hist"][0] == 1
+        assert stats["history_hist"][-1] == 1
+
+    def test_memory_stats_merge_preserves_distribution(self):
+        trainer = self.make_accounting_trainer()
+        first = trainer._empty_memory_token_stats()
+        second = trainer._empty_memory_token_stats()
+        mask = np.ones((2, 4_096), dtype=np.float32)
+
+        trainer._accumulate_memory_batch_token_stats(
+            first,
+            {
+                "history_valid_starts": np.asarray([61_440, 57_344]),
+                "target_valid_lengths": np.asarray([4_096, 4_096]),
+            },
+            mask,
+        )
+        trainer._accumulate_memory_batch_token_stats(
+            second,
+            {
+                "history_valid_starts": np.asarray([45_056, 0]),
+                "target_valid_lengths": np.asarray([4_096, 4_096]),
+            },
+            mask,
+        )
+        trainer._merge_memory_token_stats(first, second)
+
+        assert first["samples"] == 4
+        assert first["history_min"] == 0
+        assert first["history_max"] == 61_440
+        assert first["history_sum"] == 81_920
+        assert sum(first["history_hist"]) == 4
+
+    def test_memory_metrics_use_companion_csv(self, tmp_path):
+        trainer = self.make_accounting_trainer(tmp_path)
+        trainer._setup_memory_metrics_logging()
+        stats = trainer._empty_memory_token_stats()
+        trainer._accumulate_memory_batch_token_stats(
+            stats,
+            {
+                "history_valid_starts": np.asarray([57_344, 49_152]),
+                "target_valid_lengths": np.asarray([4_096, 4_096]),
+            },
+            np.ones((2, 4_096), dtype=np.float32),
+        )
+        trainer._log_memory_metrics(stats, steps_in_interval=1, elapsed_seconds=2.0)
+
+        path = Path(tmp_path) / "train.memory.csv"
+        assert path.exists()
+        rows = path.read_text().strip().splitlines()
+        assert len(rows) == 2
+        assert "valid_history_tokens" in rows[0]
+        assert "history_mean_per_sample" in rows[0]
+        assert "history_bin_0_4096" in rows[0]

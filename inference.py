@@ -236,11 +236,14 @@ class TextGenerator:
             input_tensor = xp.asarray(input_tensor, dtype=xp.int32)
             
             if log_speed:
+                synchronize()
                 forward_start = time.perf_counter()
             logits = self._inference_model.prefill(input_tensor, self._state)
             if log_speed:
+                synchronize()
                 forward_end = time.perf_counter()
-                forward_times.append(forward_end - forward_start)
+                prefill_time_s = forward_end - forward_start
+                forward_times.append(prefill_time_s)
             
             # 2. AUTOREGRESSIVE DECODE for each new token
             for step in range(max_new_tokens):
@@ -348,8 +351,16 @@ class TextGenerator:
             avg_forward_time = total_forward_time / len(forward_times) if forward_times else 0
             avg_other_time = total_other_time / len(other_times) if other_times else 0
             
+            prefill_time = (
+                locals().get("prefill_time_s", 0.0) if use_kv_cache else 0.0
+            )
+            decode_time = max(total_time - prefill_time, 0.0)
             timing = {
                 "tokens_per_sec": new_tokens / total_time if total_time > 0 else 0,
+                "decode_tokens_per_sec": (
+                    new_tokens / decode_time if use_kv_cache and decode_time > 0 else 0
+                ),
+                "prefill_time_s": prefill_time,
                 "total_tokens": new_tokens,
                 "total_time_s": total_time,
                 "forward_times": forward_times,
@@ -458,6 +469,16 @@ def main():
         default=128,
         help="Maximum tokens to keep in context for interactive mode (default: 128)",
     )
+    parser.add_argument(
+        "--max-context",
+        type=int,
+        default=None,
+        help=(
+            "Inference KV-cache horizon. Defaults to the checkpoint context "
+            "length. Sparse-attention checkpoints may use a larger value to "
+            "exercise their learned/dilated long-context structure."
+        ),
+    )
     
     args = parser.parse_args()
     
@@ -519,8 +540,17 @@ def main():
     print(f"Loaded {len(loaded_params)} parameter arrays")
     print(f"Model loading time: {load_time:.3f}s")
     
-    # Create generator
-    generator = TextGenerator(model, tokenizer, max_context=config.context_length)
+    # Create generator.  Configurable sparse attention can be evaluated with a
+    # larger inference cache than the training window; the sparse topology and
+    # RoPE tables grow dynamically while K/V remain cached exactly once.
+    inference_context = (
+        int(args.max_context) if args.max_context is not None
+        else int(config.context_length)
+    )
+    if inference_context <= 0:
+        raise ValueError("--max-context must be positive")
+    print(f"Inference context/cache horizon: {inference_context:,} tokens")
+    generator = TextGenerator(model, tokenizer, max_context=inference_context)
     
     if args.interactive:
         # Interactive mode - keep model loaded for multiple prompts
@@ -625,6 +655,9 @@ def main():
         print(f"Model loading: {load_time:.3f}s")
         print(f"Prompt processing: {prompt_time:.3f}s")
         print(f"Generation speed: {timing['tokens_per_sec']:.2f} tokens/sec ({timing['total_tokens']} tokens)")
+        if args.backend == "kv-cache":
+            print(f"KV prefill:       {timing.get('prefill_time_s', 0.0)*1000:.2f} ms")
+            print(f"Cached decode:    {timing.get('decode_tokens_per_sec', 0.0):.2f} tokens/sec")
         if timing.get("breakdown_is_async_approx", False):
             print(f"\nForward host-enqueue timing: {total_forward_time:.3f}s (CUDA async; diagnostic only)")
             print(f"Sampling/host timing:        {total_other_time:.3f}s (may include waiting on prior GPU work)")

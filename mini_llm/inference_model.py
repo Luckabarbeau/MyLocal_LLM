@@ -47,12 +47,22 @@ class InferenceModel:
         """
         self.config = config
         self.dtype = dtype if dtype is not None else config.dtype
-        if config.attention_layers is not None:
-            raise NotImplementedError(
-                "KV-cached inference for configurable per-head attention is not "
-                "implemented yet; use DecoderLanguageModel full-sequence forward "
-                "until the sparse inference cache is added."
-            )
+        self.sparse_attention = config.attention_layers is not None
+        memory_cfg = getattr(config, "memory_context", None)
+        self.terminal_landmark_memory = bool(
+            memory_cfg is not None
+            and memory_cfg.enabled
+            and memory_cfg.integration_mode == "terminal_landmark"
+        )
+        self.memory_working_length = (
+            int(memory_cfg.target_length) if self.terminal_landmark_memory else None
+        )
+        # 0059C short-history fallback: a terminal-Landmark checkpoint is an
+        # ordinary sparse 4k Transformer whenever no tokens exist outside the
+        # working window.  Do not reject such checkpoints at construction.
+        # The true >working-window external-memory cache remains a separate
+        # inference feature and is guarded in create_generation_state() so we
+        # never silently substitute incorrect long-memory semantics.
         
         # Create inference components
         self.n_layers = config.n_layers
@@ -67,6 +77,10 @@ class InferenceModel:
         # Create transformer blocks for inference
         self.blocks = []
         for layer_idx in range(config.n_layers):
+            attention_config = (
+                None if config.attention_layers is None
+                else config.attention_layers[layer_idx]
+            )
             block = TransformerBlockInference(
                 d_model=config.d_model,
                 n_q_heads=config.n_q_heads,
@@ -76,7 +90,9 @@ class InferenceModel:
                 n_experts=config.n_experts,
                 top_k=config.top_k,
                 dtype=self.dtype,
-                max_context=config.context_length
+                max_context=config.context_length,
+                attention_config=attention_config,
+                layer_idx=layer_idx,
             )
             self.blocks.append(block)
         
@@ -97,6 +113,18 @@ class InferenceModel:
         Returns:
             GenerationState with preallocated caches
         """
+        max_length = int(max_length)
+        if (
+            self.terminal_landmark_memory
+            and max_length > int(self.memory_working_length)
+        ):
+            raise NotImplementedError(
+                "0058C terminal-Landmark KV inference currently supports the "
+                f"short-history fallback through {self.memory_working_length:,} "
+                "tokens. A larger cache requires the external-history Landmark "
+                "store/router inference path; use --max-context at or below the "
+                "working-window length until that path is enabled."
+            )
         k_cache = xp.empty(
             (
                 self.n_layers,
@@ -109,6 +137,14 @@ class InferenceModel:
         )
         
         v_cache = xp.empty_like(k_cache)
+        router_input_cache = None
+        if self.sparse_attention:
+            router_input_cache = xp.empty(
+                (
+                    self.n_layers, batch_size, max_length, self.d_model,
+                ),
+                dtype=self.dtype,
+            )
 
         # RoPE tables are shared through the module-level cache, so the first
         # block may create/grow the table and subsequent blocks reuse it.
@@ -121,7 +157,26 @@ class InferenceModel:
             length=0,
             max_length=max_length,
             batch_size=batch_size,
+            router_input_cache=router_input_cache,
         )
+
+    def _embedding_lookup(self, input_ids):
+        """Inference embedding lookup kept as a separately benchmarkable region."""
+        x = self.embedding.W.data[input_ids]
+        if BACKEND_NAME == "cupy" and not hasattr(x, "__cuda_array_interface__"):
+            x = xp.asarray(x)
+        return x
+
+    def _lm_head_forward(self, last_hidden):
+        """Project one or more hidden rows to vocabulary logits.
+
+        Keeping this operation behind a small method makes the very large
+        single-token vocabulary projection independently benchmarkable without
+        changing its numerical path.
+        """
+        if BACKEND_NAME == "cupy" and not hasattr(last_hidden, "__cuda_array_interface__"):
+            last_hidden = xp.asarray(last_hidden)
+        return last_hidden @ self.lm_head
 
     def set_weights(self, training_model):
         """
@@ -173,33 +228,29 @@ class InferenceModel:
                 f"{state.remaining_capacity()}."
             )
         
-        # Embed tokens - ensure we stay on the correct backend
-        W_data = self.embedding.W.data
-        
-        x = W_data[input_ids]  # [B, T_prompt, D]
-        
-        # Ensure x is the correct backend type (CuPy if CuPy backend)
-        # CuPy arrays should have __cuda_array_interface__ attribute
-        if BACKEND_NAME == "cupy" and not hasattr(x, '__cuda_array_interface__'):
-            x = xp.asarray(x)
+        # Embed tokens.
+        x = self._embedding_lookup(input_ids)  # [B, T_prompt, D]
     
         # Process through transformer blocks
         start_pos = 0
         for i, block in enumerate(self.blocks):
-            x = block.prefill(x, state.k_cache[i], state.v_cache[i], start_pos)
+            router_cache = (
+                None if state.router_input_cache is None
+                else state.router_input_cache[i]
+            )
+            x = block.prefill(
+                x, state.k_cache[i], state.v_cache[i], start_pos,
+                router_input_cache=router_cache,
+                retrieval_route_cache=state.retrieval_routes,
+            )
         
-        # Final normalization
+        # Final normalization follows the training model's FP32-residual /
+        # low-precision-head policy.
         x = self.final_norm.forward(x)
+        last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
         
-        # LM head - return only last position logits
-        last_hidden = x[:, -1, :]  # [B, d_model]
-        
-        # Ensure last_hidden is on the correct backend for matmul with lm_head
-        # CuPy arrays should have __cuda_array_interface__ attribute
-        if BACKEND_NAME == "cupy" and not hasattr(last_hidden, '__cuda_array_interface__'):
-            last_hidden = xp.asarray(last_hidden)
-        
-        logits = last_hidden @ self.lm_head  # [B, vocab_size]
+        # LM head - return only last position logits.
+        logits = self._lm_head_forward(last_hidden)  # [B, vocab_size]
         
         # Update state length
         state.length += T_prompt
@@ -234,31 +285,29 @@ class InferenceModel:
         if not state.has_capacity(1):
             raise ValueError("No capacity remaining in generation cache.")
         
-        # Embed token
-        x = self.embedding.W.data[next_ids]  # [B, 1, D]
-        
-        # Ensure x is the correct backend type (CuPy if CuPy backend)
-        # CuPy arrays should have __cuda_array_interface__ attribute
-        if BACKEND_NAME == "cupy" and not hasattr(x, '__cuda_array_interface__'):
-            x = xp.asarray(x)
+        # Embed token.
+        x = self._embedding_lookup(next_ids)  # [B, 1, D]
         
         # Process through transformer blocks
         start_pos = state.length
         for i, block in enumerate(self.blocks):
-            x = block.decode_one(x, state.k_cache[i], state.v_cache[i], start_pos)
+            router_cache = (
+                None if state.router_input_cache is None
+                else state.router_input_cache[i]
+            )
+            x = block.decode_one(
+                x, state.k_cache[i], state.v_cache[i], start_pos,
+                router_input_cache=router_cache,
+                retrieval_route_cache=state.retrieval_routes,
+            )
         
-        # Final normalization
+        # Final normalization follows the training model's FP32-residual /
+        # low-precision-head policy.
         x = self.final_norm.forward(x)
+        last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
         
-        # LM head - return only last position logits
-        last_hidden = x[:, -1, :]  # [B, d_model]
-        
-        # Ensure last_hidden is on the correct backend for matmul with lm_head
-        # CuPy arrays should have __cuda_array_interface__ attribute
-        if BACKEND_NAME == "cupy" and not hasattr(last_hidden, '__cuda_array_interface__'):
-            last_hidden = xp.asarray(last_hidden)
-        
-        logits = last_hidden @ self.lm_head  # [B, vocab_size]
+        # LM head - return only last position logits.
+        logits = self._lm_head_forward(last_hidden)  # [B, vocab_size]
         
         # Update state length
         state.length += 1

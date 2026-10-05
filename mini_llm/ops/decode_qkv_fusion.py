@@ -83,7 +83,8 @@ def _get_module():
         int n_q_heads,
         int n_kv_heads,
         int cache_capacity,
-        int position)
+        int cache_position,
+        int rope_position)
     {
         const int b = (int)blockIdx.x;
         if (b >= batch) return;
@@ -93,7 +94,7 @@ def _get_module():
         const int packed_width = q_width + 2 * kv_width;
         const long long packed_base = (long long)b * packed_width;
         const long long q_base = (long long)b * q_width;
-        const long long trig_base = (long long)position * 32LL;
+        const long long trig_base = (long long)rope_position * 32LL;
 
         // Q: rotate packed pairs and emit compact [B,Hq,64].
         const int q_pairs = q_width >> 1;
@@ -121,7 +122,7 @@ def _get_module():
             const float a = __bfloat162float(packed[src]);
             const float d = __bfloat162float(packed[src + 1]);
             const long long dst =
-                (((long long)b * n_kv_heads + kvh) * cache_capacity + position) * 64LL + lane;
+                (((long long)b * n_kv_heads + kvh) * cache_capacity + cache_position) * 64LL + lane;
             k_cache[dst] = __float2bfloat16_rn(a * c - d * s);
             k_cache[dst + 1] = __float2bfloat16_rn(a * s + d * c);
         }
@@ -134,7 +135,7 @@ def _get_module():
             const int lane = local_col & 63;
             const long long src = packed_base + q_width + kv_width + local_col;
             const long long dst =
-                (((long long)b * n_kv_heads + kvh) * cache_capacity + position) * 64LL + lane;
+                (((long long)b * n_kv_heads + kvh) * cache_capacity + cache_position) * 64LL + lane;
             v_cache[dst] = packed[src];
         }
     }
@@ -169,6 +170,7 @@ def fused_unpack_rope_store_bf16_d64(
     *,
     position: int,
     n_q_heads: int,
+    cache_position: int | None = None,
     n_kv_heads: int,
 ) -> bool:
     """Run the 0059H fusion; return ``False`` for a transparent fallback."""
@@ -205,8 +207,9 @@ def fused_unpack_rope_store_bf16_d64(
     if int(k_cache.shape[0]) != batch or int(k_cache.shape[1]) != int(n_kv_heads):
         return False
     position = int(position)
+    cache_position = position if cache_position is None else int(cache_position)
     capacity = int(k_cache.shape[2])
-    if position < 0 or position >= capacity:
+    if cache_position < 0 or cache_position >= capacity or position < 0:
         return False
 
     # RoPE tables are [1,T,1,32]. They are shared across batch and heads.
@@ -233,6 +236,7 @@ def fused_unpack_rope_store_bf16_d64(
                 np.int32(n_q_heads),
                 np.int32(n_kv_heads),
                 np.int32(capacity),
+                np.int32(cache_position),
                 np.int32(position),
             ),
         )

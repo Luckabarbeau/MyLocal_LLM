@@ -168,9 +168,136 @@ def test_terminal_landmark_checkpoint_allows_short_history_kv_fallback():
     state = inference.create_generation_state(batch_size=1, max_length=16)
     assert state.max_length == 16
 
-    try:
-        inference.create_generation_state(batch_size=1, max_length=17)
-    except NotImplementedError as exc:
-        assert "external-history Landmark" in str(exc)
-    else:
-        raise AssertionError("long terminal-memory cache should remain guarded")
+    long_state = inference.create_generation_state(batch_size=1, max_length=17)
+    assert long_state.long_memory_enabled
+    assert long_state.working_capacity == 16
+    assert long_state.k_cache.shape[3] == 16
+
+
+def _tiny_terminal_long_inference_config():
+    router = ContextRouterConfig(
+        history_block_size=2,
+        routing_stride=2,
+        query_window=2,
+        router_dim=4,
+        top_k_blocks=1,
+        exclude_recent_tokens=2,
+        query_pooling="mean",
+        history_pooling="mean",
+        num_queries=1,
+        router_weight_mode="logit_bias",
+    )
+    layer = AttentionLayerConfig(
+        heads=(RetrievalAttentionConfig(router, group="far"),)
+    )
+    memory = MemoryContextConfig(
+        enabled=True,
+        memory_length=16,
+        recent_length=8,
+        target_length=8,
+        block_size=2,
+        top_k_blocks=1,
+        router_query_length=8,
+        router_dim=4,
+        query_pooling="mean",
+        history_pooling="mean",
+        integration_mode="terminal_landmark",
+        memory_attention_layer=-1,
+        read_heads=1,
+        read_kv_heads=1,
+    )
+    return ModelConfig(
+        tokenizer_vocab_size=64,
+        context_length=8,
+        n_layers=1,
+        d_model=64,
+        n_q_heads=1,
+        n_kv_heads=1,
+        d_head=64,
+        n_experts=2,
+        top_k=1,
+        d_ff=128,
+        attention_layers=(layer,),
+        dtype="float32",
+        memory_context=memory,
+    )
+
+
+def test_terminal_landmark_long_prefill_matches_training_terminal_prediction():
+    cfg = _tiny_terminal_long_inference_config()
+    training = DecoderLanguageModel(cfg, rng_seed=321, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    ids = xp.asarray([list(range(1, 17))], dtype=xp.int32)
+
+    reference = training.forward(ids, return_cache=False)[0, -1]
+    state = inference.create_generation_state(batch_size=1, max_length=16)
+    assert state.long_memory_enabled
+    assert state.k_cache.shape[3] == 8
+    cached = inference.prefill(ids, state)[0]
+
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=1e-5, atol=1e-6)
+    assert state.terminal_memory_store.active_blocks == 4
+    assert state.terminal_memory_route is not None
+    assert state.working_count == 8
+    assert state.working_capacity == 8
+
+
+def test_terminal_landmark_long_decode_slides_bounded_working_cache():
+    cfg = _tiny_terminal_long_inference_config()
+    training = DecoderLanguageModel(cfg, rng_seed=321, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    state = inference.create_generation_state(batch_size=1, max_length=16)
+    tokens = list(range(1, 17))
+    inference.prefill(xp.asarray([tokens], dtype=xp.int32), state)
+
+    # After every decoded token, compare against a fresh training forward over
+    # the latest complete horizon.  This catches the subtle case where a
+    # streaming implementation accidentally pins 2/128-token memory blocks to
+    # global positions instead of shifting their phase with the working window.
+    tokens.append(17)
+    logits = inference.decode_one(xp.asarray([[17]], dtype=xp.int32), state)
+    reference = training.forward(
+        xp.asarray([tokens[-16:]], dtype=xp.int32), return_cache=False
+    )[0, -1]
+    np.testing.assert_allclose(asnumpy(logits[0]), asnumpy(reference), rtol=2e-5, atol=2e-6)
+    assert logits.shape == (1, cfg.vocab_size)
+    assert np.isfinite(asnumpy(logits)).all()
+    assert state.k_cache.shape[3] == 8
+    assert state.working_count == 8
+    assert state.cache_start == 1
+    assert state.working_start_abs == 9
+    assert state.terminal_memory_store.token_count == 8
+    assert state.terminal_memory_store.ring_start == 1
+    assert state.terminal_memory_store.active_blocks == 4
+    assert state.length == 17
+
+    tokens.append(18)
+    logits = inference.decode_one(xp.asarray([[18]], dtype=xp.int32), state)
+    reference = training.forward(
+        xp.asarray([tokens[-16:]], dtype=xp.int32), return_cache=False
+    )[0, -1]
+    np.testing.assert_allclose(asnumpy(logits[0]), asnumpy(reference), rtol=2e-5, atol=2e-6)
+    assert np.isfinite(asnumpy(logits)).all()
+    assert state.cache_start == 2
+    assert state.working_start_abs == 10
+    assert state.terminal_memory_store.token_count == 8
+    assert state.terminal_memory_store.ring_start == 2
+    assert state.terminal_memory_store.active_blocks == 4
+    assert state.length == 18
+
+
+def test_terminal_landmark_external_store_respects_requested_horizon():
+    cfg = _tiny_terminal_long_inference_config()
+    training = DecoderLanguageModel(cfg, rng_seed=321, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+
+    state = inference.create_generation_state(batch_size=1, max_length=12)
+    inference.prefill(xp.asarray([list(range(1, 13))], dtype=xp.int32), state)
+    assert state.long_memory_enabled
+    assert state.working_capacity == 8
+    assert state.terminal_memory_store.external_capacity_tokens == 4
+    assert state.terminal_memory_store.max_blocks == 2
+    assert state.terminal_memory_store.active_blocks == 2

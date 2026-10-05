@@ -417,6 +417,15 @@ def main():
         help="Initial prompt for generation",
     )
     parser.add_argument(
+        "--prompt-file",
+        default=None,
+        help=(
+            "Read the complete prompt from a UTF-8 text file. Useful for "
+            "terminal-memory checkpoints with 16k-64k contexts where a shell "
+            "command-line argument would be impractical."
+        ),
+    )
+    parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=50,
@@ -481,6 +490,9 @@ def main():
     )
     
     args = parser.parse_args()
+    if args.prompt_file is not None:
+        prompt_path = Path(args.prompt_file)
+        args.prompt = prompt_path.read_text(encoding="utf-8")
     
     # Load model config
     checkpoint_path = Path(args.checkpoint)
@@ -550,6 +562,20 @@ def main():
     if inference_context <= 0:
         raise ValueError("--max-context must be positive")
     print(f"Inference context/cache horizon: {inference_context:,} tokens")
+    memory_cfg = getattr(config, "memory_context", None)
+    if (
+        memory_cfg is not None
+        and memory_cfg.enabled
+        and memory_cfg.integration_mode == "terminal_landmark"
+        and inference_context > int(memory_cfg.target_length)
+    ):
+        print(
+            "Terminal-Landmark external memory: enabled "
+            f"({int(memory_cfg.target_length):,} deep working tokens + "
+            f"up to {int(memory_cfg.distant_memory_length):,} external tokens; "
+            f"top-{int(memory_cfg.top_k_blocks)} = "
+            f"{int(memory_cfg.top_k_blocks * memory_cfg.block_size):,} exact historical K/V)"
+        )
     generator = TextGenerator(model, tokenizer, max_context=inference_context)
     
     if args.interactive:
@@ -622,7 +648,10 @@ def main():
         print("=" * 60)
         print("Text Generation")
         print("=" * 60)
-        print(f"Prompt: {args.prompt}")
+        if args.prompt_file is not None:
+            print(f"Prompt file: {args.prompt_file} ({len(args.prompt):,} characters)")
+        else:
+            print(f"Prompt: {args.prompt}")
         print(f"Strategy: {args.strategy}")
         if args.strategy in ["temperature", "top-k", "top-p"]:
             print(f"Temperature: {args.temperature}")

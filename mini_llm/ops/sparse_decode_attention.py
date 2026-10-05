@@ -98,6 +98,8 @@ def _get_module():
         int n_kv_heads,
         int cache_capacity,
         int position,
+        int cache_start,
+        int retrieval_key_shift,
         int retrieval_active,
         int retrieval_queries,
         int retrieval_blocks,
@@ -135,8 +137,10 @@ def _get_module():
         #define PROCESS_KEY(KEY_VALUE, BIAS_VALUE) do { \
             const int _key = (KEY_VALUE); \
             if (_key >= 0 && _key <= position && _key < cache_capacity) { \
+                int _slot = cache_start + _key; \
+                if (_slot >= cache_capacity) _slot -= cache_capacity; \
                 const long long _base = \
-                    (((long long)b * n_kv_heads + kvh) * cache_capacity + _key) * 64LL; \
+                    (((long long)b * n_kv_heads + kvh) * cache_capacity + _slot) * 64LL; \
                 float _dot = q0 * __bfloat162float(k_cache[_base + lane]) \
                            + q1 * __bfloat162float(k_cache[_base + lane + 32]); \
                 _dot += __shfl_down_sync(mask, _dot, 16); \
@@ -225,7 +229,7 @@ def _get_module():
                         const float bias = retrieval_block_bias[ridx];
                         const long long base = block * (long long)retrieval_block_size;
                         for (int j = 0; j < retrieval_block_size; ++j) {
-                            PROCESS_KEY((int)(base + j), bias);
+                            PROCESS_KEY((int)(base + j + retrieval_key_shift), bias);
                         }
                     }
                 }
@@ -282,6 +286,8 @@ def fused_sparse_decode_bf16_d64(
     retrieval_blocks: int,
     retrieval_block_size: int,
     scale: float,
+    cache_start: int = 0,
+    retrieval_key_shift: int = 0,
 ) -> bool:
     """Write fused sparse attention into ``out`` and return whether it ran.
 
@@ -337,6 +343,11 @@ def fused_sparse_decode_bf16_d64(
     n_kv_heads = int(k_cache.shape[1])
     capacity = int(k_cache.shape[2])
     position = int(position)
+    cache_start = int(cache_start)
+    retrieval_key_shift = int(retrieval_key_shift)
+    if not (0 <= cache_start < capacity):
+        _record_failure(f"cache start rejection: cache_start={cache_start}, capacity={capacity}")
+        return False
     if not (0 <= position < capacity):
         _record_failure(f"cache position rejection: position={position}, capacity={capacity}")
         return False
@@ -372,6 +383,8 @@ def fused_sparse_decode_bf16_d64(
             np.int32(n_kv_heads),
             np.int32(capacity),
             np.int32(position),
+            np.int32(cache_start),
+            np.int32(retrieval_key_shift),
             np.int32(1 if retrieval_active else 0),
             np.int32(retrieval_queries),
             np.int32(retrieval_blocks),

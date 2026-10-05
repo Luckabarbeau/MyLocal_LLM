@@ -23,6 +23,7 @@ from mini_llm.ops.decode_qkv_fusion import (
     fused_decode_qkv_enabled,
     fused_unpack_rope_store_bf16_d64,
 )
+from mini_llm.ops.terminal_landmark_decode import terminal_landmark_decode
 
 
 _CAUSAL_ALLOW_MASK_CACHE = {}
@@ -82,6 +83,8 @@ class GQAAttentionInference:
         # successful device launch, allowing the benchmarker to distinguish an
         # enabled flag from an actually active kernel.
         self._fused_qkv_decode_active = False
+        self._terminal_memory_head_indices = ()
+        self._terminal_memory_config = None
 
         self.Wq = None
         self.Wk = None
@@ -127,6 +130,11 @@ class GQAAttentionInference:
             # inference-local route state can never mutate the training module.
             self._static_head_groups = [dict(g) for g in training_attention._static_head_groups]
             self._retrieval_groups = [dict(g) for g in training_attention._retrieval_groups]
+            if getattr(training_attention, "terminal_memory", None) is not None:
+                self._terminal_memory_head_indices = tuple(
+                    int(h) for h in training_attention._terminal_memory_head_indices
+                )
+                self._terminal_memory_config = training_attention.terminal_memory.config
             self._build_fused_decode_metadata()
 
     def _build_fused_decode_metadata(self):
@@ -327,21 +335,35 @@ class GQAAttentionInference:
         return context.astype(q.dtype, copy=False) if bf16_attention else context
 
     def _project_and_store(
-        self, x, k_cache, v_cache, start_pos, *, single_token_decode=False
+        self, x, k_cache, v_cache, start_pos, *, single_token_decode=False,
+        rope_start_pos=None, cache_position=None,
     ):
-        """Project one contiguous input span and append its native-Hkv K/V.
+        """Project one span and write native-Hkv K/V into the working cache.
 
-        0059H specializes the post-GEMM work for BF16 autoregressive decode.
-        Prefill deliberately keeps the existing vectorized path because it has
-        many query rows and is already efficient.
+        ``start_pos`` is the logical position inside the current working window.
+        Long-memory inference may rotate Q/K at a much larger absolute RoPE
+        position and write a one-token decode into a ring-buffer cache slot.
         """
         b, t_new, _ = x.shape
-        end_pos = int(start_pos) + int(t_new)
-        if end_pos > int(k_cache.shape[2]):
-            raise ValueError(
-                f"input length {t_new} at position {start_pos} exceeds cache "
-                f"capacity {k_cache.shape[2]}"
-            )
+        logical_start = int(start_pos)
+        logical_end = logical_start + int(t_new)
+        rope_start = logical_start if rope_start_pos is None else int(rope_start_pos)
+        if cache_position is None:
+            cache_start = logical_start
+            cache_end = cache_start + int(t_new)
+            if cache_end > int(k_cache.shape[2]):
+                raise ValueError(
+                    f"input length {t_new} at cache position {cache_start} exceeds "
+                    f"capacity {k_cache.shape[2]}"
+                )
+        else:
+            if int(t_new) != 1:
+                raise ValueError("ring-cache insertion is only supported for one-token decode")
+            cache_start = int(cache_position)
+            cache_end = cache_start + 1
+            if not (0 <= cache_start < int(k_cache.shape[2])):
+                raise ValueError("ring-cache insertion slot lies outside cache")
+
         qkv = (x.reshape(-1, self.d_model) @ self.Wqkv).reshape(b, t_new, -1)
 
         if (
@@ -351,21 +373,18 @@ class GQAAttentionInference:
             and fused_decode_qkv_enabled()
             and is_bfloat16_dtype(qkv.dtype)
         ):
-            self.ensure_rope_capacity(end_pos)
-            q = xp.empty(
-                (b, 1, self.n_q_heads, self.d_head), dtype=qkv.dtype
-            )
+            self.ensure_rope_capacity(rope_start + 1)
+            q = xp.empty((b, 1, self.n_q_heads, self.d_head), dtype=qkv.dtype)
             ran = fused_unpack_rope_store_bf16_d64(
                 qkv, q, k_cache, v_cache, self._rope_cos, self._rope_sin,
-                position=int(start_pos),
+                position=rope_start,
+                cache_position=cache_start,
                 n_q_heads=self.n_q_heads,
                 n_kv_heads=self.n_kv_heads,
             )
             if ran:
                 self._fused_qkv_decode_active = True
-                # Decode callers only consume Q; K/V have already been written
-                # directly into their native cache slots.
-                return q, None, None, end_pos
+                return q, None, None, logical_end
             self._fused_qkv_decode_active = False
 
         q_end = self._q_width
@@ -373,15 +392,56 @@ class GQAAttentionInference:
         q_pre = qkv[..., :q_end].reshape(b, t_new, self.n_q_heads, self.d_head)
         k_pre = qkv[..., q_end:k_end].reshape(b, t_new, self.n_kv_heads, self.d_head)
         v = qkv[..., k_end:].reshape(b, t_new, self.n_kv_heads, self.d_head)
-        q = self._apply_rope_absolute(q_pre, start_pos)
-        k = self._apply_rope_absolute(k_pre, start_pos)
-        k_cache[:, :, int(start_pos):end_pos, :] = k.transpose(0, 2, 1, 3)
-        v_cache[:, :, int(start_pos):end_pos, :] = v.transpose(0, 2, 1, 3)
-        return q, k, v, end_pos
+        q = self._apply_rope_absolute(q_pre, rope_start)
+        k = self._apply_rope_absolute(k_pre, rope_start)
+        if cache_position is None:
+            k_cache[:, :, cache_start:cache_end, :] = k.transpose(0, 2, 1, 3)
+            v_cache[:, :, cache_start:cache_end, :] = v.transpose(0, 2, 1, 3)
+        else:
+            k_cache[:, :, cache_start:cache_end, :] = k.transpose(0, 2, 1, 3)
+            v_cache[:, :, cache_start:cache_end, :] = v.transpose(0, 2, 1, 3)
+        return q, k, v, logical_end
+
+    def _apply_terminal_memory_override(
+        self, q, context, k_cache, v_cache, *, memory_store, memory_route,
+        local_count, cache_start=0, terminal_row=-1,
+    ):
+        """Replace terminal retrieval-head context with 0058C Landmark memory."""
+        if (
+            memory_store is None
+            or memory_route is None
+            or not self._terminal_memory_head_indices
+        ):
+            return context
+        heads = tuple(self._terminal_memory_head_indices)
+        kv_heads = tuple(int(h) // self.group_size for h in heads)
+        row = int(terminal_row)
+        if row < 0:
+            row += int(context.shape[1])
+        q_term = xp.ascontiguousarray(q[:, row:row + 1, :, :])
+        replacement = terminal_landmark_decode(
+            q_term, k_cache, v_cache, memory_store, memory_route,
+            query_heads=heads,
+            local_kv_heads=kv_heads,
+            local_count=int(local_count),
+            cache_start=int(cache_start),
+            gate_scale=float(self._terminal_memory_config.router_weight_scale),
+            attn_scale=float(self.scale),
+        )
+        # TerminalMemoryInferenceStore only materializes a route once every
+        # batch element has enough complete external blocks.  Assign the whole
+        # batch directly; this avoids a tiny nonzero/advanced-index kernel and
+        # an implicit host-side size check on every generated token.
+        head_ids = xp.asarray(heads, dtype=xp.int64)
+        context[:, row, head_ids, :] = replacement[:, 0].astype(
+            context.dtype, copy=False
+        )
+        return context
 
     def _prefill_sparse(
         self, x, k_cache, v_cache, start_pos, return_all=False,
-        router_input_cache=None,
+        router_input_cache=None, rope_start_pos=None,
+        terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Exact sparse prefill using the same kernels as training forward."""
         if int(start_pos) != 0:
@@ -390,7 +450,7 @@ class GQAAttentionInference:
             )
         b, t_prompt, _ = x.shape
         q, k, v, end_pos = self._project_and_store(
-            x, k_cache, v_cache, start_pos
+            x, k_cache, v_cache, start_pos, rope_start_pos=rope_start_pos
         )
         if router_input_cache is not None:
             router_input_cache[:, :end_pos, :] = x
@@ -444,6 +504,15 @@ class GQAAttentionInference:
             )
             context[:, :, head_indices, :] = subset
 
+        context = self._apply_terminal_memory_override(
+            q, context, k_cache, v_cache,
+            memory_store=terminal_memory_store,
+            memory_route=terminal_memory_route,
+            local_count=t_prompt,
+            cache_start=0,
+            terminal_row=t_prompt - 1,
+        )
+
         merged = context.astype(q.dtype, copy=False).reshape(
             b, t_prompt, self.n_q_heads * self.d_head
         )
@@ -484,7 +553,10 @@ class GQAAttentionInference:
             return anchors
         raise RuntimeError(f"unsupported sparse inference head kind {kind!r}")
 
-    def _single_query_attention(self, q_subset, k_cache, v_cache, indices, kv_mapping, logit_bias=None):
+    def _single_query_attention(
+        self, q_subset, k_cache, v_cache, indices, kv_mapping, logit_bias=None,
+        cache_start=0,
+    ):
         """One-query sparse attention without expanding native GQA KV heads."""
         b, tq, n_heads, d = q_subset.shape
         if tq != 1:
@@ -494,6 +566,8 @@ class GQAAttentionInference:
             return xp.zeros(q_subset.shape, dtype=q_subset.dtype)
 
         kv_ids = xp.asarray(kv_mapping, dtype=xp.int64)
+        if int(cache_start) != 0:
+            indices = (indices + int(cache_start)) % int(k_cache.shape[2])
         # Common static patterns use [K]; retrieval may use [B,H,K].
         if indices.ndim == 1:
             k_native = k_cache[:, kv_ids, :, :][:, :, indices, :]
@@ -521,21 +595,41 @@ class GQAAttentionInference:
         ctx = xp.matmul(probs[:, :, None, :], vf)[:, :, 0, :]
         return ctx[:, None, :, :].astype(q_subset.dtype, copy=False)
 
+    @staticmethod
+    def _logical_ring_view(cache, cache_start, count):
+        """Return logical [oldest..newest] rows from a physical ring cache."""
+        count = int(count)
+        cache_start = int(cache_start)
+        capacity = int(cache.shape[1])
+        if count <= 0:
+            return cache[:, :0, :]
+        if cache_start == 0 and count <= capacity:
+            return cache[:, :count, :]
+        end = cache_start + count
+        if end <= capacity:
+            return cache[:, cache_start:end, :]
+        return xp.concatenate(
+            (cache[:, cache_start:, :], cache[:, : end - capacity, :]), axis=1
+        )
+
     def _retrieval_route_for_position(
         self, group, router_input_cache, end_pos, position,
-        retrieval_route_cache, route_cache_key,
+        retrieval_route_cache, route_cache_key, *, cache_start=0,
+        working_count=None, route_clock=None, working_start_abs=0,
     ):
-        """Return the learned block route controlling one decode position.
+        """Return the learned within-working-window retrieval route.
 
-        Unlike the training/full-prefix router, incremental inference evaluates
-        only the *current* route.  Historical block projections are cached once
-        when blocks first become eligible, so a 64k decode does not repeatedly
-        repool/reproject the entire prefix at every routing boundary.
+        0059I keeps the base 4k sparse router alive while the working cache is a
+        ring. Routes are refreshed at the original routing stride. At a refresh
+        boundary the small 4k router-input ring is materialized contiguously;
+        between boundaries selected logical blocks are shifted so they continue
+        to refer to the same absolute tokens while the window advances.
         """
         module = group["module"]
         router = module.router
         cfg = module.config
         p = int(position)
+        count = int(end_pos if working_count is None else working_count)
         stride = int(cfg.routing_stride)
         block_size = int(cfg.history_block_size)
         route_start = (p // stride) * stride
@@ -545,48 +639,30 @@ class GQAAttentionInference:
         if route_start < stride or candidate_blocks < int(cfg.top_k_blocks):
             return None
 
+        clock = p if route_clock is None else int(route_clock)
+        refresh_id = clock // stride
         state = retrieval_route_cache.get(route_cache_key)
-        if state is not None and int(state.get("route_start", -1)) == route_start:
+        if state is not None and int(state.get("refresh_id", -1)) == refresh_id:
             return state
 
-        batch = int(router_input_cache.shape[0])
-        if state is None:
-            max_blocks = int(router_input_cache.shape[1]) // block_size
-            state = {
-                "route_start": -1,
-                "weights": None,
-                "selected": None,
-                "block_bias": None,
-                "projected_blocks": 0,
-                "history_proj": xp.empty(
-                    (batch, max_blocks, int(router.router_dim)),
-                    dtype=router_input_cache.dtype,
-                ),
-            }
-            retrieval_route_cache[route_cache_key] = state
-
-        projected = int(state["projected_blocks"])
-        if candidate_blocks > projected:
-            token_start = projected * block_size
-            token_end = candidate_blocks * block_size
-            pooled, _ = router.history_pooler.forward(
-                router_input_cache[:, token_start:token_end, :]
-            )
-            hproj = (
-                pooled.reshape(-1, router.d_model) @ router.W_history.data
-            ).reshape(batch, candidate_blocks - projected, router.router_dim)
-            state["history_proj"][:, projected:candidate_blocks, :] = hproj
-            state["projected_blocks"] = candidate_blocks
+        logical_cache = self._logical_ring_view(
+            router_input_cache, cache_start, count
+        )
+        batch = int(logical_cache.shape[0])
+        token_end = candidate_blocks * block_size
+        pooled, _ = router.history_pooler.forward(logical_cache[:, :token_end, :])
+        history_proj = (
+            pooled.reshape(-1, router.d_model) @ router.W_history.data
+        ).reshape(batch, candidate_blocks, router.router_dim)
 
         route_starts = xp.asarray([route_start], dtype=xp.int64)
         query_pooled, _ = router.query_pooler.forward(
-            router_input_cache[:, :route_start, :], route_starts
+            logical_cache[:, :route_start, :], route_starts
         )
         query_proj = (
             query_pooled.reshape(-1, router.d_model) @ router.W_query.data
         ).reshape(batch, 1, router.num_queries, router.router_dim)
 
-        history_proj = state["history_proj"][:, :candidate_blocks, :]
         q3 = query_proj.reshape(batch, router.num_queries, router.router_dim)
         if is_low_precision_dtype(q3.dtype):
             qscore = q3.astype(xp.float32, copy=False)
@@ -597,16 +673,17 @@ class GQAAttentionInference:
         scores = xp.matmul(qscore, hscore.swapaxes(1, 2)) / math.sqrt(
             router.router_dim
         )
-        # selected_topk_softmax_forward also supplies the exact deterministic
-        # tie handling used by training.  Its backward cache is intentionally
-        # discarded during inference.
         weights, selected, _ = selected_topk_softmax_forward(
             scores[:, None, :, :], int(cfg.top_k_blocks),
             output_dtype=router_input_cache.dtype,
         )
-        state["route_start"] = route_start
-        state["weights"] = xp.ascontiguousarray(weights[:, 0, :, :])
-        state["selected"] = xp.ascontiguousarray(selected[:, 0, :, :])
+        state = {
+            "refresh_id": refresh_id,
+            "route_start": route_start,
+            "weights": xp.ascontiguousarray(weights[:, 0, :, :]),
+            "selected": xp.ascontiguousarray(selected[:, 0, :, :]),
+            "window_start_abs": int(working_start_abs),
+        }
         if cfg.router_weight_mode == "logit_bias":
             wf = state["weights"].astype(xp.float32, copy=False)
             state["block_bias"] = xp.ascontiguousarray(
@@ -617,19 +694,15 @@ class GQAAttentionInference:
             state["block_bias"] = xp.zeros(
                 state["selected"].shape, dtype=xp.float32
             )
+        retrieval_route_cache[route_cache_key] = state
         return state
 
     def _fused_sparse_decode_context(
         self, q, k_cache, v_cache, router_input_cache, end_pos, position,
-        retrieval_route_cache, layer_idx,
+        retrieval_route_cache, layer_idx, *, cache_start=0, working_count=None,
+        route_clock=None, working_start_abs=0,
     ):
-        """Run the 0059E one-launch BF16 sparse attention path when possible.
-
-        Routing remains identical to the reference implementation.  The only
-        difference is execution of the already-defined sparse K/V read.  A
-        ``None`` return means the topology/dtype/backend is unsupported and the
-        caller must use the legacy per-group implementation.
-        """
+        """Run the one-launch BF16 sparse read, including ring-cache mapping."""
         if not self._fused_decode_ready:
             return None
 
@@ -639,16 +712,15 @@ class GQAAttentionInference:
         retrieval_queries = 1
         retrieval_blocks = 1
         retrieval_block_size = 1
+        retrieval_key_shift = 0
 
         if self._retrieval_groups:
             group = self._retrieval_groups[0]
             route = self._retrieval_route_for_position(
-                group,
-                router_input_cache,
-                end_pos,
-                position,
-                retrieval_route_cache,
-                (int(layer_idx), str(group["name"])),
+                group, router_input_cache, end_pos, position,
+                retrieval_route_cache, (int(layer_idx), str(group["name"])),
+                cache_start=cache_start, working_count=working_count,
+                route_clock=route_clock, working_start_abs=working_start_abs,
             )
             cfg = group["module"].config
             retrieval_block_size = int(cfg.history_block_size)
@@ -658,13 +730,11 @@ class GQAAttentionInference:
                 selected = route["selected"]
                 block_bias = route["block_bias"]
                 retrieval_active = True
+                retrieval_key_shift = int(route.get("window_start_abs", working_start_abs)) - int(working_start_abs)
 
         context = xp.empty_like(q)
         ran = fused_sparse_decode_bf16_d64(
-            q,
-            k_cache,
-            v_cache,
-            context,
+            q, k_cache, v_cache, context,
             head_kind=self._fused_head_kind,
             kv_head=self._fused_kv_head,
             p0=self._fused_p0,
@@ -679,18 +749,18 @@ class GQAAttentionInference:
             retrieval_blocks=retrieval_blocks,
             retrieval_block_size=retrieval_block_size,
             scale=self.scale,
+            cache_start=cache_start,
+            retrieval_key_shift=retrieval_key_shift,
         )
         if not ran:
-            # Unsupported layout/toolchain: permanently use the proven legacy
-            # path for this attention instance instead of retrying/allocating a
-            # fused output buffer on every generated token.
             self._fused_decode_ready = False
             return None
         return context
 
     def _decode_retrieval_group(
         self, group, q, k_cache, v_cache, router_input_cache,
-        end_pos, position, retrieval_route_cache, route_cache_key,
+        end_pos, position, retrieval_route_cache, route_cache_key, *,
+        cache_start=0, working_count=None, route_clock=None, working_start_abs=0,
     ):
         head_indices = tuple(group["head_indices"])
         q_subset = q[:, :, head_indices, :]
@@ -698,6 +768,8 @@ class GQAAttentionInference:
         route = self._retrieval_route_for_position(
             group, router_input_cache, end_pos, position,
             retrieval_route_cache, route_cache_key,
+            cache_start=cache_start, working_count=working_count,
+            route_clock=route_clock, working_start_abs=working_start_abs,
         )
         if route is None:
             return xp.zeros(q_subset.shape, dtype=q_subset.dtype)
@@ -715,6 +787,10 @@ class GQAAttentionInference:
         indices = (
             selected[..., None] * block_size + offsets[None, None, None, :]
         ).reshape(selected.shape[0], n_heads, -1)
+        key_shift = int(route.get("window_start_abs", working_start_abs)) - int(working_start_abs)
+        if key_shift:
+            indices = indices + key_shift
+        valid_idx = (indices >= 0) & (indices < int(working_count if working_count is not None else end_pos))
 
         logit_bias = None
         cfg = group["module"].config
@@ -724,63 +800,74 @@ class GQAAttentionInference:
                 wf + float(cfg.router_weight_eps)
             )
             logit_bias = xp.repeat(block_bias, block_size, axis=-1)
+        if logit_bias is None:
+            logit_bias = xp.zeros(indices.shape, dtype=xp.float32)
+        logit_bias = xp.where(valid_idx, logit_bias, -1.0e30)
+        indices = xp.where(valid_idx, indices, 0)
         return self._single_query_attention(
             q_subset, k_cache, v_cache, indices, kv_mapping,
-            logit_bias=logit_bias,
+            logit_bias=logit_bias, cache_start=cache_start,
         )
 
     def _decode_sparse(
         self, x, k_cache, v_cache, start_pos,
-        router_input_cache=None, retrieval_route_cache=None,
-        layer_idx=0,
+        router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,
+        cache_position=None, rope_position=None, cache_start=0,
+        working_count=None, route_clock=None, working_start_abs=0,
+        terminal_memory_store=None, terminal_memory_route=None,
     ):
         if router_input_cache is None or retrieval_route_cache is None:
             raise ValueError("sparse decode requires router and route inference state")
         b, t_new, _ = x.shape
         if t_new != 1:
             raise AssertionError("decode_one processes exactly one token")
+        logical_position = int(start_pos)
+        if working_count is None:
+            working_count = logical_position + 1
+        cache_slot = logical_position if cache_position is None else int(cache_position)
+        rope_pos = logical_position if rope_position is None else int(rope_position)
         q, _, _, end_pos = self._project_and_store(
-            x, k_cache, v_cache, start_pos, single_token_decode=True
+            x, k_cache, v_cache, logical_position, single_token_decode=True,
+            rope_start_pos=rope_pos, cache_position=cache_slot,
         )
-        router_input_cache[:, int(start_pos):end_pos, :] = x
+        router_input_cache[:, cache_slot:cache_slot + 1, :] = x
 
-        fused_context = self._fused_sparse_decode_context(
-            q,
-            k_cache,
-            v_cache,
-            router_input_cache,
-            end_pos,
-            start_pos,
-            retrieval_route_cache,
-            layer_idx,
+        context = self._fused_sparse_decode_context(
+            q, k_cache, v_cache, router_input_cache, end_pos, logical_position,
+            retrieval_route_cache, layer_idx,
+            cache_start=cache_start, working_count=working_count,
+            route_clock=route_clock, working_start_abs=working_start_abs,
         )
-        if fused_context is not None:
-            merged = fused_context.reshape(
-                b, 1, self.n_q_heads * self.d_head
-            )
-            y = (merged.reshape(-1, self.d_model) @ self.Wo).reshape(
-                b, 1, self.d_model
-            )
-            return y[:, -1, :]
+        if context is None:
+            context = xp.zeros(q.shape, dtype=q.dtype)
+            for group in self._static_head_groups:
+                head_indices = tuple(group["head_indices"])
+                indices = self._decode_indices(group, logical_position)
+                subset = self._single_query_attention(
+                    q[:, :, head_indices, :], k_cache, v_cache, indices,
+                    tuple(i // self.group_size for i in head_indices),
+                    cache_start=cache_start,
+                )
+                context[:, :, head_indices, :] = subset
 
-        context = xp.zeros(q.shape, dtype=q.dtype)
-        for group_index, group in enumerate(self._static_head_groups):
-            head_indices = tuple(group["head_indices"])
-            indices = self._decode_indices(group, start_pos)
-            subset = self._single_query_attention(
-                q[:, :, head_indices, :], k_cache, v_cache, indices,
-                tuple(i // self.group_size for i in head_indices),
-            )
-            context[:, :, head_indices, :] = subset
+            for group in self._retrieval_groups:
+                subset = self._decode_retrieval_group(
+                    group, q, k_cache, v_cache, router_input_cache,
+                    end_pos, logical_position, retrieval_route_cache,
+                    (int(layer_idx), str(group["name"])),
+                    cache_start=cache_start, working_count=working_count,
+                    route_clock=route_clock, working_start_abs=working_start_abs,
+                )
+                context[:, :, tuple(group["head_indices"]), :] = subset
 
-        for group_index, group in enumerate(self._retrieval_groups):
-            subset = self._decode_retrieval_group(
-                group, q, k_cache, v_cache, router_input_cache,
-                end_pos, start_pos, retrieval_route_cache,
-                (int(layer_idx), str(group["name"])),
-            )
-            context[:, :, tuple(group["head_indices"]), :] = subset
-
+        context = self._apply_terminal_memory_override(
+            q, context, k_cache, v_cache,
+            memory_store=terminal_memory_store,
+            memory_route=terminal_memory_route,
+            local_count=working_count,
+            cache_start=cache_start,
+            terminal_row=0,
+        )
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
         y = (merged.reshape(-1, self.d_model) @ self.Wo).reshape(
             b, 1, self.d_model
@@ -789,7 +876,8 @@ class GQAAttentionInference:
 
     def prefill(
         self, x, k_cache, v_cache, start_pos, return_all=False,
-        router_input_cache=None, retrieval_route_cache=None, layer_idx=0,
+        router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,
+        rope_start_pos=None, terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Prefill the cache for a prompt and run causal attention."""
         b, t_prompt, _ = x.shape
@@ -808,6 +896,9 @@ class GQAAttentionInference:
             return self._prefill_sparse(
                 x, k_cache, v_cache, start_pos, return_all=return_all,
                 router_input_cache=router_input_cache,
+                rope_start_pos=rope_start_pos,
+                terminal_memory_store=terminal_memory_store,
+                terminal_memory_route=terminal_memory_route,
             )
 
         _, _, _, Wo = self._weight_data()
@@ -854,7 +945,9 @@ class GQAAttentionInference:
 
     def decode_one(
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
-        retrieval_route_cache=None, layer_idx=0,
+        retrieval_route_cache=None, layer_idx=0, *, cache_position=None,
+        rope_position=None, cache_start=0, working_count=None, route_clock=None,
+        working_start_abs=0, terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Decode exactly one token using cached native-Hkv K/V tensors."""
         b, t_new, _ = x.shape
@@ -869,7 +962,12 @@ class GQAAttentionInference:
                 x, k_cache, v_cache, start_pos,
                 router_input_cache=router_input_cache,
                 retrieval_route_cache=retrieval_route_cache,
-                layer_idx=layer_idx,
+                layer_idx=layer_idx, cache_position=cache_position,
+                rope_position=rope_position, cache_start=cache_start,
+                working_count=working_count, route_clock=route_clock,
+                working_start_abs=working_start_abs,
+                terminal_memory_store=terminal_memory_store,
+                terminal_memory_route=terminal_memory_route,
             )
 
         _, _, _, Wo = self._weight_data()

@@ -37,15 +37,38 @@ class GenerationState:
     # reused for routing_stride consecutive decode positions.
     retrieval_routes: dict = field(default_factory=dict)
 
+    # 0059I terminal-Landmark long-memory inference state.  The deep
+    # Transformer cache remains bounded by ``working_capacity`` while
+    # ``max_length`` is the total addressable horizon.  ``cache_start`` is the
+    # physical ring slot corresponding to logical working position zero.
+    long_memory_enabled: bool = False
+    working_capacity: int = 0
+    working_count: int = 0
+    cache_start: int = 0
+    working_start_abs: int = 0
+    next_abs_pos: int = 0
+    working_token_ids: Optional[xp.ndarray] = None
+    working_embedding_sum: Optional[xp.ndarray] = None
+    terminal_memory_store: object = None
+    terminal_memory_route: object = None
+
     def reset(self):
         """Reset generation state without deallocating cache."""
         self.length = 0
         self.retrieval_routes.clear()
+        self.terminal_memory_route = None
     
     def remaining_capacity(self) -> int:
         """Remaining tokens that can be generated."""
+        if self.long_memory_enabled:
+            # The terminal-memory state is a sliding horizon. Generation can
+            # continue after the addressable horizon fills because old external
+            # blocks are evicted from the memory ring.
+            return 2**63 - 1
         return self.max_length - self.length
     
     def has_capacity(self, n_tokens: int = 1) -> bool:
         """Check if there's capacity for n more tokens."""
+        if self.long_memory_enabled:
+            return True
         return self.length + n_tokens <= self.max_length

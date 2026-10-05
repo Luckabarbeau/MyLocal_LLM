@@ -27,6 +27,7 @@ from mini_llm.ops.embedding import Embedding
 from mini_llm.ops.rmsnorm_inference import RMSNormInference
 from mini_llm.blocks.transformer_block_inference import TransformerBlockInference
 from mini_llm.inference_state import GenerationState
+from mini_llm.ops.terminal_memory_inference import TerminalMemoryInferenceStore
 
 
 class InferenceModel:
@@ -57,12 +58,13 @@ class InferenceModel:
         self.memory_working_length = (
             int(memory_cfg.target_length) if self.terminal_landmark_memory else None
         )
-        # 0059C short-history fallback: a terminal-Landmark checkpoint is an
-        # ordinary sparse 4k Transformer whenever no tokens exist outside the
-        # working window.  Do not reject such checkpoints at construction.
-        # The true >working-window external-memory cache remains a separate
-        # inference feature and is guarded in create_generation_state() so we
-        # never silently substitute incorrect long-memory semantics.
+        self.memory_config = memory_cfg if self.terminal_landmark_memory else None
+        self.memory_router = None
+        self.memory_attention_layer = None
+        self.terminal_memory_adapter = None
+        # Short prompts remain ordinary sparse 4k inference.  When the requested
+        # horizon exceeds the working window, 0059I adds the separate external
+        # terminal-Landmark block store while keeping these deep caches bounded.
         
         # Create inference components
         self.n_layers = config.n_layers
@@ -114,50 +116,35 @@ class InferenceModel:
             GenerationState with preallocated caches
         """
         max_length = int(max_length)
-        if (
+        long_memory = bool(
             self.terminal_landmark_memory
             and max_length > int(self.memory_working_length)
-        ):
-            raise NotImplementedError(
-                "0058C terminal-Landmark KV inference currently supports the "
-                f"short-history fallback through {self.memory_working_length:,} "
-                "tokens. A larger cache requires the external-history Landmark "
-                "store/router inference path; use --max-context at or below the "
-                "working-window length until that path is enabled."
+        )
+        if long_memory and max_length > int(self.memory_config.memory_length):
+            raise ValueError(
+                f"requested horizon {max_length:,} exceeds the checkpoint's "
+                f"trained terminal-memory horizon {self.memory_config.memory_length:,}"
             )
+        cache_length = int(self.memory_working_length) if long_memory else max_length
         k_cache = xp.empty(
-            (
-                self.n_layers,
-                batch_size,
-                self.n_kv_heads,
-                max_length,
-                self.head_dim,
-            ),
+            (self.n_layers, batch_size, self.n_kv_heads, cache_length, self.head_dim),
             dtype=self.dtype,
         )
-        
         v_cache = xp.empty_like(k_cache)
         router_input_cache = None
         if self.sparse_attention:
             router_input_cache = xp.empty(
-                (
-                    self.n_layers, batch_size, max_length, self.d_model,
-                ),
+                (self.n_layers, batch_size, cache_length, self.d_model),
                 dtype=self.dtype,
             )
 
-        # RoPE tables are shared through the module-level cache, so the first
-        # block may create/grow the table and subsequent blocks reuse it.
         for block in self.blocks:
             block.attention.ensure_rope_capacity(max_length)
-        
+
         return GenerationState(
-            k_cache=k_cache,
-            v_cache=v_cache,
-            length=0,
-            max_length=max_length,
-            batch_size=batch_size,
-            router_input_cache=router_input_cache,
+            k_cache=k_cache, v_cache=v_cache, length=0, max_length=max_length,
+            batch_size=batch_size, router_input_cache=router_input_cache,
+            long_memory_enabled=long_memory, working_capacity=cache_length,
         )
 
     def _embedding_lookup(self, input_ids):
@@ -198,6 +185,119 @@ class InferenceModel:
         # Set LM head (output projection)
         # output_proj.W is [d_model, vocab], so we use it directly
         self.lm_head = training_model.output_proj.W.data  # [d_model, vocab]
+        if self.terminal_landmark_memory:
+            self.memory_router = training_model.memory_router
+            self.memory_attention_layer = int(training_model.memory_attention_layer)
+            self.terminal_memory_adapter = (
+                training_model.blocks[self.memory_attention_layer].attention.terminal_memory
+            )
+
+    def _prefill_terminal_long(self, input_ids, state):
+        cfg = self.memory_config
+        B, T_prompt = input_ids.shape
+        working_capacity = int(cfg.target_length)
+        working_count = min(int(T_prompt), working_capacity)
+        external_count = max(0, int(T_prompt) - working_count)
+        external_ids = input_ids[:, :external_count]
+        working_ids = input_ids[:, external_count:]
+
+        # Use one monotonic RoPE coordinate across external + working tokens.
+        # RoPE is translation invariant, while the external store itself handles
+        # the right-aligned 128-token block phase used by training.
+        working_start_abs = external_count
+
+        store = TerminalMemoryInferenceStore(
+            cfg, self.memory_router, self.terminal_memory_adapter, self.embedding.W.data,
+            external_capacity_tokens=max(0, int(state.max_length) - working_capacity),
+        )
+        store.initialize(external_ids, absolute_start=0)
+        state.terminal_memory_store = store
+
+        working_x = self._embedding_lookup(working_ids)
+        state.working_token_ids = xp.empty(
+            (B, working_capacity), dtype=xp.int32
+        )
+        state.working_token_ids[:, :working_count] = working_ids
+        state.working_embedding_sum = xp.sum(
+            working_x.astype(xp.float32, copy=False), axis=1
+        )
+        state.working_count = working_count
+        state.cache_start = 0
+        state.working_start_abs = int(working_start_abs)
+        state.next_abs_pos = int(working_start_abs + working_count)
+        state.terminal_memory_route = store.route(
+            state.working_embedding_sum, working_count
+        )
+
+        x = working_x
+        for i, block in enumerate(self.blocks):
+            router_cache = None if state.router_input_cache is None else state.router_input_cache[i]
+            use_memory = i == self.memory_attention_layer
+            x = block.prefill(
+                x, state.k_cache[i], state.v_cache[i], 0,
+                router_input_cache=router_cache,
+                retrieval_route_cache=state.retrieval_routes,
+                rope_start_pos=working_start_abs,
+                terminal_memory_store=store if use_memory else None,
+                terminal_memory_route=state.terminal_memory_route if use_memory else None,
+            )
+
+        x = self.final_norm.forward(x)
+        last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
+        state.length = int(T_prompt)
+        return self._lm_head_forward(last_hidden)
+
+    def _decode_terminal_long(self, next_ids, state):
+        B = int(next_ids.shape[0])
+        new_embedding = self._embedding_lookup(next_ids)
+        new_embedding_row = new_embedding[:, 0, :]
+        cap = int(state.working_capacity)
+
+        if int(state.working_count) >= cap:
+            old_slot = int(state.cache_start)
+            old_ids = state.working_token_ids[:, old_slot]
+            state.terminal_memory_store.append_evicted(
+                old_ids, state.working_start_abs
+            )
+            old_embedding = self.embedding.W.data[old_ids].astype(xp.float32, copy=False)
+            state.working_embedding_sum -= old_embedding
+            state.cache_start = (old_slot + 1) % cap
+            state.working_start_abs += 1
+            logical_position = cap - 1
+            cache_position = (state.cache_start + logical_position) % cap
+            state.working_count = cap
+        else:
+            logical_position = int(state.working_count)
+            cache_position = (int(state.cache_start) + logical_position) % cap
+            state.working_count += 1
+
+        state.working_token_ids[:, cache_position] = next_ids[:, 0]
+        state.working_embedding_sum += new_embedding_row.astype(xp.float32, copy=False)
+        rope_position = int(state.next_abs_pos)
+        state.next_abs_pos += 1
+        state.terminal_memory_route = state.terminal_memory_store.route(
+            state.working_embedding_sum, state.working_count
+        )
+
+        x = new_embedding
+        for i, block in enumerate(self.blocks):
+            router_cache = None if state.router_input_cache is None else state.router_input_cache[i]
+            use_memory = i == self.memory_attention_layer
+            x = block.decode_one(
+                x, state.k_cache[i], state.v_cache[i], logical_position,
+                router_input_cache=router_cache,
+                retrieval_route_cache=state.retrieval_routes,
+                cache_position=cache_position, rope_position=rope_position,
+                cache_start=state.cache_start, working_count=state.working_count,
+                route_clock=rope_position, working_start_abs=state.working_start_abs,
+                terminal_memory_store=state.terminal_memory_store if use_memory else None,
+                terminal_memory_route=state.terminal_memory_route if use_memory else None,
+            )
+
+        x = self.final_norm.forward(x)
+        last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
+        state.length += 1
+        return self._lm_head_forward(last_hidden)
 
     def prefill(self, input_ids: xp.ndarray, state: GenerationState) -> xp.ndarray:
         """
@@ -221,6 +321,11 @@ class InferenceModel:
             input_ids = input_ids.astype(xp.int32)
         
         B, T_prompt = input_ids.shape
+
+        if state.long_memory_enabled:
+            if T_prompt > int(state.max_length):
+                input_ids = input_ids[:, -int(state.max_length):]
+            return self._prefill_terminal_long(input_ids, state)
         
         if not state.has_capacity(T_prompt):
             raise ValueError(
@@ -281,6 +386,9 @@ class InferenceModel:
         
         B, T_new = next_ids.shape
         assert T_new == 1, "decode_one processes exactly one token"
+
+        if state.long_memory_enabled:
+            return self._decode_terminal_long(next_ids, state)
         
         if not state.has_capacity(1):
             raise ValueError("No capacity remaining in generation cache.")

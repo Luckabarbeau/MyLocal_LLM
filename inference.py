@@ -506,6 +506,32 @@ def main():
     
     config = ModelConfig(**config_dict)
     print(f"Loaded config: {config.d_model}d model, {config.n_layers} layers")
+
+    memory_cfg = getattr(config, "memory_context", None)
+    if args.max_context is not None:
+        requested_context = int(args.max_context)
+    elif (
+        memory_cfg is not None
+        and memory_cfg.enabled
+        and memory_cfg.integration_mode in {"terminal_landmark", "routed_prefix"}
+    ):
+        # For hierarchical-memory checkpoints context_length is the bounded deep
+        # active sequence (4k or 6k), not the addressable history horizon.
+        requested_context = int(memory_cfg.memory_length)
+    else:
+        requested_context = int(config.context_length)
+    if requested_context <= 0:
+        raise ValueError("--max-context must be positive")
+    if (
+        memory_cfg is not None
+        and memory_cfg.enabled
+        and memory_cfg.integration_mode in {"terminal_landmark", "routed_prefix"}
+        and requested_context > int(memory_cfg.memory_length)
+    ):
+        raise ValueError(
+            f"--max-context {requested_context:,} exceeds the checkpoint's trained "
+            f"memory horizon {int(memory_cfg.memory_length):,}"
+        )
     
     # Load tokenizer
     tokenizer_path = checkpoint_path / "tokenizer.json"
@@ -555,14 +581,21 @@ def main():
     # Create generator.  Configurable sparse attention can be evaluated with a
     # larger inference cache than the training window; the sparse topology and
     # RoPE tables grow dynamically while K/V remain cached exactly once.
-    inference_context = (
-        int(args.max_context) if args.max_context is not None
-        else int(config.context_length)
-    )
-    if inference_context <= 0:
-        raise ValueError("--max-context must be positive")
+    inference_context = requested_context
     print(f"Inference context/cache horizon: {inference_context:,} tokens")
-    memory_cfg = getattr(config, "memory_context", None)
+    if (
+        memory_cfg is not None
+        and memory_cfg.enabled
+        and memory_cfg.integration_mode == "routed_prefix"
+    ):
+        print(
+            "Routed-prefix memory: enabled "
+            f"({int(memory_cfg.target_length):,} current tokens + top-"
+            f"{int(memory_cfg.top_k_blocks)} x {int(memory_cfg.block_size)} = "
+            f"{int(memory_cfg.retrieved_length):,} exact historical prefix tokens; "
+            f"addressable horizon {inference_context:,}; deterministic refresh every "
+            f"{int(memory_cfg.inference_route_refresh_tokens):,} generated tokens by default)"
+        )
     if (
         memory_cfg is not None
         and memory_cfg.enabled

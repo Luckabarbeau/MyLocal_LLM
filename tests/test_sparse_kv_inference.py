@@ -301,3 +301,234 @@ def test_terminal_landmark_external_store_respects_requested_horizon():
     assert state.terminal_memory_store.external_capacity_tokens == 4
     assert state.terminal_memory_store.max_blocks == 2
     assert state.terminal_memory_store.active_blocks == 2
+
+
+def _tiny_routed_prefix_inference_config(*, refresh_tokens=1, sparse=False):
+    memory = MemoryContextConfig(
+        enabled=True,
+        memory_length=8,
+        recent_length=4,
+        target_length=4,
+        block_size=2,
+        top_k_blocks=1,
+        router_query_length=4,
+        router_dim=4,
+        integration_mode="routed_prefix",
+        memory_training="joint",
+        read_heads=1,
+        read_kv_heads=1,
+        inference_route_refresh_tokens=refresh_tokens,
+    )
+    attention_layers = None
+    n_q_heads = 2
+    n_kv_heads = 1
+    d_model = 8
+    d_head = 4
+    if sparse:
+        router = ContextRouterConfig(
+            history_block_size=2,
+            routing_stride=2,
+            query_window=2,
+            router_dim=4,
+            top_k_blocks=1,
+            exclude_recent_tokens=2,
+            query_pooling="mean",
+            history_pooling="mean",
+            num_queries=1,
+            router_weight_mode="logit_bias",
+        )
+        layer = AttentionLayerConfig(
+            heads=(
+                LocalAttentionConfig(window=4),
+                DilatedAttentionConfig(window=6, dilation=2, offset=0),
+                GlobalSparseAttentionConfig(stride=2, offset=0, include_current=True),
+                RetrievalAttentionConfig(router, group="far"),
+            )
+        )
+        attention_layers = (layer,)
+        n_q_heads = 4
+        n_kv_heads = 2
+        d_model = 32
+        d_head = 8
+    cfg = ModelConfig(
+        tokenizer_vocab_size=32,
+        context_length=memory.active_length,
+        n_layers=1,
+        d_model=d_model,
+        n_q_heads=n_q_heads,
+        n_kv_heads=n_kv_heads,
+        d_head=d_head,
+        n_experts=2,
+        top_k=1,
+        d_ff=16,
+        attention_layers=attention_layers,
+        dtype="float32",
+        memory_context=memory,
+    )
+    return cfg
+
+
+def test_routed_prefix_inference_allocates_bounded_0060b_cache():
+    cfg = _tiny_routed_prefix_inference_config()
+    inference = InferenceModel(cfg, dtype="float32")
+
+    inference.create_generation_state(batch_size=1, max_length=4)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    assert state.long_memory_enabled
+    assert state.working_capacity == 4
+    assert state.k_cache.shape[3] == cfg.memory_context.active_length
+    assert state.routed_prefix_refresh_tokens == 1
+
+
+def test_routed_prefix_long_prefill_matches_training_terminal_prediction():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=1)
+    training = DecoderLanguageModel(cfg, rng_seed=123, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    ids = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int32)
+
+    reference = training.forward(ids, return_cache=False)[0, -1]
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    cached = inference.prefill(ids, state)[0]
+
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=1e-5, atol=1e-6)
+    assert state.routed_prefix_length == 2
+    assert state.routed_prefix_route is not None
+    assert state.routed_prefix_store.token_count == 4
+    np.testing.assert_array_equal(
+        asnumpy(state.routed_prefix_route.selected_token_ids),
+        np.asarray([[3, 4]], dtype=np.int32),
+    )
+
+
+def test_routed_prefix_strict_refresh_decode_matches_fresh_training_horizon():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=1)
+    training = DecoderLanguageModel(cfg, rng_seed=123, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    inference.prefill(
+        xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int32), state
+    )
+
+    cached = inference.decode_one(xp.asarray([[9]], dtype=xp.int32), state)[0]
+    reference = training.forward(
+        xp.asarray([[2, 3, 4, 5, 6, 7, 8, 9]], dtype=xp.int32),
+        return_cache=False,
+    )[0, -1]
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=1e-5, atol=1e-6)
+    assert state.cache_start == 0
+    assert state.routed_prefix_refresh_count == 2
+    assert state.working_start_abs == 5
+
+
+def test_routed_prefix_split_ring_decodes_then_refreshes():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=2)
+    training = DecoderLanguageModel(cfg, rng_seed=123, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    inference.prefill(
+        xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int32), state
+    )
+
+    first = inference.decode_one(xp.asarray([[9]], dtype=xp.int32), state)
+    assert np.isfinite(asnumpy(first)).all()
+    assert state.cache_start == 1
+    assert state.routed_prefix_refresh_count == 1
+    assert state.routed_prefix_tokens_since_refresh == 1
+
+    second = inference.decode_one(xp.asarray([[10]], dtype=xp.int32), state)[0]
+    reference = training.forward(
+        xp.asarray([[3, 4, 5, 6, 7, 8, 9, 10]], dtype=xp.int32),
+        return_cache=False,
+    )[0, -1]
+    np.testing.assert_allclose(asnumpy(second), asnumpy(reference), rtol=1e-5, atol=1e-6)
+    assert state.cache_start == 0
+    assert state.routed_prefix_refresh_count == 2
+    assert state.routed_prefix_tokens_since_refresh == 0
+
+
+def test_routed_prefix_sparse_prefill_matches_training_with_true_positions():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=1, sparse=True)
+    training = DecoderLanguageModel(cfg, rng_seed=321, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    ids = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int32)
+    reference = training.forward(ids, return_cache=False)[0, -1]
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    cached = inference.prefill(ids, state)[0]
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=1e-5, atol=1e-6)
+
+
+def test_routed_prefix_sparse_split_ring_decode_and_refresh():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=2, sparse=True)
+    training = DecoderLanguageModel(cfg, rng_seed=321, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    inference.prefill(
+        xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int32), state
+    )
+
+    first = inference.decode_one(xp.asarray([[9]], dtype=xp.int32), state)
+    assert np.isfinite(asnumpy(first)).all()
+    assert state.cache_start == 1
+
+    second = inference.decode_one(xp.asarray([[10]], dtype=xp.int32), state)[0]
+    reference = training.forward(
+        xp.asarray([[3, 4, 5, 6, 7, 8, 9, 10]], dtype=xp.int32),
+        return_cache=False,
+    )[0, -1]
+    np.testing.assert_allclose(asnumpy(second), asnumpy(reference), rtol=2e-5, atol=2e-6)
+
+
+def test_routed_prefix_short_history_prefill_uses_every_external_token():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=1)
+    training = DecoderLanguageModel(cfg, rng_seed=777, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    # target_length=4 and retrieved budget=2: a 5-token prompt has one old token.
+    ids = xp.asarray([[1, 2, 3, 4, 5]], dtype=xp.int32)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    cached = inference.prefill(ids, state)[0]
+
+    # Match the training representation: one valid history row right-aligned in
+    # the four-row external store, followed by the same continuous working 4.
+    source = xp.asarray([[0, 0, 0, 1, 2, 3, 4, 5]], dtype=xp.int32)
+    meta = {
+        "history_valid_starts": np.asarray([3], dtype=np.int64),
+        "target_valid_lengths": np.asarray([4], dtype=np.int64),
+        "target_loss_mask": np.ones((1, 4), dtype=np.float32),
+        "use_retrieval": True,
+    }
+    reference = training.forward(source, memory_metadata=meta, return_cache=False)[0, -1]
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=1e-5, atol=1e-6)
+    assert state.routed_prefix_length == 1
+    np.testing.assert_array_equal(
+        asnumpy(state.routed_prefix_route.selected_token_ids),
+        np.asarray([[1]], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        asnumpy(state.routed_prefix_route.selected_position_ids),
+        np.asarray([[0]], dtype=np.int64),
+    )
+
+
+def test_routed_prefix_sparse_short_history_prefill_matches_training():
+    cfg = _tiny_routed_prefix_inference_config(refresh_tokens=1, sparse=True)
+    training = DecoderLanguageModel(cfg, rng_seed=779, dtype="float32")
+    inference = InferenceModel(cfg, dtype="float32")
+    inference.set_weights(training)
+    ids = xp.asarray([[1, 2, 3, 4, 5]], dtype=xp.int32)
+    state = inference.create_generation_state(batch_size=1, max_length=8)
+    cached = inference.prefill(ids, state)[0]
+    source = xp.asarray([[0, 0, 0, 1, 2, 3, 4, 5]], dtype=xp.int32)
+    meta = {
+        "history_valid_starts": np.asarray([3], dtype=np.int64),
+        "target_valid_lengths": np.asarray([4], dtype=np.int64),
+        "target_loss_mask": np.ones((1, 4), dtype=np.float32),
+        "use_retrieval": True,
+    }
+    reference = training.forward(source, memory_metadata=meta, return_cache=False)[0, -1]
+    np.testing.assert_allclose(asnumpy(cached), asnumpy(reference), rtol=2e-5, atol=2e-6)

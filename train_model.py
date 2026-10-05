@@ -515,8 +515,9 @@ def main():
         checkpoint_path = None
         config = model_config_from_name(args.model)
 
-    # 0058A: the long historical store is external memory.  Only the dense
-    # current training window enters the deep Transformer.
+    # 0058/0060: the long historical store is searched outside the deep
+    # Transformer.  Routed-prefix mode reopens only a bounded 2k subset before
+    # the continuous 4k working window.
     # Canonical values live in ModelConfig; environment overrides are provided
     # for benchmark/curriculum sweeps without changing parameter shapes.
     memory_cfg = config.memory_context
@@ -534,6 +535,7 @@ def main():
         "MINI_LLM_MEMORY_READ_QUERY_CHUNK": "read_query_chunk",
         "MINI_LLM_MEMORY_ATTENTION_LAYER": "memory_attention_layer",
         "MINI_LLM_MEMORY_MIN_ROUTER_HISTORY_BLOCKS": "min_router_history_blocks",
+        "MINI_LLM_MEMORY_ROUTER_TEMPERATURE_ANNEAL_STEPS": "router_temperature_anneal_steps",
     }
     for env_name, field_name in override_map.items():
         raw = os.environ.get(env_name)
@@ -542,6 +544,21 @@ def main():
     residual_scale_raw = os.environ.get("MINI_LLM_MEMORY_READER_RESIDUAL_SCALE")
     if residual_scale_raw is not None:
         memory_overrides["reader_residual_scale"] = float(residual_scale_raw)
+    float_override_map = {
+        "MINI_LLM_MEMORY_ROUTER_TEMPERATURE": "router_temperature",
+        "MINI_LLM_MEMORY_ROUTER_TEMPERATURE_MIN": "router_temperature_min",
+        "MINI_LLM_MEMORY_ROUTER_SURROGATE_SCALE": "router_surrogate_scale",
+        "MINI_LLM_MEMORY_RETRIEVAL_BATCH_PROBABILITY": "retrieval_batch_probability",
+    }
+    for env_name, field_name in float_override_map.items():
+        raw = os.environ.get(env_name)
+        if raw is not None:
+            memory_overrides[field_name] = float(raw)
+    gumbel_raw = os.environ.get("MINI_LLM_MEMORY_ROUTER_GUMBEL_NOISE")
+    if gumbel_raw is not None:
+        memory_overrides["router_gumbel_noise"] = gumbel_raw.strip().lower() not in {
+            "0", "false", "off", "no", ""
+        }
     integration_raw = os.environ.get("MINI_LLM_MEMORY_INTEGRATION")
     if integration_raw is not None:
         memory_overrides["integration_mode"] = integration_raw.strip().lower()
@@ -565,7 +582,7 @@ def main():
                 "MINI_LLM_MEMORY_LENGTH instead."
             )
         # The loader samples a historical store plus the dense current window;
-        # config.context_length records only the bounded deep current length.
+        # config.context_length records only the bounded deep active length.
         run_context_length = int(memory_cfg.source_input_length)
         config = dataclasses.replace(
             config, context_length=int(memory_cfg.active_length)

@@ -296,6 +296,197 @@ class HierarchicalMemoryRouter:
             selected_valid[:, 0, :], route_valid[:, 0], cache,
         )
 
+    def forward_routed_prefix(
+        self,
+        history_x,
+        recent_x,
+        *,
+        history_valid_starts=None,
+        stochastic=False,
+        gumbel_seed=None,
+        temperature=1.0,
+    ):
+        """0060A: choose one hard block set for a deep routed prefix.
+
+        Forward semantics are deliberately discrete: the returned IDs are the
+        exact historical blocks that will be reopened and prepended to the
+        dense current window.  During training, optional Gumbel perturbations
+        provide exploration.  A full masked softmax over *all* eligible blocks
+        is retained only as a handwritten straight-through backward surrogate;
+        it is never exposed to the Transformer.
+        """
+        batch = int(recent_x.shape[0])
+        route_starts = xp.asarray([int(recent_x.shape[1])], dtype=xp.int64)
+        cutoffs = xp.asarray([int(history_x.shape[1])], dtype=xp.int64)
+
+        # Reuse the established pooling/projection/candidate-mask path.  Its
+        # deterministic selected-top-k result is intentionally ignored here;
+        # 0060A performs the stochastic hard selection below while preserving
+        # the exact same score/backward cache contract.
+        _, _, _, route_valid, _, cache = self.forward(
+            history_x,
+            recent_x,
+            route_starts,
+            cutoffs,
+            history_valid_starts=history_valid_starts,
+            query_valid_starts=None,
+        )
+        scores = cache["scores"][:, 0, :]
+        candidate_mask = cache["candidate_mask"][:, 0, :]
+        work_scores = (
+            scores.astype("float32", copy=False)
+            if is_low_precision_dtype(scores.dtype)
+            else scores
+        )
+
+        temperature = float(temperature)
+        if not math.isfinite(temperature) or temperature <= 0.0:
+            raise ValueError("router temperature must be positive and finite")
+
+        if stochastic:
+            if gumbel_seed is None:
+                raise ValueError("stochastic routed-prefix selection requires gumbel_seed")
+            random = xp.random.RandomState(int(gumbel_seed))
+            # Keep the transform away from log(0) on both NumPy and CuPy.
+            u = random.uniform(1.0e-6, 1.0 - 1.0e-6, size=work_scores.shape)
+            u = xp.asarray(u, dtype=work_scores.dtype)
+            gumbel = -xp.log(-xp.log(u))
+            perturbed = work_scores + gumbel
+        else:
+            gumbel = None
+            perturbed = work_scores
+
+        ranked = xp.where(candidate_mask, perturbed, -xp.inf)
+        selected = xp.argsort(-ranked, axis=-1)[:, : self.top_k_blocks]
+        selected_valid = xp.take_along_axis(candidate_mask, selected, axis=-1)
+
+        # Selection rank must not become a communication channel.  Reopened
+        # blocks are always sorted by their real historical position; invalid
+        # padded slots (possible only for short direct-call examples) sort last.
+        sentinel = int(history_x.shape[1] // int(self.config.block_size)) + 1
+        chronological_key = xp.where(selected_valid, selected, sentinel)
+        order = xp.argsort(chronological_key, axis=-1)
+        selected = xp.take_along_axis(selected, order, axis=-1)
+        selected_valid = xp.take_along_axis(selected_valid, order, axis=-1)
+
+        # Full candidate softmax for the straight-through surrogate.  Using the
+        # same Gumbel perturbation as hard selection makes exploration and the
+        # local backward approximation refer to the same sampled ranking.
+        scaled = perturbed / temperature
+        scaled = xp.where(candidate_mask, scaled, -xp.inf)
+        row_has_value = xp.any(candidate_mask, axis=-1, keepdims=True)
+        row_max = xp.max(scaled, axis=-1, keepdims=True)
+        row_max = xp.where(row_has_value, row_max, 0.0)
+        exp_scores = xp.where(candidate_mask, xp.exp(scaled - row_max), 0.0)
+        denom = xp.sum(exp_scores, axis=-1, keepdims=True)
+        probs = xp.where(denom > 0.0, exp_scores / xp.maximum(denom, 1.0e-30), 0.0)
+        selected_probs = xp.take_along_axis(probs, selected, axis=-1)
+        selected_probs = xp.where(selected_valid, selected_probs, 0.0)
+
+        # Diagnostics use a normalized distribution over the actually reopened
+        # blocks.  This tensor is not consumed by the Transformer or backward.
+        selected_mass = xp.sum(selected_probs, axis=-1, keepdims=True)
+        route_weights = xp.where(
+            selected_mass > 0.0,
+            selected_probs / xp.maximum(selected_mass, 1.0e-30),
+            0.0,
+        ).astype(history_x.dtype, copy=False)
+
+        cache["prefix_selected"] = selected
+        cache["prefix_selected_valid"] = selected_valid
+        cache["prefix_soft_probs"] = probs
+        cache["prefix_temperature"] = temperature
+        cache["prefix_gumbel"] = gumbel
+        return (
+            route_weights,
+            selected,
+            selected_valid,
+            route_valid[:, 0],
+            cache,
+        )
+
+    def backward_routed_prefix(
+        self,
+        dselected_embeddings,
+        selected_embeddings,
+        cache,
+        *,
+        surrogate_scale=None,
+    ):
+        """0060A straight-through router backward from deep prefix utility.
+
+        Conceptually each selected block has an identity gate
+
+            g = 1 + a * (K p - stopgrad(K p)),
+
+        where ``K*p`` is a mass-K soft relaxation of the K-hot selection mask.
+        The *forward* value is exactly one: the Transformer receives the
+        untouched historical token embeddings.  Backward uses the correlation
+        between the downstream gradient and the selected real block content as
+        ``dL/dg`` and differentiates the full candidate softmax.  Consequently
+        unselected candidates receive gradient through softmax normalization
+        even though no dense historical mixture is materialized.
+        """
+        selected = cache["prefix_selected"]
+        selected_valid = cache["prefix_selected_valid"]
+        probs = cache["prefix_soft_probs"]
+        temperature = float(cache["prefix_temperature"])
+        scale = (
+            float(self.config.router_surrogate_scale)
+            if surrogate_scale is None
+            else float(surrogate_scale)
+        )
+        if scale == 0.0:
+            dscores = xp.zeros_like(cache["scores"])
+            return self._backward_scores(dscores, cache)
+
+        batch, n_selected = map(int, selected.shape)
+        block_size = int(self.config.block_size)
+        expected = (batch, n_selected * block_size, self.d_model)
+        if tuple(dselected_embeddings.shape) != expected:
+            raise ValueError(
+                f"dselected_embeddings must have shape {expected}, got "
+                f"{tuple(dselected_embeddings.shape)}"
+            )
+        if tuple(selected_embeddings.shape) != expected:
+            raise ValueError("selected_embeddings shape does not match routed prefix")
+
+        dwork = dselected_embeddings.reshape(
+            batch, n_selected, block_size, self.d_model
+        )
+        ework = selected_embeddings.reshape(
+            batch, n_selected, block_size, self.d_model
+        )
+        if is_low_precision_dtype(dwork.dtype):
+            dwork = dwork.astype("float32", copy=False)
+        if is_low_precision_dtype(ework.dtype):
+            ework = ework.astype("float32", copy=False)
+        dgate = xp.sum(dwork * ework, axis=(2, 3))
+        # A K-hot hard mask has total mass K, whereas an ordinary softmax has
+        # total mass one.  K*p is the simplest matching-mass relaxation and
+        # avoids an otherwise unnecessarily tiny initial router gradient when
+        # hundreds of historical blocks are eligible.
+        dselected_prob = xp.where(
+            selected_valid, dgate * scale * float(self.top_k_blocks), 0.0
+        )
+
+        dprob = xp.zeros_like(probs)
+        safe_selected = xp.where(selected_valid, selected, 0)
+        # Scatter-add keeps the helper robust for direct calls with fewer than K
+        # valid candidates, where padded selected slots may repeat index zero.
+        for slot in range(n_selected):
+            idx = safe_selected[:, slot]
+            vals = xp.where(
+                selected_valid[:, slot],
+                dselected_prob[:, slot].astype(dprob.dtype, copy=False),
+                0.0,
+            )
+            xp.add.at(dprob, (xp.arange(batch), idx), vals)
+        correction = xp.sum(dprob * probs, axis=-1, keepdims=True)
+        dscaled = probs * (dprob - correction)
+        dscores = (dscaled / temperature)[:, None, :]
+        return self._backward_scores(dscores, cache)
+
     def backward_terminal(self, dselected_scores, cache):
         """Backward raw selected Landmark gate logits into router parameters."""
         selected = cache["terminal_selected"]

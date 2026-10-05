@@ -61,11 +61,13 @@ def test_memory_presets_keep_deep_active_length_fixed():
         ModelConfig.wide_500m_memory_32k(),
         ModelConfig.wide_500m_memory_64k(),
     ]
-    assert {cfg.memory_context.active_length for cfg in configs} == {4096}
-    assert {cfg.context_length for cfg in configs} == {4096}
+    assert {cfg.memory_context.integration_mode for cfg in configs} == {"routed_prefix"}
+    assert {cfg.memory_context.active_length for cfg in configs} == {6144}
+    assert {cfg.context_length for cfg in configs} == {6144}
     assert [cfg.memory_context.memory_length for cfg in configs] == [16384, 32768, 65536]
     assert [cfg.memory_context.searchable_blocks for cfg in configs] == [96, 224, 480]
     assert {cfg.memory_context.target_length for cfg in configs} == {4096}
+    assert {cfg.memory_context.retrieved_length for cfg in configs} == {2048}
     assert {cfg.memory_context.router_query_length for cfg in configs} == {4096}
     assert len({cfg.estimated_parameter_count() for cfg in configs}) == 1
 
@@ -649,6 +651,141 @@ def test_causal_query_pool_mean_ignores_left_padding_per_batch():
 
 
 
+def _tiny_routed_prefix_config(top_k_blocks=1, surrogate_scale=1.0):
+    memory = MemoryContextConfig(
+        enabled=True,
+        memory_length=8,
+        recent_length=4,
+        target_length=4,
+        block_size=2,
+        top_k_blocks=top_k_blocks,
+        router_query_length=4,
+        router_dim=3,
+        query_pooling="mean",
+        history_pooling="mean",
+        integration_mode="routed_prefix",
+        memory_training="joint",
+        router_surrogate_scale=surrogate_scale,
+        router_gumbel_noise=True,
+        retrieval_batch_probability=1.0,
+        read_heads=1,
+        read_kv_heads=1,
+    )
+    return ModelConfig(
+        tokenizer_vocab_size=32,
+        context_length=memory.active_length,
+        n_layers=1,
+        d_model=8,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=4,
+        n_experts=2,
+        top_k=1,
+        d_ff=16,
+        dtype="float64",
+        memory_context=memory,
+    )
+
+
+def test_routed_prefix_reopens_all_history_directly_when_it_fits_budget():
+    model = DecoderLanguageModel(
+        _tiny_routed_prefix_config(top_k_blocks=2), rng_seed=41
+    )
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    active, cache = model._hierarchical_context_forward(
+        source, memory_metadata=_terminal_metadata()
+    )
+    assert cache["mode"] == "routed_prefix"
+    assert cache["retrieval_active"] is True
+    assert cache["prefix_mode"] == "direct_history"
+    assert cache["router_cache"] is None
+    np.testing.assert_array_equal(asnumpy(active.token_ids), asnumpy(source))
+    np.testing.assert_array_equal(asnumpy(active.position_ids)[0], np.arange(8))
+    assert active.embeddings.shape == (1, 8, 8)
+    assert active.target_start == 4
+    assert active.target_end == 8
+
+
+def test_routed_prefix_can_train_plain_dense_window_without_retrieval():
+    model = DecoderLanguageModel(_tiny_routed_prefix_config(), rng_seed=43)
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    metadata = _terminal_metadata()
+    metadata["use_retrieval"] = False
+    active, cache = model._hierarchical_context_forward(source, memory_metadata=metadata)
+    assert cache["retrieval_active"] is False
+    assert active.embeddings.shape == (1, 4, 8)
+    np.testing.assert_array_equal(asnumpy(active.token_ids), np.array([[5, 6, 7, 8]]))
+    np.testing.assert_array_equal(asnumpy(active.position_ids), np.array([[4, 5, 6, 7]]))
+    assert active.target_start == 0
+    assert active.target_end == 4
+
+
+def test_routed_prefix_gumbel_selection_is_reproducible_from_seed():
+    model = DecoderLanguageModel(_tiny_routed_prefix_config(), rng_seed=47)
+    # Equalize router scores so selection is controlled entirely by Gumbel noise.
+    model.memory_router.W_query.data[...] = 0.0
+    model.memory_router.W_history.data[...] = 0.0
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    meta = _terminal_metadata()
+    meta.update({
+        "router_stochastic": True,
+        "router_gumbel_seed": 12345,
+        "router_temperature": 0.7,
+    })
+    a, _ = model._hierarchical_context_forward(source, memory_metadata=meta)
+    b, _ = model._hierarchical_context_forward(source, memory_metadata=meta)
+    np.testing.assert_array_equal(asnumpy(a.selected_blocks), asnumpy(b.selected_blocks))
+
+
+def test_routed_prefix_st_surrogate_reaches_unselected_history_blocks():
+    model = DecoderLanguageModel(_tiny_routed_prefix_config(), rng_seed=53)
+    router = model.memory_router
+    history = xp.asarray(
+        np.arange(32, dtype=np.float64).reshape(1, 4, 8) / 17.0
+    )
+    recent = xp.asarray(
+        np.arange(32, 64, dtype=np.float64).reshape(1, 4, 8) / 19.0
+    )
+    _, selected, _, _, cache = router.forward_routed_prefix(
+        history, recent, stochastic=False, temperature=1.0
+    )
+    block = int(asnumpy(selected)[0, 0])
+    selected_embeddings = history[:, block * 2:block * 2 + 2, :]
+    dselected = xp.ones_like(selected_embeddings)
+    router.zero_grad()
+    dhistory, _ = router.backward_routed_prefix(
+        dselected, selected_embeddings, cache
+    )
+    block_norms = [
+        np.linalg.norm(asnumpy(dhistory[:, i * 2:(i + 1) * 2, :]))
+        for i in range(2)
+    ]
+    assert block_norms[block] > 0.0
+    assert block_norms[1 - block] > 0.0
+
+
+def test_routed_prefix_surrogate_is_forward_identity_but_lm_trains_router():
+    source = xp.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int64)
+    meta = _terminal_metadata()
+    with_st = DecoderLanguageModel(
+        _tiny_routed_prefix_config(surrogate_scale=1.0), rng_seed=59
+    )
+    no_st = DecoderLanguageModel(
+        _tiny_routed_prefix_config(surrogate_scale=0.0), rng_seed=59
+    )
+    hidden_a, _ = with_st.forward_body(source, memory_metadata=meta, return_cache=True)
+    hidden_b, _ = no_st.forward_body(source, memory_metadata=meta, return_cache=True)
+    np.testing.assert_allclose(asnumpy(hidden_a), asnumpy(hidden_b), rtol=0, atol=0)
+
+    logits, cache = with_st.forward(source, memory_metadata=meta, return_cache=True)
+    loss, loss_cache = with_st.compute_loss(logits, targets)
+    with_st.zero_grad()
+    dlogits = with_st.backward_loss(loss_cache)
+    with_st.backward(dlogits, cache)
+    assert np.linalg.norm(asnumpy(with_st.memory_router.W_query.grad)) > 0.0
+    assert np.linalg.norm(asnumpy(with_st.memory_router.W_history.grad)) > 0.0
+
 def _tiny_terminal_landmark_config(memory_training="joint", top_k_blocks=1):
     layer_router = ContextRouterConfig(
         history_block_size=2,
@@ -709,13 +846,14 @@ def _terminal_metadata(history_start=0, valid=4):
     }
 
 
-def test_terminal_landmark_preset_memory_length_is_total_horizon():
+def test_routed_prefix_preset_memory_length_is_total_horizon():
     cfg = ModelConfig.wide_500m_memory_64k().memory_context
-    assert cfg.integration_mode == "terminal_landmark"
+    assert cfg.integration_mode == "routed_prefix"
     assert cfg.memory_length == 65536
     assert cfg.distant_memory_length == 61440
     assert cfg.source_input_length == 65536
-    assert cfg.active_length == 4096
+    assert cfg.retrieved_length == 2048
+    assert cfg.active_length == 6144
     assert cfg.searchable_blocks == 480
 
 
@@ -1071,3 +1209,77 @@ def test_backbone_checkpoint_streams_into_terminal_memory_model(tmp_path):
     for p in memory.parameters():
         if p.name in base_values:
             np.testing.assert_array_equal(asnumpy(p.data), base_values[p.name])
+
+
+def test_document_sampler_returns_shorter_same_document_history_when_needed():
+    """Short packed shards keep their genuine history instead of aborting."""
+    eos = 99
+    # Longest document has six prediction pairs. A 4-token target is valid,
+    # but target(4) + requested history(4) cannot both be satisfied.
+    shard = np.asarray([
+        1, 2, 3, eos,
+        10, 11, 12, 13, 14, 15, eos,
+        20, 21, eos,
+    ])
+    index = build_packed_document_index(shard, eos)
+    inputs, labels, meta = create_hierarchical_memory_minibatch(
+        shard,
+        batch_size=2,
+        memory_length=8,
+        target_length=4,
+        rng=np.random.default_rng(17),
+        eos_token_id=eos,
+        document_index=index,
+        document_aware=True,
+        return_metadata=True,
+        min_history_tokens=4,
+    )
+
+    assert inputs.shape == (2, 12)
+    assert labels.shape == (2, 4)
+    assert np.all(meta["target_valid_lengths"] == 4)
+    assert not np.any(meta["min_history_satisfied"])
+    # The fallback still stays inside one EOS-bounded document.
+    assert np.all(meta["document_starts"] == 4)
+    assert np.all(meta["document_ends"] == 11)
+
+
+def test_routed_prefix_uses_all_available_short_history_without_router():
+    """A 4k+epsilon document should prepend every real old token directly."""
+    model = DecoderLanguageModel(
+        _tiny_routed_prefix_config(top_k_blocks=2), rng_seed=67
+    )
+    # External store is four rows wide, but only the last two are real history.
+    source = xp.asarray([[0, 0, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    meta = _terminal_metadata(history_start=2, valid=4)
+    meta["use_retrieval"] = True
+    active, cache = model._hierarchical_context_forward(source, memory_metadata=meta)
+
+    assert cache["retrieval_active"] is True
+    assert cache["prefix_mode"] == "direct_history"
+    assert cache["prefix_length"] == 2
+    assert cache["router_cache"] is None
+    np.testing.assert_array_equal(
+        asnumpy(active.token_ids), np.asarray([[3, 4, 5, 6, 7, 8]])
+    )
+    np.testing.assert_array_equal(
+        asnumpy(active.position_ids), np.asarray([[2, 3, 4, 5, 6, 7]])
+    )
+    assert active.target_start == 2
+    assert active.target_end == 6
+
+
+def test_routed_prefix_direct_history_backward_does_not_train_router():
+    model = DecoderLanguageModel(
+        _tiny_routed_prefix_config(top_k_blocks=2), rng_seed=71
+    )
+    source = xp.asarray([[0, 0, 3, 4, 5, 6, 7, 8]], dtype=xp.int64)
+    targets = xp.asarray([[6, 7, 8, 9]], dtype=xp.int64)
+    meta = _terminal_metadata(history_start=2, valid=4)
+    meta["use_retrieval"] = True
+    logits, cache = model.forward(source, memory_metadata=meta, return_cache=True)
+    _, loss_cache = model.compute_loss(logits, targets)
+    model.zero_grad()
+    model.backward(model.backward_loss(loss_cache), cache)
+    np.testing.assert_allclose(asnumpy(model.memory_router.W_query.grad), 0.0, rtol=0, atol=0)
+    np.testing.assert_allclose(asnumpy(model.memory_router.W_history.grad), 0.0, rtol=0, atol=0)

@@ -357,7 +357,29 @@ class ExtendedTrainer:
             cfg = self.memory_context
             print("  Causal external memory routing: enabled")
             print("  Document-aware sampling:       enabled (EOS-bounded)")
-            if cfg.integration_mode == "terminal_landmark":
+            if cfg.integration_mode == "routed_prefix":
+                print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
+                print(f"  Searchable history:            {cfg.distant_memory_length:,} tokens")
+                print(f"  Dense working window:          {cfg.target_length:,} tokens")
+                print(f"  Routed historical prefix:      {cfg.retrieved_length:,} tokens")
+                print(f"  Active Transformer length:     {cfg.active_length:,}")
+                print(f"  Memory block size:             {cfg.block_size:,}")
+                print(f"  Searchable memory blocks:      {cfg.searchable_blocks:,}")
+                print(f"  Routed blocks:                 {cfg.top_k_blocks:,}")
+                print(f"  Router query length:           {cfg.router_query_length:,}")
+                print(f"  Router dimension:              {cfg.router_dim:,}")
+                print(
+                    f"  Retrieval batch probability:  "
+                    f"{100.0 * cfg.retrieval_batch_probability:.1f}%"
+                )
+                print(
+                    f"  Router temperature:            {cfg.router_temperature:g} -> "
+                    f"{cfg.router_temperature_min:g} over "
+                    f"{cfg.router_temperature_anneal_steps:,} steps"
+                )
+                print(f"  Gumbel exploration:            {cfg.router_gumbel_noise}")
+                print(f"  ST surrogate scale:            {cfg.router_surrogate_scale:g}")
+            elif cfg.integration_mode == "terminal_landmark":
                 print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
                 print(f"  External searchable history:   {cfg.distant_memory_length:,} tokens")
                 print(f"  Dense working window:          {cfg.target_length:,} tokens")
@@ -842,6 +864,31 @@ class ExtendedTrainer:
             document_index = self._get_document_index(
                 self.document_indices, cache_key, shard_path, shard_data
             )
+            routed_prefix_retrieval = None
+            min_history_tokens = 0
+            if self.memory_context.integration_mode == "routed_prefix":
+                routed_prefix_retrieval = bool(
+                    self.train_rng.random()
+                    < float(self.memory_context.retrieval_batch_probability)
+                )
+                if routed_prefix_retrieval:
+                    # Right-aligned history can begin mid-block. K*B + (B-1)
+                    # tokens guarantees K complete block-aligned candidates.
+                    min_history_tokens = (
+                        self.memory_context.top_k_blocks
+                        * self.memory_context.block_size
+                        + self.memory_context.block_size
+                        - 1
+                    )
+            elif (
+                self.memory_context.integration_mode == "terminal_landmark"
+                and self.memory_context.memory_training == "router_only"
+            ):
+                min_history_tokens = (
+                    self.memory_context.min_router_history_blocks
+                    * self.memory_context.block_size
+                )
+
             inputs, targets, metadata = create_hierarchical_memory_minibatch(
                 shard_data,
                 self.batch_size,
@@ -852,14 +899,24 @@ class ExtendedTrainer:
                 document_index=document_index,
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
-                min_history_tokens=(
-                    self.memory_context.min_router_history_blocks
-                    * self.memory_context.block_size
-                    if self.memory_context.integration_mode == "terminal_landmark"
-                    and self.memory_context.memory_training == "router_only"
-                    else 0
-                ),
+                min_history_tokens=min_history_tokens,
             )
+            if routed_prefix_retrieval is not None:
+                history_available = (
+                    int(self.memory_context.distant_memory_length)
+                    - np.asarray(metadata["history_valid_starts"], dtype=np.int64)
+                )
+                retrieval_eligible = bool(
+                    np.all(history_available > 0)
+                    and np.all(
+                        metadata["target_valid_lengths"]
+                        == self.memory_context.target_length
+                    )
+                )
+                metadata["retrieval_requested"] = routed_prefix_retrieval
+                metadata["use_retrieval"] = bool(
+                    routed_prefix_retrieval and retrieval_eligible
+                )
 
         self.tokens_processed += self.batch_size * self.seq_length
         if return_metadata:
@@ -912,13 +969,36 @@ class ExtendedTrainer:
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
                 min_history_tokens=(
-                    self.memory_context.min_router_history_blocks
-                    * self.memory_context.block_size
-                    if self.memory_context.integration_mode == "terminal_landmark"
-                    and self.memory_context.memory_training == "router_only"
-                    else 0
+                    (
+                        self.memory_context.top_k_blocks
+                        * self.memory_context.block_size
+                        + self.memory_context.block_size
+                        - 1
+                    )
+                    if self.memory_context.integration_mode == "routed_prefix"
+                    else (
+                        self.memory_context.min_router_history_blocks
+                        * self.memory_context.block_size
+                        if self.memory_context.integration_mode == "terminal_landmark"
+                        and self.memory_context.memory_training == "router_only"
+                        else 0
+                    )
                 ),
             )
+            if self.memory_context.integration_mode == "routed_prefix":
+                history_available = (
+                    int(self.memory_context.distant_memory_length)
+                    - np.asarray(metadata["history_valid_starts"], dtype=np.int64)
+                )
+                retrieval_eligible = bool(
+                    np.all(history_available > 0)
+                    and np.all(
+                        metadata["target_valid_lengths"]
+                        == self.memory_context.target_length
+                    )
+                )
+                metadata["retrieval_requested"] = True
+                metadata["use_retrieval"] = retrieval_eligible
 
         if return_metadata:
             return inputs, targets, metadata
@@ -982,6 +1062,43 @@ class ExtendedTrainer:
         )
         print()
 
+    def _configure_routed_prefix_metadata(self, metadata, *, training):
+        """Attach 0060A routing mode without changing the sampler contract."""
+        if (
+            metadata is None
+            or self.memory_context is None
+            or self.memory_context.integration_mode != "routed_prefix"
+        ):
+            return metadata
+        cfg = self.memory_context
+        metadata = dict(metadata)
+        if training:
+            if "use_retrieval" not in metadata:
+                probability = float(cfg.retrieval_batch_probability)
+                metadata["use_retrieval"] = bool(
+                    self.train_rng.random() < probability
+                )
+            metadata["router_stochastic"] = True
+            metadata["router_gumbel_seed"] = int(
+                self.train_rng.integers(0, 2**31 - 1)
+            )
+            anneal_steps = max(1, int(cfg.router_temperature_anneal_steps))
+            progress = min(max(float(self.step) / anneal_steps, 0.0), 1.0)
+            metadata["router_temperature"] = (
+                float(cfg.router_temperature)
+                + progress
+                * (float(cfg.router_temperature_min) - float(cfg.router_temperature))
+            )
+        else:
+            # Validation measures the actual inference policy: deterministic
+            # retrieval with no Gumbel exploration.  Preserve sampler-derived
+            # eligibility so exact-4k/short fragments do not materialize a
+            # useless padded 60k history just to discover there is no prefix.
+            metadata.setdefault("use_retrieval", True)
+            metadata["router_stochastic"] = False
+            metadata["router_temperature"] = float(cfg.router_temperature_min)
+        return metadata
+
     def compute_val_loss(self) -> float:
         """
         Compute validation loss over multiple steps.
@@ -1001,6 +1118,9 @@ class ExtendedTrainer:
         for _ in range(self.val_steps):
             inputs, targets, batch_metadata = self.get_val_batch(
                 return_metadata=True
+            )
+            batch_metadata = self._configure_routed_prefix_metadata(
+                batch_metadata, training=False
             )
             loss_mask = (
                 None if batch_metadata is None
@@ -1095,6 +1215,9 @@ class ExtendedTrainer:
                 inputs, targets, batch_metadata = self.get_train_batch(
                     return_metadata=True
                 )
+            batch_metadata = self._configure_routed_prefix_metadata(
+                batch_metadata, training=True
+            )
             loss_mask = (
                 None if batch_metadata is None
                 else batch_metadata.get("target_loss_mask")

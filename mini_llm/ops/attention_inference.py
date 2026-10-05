@@ -259,6 +259,40 @@ class GQAAttentionInference:
         x[..., 1::2] = x0 * sin + x1 * cos
         return x
 
+    def _apply_rope_positions(self, x, position_ids):
+        """Apply cached RoPE for explicit [T] or [B,T] source positions."""
+        b, t_new, _, _ = x.shape
+        positions = xp.asarray(position_ids)
+        if positions.ndim == 1:
+            if int(positions.shape[0]) != int(t_new):
+                raise ValueError("1D position_ids must have shape [T]")
+        elif positions.ndim == 2:
+            if tuple(positions.shape) != (int(b), int(t_new)):
+                raise ValueError("2D position_ids must have shape [B,T]")
+        else:
+            raise ValueError("position_ids must have shape [T] or [B,T]")
+        if positions.dtype.kind not in {"i", "u"}:
+            raise TypeError("position_ids must use an integer dtype")
+        if positions.size and bool(xp.any(positions < 0)):
+            raise ValueError("position_ids must be non-negative")
+
+        max_position = int(xp.max(positions).item()) if positions.size else -1
+        self.ensure_rope_capacity(max_position + 1)
+        base_cos = self._rope_cos[0, :, 0, :]
+        base_sin = self._rope_sin[0, :, 0, :]
+        if positions.ndim == 1:
+            cos = base_cos[positions][None, :, None, :]
+            sin = base_sin[positions][None, :, None, :]
+        else:
+            cos = base_cos[positions][:, :, None, :]
+            sin = base_sin[positions][:, :, None, :]
+
+        x0 = x[..., 0::2].copy()
+        x1 = x[..., 1::2]
+        x[..., 0::2] = x0 * cos - x1 * sin
+        x[..., 1::2] = x0 * sin + x1 * cos
+        return x
+
     def _attention(self, q, k_native, v_native, causal_mask=None):
         """Attend with native Hkv K/V tensors; never physically repeat them."""
         b, t_query, _, _ = q.shape
@@ -336,7 +370,7 @@ class GQAAttentionInference:
 
     def _project_and_store(
         self, x, k_cache, v_cache, start_pos, *, single_token_decode=False,
-        rope_start_pos=None, cache_position=None,
+        rope_start_pos=None, cache_position=None, position_ids=None,
     ):
         """Project one span and write native-Hkv K/V into the working cache.
 
@@ -392,8 +426,12 @@ class GQAAttentionInference:
         q_pre = qkv[..., :q_end].reshape(b, t_new, self.n_q_heads, self.d_head)
         k_pre = qkv[..., q_end:k_end].reshape(b, t_new, self.n_kv_heads, self.d_head)
         v = qkv[..., k_end:].reshape(b, t_new, self.n_kv_heads, self.d_head)
-        q = self._apply_rope_absolute(q_pre, rope_start)
-        k = self._apply_rope_absolute(k_pre, rope_start)
+        if position_ids is None:
+            q = self._apply_rope_absolute(q_pre, rope_start)
+            k = self._apply_rope_absolute(k_pre, rope_start)
+        else:
+            q = self._apply_rope_positions(q_pre, position_ids)
+            k = self._apply_rope_positions(k_pre, position_ids)
         if cache_position is None:
             k_cache[:, :, cache_start:cache_end, :] = k.transpose(0, 2, 1, 3)
             v_cache[:, :, cache_start:cache_end, :] = v.transpose(0, 2, 1, 3)
@@ -440,7 +478,7 @@ class GQAAttentionInference:
 
     def _prefill_sparse(
         self, x, k_cache, v_cache, start_pos, return_all=False,
-        router_input_cache=None, rope_start_pos=None,
+        router_input_cache=None, rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Exact sparse prefill using the same kernels as training forward."""
@@ -450,7 +488,8 @@ class GQAAttentionInference:
             )
         b, t_prompt, _ = x.shape
         q, k, v, end_pos = self._project_and_store(
-            x, k_cache, v_cache, start_pos, rope_start_pos=rope_start_pos
+            x, k_cache, v_cache, start_pos, rope_start_pos=rope_start_pos,
+            position_ids=position_ids,
         )
         if router_input_cache is not None:
             router_input_cache[:, :end_pos, :] = x
@@ -555,7 +594,7 @@ class GQAAttentionInference:
 
     def _single_query_attention(
         self, q_subset, k_cache, v_cache, indices, kv_mapping, logit_bias=None,
-        cache_start=0,
+        cache_start=0, fixed_prefix_length=0, working_capacity=None,
     ):
         """One-query sparse attention without expanding native GQA KV heads."""
         b, tq, n_heads, d = q_subset.shape
@@ -566,8 +605,13 @@ class GQAAttentionInference:
             return xp.zeros(q_subset.shape, dtype=q_subset.dtype)
 
         kv_ids = xp.asarray(kv_mapping, dtype=xp.int64)
-        if int(cache_start) != 0:
-            indices = (indices + int(cache_start)) % int(k_cache.shape[2])
+        indices = self._map_logical_indices(
+            indices,
+            cache_start=cache_start,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
+            cache_capacity=int(k_cache.shape[2]),
+        )
         # Common static patterns use [K]; retrieval may use [B,H,K].
         if indices.ndim == 1:
             k_native = k_cache[:, kv_ids, :, :][:, :, indices, :]
@@ -612,10 +656,68 @@ class GQAAttentionInference:
             (cache[:, cache_start:, :], cache[:, : end - capacity, :]), axis=1
         )
 
+    @staticmethod
+    def _map_logical_indices(
+        indices, *, cache_start=0, fixed_prefix_length=0,
+        working_capacity=None, cache_capacity=None,
+    ):
+        """Map compact active-sequence indices onto a fixed-prefix + ring cache."""
+        prefix = int(fixed_prefix_length)
+        if working_capacity is None:
+            if cache_capacity is None:
+                raise ValueError("cache_capacity is required when working_capacity is omitted")
+            working_capacity = int(cache_capacity) - prefix
+        working_capacity = int(working_capacity)
+        if working_capacity <= 0:
+            return indices
+        start = int(cache_start)
+        if prefix == 0:
+            return (indices + start) % working_capacity
+        return xp.where(
+            indices < prefix,
+            indices,
+            prefix + ((indices - prefix + start) % working_capacity),
+        )
+
+    @classmethod
+    def _logical_active_view(
+        cls, cache, *, cache_start=0, count=None, fixed_prefix_length=0,
+        working_capacity=None,
+    ):
+        """Materialize [fixed prefix | logical working ring] in compact order."""
+        prefix = int(fixed_prefix_length)
+        if working_capacity is None:
+            working_capacity = int(cache.shape[1]) - prefix
+        working_capacity = int(working_capacity)
+        if count is None:
+            count = prefix + working_capacity
+        count = int(count)
+        work_count = max(0, count - prefix)
+        if prefix == 0:
+            physical = cls._map_logical_indices(
+                xp.arange(work_count, dtype=xp.int64),
+                cache_start=cache_start,
+                fixed_prefix_length=0,
+                working_capacity=working_capacity,
+            )
+            return cache[:, physical, :]
+        prefix_view = cache[:, :prefix, :]
+        if work_count <= 0:
+            return prefix_view
+        work_logical = xp.arange(prefix, prefix + work_count, dtype=xp.int64)
+        physical = cls._map_logical_indices(
+            work_logical,
+            cache_start=cache_start,
+            fixed_prefix_length=prefix,
+            working_capacity=working_capacity,
+        )
+        return xp.concatenate((prefix_view, cache[:, physical, :]), axis=1)
+
     def _retrieval_route_for_position(
         self, group, router_input_cache, end_pos, position,
         retrieval_route_cache, route_cache_key, *, cache_start=0,
         working_count=None, route_clock=None, working_start_abs=0,
+        fixed_prefix_length=0, working_capacity=None,
     ):
         """Return the learned within-working-window retrieval route.
 
@@ -645,8 +747,12 @@ class GQAAttentionInference:
         if state is not None and int(state.get("refresh_id", -1)) == refresh_id:
             return state
 
-        logical_cache = self._logical_ring_view(
-            router_input_cache, cache_start, count
+        logical_cache = self._logical_active_view(
+            router_input_cache,
+            cache_start=cache_start,
+            count=count,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
         )
         batch = int(logical_cache.shape[0])
         token_end = candidate_blocks * block_size
@@ -700,9 +806,16 @@ class GQAAttentionInference:
     def _fused_sparse_decode_context(
         self, q, k_cache, v_cache, router_input_cache, end_pos, position,
         retrieval_route_cache, layer_idx, *, cache_start=0, working_count=None,
-        route_clock=None, working_start_abs=0,
+        route_clock=None, working_start_abs=0, fixed_prefix_length=0,
+        working_capacity=None,
     ):
         """Run the one-launch BF16 sparse read, including ring-cache mapping."""
+        # The current fused kernel assumes one uniformly rotating cache.  0060B
+        # keeps the routed prefix fixed while only the current-window segment
+        # rotates, so use the exact fallback until a dedicated split-ring fused
+        # kernel is added.
+        if int(fixed_prefix_length) != 0 or working_capacity is not None:
+            return None
         if not self._fused_decode_ready:
             return None
 
@@ -721,6 +834,8 @@ class GQAAttentionInference:
                 retrieval_route_cache, (int(layer_idx), str(group["name"])),
                 cache_start=cache_start, working_count=working_count,
                 route_clock=route_clock, working_start_abs=working_start_abs,
+                fixed_prefix_length=fixed_prefix_length,
+                working_capacity=working_capacity,
             )
             cfg = group["module"].config
             retrieval_block_size = int(cfg.history_block_size)
@@ -761,6 +876,7 @@ class GQAAttentionInference:
         self, group, q, k_cache, v_cache, router_input_cache,
         end_pos, position, retrieval_route_cache, route_cache_key, *,
         cache_start=0, working_count=None, route_clock=None, working_start_abs=0,
+        fixed_prefix_length=0, working_capacity=None,
     ):
         head_indices = tuple(group["head_indices"])
         q_subset = q[:, :, head_indices, :]
@@ -770,6 +886,8 @@ class GQAAttentionInference:
             retrieval_route_cache, route_cache_key,
             cache_start=cache_start, working_count=working_count,
             route_clock=route_clock, working_start_abs=working_start_abs,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
         )
         if route is None:
             return xp.zeros(q_subset.shape, dtype=q_subset.dtype)
@@ -807,6 +925,8 @@ class GQAAttentionInference:
         return self._single_query_attention(
             q_subset, k_cache, v_cache, indices, kv_mapping,
             logit_bias=logit_bias, cache_start=cache_start,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
         )
 
     def _decode_sparse(
@@ -814,6 +934,7 @@ class GQAAttentionInference:
         router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,
         cache_position=None, rope_position=None, cache_start=0,
         working_count=None, route_clock=None, working_start_abs=0,
+        fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
     ):
         if router_input_cache is None or retrieval_route_cache is None:
@@ -837,6 +958,8 @@ class GQAAttentionInference:
             retrieval_route_cache, layer_idx,
             cache_start=cache_start, working_count=working_count,
             route_clock=route_clock, working_start_abs=working_start_abs,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
         )
         if context is None:
             context = xp.zeros(q.shape, dtype=q.dtype)
@@ -847,6 +970,8 @@ class GQAAttentionInference:
                     q[:, :, head_indices, :], k_cache, v_cache, indices,
                     tuple(i // self.group_size for i in head_indices),
                     cache_start=cache_start,
+                    fixed_prefix_length=fixed_prefix_length,
+                    working_capacity=working_capacity,
                 )
                 context[:, :, head_indices, :] = subset
 
@@ -857,6 +982,8 @@ class GQAAttentionInference:
                     (int(layer_idx), str(group["name"])),
                     cache_start=cache_start, working_count=working_count,
                     route_clock=route_clock, working_start_abs=working_start_abs,
+                    fixed_prefix_length=fixed_prefix_length,
+                    working_capacity=working_capacity,
                 )
                 context[:, :, tuple(group["head_indices"]), :] = subset
 
@@ -877,7 +1004,8 @@ class GQAAttentionInference:
     def prefill(
         self, x, k_cache, v_cache, start_pos, return_all=False,
         router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,
-        rope_start_pos=None, terminal_memory_store=None, terminal_memory_route=None,
+        rope_start_pos=None, position_ids=None,
+        terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Prefill the cache for a prompt and run causal attention."""
         b, t_prompt, _ = x.shape
@@ -897,6 +1025,7 @@ class GQAAttentionInference:
                 x, k_cache, v_cache, start_pos, return_all=return_all,
                 router_input_cache=router_input_cache,
                 rope_start_pos=rope_start_pos,
+                position_ids=position_ids,
                 terminal_memory_store=terminal_memory_store,
                 terminal_memory_route=terminal_memory_route,
             )
@@ -917,8 +1046,12 @@ class GQAAttentionInference:
             b, t_prompt, self.n_kv_heads, self.d_head
         )
 
-        q = self._apply_rope_absolute(q_pre, start_pos)
-        k = self._apply_rope_absolute(k_pre, start_pos)
+        if position_ids is None:
+            q = self._apply_rope_absolute(q_pre, start_pos)
+            k = self._apply_rope_absolute(k_pre, start_pos)
+        else:
+            q = self._apply_rope_positions(q_pre, position_ids)
+            k = self._apply_rope_positions(k_pre, position_ids)
 
         k_cache[:, :, int(start_pos):end_pos, :] = k.transpose(0, 2, 1, 3)
         v_cache[:, :, int(start_pos):end_pos, :] = v.transpose(0, 2, 1, 3)
@@ -947,7 +1080,8 @@ class GQAAttentionInference:
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
         retrieval_route_cache=None, layer_idx=0, *, cache_position=None,
         rope_position=None, cache_start=0, working_count=None, route_clock=None,
-        working_start_abs=0, terminal_memory_store=None, terminal_memory_route=None,
+        working_start_abs=0, fixed_prefix_length=0, working_capacity=None,
+        terminal_memory_store=None, terminal_memory_route=None,
     ):
         """Decode exactly one token using cached native-Hkv K/V tensors."""
         b, t_new, _ = x.shape
@@ -966,6 +1100,8 @@ class GQAAttentionInference:
                 rope_position=rope_position, cache_start=cache_start,
                 working_count=working_count, route_clock=route_clock,
                 working_start_abs=working_start_abs,
+                fixed_prefix_length=fixed_prefix_length,
+                working_capacity=working_capacity,
                 terminal_memory_store=terminal_memory_store,
                 terminal_memory_route=terminal_memory_route,
             )
@@ -986,19 +1122,31 @@ class GQAAttentionInference:
             b, 1, self.n_kv_heads, self.d_head
         )
 
-        q = self._apply_rope_absolute(q_pre, start_pos)
-        k = self._apply_rope_absolute(k_pre, start_pos)
+        rope_pos = int(start_pos) if rope_position is None else int(rope_position)
+        q = self._apply_rope_absolute(q_pre, rope_pos)
+        k = self._apply_rope_absolute(k_pre, rope_pos)
 
         end_pos = int(start_pos) + 1
-        k_cache[:, :, int(start_pos):end_pos, :] = k.transpose(0, 2, 1, 3)
-        v_cache[:, :, int(start_pos):end_pos, :] = v.transpose(0, 2, 1, 3)
+        cache_slot = int(start_pos) if cache_position is None else int(cache_position)
+        k_cache[:, :, cache_slot:cache_slot + 1, :] = k.transpose(0, 2, 1, 3)
+        v_cache[:, :, cache_slot:cache_slot + 1, :] = v.transpose(0, 2, 1, 3)
 
-        context = self._attention(
-            q,
-            k_cache[:, :, :end_pos, :],
-            v_cache[:, :, :end_pos, :],
-            causal_mask=None,
-        )
+        if working_capacity is None and int(fixed_prefix_length) == 0:
+            k_all = k_cache[:, :, :end_pos, :]
+            v_all = v_cache[:, :, :end_pos, :]
+        else:
+            active_count = int(working_count if working_count is not None else end_pos)
+            logical = xp.arange(active_count, dtype=xp.int64)
+            physical = self._map_logical_indices(
+                logical,
+                cache_start=cache_start,
+                fixed_prefix_length=fixed_prefix_length,
+                working_capacity=working_capacity,
+                cache_capacity=int(k_cache.shape[2]),
+            )
+            k_all = k_cache[:, :, physical, :]
+            v_all = v_cache[:, :, physical, :]
+        context = self._attention(q, k_all, v_all, causal_mask=None)
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
         y = (merged.reshape(-1, self.d_model) @ Wo).reshape(
             b, 1, self.d_model

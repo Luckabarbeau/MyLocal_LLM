@@ -52,11 +52,25 @@ class GenerationState:
     terminal_memory_store: object = None
     terminal_memory_route: object = None
 
+    # 0060B routed-prefix long-memory state.  The top-level memory store keeps
+    # only old token IDs and cheap router projections.  Deep K/V remains bounded
+    # by [retrieved prefix | working window].  ``cache_start`` is the ring start
+    # *inside the working segment*; the prefix segment itself never rotates.
+    routed_prefix_store: object = None
+    routed_prefix_route: object = None
+    routed_prefix_length: int = 0
+    routed_prefix_refresh_tokens: int = 0
+    routed_prefix_tokens_since_refresh: int = 0
+    routed_prefix_refresh_count: int = 0
+
     def reset(self):
         """Reset generation state without deallocating cache."""
         self.length = 0
         self.retrieval_routes.clear()
         self.terminal_memory_route = None
+        self.routed_prefix_route = None
+        self.routed_prefix_tokens_since_refresh = 0
+        self.routed_prefix_refresh_count = 0
     
     def remaining_capacity(self) -> int:
         """Remaining tokens that can be generated."""

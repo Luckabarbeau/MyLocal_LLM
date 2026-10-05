@@ -103,7 +103,7 @@ class TransformerBlockInference:
 
     def prefill(
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
-        retrieval_route_cache=None, *, rope_start_pos=None,
+        retrieval_route_cache=None, *, rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
     ):
         """
@@ -135,6 +135,7 @@ class TransformerBlockInference:
             router_input_cache=router_input_cache,
             retrieval_route_cache=retrieval_route_cache,
             layer_idx=self.layer_idx, rope_start_pos=rope_start_pos,
+            position_ids=position_ids,
             terminal_memory_store=terminal_memory_store,
             terminal_memory_route=terminal_memory_route,
         )
@@ -160,6 +161,7 @@ class TransformerBlockInference:
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
         retrieval_route_cache=None, *, cache_position=None, rope_position=None,
         cache_start=0, working_count=None, route_clock=None, working_start_abs=0,
+        fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
     ):
         """
@@ -191,6 +193,8 @@ class TransformerBlockInference:
             rope_position=rope_position, cache_start=cache_start,
             working_count=working_count, route_clock=route_clock,
             working_start_abs=working_start_abs,
+            fixed_prefix_length=fixed_prefix_length,
+            working_capacity=working_capacity,
             terminal_memory_store=terminal_memory_store,
             terminal_memory_route=terminal_memory_route,
         )

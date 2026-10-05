@@ -5,18 +5,17 @@ import math
 class MemoryContextConfig:
     """Hierarchical long-memory configuration.
 
-    In the 0058C ``terminal_landmark`` path ``memory_length`` is the total
-    causal horizon ending at the current working window. ``target_length``
-    rows form the ordinary dense Transformer working window; the preceding
-    ``memory_length - target_length`` rows are a same-document external store.
-    The router pools the recent working context once, selects old blocks, and
-    exact tokens from those blocks become K/V only for the terminal query of
-    one configurable attention layer. They never become deep Transformer query
-    rows. Dense LM training still supervises the complete working window in
-    ``joint`` mode; ``router_only`` post-training projects and backpropagates
-    only the terminal next-token objective.
+    ``memory_length`` is the total causal horizon ending at the current
+    working window.  In the 0060A ``routed_prefix`` path the final
+    ``target_length`` rows are the continuous dense training window and the
+    preceding rows form a same-document searchable store.  The router pools
+    the current window once, selects old blocks, sorts them chronologically,
+    and reopens the exact historical tokens as a bounded prefix processed by
+    every Transformer layer.  LM loss is applied only to the continuous current
+    window.
 
-    ``pretransformer_read`` remains solely as the 0058A/B comparison path.
+    ``terminal_landmark`` retains the 0058C K/V-only terminal-query ablation and
+    ``pretransformer_read`` retains the 0058A/B external-reader comparison path.
     """
 
     enabled: bool = False
@@ -31,10 +30,29 @@ class MemoryContextConfig:
     history_pooling: str = "mean"
     router_weight_scale: float = 1.0
 
-    # 0058C memory integration.  ``pretransformer_read`` preserves the 0058A/B
+    # 0060A routed-prefix router training.  The hard selected block IDs are
+    # used in the forward pass; a full candidate softmax provides the
+    # straight-through surrogate used only by the handwritten backward.
+    router_temperature: float = 1.0
+    router_temperature_min: float = 0.25
+    router_temperature_anneal_steps: int = 10_000
+    router_surrogate_scale: float = 1.0
+    router_gumbel_noise: bool = True
+    retrieval_batch_probability: float = 0.5
+    # 0060B inference keeps the selected historical prefix fixed between
+    # refreshes so one-token KV-cache decode remains useful.  At a refresh the
+    # deterministic router is rerun from the current 4k window and the bounded
+    # [retrieved prefix | current window] deep cache is rebuilt.  A value of 1
+    # gives strict per-token rerouting; block_size is a practical default.
+    inference_route_refresh_tokens: int = 128
+
+    # 0058C/0060A memory integration.  ``pretransformer_read`` preserves the 0058A/B
     # comparison path. ``terminal_landmark`` keeps the 4k working sequence
     # untouched and exposes exact routed historical K/V only to the terminal
-    # query in one configurable Transformer attention layer.
+    # query in one configurable Transformer attention layer. ``routed_prefix``
+    # is the 0060A production path: K exact old blocks are sorted by source
+    # position, prepended to the continuous 4k working window, and the complete
+    # bounded active sequence is processed by every Transformer layer.
     integration_mode: str = "pretransformer_read"
     memory_attention_layer: int = -1
     memory_training: str = "joint"
@@ -65,31 +83,40 @@ class MemoryContextConfig:
             "read_kv_heads": self.read_kv_heads,
             "read_query_chunk": self.read_query_chunk,
             "min_router_history_blocks": self.min_router_history_blocks,
+            "router_temperature_anneal_steps": self.router_temperature_anneal_steps,
+            "inference_route_refresh_tokens": self.inference_route_refresh_tokens,
         }
         for name, value in positive.items():
             if int(value) != value or int(value) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if self.recent_length > self.memory_length:
             raise ValueError("recent_length must not exceed memory_length")
-        if self.integration_mode == "terminal_landmark" and self.target_length >= self.memory_length:
+        if self.integration_mode in {"terminal_landmark", "routed_prefix"} and self.target_length >= self.memory_length:
             raise ValueError(
-                "terminal_landmark requires target_length < memory_length"
+                f"{self.integration_mode} requires target_length < memory_length"
             )
         if self.target_length > self.recent_length:
             raise ValueError(
-                "0058A requires target_length <= recent_length so target rows "
-                "never age into the fixed historical memory store within one sample"
+                "target_length must not exceed recent_length for hierarchical memory"
             )
         if self.router_query_length > self.recent_length:
             raise ValueError("router_query_length must not exceed recent_length")
         if self.read_heads % self.read_kv_heads != 0:
             raise ValueError("read_heads must be divisible by read_kv_heads")
-        if self.integration_mode not in {"pretransformer_read", "terminal_landmark"}:
+        if self.integration_mode not in {
+            "pretransformer_read", "terminal_landmark", "routed_prefix"
+        }:
             raise ValueError(
-                "integration_mode must be 'pretransformer_read' or 'terminal_landmark'"
+                "integration_mode must be 'pretransformer_read', "
+                "'terminal_landmark', or 'routed_prefix'"
             )
         if self.memory_training not in {"joint", "router_only", "disabled"}:
             raise ValueError("memory_training must be 'joint', 'router_only', or 'disabled'")
+        if self.integration_mode == "routed_prefix" and self.memory_training == "router_only":
+            raise ValueError(
+                "routed_prefix trains from the dense current-window LM objective; "
+                "memory_training='router_only' is terminal-landmark-only"
+            )
         if int(self.min_router_history_blocks) > int(self.searchable_blocks):
             raise ValueError("min_router_history_blocks exceeds searchable memory blocks")
         if self.query_pooling not in {"mean", "last", "learned"}:
@@ -98,6 +125,10 @@ class MemoryContextConfig:
             raise ValueError("history_pooling must be 'mean', 'first', 'last', or 'learned'")
         for name, value in {
             "router_weight_scale": self.router_weight_scale,
+            "router_temperature": self.router_temperature,
+            "router_temperature_min": self.router_temperature_min,
+            "router_surrogate_scale": self.router_surrogate_scale,
+            "retrieval_batch_probability": self.retrieval_batch_probability,
             "reader_weight_eps": self.reader_weight_eps,
             "reader_residual_scale": self.reader_residual_scale,
         }.items():
@@ -105,6 +136,16 @@ class MemoryContextConfig:
                 raise ValueError(f"{name} must be finite")
         if float(self.reader_weight_eps) <= 0.0:
             raise ValueError("reader_weight_eps must be positive")
+        if float(self.router_temperature) <= 0.0 or float(self.router_temperature_min) <= 0.0:
+            raise ValueError("router temperatures must be positive")
+        if float(self.router_temperature_min) > float(self.router_temperature):
+            raise ValueError("router_temperature_min must not exceed router_temperature")
+        if float(self.router_surrogate_scale) < 0.0:
+            raise ValueError("router_surrogate_scale must be non-negative")
+        if not 0.0 <= float(self.retrieval_batch_probability) <= 1.0:
+            raise ValueError("retrieval_batch_probability must lie in [0, 1]")
+        if not isinstance(self.router_gumbel_noise, bool):
+            raise TypeError("router_gumbel_noise must be a bool")
         if self.enabled:
             if self.memory_length < self.block_size:
                 raise ValueError("enabled memory context requires at least one memory block")
@@ -116,7 +157,7 @@ class MemoryContextConfig:
     @property
     def distant_memory_length(self) -> int:
         """Number of tokens physically stored outside the 4k working window."""
-        if self.integration_mode == "terminal_landmark":
+        if self.integration_mode in {"terminal_landmark", "routed_prefix"}:
             return int(self.memory_length) - int(self.target_length)
         return int(self.memory_length)
 
@@ -130,8 +171,10 @@ class MemoryContextConfig:
 
     @property
     def active_length(self) -> int:
-        # 0058A external memory is read into each current token; retrieved
-        # history is never appended to the deep Transformer sequence.
+        if self.integration_mode == "routed_prefix":
+            return int(self.retrieved_length) + int(self.target_length)
+        # 0058A external memory is read into each current token; 0058C keeps
+        # history K/V-only, so neither appends history to the deep sequence.
         return int(self.target_length)
 
     @property
@@ -142,7 +185,7 @@ class MemoryContextConfig:
         horizon*, including the current working window.  The sampler still reads
         one additional corpus token to provide the terminal next-token label.
         """
-        if self.integration_mode == "terminal_landmark":
+        if self.integration_mode in {"terminal_landmark", "routed_prefix"}:
             return int(self.memory_length)
         return int(self.memory_length) + int(self.target_length)
 
@@ -301,8 +344,10 @@ class ModelConfig:
                 # RMSNorm scale + compact historical K/V adapter. The terminal
                 # query reuses the selected Transformer's existing Q projection.
                 total += d + 2 * d * read_kv
-            else:
+            elif memory.integration_mode == "pretransformer_read":
                 total += d * read_q + 2 * d * read_kv + read_q * d
+            # routed_prefix needs no reader/adapter parameters: exact selected
+            # token embeddings enter the ordinary Transformer residual stream.
 
         return int(total)
 
@@ -664,12 +709,13 @@ class ModelConfig:
 
     @classmethod
     def _wide_500m_memory_context(cls, memory_length: int):
-        """Wide ~500M trunk with terminal Landmark-gated external memory.
+        """Wide ~500M trunk with 0060A learned routed-prefix memory.
 
         ``memory_length`` is the total causal horizon.  The final 4k tokens are
-        the ordinary dense Transformer working window; preceding same-document
-        tokens form the searchable store.  Only the terminal prediction invokes
-        learned long-memory routing, while the base LM remains densely trained.
+        the continuous dense training window; preceding same-document tokens
+        form the searchable store.  Exactly 16 x 128 historical tokens are
+        reopened as a chronological 2k prefix, giving a fixed 6,144-row deep
+        Transformer sequence for 16k/32k/64k addressable horizons.
         """
         memory_length = int(memory_length)
         if memory_length not in {16_384, 32_768, 65_536}:
@@ -687,9 +733,16 @@ class ModelConfig:
             query_pooling="mean",
             history_pooling="mean",
             router_weight_scale=1.0,
-            integration_mode="terminal_landmark",
+            integration_mode="routed_prefix",
             memory_attention_layer=-1,
             memory_training="joint",
+            router_temperature=1.0,
+            router_temperature_min=0.25,
+            router_temperature_anneal_steps=10_000,
+            router_surrogate_scale=1.0,
+            router_gumbel_noise=True,
+            retrieval_batch_probability=0.5,
+            inference_route_refresh_tokens=128,
             read_heads=2,
             read_kv_heads=1,
             read_query_chunk=64,
@@ -697,9 +750,11 @@ class ModelConfig:
             reader_residual_scale=1.0,
         )
 
-        # 0058C keeps only the dense neighboring training window in the deep
-        # trunk. Long history is external K/V memory, so attention geometry is
-        # based on 4k regardless of the 16k/32k/64k addressable horizon.
+        # Keep the exact 4k sparse-head geometry used by the pretrained/base
+        # trunk (same local/dilated/global/retrieval policies), while allowing
+        # those unchanged layers to process the bounded 2k+4k active sequence.
+        # This avoids silently changing attention semantics when initializing
+        # 0060A from an existing 4k-compatible checkpoint.
         base = cls._wide_500m_sparse_context(4_096)
         return cls(
             tokenizer_vocab_size=base.tokenizer_vocab_size,

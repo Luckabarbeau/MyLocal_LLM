@@ -131,7 +131,7 @@ class DecoderLanguageModel:
                     name="memory_reader",
                     dtype=self.dtype,
                 )
-            else:
+            elif config.memory_context.integration_mode == "terminal_landmark":
                 layer = int(config.memory_context.memory_attention_layer)
                 if layer < 0:
                     layer += len(self.blocks)
@@ -409,6 +409,273 @@ class DecoderLanguageModel:
             dweights,
         )
 
+    def _routed_prefix_context_forward(self, token_ids, memory_metadata=None):
+        """0060A/B2: construct a real historical prefix plus the dense 4k window.
+
+        Source layout is ``[searchable same-document history][current window]``.
+        When no selection decision is needed, every available historical token
+        is reopened directly (up to the configured retrieved-token budget).
+        Once history is large enough to require compression, the shallow router
+        selects K complete old blocks exactly as in 0060A.  Router scores,
+        probabilities, and selection rank are never exposed to the Transformer.
+        """
+        cfg = self.config.memory_context
+        source_ids = xp.asarray(token_ids)
+        if source_ids.ndim != 2 or int(source_ids.shape[1]) != int(cfg.source_input_length):
+            raise ValueError(
+                f"routed-prefix memory requires [B,{cfg.source_input_length}] source IDs"
+            )
+        batch = int(source_ids.shape[0])
+        history_length = int(cfg.distant_memory_length)
+        working_length = int(cfg.target_length)
+        history_ids = source_ids[:, :history_length]
+        working_ids = source_ids[:, history_length:]
+
+        if memory_metadata is None:
+            history_valid_starts = xp.zeros((batch,), dtype=xp.int64)
+            target_valid_lengths = xp.full((batch,), working_length, dtype=xp.int64)
+            use_retrieval = True
+            stochastic = False
+            gumbel_seed = None
+            temperature = float(cfg.router_temperature)
+        else:
+            history_valid_starts = xp.asarray(
+                memory_metadata.get(
+                    "history_valid_starts", xp.zeros((batch,), dtype=xp.int64)
+                ),
+                dtype=xp.int64,
+            )
+            target_valid_lengths = xp.asarray(
+                memory_metadata.get(
+                    "target_valid_lengths", xp.full((batch,), working_length, dtype=xp.int64)
+                ),
+                dtype=xp.int64,
+            )
+            use_retrieval = bool(memory_metadata.get("use_retrieval", True))
+            stochastic = bool(memory_metadata.get("router_stochastic", False))
+            gumbel_seed = memory_metadata.get("router_gumbel_seed")
+            temperature = float(
+                memory_metadata.get("router_temperature", cfg.router_temperature)
+            )
+        if cfg.memory_training == "disabled":
+            use_retrieval = False
+        if history_valid_starts.shape != (batch,) or target_valid_lengths.shape != (batch,):
+            raise ValueError("hierarchical memory metadata batch shape mismatch")
+        if use_retrieval and bool(xp.any(target_valid_lengths != working_length)):
+            # The base Transformer has no padding attention mask.  Short target
+            # fragments therefore remain ordinary dense-window examples.
+            use_retrieval = False
+
+        with performance_scope("memory_context.working_embedding.forward"):
+            working_x = self.embedding.W.data[working_ids]
+        working_positions = xp.broadcast_to(
+            xp.arange(
+                history_length,
+                history_length + working_length,
+                dtype=xp.int64,
+            )[None, :],
+            (batch, working_length),
+        )
+
+        selected_blocks = xp.zeros((batch, int(cfg.top_k_blocks)), dtype=xp.int64)
+        selected_valid = xp.zeros(selected_blocks.shape, dtype=bool)
+        route_weights = xp.zeros(selected_blocks.shape, dtype=working_x.dtype)
+        route_valid = xp.zeros((batch,), dtype=bool)
+        router_cache = None
+        selected_token_ids = None
+        prefix_length = 0
+        prefix_mode = "none"
+
+        # The document-aware sampler right-aligns genuine history in the fixed
+        # external store.  If the entire available history fits in the 2k
+        # retrieved budget, there is no useful routing decision: reopen every
+        # real token directly.  Production partial-history batches are
+        # homogeneous; direct callers with ragged per-example history fall back
+        # to the dense window rather than introducing unmasked padding rows.
+        available_history = history_length - history_valid_starts
+        direct_limit = int(cfg.retrieved_length)
+        route_threshold = direct_limit + int(cfg.block_size) - 1
+        max_available = int(xp.max(available_history).item())
+        min_available = int(xp.min(available_history).item())
+        if use_retrieval and min_available <= 0:
+            use_retrieval = False
+        if use_retrieval and min_available > 0:
+            if max_available < route_threshold:
+                if min_available != max_available:
+                    use_retrieval = False
+                else:
+                    prefix_length = min(max_available, direct_limit)
+                    prefix_start = history_length - prefix_length
+                    selected_token_ids = history_ids[:, prefix_start:history_length]
+                    with performance_scope("memory_context.history_gather.forward"):
+                        selected_x = self.embedding.W.data[selected_token_ids]
+                    prefix_positions = xp.broadcast_to(
+                        xp.arange(prefix_start, history_length, dtype=xp.int64)[None, :],
+                        (batch, prefix_length),
+                    )
+                    active_x = xp.concatenate((selected_x, working_x), axis=1)
+                    active_ids = xp.concatenate((selected_token_ids, working_ids), axis=1)
+                    active_positions = xp.concatenate(
+                        (prefix_positions, working_positions), axis=1
+                    )
+                    prefix_mode = "direct_history"
+                    del selected_x
+
+        if use_retrieval and prefix_mode == "none":
+            with performance_scope("memory_context.history_embedding.forward"):
+                history_x = self.embedding.W.data[history_ids]
+            with performance_scope("memory_context.router.forward"):
+                (
+                    route_weights,
+                    selected_blocks,
+                    selected_valid,
+                    route_valid,
+                    router_cache,
+                ) = self.memory_router.forward_routed_prefix(
+                    history_x,
+                    working_x,
+                    history_valid_starts=history_valid_starts,
+                    stochastic=(stochastic and bool(cfg.router_gumbel_noise)),
+                    gumbel_seed=gumbel_seed,
+                    temperature=temperature,
+                )
+
+            # If there are not yet K complete block-aligned candidates but the
+            # raw history already exceeds the exact-prefix budget by less than a
+            # block, keep the newest 2k exact tokens.  This avoids dropping all
+            # memory during the narrow transition into true routed operation.
+            if not bool(xp.all(selected_valid)):
+                router_cache = None
+                selected_blocks[...] = 0
+                selected_valid[...] = False
+                route_weights[...] = 0
+                route_valid[...] = False
+                if min_available == max_available and max_available > 0:
+                    prefix_length = min(max_available, direct_limit)
+                    prefix_start = history_length - prefix_length
+                    selected_token_ids = history_ids[:, prefix_start:history_length]
+                    with performance_scope("memory_context.history_gather.forward"):
+                        selected_x = self.embedding.W.data[selected_token_ids]
+                    prefix_positions = xp.broadcast_to(
+                        xp.arange(prefix_start, history_length, dtype=xp.int64)[None, :],
+                        (batch, prefix_length),
+                    )
+                    active_x = xp.concatenate((selected_x, working_x), axis=1)
+                    active_ids = xp.concatenate((selected_token_ids, working_ids), axis=1)
+                    active_positions = xp.concatenate(
+                        (prefix_positions, working_positions), axis=1
+                    )
+                    prefix_mode = "direct_history"
+                    del selected_x
+                else:
+                    use_retrieval = False
+            else:
+                block_size = int(cfg.block_size)
+                offsets = xp.arange(block_size, dtype=xp.int64)
+                selected_positions = (
+                    selected_blocks[..., None] * block_size + offsets
+                ).reshape(batch, -1)
+                batch_ids = xp.arange(batch, dtype=xp.int64)[:, None]
+                selected_token_ids = history_ids[batch_ids, selected_positions]
+                with performance_scope("memory_context.history_gather.forward"):
+                    selected_x = self.embedding.W.data[selected_token_ids]
+                prefix_length = int(cfg.retrieved_length)
+                active_x = xp.concatenate((selected_x, working_x), axis=1)
+                active_ids = xp.concatenate((selected_token_ids, working_ids), axis=1)
+                active_positions = xp.concatenate(
+                    (selected_positions, working_positions), axis=1
+                )
+                prefix_mode = "routed_blocks"
+                del selected_x
+            del history_x
+
+        if not use_retrieval:
+            active_x = working_x
+            active_ids = working_ids
+            active_positions = working_positions
+            prefix_length = 0
+            prefix_mode = "none"
+
+        active = ActiveContext(
+            embeddings=active_x,
+            token_ids=active_ids,
+            position_ids=active_positions,
+            source_indices=active_positions,
+            target_start=prefix_length,
+            target_end=prefix_length + working_length,
+            selected_blocks=selected_blocks,
+            route_weights=route_weights,
+            selected_valid=selected_valid,
+            route_valid=route_valid,
+            terminal_memory=None,
+        )
+        cache = {
+            "mode": "routed_prefix",
+            "history_ids": history_ids,
+            "working_ids": working_ids,
+            "selected_token_ids": selected_token_ids,
+            "history_valid_starts": history_valid_starts,
+            "router_cache": router_cache,
+            "selected_blocks": selected_blocks,
+            "route_weights": route_weights,
+            "selected_valid": selected_valid,
+            "route_valid": route_valid,
+            "retrieval_active": bool(prefix_length > 0),
+            "prefix_mode": prefix_mode,
+            "prefix_length": int(prefix_length),
+            "target_slice": (prefix_length, prefix_length + working_length),
+        }
+        return active, cache
+
+    def _routed_prefix_context_backward(self, dactive, cache):
+        """Backward for exact direct-history and ST-routed historical prefixes."""
+        working_ids = cache.pop("working_ids")
+        history_ids = cache.pop("history_ids")
+        selected_token_ids = cache.pop("selected_token_ids")
+        router_cache = cache.pop("router_cache")
+        cache.pop("selected_blocks", None)
+        cache.pop("route_weights", None)
+        cache.pop("selected_valid", None)
+        cache.pop("route_valid", None)
+        retrieval_active = bool(cache.pop("retrieval_active"))
+        prefix_mode = cache.pop("prefix_mode", "routed_blocks")
+        prefix_length = int(cache.pop("prefix_length"))
+        cache.pop("history_valid_starts", None)
+
+        if not retrieval_active:
+            with performance_scope("memory_context.embedding.backward"):
+                self.embedding.backward(dactive, {"token_ids": working_ids})
+            return
+
+        dselected = dactive[:, :prefix_length, :]
+        dworking_direct = dactive[:, prefix_length:, :]
+        if prefix_mode == "direct_history":
+            # No selection choice exists while all useful history fits inside
+            # the prefix budget, so there is deliberately no router gradient.
+            with performance_scope("memory_context.embedding.backward"):
+                self.embedding.backward(dselected, {"token_ids": selected_token_ids})
+                self.embedding.backward(dworking_direct, {"token_ids": working_ids})
+            return
+
+        with performance_scope("memory_context.history_gather.replay"):
+            selected_x = self.embedding.W.data[selected_token_ids]
+        with performance_scope("memory_context.router.backward"):
+            dhistory_router, dworking_router = self.memory_router.backward_routed_prefix(
+                dselected,
+                selected_x,
+                router_cache,
+            )
+        dworking_total = dworking_direct + dworking_router.astype(
+            dworking_direct.dtype, copy=False
+        )
+        with performance_scope("memory_context.embedding.backward"):
+            # Direct deep-prefix gradient goes only to the exact reopened tokens;
+            # router pooling adds its separate shallow gradient over all history.
+            self.embedding.backward(dhistory_router, {"token_ids": history_ids})
+            self.embedding.backward(dselected, {"token_ids": selected_token_ids})
+            self.embedding.backward(dworking_total, {"token_ids": working_ids})
+        del selected_x, dhistory_router, dworking_router, dworking_total
+
     def _terminal_landmark_context_forward(self, token_ids, memory_metadata=None):
         """0058C: route once from the full working window, keep exact old K/V.
 
@@ -566,8 +833,13 @@ class DecoderLanguageModel:
                 self.embedding.backward(dworking_total, {"token_ids": working_ids})
 
     def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
-        if self.config.memory_context.integration_mode == "terminal_landmark":
+        mode = self.config.memory_context.integration_mode
+        if mode == "terminal_landmark":
             return self._terminal_landmark_context_forward(
+                token_ids, memory_metadata=memory_metadata
+            )
+        if mode == "routed_prefix":
+            return self._routed_prefix_context_forward(
                 token_ids, memory_metadata=memory_metadata
             )
         return self._pretransformer_context_forward(
@@ -575,10 +847,11 @@ class DecoderLanguageModel:
         )
 
     def _hierarchical_context_backward(self, dactive, cache):
-        if cache.get("mode") == "terminal_landmark":
-            cache.pop("mode", None)
+        mode = cache.pop("mode", None)
+        if mode == "terminal_landmark":
             return self._terminal_landmark_context_backward(dactive, cache)
-        cache.pop("mode", None)
+        if mode == "routed_prefix":
+            return self._routed_prefix_context_backward(dactive, cache)
         return self._pretransformer_context_backward(dactive, cache)
 
     def memory_routing_diagnostics(self, cache):
@@ -701,6 +974,7 @@ class DecoderLanguageModel:
     def forward_body(
         self, token_ids, finite_trace=None, return_cache=True,
         activation_checkpoint=False, position_ids=None, memory_metadata=None,
+        return_target_slice=False,
     ):
         """Run embedding/Transformer/final-norm without materializing logits.
 
@@ -822,6 +1096,8 @@ class DecoderLanguageModel:
             if is_low_precision_dtype(self.dtype) else x
         )
         if not return_cache:
+            if return_target_slice:
+                return head_input, target_slice
             return head_input
 
         cache = {
@@ -863,20 +1139,11 @@ class DecoderLanguageModel:
             )
             target_slice = cache.get("target_slice")
         else:
-            head_input = self.forward_body(
+            head_input, target_slice = self.forward_body(
                 token_ids, finite_trace=finite_trace, return_cache=False,
                 position_ids=position_ids, memory_metadata=memory_metadata,
+                return_target_slice=True,
             )
-            target_slice = None
-            if self.hierarchical_memory_enabled:
-                cfg = self.config.memory_context
-                if (
-                    cfg.integration_mode == "terminal_landmark"
-                    and cfg.memory_training == "router_only"
-                ):
-                    target_slice = (int(cfg.target_length) - 1, int(cfg.target_length))
-                else:
-                    target_slice = (0, int(cfg.target_length))
 
         head_for_logits = head_input
         if target_slice is not None:

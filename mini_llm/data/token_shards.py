@@ -842,6 +842,7 @@ def create_hierarchical_memory_minibatch(
         document_starts = np.empty(batch_size, dtype=np.int64)
         document_ends = np.empty(batch_size, dtype=np.int64)
         target_source_starts = np.empty(batch_size, dtype=np.int64)
+        min_history_satisfied = np.zeros(batch_size, dtype=bool)
 
         for batch_idx in range(batch_size):
             required_pairs = target_length + min_history_tokens
@@ -855,20 +856,30 @@ def create_hierarchical_memory_minibatch(
                     doc_start, doc_end = candidate_start, candidate_end
                     break
             if doc_start is None:
-                # Deterministic fallback across the sidecar. Router-only mode
-                # should fail loudly if the shard contains no useful long sample.
+                # Deterministic scan across the sidecar. Prefer a document that
+                # satisfies the requested history budget, but do not make a
+                # heterogeneous packed shard fatal when none does. In that
+                # case use the longest document in this shard; the returned
+                # metadata marks the requested full-history budget as
+                # unsatisfied.  Routed-prefix callers may still consume the
+                # genuine shorter history directly instead of discarding it.
                 previous = 0
+                best_start = None
+                best_end = None
+                best_pairs = -1
                 for end_value in document_index.ends:
                     end = int(end_value)
-                    if end - previous - 1 >= required_pairs:
+                    pairs = end - previous - 1
+                    if pairs > best_pairs:
+                        best_start, best_end, best_pairs = previous, end, pairs
+                    if pairs >= required_pairs:
                         doc_start, doc_end = previous, end
                         break
                     previous = end
                 if doc_start is None:
-                    raise ValueError(
-                        "packed shard contains no document long enough for "
-                        f"target_length={target_length} and min_history_tokens={min_history_tokens}"
-                    )
+                    if best_start is None:
+                        raise ValueError("packed shard contains no indexed documents")
+                    doc_start, doc_end = best_start, best_end
 
             pair_count = int(doc_end - doc_start - 1)
             if pair_count >= target_length:
@@ -884,6 +895,7 @@ def create_hierarchical_memory_minibatch(
 
             history_start = max(doc_start, target_start - memory_length)
             history_length = int(target_start - history_start)
+            min_history_satisfied[batch_idx] = history_length >= min_history_tokens
             history_dst_start = memory_length - history_length
             if history_length:
                 source_inputs[
@@ -912,6 +924,7 @@ def create_hierarchical_memory_minibatch(
             "document_starts": document_starts,
             "document_ends": document_ends,
             "target_source_starts": target_source_starts,
+            "min_history_satisfied": min_history_satisfied,
         }
         if return_metadata:
             return source_inputs, target_labels, metadata
@@ -955,5 +968,8 @@ def create_hierarchical_memory_minibatch(
         "history_valid_starts": np.zeros(batch_size, dtype=np.int64),
         "target_valid_lengths": np.full(batch_size, target_length, dtype=np.int64),
         "target_loss_mask": np.ones((batch_size, target_length), dtype=np.float32),
+        "min_history_satisfied": np.full(
+            batch_size, memory_length >= min_history_tokens, dtype=bool
+        ),
     }
     return source_inputs, target_labels, metadata

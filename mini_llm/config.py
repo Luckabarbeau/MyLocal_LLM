@@ -738,7 +738,7 @@ class ModelConfig:
             memory_training="joint",
             router_temperature=1.0,
             router_temperature_min=0.25,
-            router_temperature_anneal_steps=10_000,
+            router_temperature_anneal_steps=50_000,
             router_surrogate_scale=1.0,
             router_gumbel_noise=True,
             retrieval_batch_probability=0.5,

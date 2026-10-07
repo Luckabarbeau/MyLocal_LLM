@@ -591,3 +591,49 @@ class TestMemoryCoverageDiagnostics:
         assert "valid_history_tokens" in rows[0]
         assert "history_mean_per_sample" in rows[0]
         assert "history_bin_0_4096" in rows[0]
+
+
+def test_0060b3_chunked_lm_head_validation_matches_full_logits(monkeypatch):
+    """Validation should reuse the bounded LM-head path and never call full forward."""
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "4")
+    model = make_model()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_shard = Path(tmpdir) / "train_shard_00000.bin"
+        val_shard = Path(tmpdir) / "val_shard_00000.bin"
+        create_dummy_shard(train_shard, num_tokens=4096)
+        create_dummy_shard(val_shard, num_tokens=4096)
+        trainer = ExtendedTrainer(
+            model=model,
+            train_shard_paths=[str(train_shard)],
+            val_shard_paths=[str(val_shard)],
+            batch_size=2,
+            seq_length=8,
+            grad_accum_steps=1,
+            total_steps=10,
+            warmup_steps=1,
+            val_steps=1,
+            rng_seed=91,
+        )
+
+        inputs, targets = trainer.get_val_batch()
+        reference_logits = model.forward(inputs, return_cache=False)
+        reference_loss, _ = model.compute_loss(reference_logits, targets)
+
+        def fixed_val_batch(return_metadata=False):
+            if return_metadata:
+                return inputs, targets, None
+            return inputs, targets
+
+        trainer.get_val_batch = fixed_val_batch
+
+        def full_forward_must_not_run(*args, **kwargs):
+            raise AssertionError(
+                "chunked validation must not materialize full vocabulary logits"
+            )
+
+        monkeypatch.setattr(model, "forward", full_forward_must_not_run)
+        chunked_loss = trainer.compute_val_loss()
+
+        assert trainer.lm_head_chunk_tokens == 4
+        assert chunked_loss == pytest.approx(reference_loss, rel=1e-6, abs=1e-7)

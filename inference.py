@@ -45,6 +45,7 @@ from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.inference_model import InferenceModel
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
+from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile
 
 
 def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -468,6 +469,16 @@ def main():
         help="Inference backend: 'reference' uses full prefix, 'kv-cache' uses preallocated cache (default)",
     )
     parser.add_argument(
+        "--runtime-profile",
+        choices=["auto", "reference", "gpu-fast", "consumer-gpu"],
+        default=None,
+        help=(
+            "Runtime defaults profile. Default: MINI_LLM_RUNTIME_PROFILE or auto. "
+            "For CuPy inference, auto enables the validated GPU fast paths. "
+            "Explicit MINI_LLM_* environment variables always win."
+        ),
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         help="Interactive mode - keep model loaded for multiple prompts",
@@ -506,6 +517,15 @@ def main():
     
     config = ModelConfig(**config_dict)
     print(f"Loaded config: {config.d_model}d model, {config.n_layers} layers")
+
+    runtime_profile = apply_runtime_defaults(
+        args.runtime_profile,
+        backend_name=BACKEND_NAME,
+        config=config,
+        training=False,
+        precision=getattr(config, "dtype", None),
+    )
+    print(format_runtime_profile(runtime_profile))
 
     memory_cfg = getattr(config, "memory_context", None)
     if args.max_context is not None:

@@ -35,12 +35,13 @@ from pathlib import Path
 
 import numpy as np
 
-from mini_llm.backend import xp, validate_bfloat16_backend
+from mini_llm.backend import xp, BACKEND_NAME, validate_bfloat16_backend
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 from mini_llm.train_extended import ExtendedTrainer
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
+from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile
 
 
 def parse_args():
@@ -70,6 +71,16 @@ def parse_args():
         help=(
             "Training precision policy. bf16-mixed uses BF16 parameters/GEMMs "
             "with FP32 residuals, reductions, gradients, and optimizer state."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-profile",
+        choices=["auto", "reference", "gpu-fast", "consumer-gpu"],
+        default=None,
+        help=(
+            "Runtime defaults profile. Default: MINI_LLM_RUNTIME_PROFILE or auto. "
+            "auto selects reference on NumPy, gpu-fast on CuPy, and consumer-gpu "
+            "for large CuPy training models. Explicit MINI_LLM_* variables always win."
         ),
     )
     
@@ -593,6 +604,15 @@ def main():
             if args.context_length is not None
             else int(config.context_length)
         )
+
+    runtime_profile = apply_runtime_defaults(
+        args.runtime_profile,
+        backend_name=BACKEND_NAME,
+        config=config,
+        training=True,
+        precision=args.precision,
+    )
+    print(format_runtime_profile(runtime_profile))
 
     # Prefer context-independent packed shards.  Mixed pretraining keeps each
     # source physically separate and samples source names according to explicit

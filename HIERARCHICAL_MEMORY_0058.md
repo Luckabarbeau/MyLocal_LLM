@@ -1,5 +1,12 @@
 # 0058 Hierarchical Memory Context Routing
 
+> **Historical note (0060A/0060B):** this document records the 0058 design.
+> The canonical `wide-500m-memory-*` presets now use the routed-prefix training
+> architecture documented in `PATCH_0060A_ROUTED_PREFIX.md`, with KV-cached
+> long-memory inference documented in `PATCH_0060B_ROUTED_PREFIX_INFERENCE.md`.
+> The 0058/0059 `terminal_landmark` path remains in the codebase as an
+> ablation/reference.
+
 Patch 0058 separates the amount of history that can be searched from the number
 of tokens that enter the expensive Transformer trunk.  The invariant is:
 

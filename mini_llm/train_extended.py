@@ -193,10 +193,10 @@ class ExtendedTrainer:
             self.memory_profile_steps = max(0, int(memory_profile_steps_raw))
         self._memory_profiled_steps = 0
 
-        # 0056: training-only chunked/recomputed vocabulary head.  A value of
-        # zero preserves the historical full-logits path used by inference and
-        # reference tests.  Positive values bound the number of token rows whose
-        # [tokens, vocab] logits exist at once.
+        # 0056/0060B3: chunked/recomputed vocabulary head for both training
+        # and validation.  A value of zero preserves the historical full-logits
+        # path used by inference and reference tests.  Positive values bound the
+        # number of token rows whose [tokens, vocab] logits exist at once.
         self.lm_head_chunk_tokens = max(
             0, int(os.environ.get("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"))
         )
@@ -1129,13 +1129,39 @@ class ExtendedTrainer:
             loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
             targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
             
-            # Forward pass (no gradient tracking needed)
-            logits, _ = self.model.forward(
-                inputs, memory_metadata=batch_metadata
-            )
-            loss, _ = self.model.compute_loss(
-                logits, targets, loss_mask=loss_mask
-            )
+            # Validation must use the same bounded vocabulary projection as
+            # training when LM-head chunking is enabled.  Materializing the
+            # complete [B, T, vocab] logits tensor here defeats the training
+            # memory optimization and can OOM at validation boundaries even
+            # though the training microbatch itself fits.
+            if self.lm_head_chunk_tokens > 0:
+                head_input, target_slice = self.model.forward_body(
+                    inputs,
+                    return_cache=False,
+                    memory_metadata=batch_metadata,
+                    return_target_slice=True,
+                )
+                loss, loss_cache = self.model.chunked_lm_head_loss_forward(
+                    head_input,
+                    targets,
+                    chunk_tokens=self.lm_head_chunk_tokens,
+                    loss_mask=loss_mask,
+                    target_slice=target_slice,
+                )
+                # No backward pass is performed in validation.  Drop the
+                # compact chunked-head cache immediately so it cannot extend
+                # hidden-state lifetimes into the next validation batch.
+                del loss_cache, head_input
+            else:
+                logits = self.model.forward(
+                    inputs,
+                    return_cache=False,
+                    memory_metadata=batch_metadata,
+                )
+                loss, _ = self.model.compute_loss(
+                    logits, targets, loss_mask=loss_mask
+                )
+                del logits
             losses.append(loss)  # loss is already a Python float from scalar()
         
         # Compute mean on backend array (only sync once at the end)

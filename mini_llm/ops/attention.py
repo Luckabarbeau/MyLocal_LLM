@@ -1077,19 +1077,43 @@ class GQAAttention:
             "k_rope_cache": k_rope_cache,
         }
 
-    def backward(self, dy, cache):
+    def backward(
+        self, dy, cache, *, output_scale=None, return_output_scale_grad=False
+    ):
         x = cache["x"]
         q, k, v = cache["q"], cache["k"], cache["v"]
         merged = cache["merged"]
         b, t, _ = x.shape
 
         with performance_scope("attention.output_projection.backward"):
-            self.Wo.grad += (
-                merged.reshape(-1, merged.shape[-1]).T
-                @ dy.reshape(-1, dy.shape[-1])
-            )
+            merged2 = merged.reshape(-1, merged.shape[-1])
             dy2 = dy.reshape(-1, dy.shape[-1])
-            dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
+            output_scale_grad = None
+            if output_scale is None:
+                self.Wo.grad += merged2.T @ dy2
+                dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
+            else:
+                # For y = alpha * (merged @ Wo), form the ungated output
+                # projection gradient once.  Its Frobenius product with Wo is
+                # exactly dL/d(alpha), while all ordinary branch gradients are
+                # scaled by alpha.  This avoids retaining the full attention
+                # output solely for the scalar gate gradient.
+                raw_wgrad = merged2.T @ dy2
+                if return_output_scale_grad:
+                    acc_dtype = (
+                        xp.float32
+                        if is_low_precision_dtype(self.Wo.data.dtype)
+                        else self.Wo.data.dtype
+                    )
+                    output_scale_grad = xp.sum(
+                        raw_wgrad.astype(acc_dtype, copy=False)
+                        * self.Wo.data.astype(acc_dtype, copy=False),
+                        dtype=acc_dtype,
+                    )
+                self.Wo.grad += output_scale * raw_wgrad
+                dmerged = (
+                    (dy2 @ self.Wo.data.T) * output_scale
+                ).reshape(merged.shape)
         dcontext = dmerged.reshape(
             b, t, self.n_q_heads, self.d_head
         )
@@ -1100,7 +1124,10 @@ class GQAAttention:
             )
             with performance_scope("attention.qkv_projection.backward"):
                 dx = self._projection_backward(x, dq, dk, dv, cache)
-            return dx + drouter_input.astype(dx.dtype, copy=False)
+            dx = dx + drouter_input.astype(dx.dtype, copy=False)
+            if return_output_scale_grad:
+                return dx, output_scale_grad
+            return dx
 
         probs = cache["probs"]
         q_grouped = self._group_queries(q)              # [B,Hkv,G,T,D]
@@ -1169,4 +1196,7 @@ class GQAAttention:
         dv = dv_heads.transpose(0, 2, 1, 3)
 
         with performance_scope("attention.qkv_projection.backward"):
-            return self._projection_backward(x, dq, dk, dv, cache)
+            dx = self._projection_backward(x, dq, dk, dv, cache)
+        if return_output_scale_grad:
+            return dx, output_scale_grad
+        return dx

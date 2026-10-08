@@ -45,6 +45,11 @@ class AdamW:
         self.weight_decay = float(weight_decay)
         self.numerical_debug = bool(numerical_debug)
         self.step_index = 0
+        # 0064B: Adam age is tracked per parameter so a block activated after
+        # many global updates starts with correct step-1 bias correction instead
+        # of inheriting the age of the already-trained parameters.  Initial
+        # parameters preserve historical behavior with birth step zero.
+        self.parameter_birth_steps = [0 for _ in self.parameters]
 
         self.offload_mode = _offload_mode()
         self.moments_offloaded = (
@@ -73,6 +78,12 @@ class AdamW:
         self._m_host_memory = None
         self._v_host_memory = None
         self._master_host_memory = None
+        # Dynamically added progressive-depth parameters use additional pinned
+        # slabs rather than reallocating/copying the established optimizer
+        # state.  Keeping the memory handles alive preserves the NumPy views.
+        self._extra_m_host_memory = []
+        self._extra_v_host_memory = []
+        self._extra_master_host_memory = []
         self._m_stage = None
         self._v_stage = None
         self._w_stage = None
@@ -219,6 +230,130 @@ class AdamW:
         self.v[index][...] = v_arr
         return True
 
+    def _allocate_pinned_views(self, parameters, *, zero=False):
+        """Allocate one pinned FP32 slab and return per-parameter views."""
+        import cupy
+
+        params = list(parameters)
+        total_numel = sum(int(p.data.size) for p in params)
+        if total_numel <= 0:
+            return None, []
+        nbytes = total_numel * np.dtype(np.float32).itemsize
+        memory = cupy.cuda.alloc_pinned_memory(nbytes)
+        storage = np.frombuffer(memory, dtype=np.float32, count=total_numel)
+        if zero:
+            storage.fill(0.0)
+        views = []
+        offset = 0
+        for p in params:
+            n = int(p.data.size)
+            shape = tuple(int(x) for x in p.data.shape)
+            views.append(storage[offset:offset + n].reshape(shape))
+            offset += n
+        return memory, views
+
+    def _initialize_offloaded_masters(self, parameters, master_views):
+        """Copy newly activated model weights into pinned FP32 masters."""
+        stream = xp.cuda.get_current_stream()
+        for p, dst_view in zip(parameters, master_views):
+            src = p.data.reshape(-1)
+            dst = dst_view.reshape(-1)
+            size = int(p.data.size)
+            for start in range(0, size, self._offload_chunk_elems):
+                stop = min(size, start + self._offload_chunk_elems)
+                n = stop - start
+                w_dev = self._w_stage[:n]
+                w_dev[...] = src[start:stop]
+                w_dev.get(out=dst[start:stop], stream=stream, blocking=False)
+                stream.synchronize()
+
+    def add_parameters(self, parameters):
+        """Add newly activated parameters without disturbing existing Adam state.
+
+        New parameters receive fresh FP32 masters, zero first/second moments and
+        a birth step equal to the number of already-completed optimizer updates.
+        The next optimizer update therefore uses local Adam step 1 for them.
+        """
+        existing_ids = {id(p) for p in self.parameters}
+        existing_names = {p.name for p in self.parameters}
+        new_params = []
+        for p in parameters:
+            if id(p) in existing_ids:
+                continue
+            if p.name in existing_names:
+                raise ValueError(f"duplicate optimizer parameter name: {p.name}")
+            existing_ids.add(id(p))
+            existing_names.add(p.name)
+            new_params.append(p)
+        if not new_params:
+            return 0
+
+        if self.master_weights_offloaded:
+            master_memory, master_views = self._allocate_pinned_views(new_params)
+            self._extra_master_host_memory.append(master_memory)
+            self.master_weights.extend(master_views)
+            self._initialize_offloaded_masters(new_params, master_views)
+            self.offload_host_bytes += sum(
+                int(p.data.size) for p in new_params
+            ) * np.dtype(np.float32).itemsize
+        else:
+            self.master_weights.extend(
+                p.data.astype("float32", copy=True) for p in new_params
+            )
+
+        if self.moments_offloaded:
+            m_memory, m_views = self._allocate_pinned_views(new_params, zero=True)
+            v_memory, v_views = self._allocate_pinned_views(new_params, zero=True)
+            self._extra_m_host_memory.append(m_memory)
+            self._extra_v_host_memory.append(v_memory)
+            self.m.extend(m_views)
+            self.v.extend(v_views)
+            state_bytes = sum(int(p.data.size) for p in new_params) * np.dtype(np.float32).itemsize
+            self.offload_host_bytes += 2 * state_bytes
+        else:
+            self.m.extend(xp.zeros_like(p.data, dtype="float32") for p in new_params)
+            self.v.extend(xp.zeros_like(p.data, dtype="float32") for p in new_params)
+
+        self.parameters.extend(new_params)
+        self.parameter_birth_steps.extend(
+            [int(self.step_index)] * len(new_params)
+        )
+        return len(new_params)
+
+    def parameter_birth_step_state(self):
+        """Return JSON-safe per-parameter Adam birth steps keyed by name."""
+        return {
+            p.name: int(self.parameter_birth_steps[i])
+            for i, p in enumerate(self.parameters)
+        }
+
+    def restore_parameter_birth_steps(self, state):
+        """Restore per-parameter Adam ages from checkpoint training state."""
+        if not state:
+            return 0
+        restored = 0
+        for i, p in enumerate(self.parameters):
+            if p.name not in state:
+                continue
+            birth = int(state[p.name])
+            if birth < 0 or birth > int(self.step_index):
+                raise ValueError(
+                    f"invalid optimizer birth step {birth} for {p.name} "
+                    f"at optimizer step {self.step_index}"
+                )
+            self.parameter_birth_steps[i] = birth
+            restored += 1
+        return restored
+
+    def _bias_correction(self, index, eta):
+        local_step = int(self.step_index) - int(self.parameter_birth_steps[index])
+        if local_step <= 0:
+            raise RuntimeError("optimizer parameter has not reached local step 1")
+        c1 = 1.0 - self.beta1 ** local_step
+        c2 = 1.0 - self.beta2 ** local_step
+        sqrt_c2 = c2 ** 0.5
+        return eta * sqrt_c2 / c1, self.eps * sqrt_c2
+
     def _debug_check_gradient(self, g, i, p):
         if self.numerical_debug and np is not None:
             g_cpu = g.get() if hasattr(g, "get") else g
@@ -238,9 +373,10 @@ class AdamW:
                     f"at step {self.step_index}"
                 )
 
-    def _step_device_moments(self, eta, step_size, eps_scaled):
-        """Established all-device Adam path."""
+    def _step_device_moments(self, eta):
+        """Established all-device Adam path with per-parameter Adam age."""
         for i, p in enumerate(self.parameters):
+            step_size, eps_scaled = self._bias_correction(i, eta)
             g = p.grad.astype("float32", copy=False)
             self._debug_check_gradient(g, i, p)
 
@@ -258,7 +394,12 @@ class AdamW:
                         f"at step {self.step_index}"
                     )
 
-            update = xp.sqrt(self.v[i])
+            # ``xp.sqrt`` of a NumPy 0-D array returns a scalar, which cannot
+            # be used as an ``out`` buffer by the following divide.  Learned
+            # progressive residual gates are scalar Parameters, so keep an
+            # explicit array buffer here for both scalar and tensor parameters.
+            update = xp.empty_like(self.v[i])
+            xp.sqrt(self.v[i], out=update)
             update += eps_scaled
             xp.divide(self.m[i], update, out=update)
             update *= step_size
@@ -269,7 +410,7 @@ class AdamW:
             self._debug_check_master(i, p)
             p.data[...] = self.master_weights[i].astype(p.data.dtype)
 
-    def _step_offloaded_moments(self, eta, step_size, eps_scaled):
+    def _step_offloaded_moments(self, eta):
         """0055B/0055C streamed Adam with pinned host optimizer state."""
         stream = xp.cuda.get_current_stream()
         one_minus_b1 = 1.0 - self.beta1
@@ -277,6 +418,7 @@ class AdamW:
         decay_factor = 1.0 - eta * self.weight_decay
 
         for i, p in enumerate(self.parameters):
+            step_size, eps_scaled = self._bias_correction(i, eta)
             g_flat = p.grad.reshape(-1)
             p_flat = p.data.reshape(-1)
             m_host = self.m[i].reshape(-1)
@@ -358,16 +500,10 @@ class AdamW:
         self.step_index += 1
         eta = self.lr if lr is None else float(lr)
 
-        c1 = 1.0 - self.beta1 ** self.step_index
-        c2 = 1.0 - self.beta2 ** self.step_index
-        sqrt_c2 = c2 ** 0.5
-        step_size = eta * sqrt_c2 / c1
-        eps_scaled = self.eps * sqrt_c2
-
         if self.moments_offloaded:
-            self._step_offloaded_moments(eta, step_size, eps_scaled)
+            self._step_offloaded_moments(eta)
         else:
-            self._step_device_moments(eta, step_size, eps_scaled)
+            self._step_device_moments(eta)
 
     def zero_grad(self):
         """Zero out all gradients."""

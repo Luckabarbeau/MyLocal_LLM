@@ -1,7 +1,7 @@
 """Experts for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp, is_bfloat16_dtype
+from mini_llm.backend import xp
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
 
@@ -90,55 +90,18 @@ class ExpertsInference:
             )
             self.experts.append(expert)
 
-        self.W_gate_stack = None
-        self.W_up_stack = None
-        self.W_down_stack = None
-
-        # CuPy 14.x cannot execute generic N-D BF16 matmul.  Single-token
-        # decode evaluates all experts as one batched operation, so retain
-        # FP32 mirrors of those stacked matrices only when the model weights
-        # are BF16.  Prompt/prefill still uses the original BF16 2-D GEMMs.
-        self.W_gate_stack_f32 = None
-        self.W_up_stack_f32 = None
-        self.W_down_stack_f32 = None
-
     def set_weights(self, experts):
-        """Set weights and build persistent stacked decode matrices once."""
+        """Set weights from the training Experts module."""
         for i in range(self.n_experts):
             self.experts[i].set_weights(experts.experts[i])
 
-        self.W_gate_stack = xp.stack(
-            [expert.W_gate for expert in self.experts], axis=0
-        )
-        self.W_up_stack = xp.stack(
-            [expert.W_up for expert in self.experts], axis=0
-        )
-        self.W_down_stack = xp.stack(
-            [expert.W_down for expert in self.experts], axis=0
-        )
-
-        if is_bfloat16_dtype(self.W_gate_stack.dtype):
-            self.W_gate_stack_f32 = self.W_gate_stack.astype(
-                xp.float32, copy=False
-            )
-            self.W_up_stack_f32 = self.W_up_stack.astype(
-                xp.float32, copy=False
-            )
-            self.W_down_stack_f32 = self.W_down_stack.astype(
-                xp.float32, copy=False
-            )
-        else:
-            self.W_gate_stack_f32 = None
-            self.W_up_stack_f32 = None
-            self.W_down_stack_f32 = None
-
     def forward(self, x, weights, expert_indices):
-        """Sparse inference dispatch with a special single-token decode path.
+        """Sparse inference dispatch matching the training forward semantics.
 
-        Decode avoids the old ``for every expert -> xp.any(mask)`` pattern,
-        which forced up to ``n_experts`` device/host synchronizations per
-        layer.  Only the two selected expert ids are copied to the host once.
-        Prefill reuses the same grouped RoutingPlan used by training.
+        Both prompt prefill and one-token decode use the same RoutingPlan-based
+        sparse top-k dispatch.  BF16 decode deliberately avoids the previous
+        all-expert FP32 path because that changes the numerical path relative
+        to the BF16 training forward.
         """
         batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
@@ -148,53 +111,7 @@ class ExpertsInference:
         weights_flat = weights.reshape(N, k)
         y_flat = xp.zeros((N, d_model), dtype=x.dtype)
 
-        if N == 1:
-            # GPU-only decode experiment: evaluate all experts together rather
-            # than synchronizing selected expert ids to Python.  CuPy 14.x
-            # cannot run its generic N-D matmul path with BF16 operands.  For
-            # BF16 models, use persistent FP32 mirrors for these *batched*
-            # single-token expert products.  The much larger prompt/prefill
-            # expert products remain true 2-D BF16 GEMMs below.
-            bf16_decode = self.W_gate_stack_f32 is not None
-            if bf16_decode:
-                x_experts = x_flat.astype(
-                    xp.float32, copy=False
-                )[xp.newaxis, :, :]
-                W_gate = self.W_gate_stack_f32
-                W_up = self.W_up_stack_f32
-                W_down = self.W_down_stack_f32
-            else:
-                x_experts = x_flat[xp.newaxis, :, :]
-                W_gate = self.W_gate_stack
-                W_up = self.W_up_stack
-                W_down = self.W_down_stack
-
-            g = xp.matmul(x_experts, W_gate)  # [E,1,Dff]
-            u = xp.matmul(x_experts, W_up)    # [E,1,Dff]
-            h = silu(g) * u
-            all_outputs = xp.matmul(h, W_down)  # [E,1,D]
-
-            selected = all_outputs[
-                expert_indices.reshape(-1), 0, :
-            ]  # [k,D], GPU gather only after expert computation
-            combine_weights = weights_flat[0, :, xp.newaxis]
-            if bf16_decode:
-                combine_weights = combine_weights.astype(
-                    xp.float32, copy=False
-                )
-            combined = xp.sum(
-                selected * combine_weights,
-                axis=0,
-            )
-
-            # Return the branch in the model compute dtype so the next block
-            # continues to use BF16 2-D projection GEMMs.
-            if bf16_decode:
-                combined = combined.astype(x.dtype, copy=False)
-            return combined.reshape(batch_size, seq_len, d_model)
-
-        # Prompt/prefill path: group assignments once instead of performing
-        # one device-synchronizing xp.any() check for every expert.
+        # Group assignments once, exactly as in the training dispatcher.
         routing_plan = RoutingPlan.from_router_outputs(
             expert_indices, weights, k, n_experts=self.n_experts
         )

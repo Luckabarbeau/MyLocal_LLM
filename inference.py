@@ -587,12 +587,26 @@ def main():
     
     # Load checkpoint (skip optimizer state for inference - it's 12GB and not needed)
     param_names = [p.name for p in model.parameters()]
-    loaded_params, _, _ = load_checkpoint(checkpoint_path, param_names=param_names, skip_optimizer=True)
+    loaded_params, _, training_state = load_checkpoint(
+        checkpoint_path, param_names=param_names, skip_optimizer=True
+    )
     
     # Apply loaded parameters
     for p in model.parameters():
         if p.name in loaded_params:
             p.data[...] = loaded_params[p.name]
+
+    if getattr(config, "progressive_depth", False):
+        active_layers = int(
+            (training_state or {}).get(
+                "progressive_active_layers", config.progressive_initial_layers
+            )
+        )
+        model.set_active_layers(active_layers)
+        print(
+            "Progressive checkpoint active depth: "
+            f"{model.active_layers}/{model.max_layers}"
+        )
     
     load_time = time_mod.time() - load_start
     print(f"Loaded {len(loaded_params)} parameter arrays")

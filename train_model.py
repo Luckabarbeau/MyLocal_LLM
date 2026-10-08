@@ -84,6 +84,36 @@ def parse_args():
         ),
     )
     
+    # Progressive-depth training (0064B)
+    parser.add_argument(
+        "--progressive-depth",
+        action="store_true",
+        help=(
+            "Enable residual-gated progressive Transformer depth. New runs begin "
+            "with --initial-active-layers blocks; inactive blocks are skipped "
+            "entirely until activated."
+        ),
+    )
+    parser.add_argument(
+        "--initial-active-layers",
+        type=int,
+        default=None,
+        help=(
+            "Initial executed depth for a new --progressive-depth run "
+            "(default: 1). Ignored on resume, where checkpoint state wins."
+        ),
+    )
+    parser.add_argument(
+        "--progressive-growth-steps",
+        default=None,
+        help=(
+            "Comma-separated completed optimizer steps at which to activate one "
+            "additional block before the following update, e.g. "
+            "'1000,3000,7000'. On resume, the checkpointed schedule is reused "
+            "when this option is omitted."
+        ),
+    )
+
     # Data configuration
     parser.add_argument(
         "--dataset-path",
@@ -317,6 +347,25 @@ def model_config_from_name(name: str) -> ModelConfig:
     raise ValueError(f"unknown model preset: {name}")
 
 
+def parse_progressive_growth_steps(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        steps = [int(part.strip()) for part in text.split(",") if part.strip()]
+    except ValueError as exc:
+        raise ValueError(
+            "--progressive-growth-steps must be a comma-separated list of integers"
+        ) from exc
+    if any(step <= 0 for step in steps):
+        raise ValueError("progressive growth steps must be positive")
+    if steps != sorted(set(steps)):
+        raise ValueError("progressive growth steps must be unique and strictly increasing")
+    return steps
+
+
 def load_tokenizer_file(path: Path):
     try:
         return FastBPETokenizer.load(str(path))
@@ -372,6 +421,12 @@ def setup_model(config: ModelConfig, dtype: str = "float16") -> DecoderLanguageM
     
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
+    if getattr(model, "progressive_depth_enabled", False):
+        optimized = sum(p.data.size for p in model.optimization_parameters())
+        print(
+            f"  Active Transformer depth: {model.active_layers}/{model.max_layers}"
+        )
+        print(f"  Initial optimizer parameters: {optimized:,}")
     print(f"  Model dtype: {dtype}")
     
     return model
@@ -585,6 +640,46 @@ def main():
         memory_cfg = dataclasses.replace(memory_cfg, **memory_overrides)
         config = dataclasses.replace(config, memory_context=memory_cfg)
 
+    # 0064B: progressive-depth is an architecture/checkpoint property, not a
+    # runtime kernel flag.  New runs opt in explicitly.  Resume always trusts
+    # the checkpoint config so parameter layout cannot silently change.
+    if args.resume_from:
+        if args.progressive_depth and not config.progressive_depth:
+            raise ValueError(
+                "cannot enable progressive depth while resuming a non-progressive checkpoint"
+            )
+        if (
+            args.initial_active_layers is not None
+            and int(args.initial_active_layers) != int(config.progressive_initial_layers)
+        ):
+            raise ValueError(
+                "--initial-active-layers cannot change the checkpoint's progressive architecture"
+            )
+    else:
+        if args.progressive_depth:
+            initial_layers = (
+                1 if args.initial_active_layers is None
+                else int(args.initial_active_layers)
+            )
+            config = dataclasses.replace(
+                config,
+                progressive_depth=True,
+                progressive_initial_layers=initial_layers,
+            )
+        elif args.initial_active_layers is not None:
+            raise ValueError(
+                "--initial-active-layers requires --progressive-depth on a new run"
+            )
+
+    memory_cfg = config.memory_context
+    requested_growth_steps = parse_progressive_growth_steps(
+        args.progressive_growth_steps
+    )
+    if requested_growth_steps and not config.progressive_depth:
+        raise ValueError(
+            "--progressive-growth-steps requires a progressive-depth model"
+        )
+
     if memory_cfg.enabled:
         if args.context_length is not None:
             raise ValueError(
@@ -731,6 +826,19 @@ def main():
         print(f"Source sample input length: {run_context_length:,}")
     else:
         print(f"Context length: {run_context_length}")
+    if config.progressive_depth:
+        print(
+            "Progressive depth: enabled "
+            f"(initial {config.progressive_initial_layers}/{config.n_layers} layers)"
+        )
+        if requested_growth_steps is not None:
+            print(
+                "Requested growth steps: "
+                + (
+                    ", ".join(str(x) for x in requested_growth_steps)
+                    if requested_growth_steps else "manual only"
+                )
+            )
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.grad_accum_steps}x")
     effective_sequences = args.batch_size * args.grad_accum_steps
@@ -778,7 +886,13 @@ def main():
         print(f"  External-memory parameters: {estimated_params - base_params:,}")
     if args.precision == "bf16-mixed":
         gib = 1024 ** 3
-        optimized_estimate = estimated_params
+        optimized_estimate = (
+            config.estimated_parameter_count(
+                active_layers=config.progressive_initial_layers
+            )
+            if config.progressive_depth
+            else estimated_params
+        )
         if (
             config.memory_context.enabled
             and config.memory_context.memory_training == "router_only"
@@ -881,6 +995,18 @@ def main():
         if get_pool is not None:
             get_pool().free_all_blocks()
 
+        if config.progressive_depth:
+            restored_active_layers = int(
+                (training_state or {}).get(
+                    "progressive_active_layers", config.progressive_initial_layers
+                )
+            )
+            model.set_active_layers(restored_active_layers)
+            print(
+                "Restored progressive active depth: "
+                f"{model.active_layers}/{model.max_layers}"
+            )
+
         stored_optimizer_state = optimizer_state
         start_step = training_state.get("step", 0) if training_state else 0
         if training_state and "tokens_processed" in training_state:
@@ -942,6 +1068,15 @@ def main():
         val_source_shards = None
         source_weights = None
 
+    if requested_growth_steps is None:
+        progressive_growth_steps = (
+            list((training_state or {}).get("progressive_growth_steps", []))
+            if args.resume_from
+            else []
+        )
+    else:
+        progressive_growth_steps = list(requested_growth_steps)
+
     trainer = ExtendedTrainer(
         model=model,
         train_shard_paths=[str(p) for p in train_shards],
@@ -966,6 +1101,7 @@ def main():
         val_source_shards=val_source_shards,
         source_weights=source_weights,
         eos_token_id=eos_token_id,
+        progressive_growth_steps=progressive_growth_steps,
     )
 
     trainer.step = start_step
@@ -1061,6 +1197,17 @@ def main():
                 )
             m_dict.clear()
             v_dict.clear()
+
+        birth_state = (training_state or {}).get(
+            "optimizer_parameter_birth_steps", {}
+        )
+        restored_births = trainer.optimizer.restore_parameter_birth_steps(
+            birth_state
+        )
+        if restored_births:
+            print(
+                f"Restored Adam birth steps for {restored_births} parameters"
+            )
 
         # No checkpoint optimizer arrays are needed after the in-place restore.
         stored_optimizer_state.clear()

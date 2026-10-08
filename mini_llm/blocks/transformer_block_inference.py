@@ -31,6 +31,7 @@ class TransformerBlockInference:
         top_k: int,
         dtype: str = "float32",
         max_context: int = None,
+        rope_base: float = 10_000.0,
         attention_config=None,
         layer_idx: int = 0,
     ):
@@ -57,6 +58,11 @@ class TransformerBlockInference:
         self.layer_idx = int(layer_idx)
         self.compute_dtype = resolve_dtype(dtype)
         self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
+        # 0064B progressive checkpoints carry learned residual gates.  Ordinary
+        # checkpoints keep both values at 1.0, so the historical inference path
+        # is unchanged.
+        self.alpha_attn = 1.0
+        self.alpha_mlp = 1.0
         
         # RMSNorms (weights shared with training)
         self.norm1 = RMSNormInference(d_model, dtype=dtype)
@@ -68,6 +74,7 @@ class TransformerBlockInference:
             n_q_heads=n_q_heads,
             n_kv_heads=n_kv_heads,
             d_head=d_head,
+            rope_base=rope_base,
             dtype=dtype,
             max_context=max_context,
             attention_config=attention_config,
@@ -100,6 +107,12 @@ class TransformerBlockInference:
             training_attention=training_block.attention,
         )
         self.moe.set_weights(training_block.moe)
+        if getattr(training_block, "residual_gates", False):
+            self.alpha_attn = training_block.alpha_attn.data
+            self.alpha_mlp = training_block.alpha_mlp.data
+        else:
+            self.alpha_attn = 1.0
+            self.alpha_mlp = 1.0
 
     def prefill(
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
@@ -142,6 +155,8 @@ class TransformerBlockInference:
         a_residual = (
             a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
         )
+        if self.alpha_attn is not None:
+            a_residual = a_residual * self.alpha_attn
         x = residual1 + a_residual
 
         residual2 = x
@@ -155,6 +170,8 @@ class TransformerBlockInference:
         m_residual = (
             m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
         )
+        if self.alpha_mlp is not None:
+            m_residual = m_residual * self.alpha_mlp
         return residual2 + m_residual
 
     def decode_one(
@@ -201,6 +218,8 @@ class TransformerBlockInference:
         a_residual = (
             a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
         )
+        if self.alpha_attn is not None:
+            a_residual = a_residual * self.alpha_attn
         x = residual1 + a_residual
 
         residual2 = x
@@ -213,4 +232,6 @@ class TransformerBlockInference:
         m_residual = (
             m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
         )
+        if self.alpha_mlp is not None:
+            m_residual = m_residual * self.alpha_mlp
         return residual2 + m_residual

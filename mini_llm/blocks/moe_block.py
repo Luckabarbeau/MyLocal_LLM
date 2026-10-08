@@ -128,23 +128,40 @@ class MoE:
                 x, weights, expert_indices, routing_plan, return_cache=False
             )
 
-    def backward(self, dy, cache):
+    def backward(
+        self, dy, cache, *, output_scale=None, return_output_scale_grad=False
+    ):
         """Backward pass through experts and router.
 
-        Expert input/parameter gradients and the selected router-weight
-        gradients are produced in a single expert dispatch pass.
+        ``output_scale`` implements a scalar gate around the complete MoE
+        residual branch without retaining the MoE output.  Expert backward uses
+        scaled route weights for ordinary parameter/input gradients while
+        retaining the raw route-weight derivatives long enough to recover
+        ``dL/d(output_scale)``.
         """
         router_cache = cache["router_cache"]
         experts_cache = cache["experts_cache"]
 
-        # Reuse the routing plan, expert outputs, and activation caches from
-        # forward.  This avoids both expert recomputation and a second expert
-        # dispatch loop solely for dL/d(router weights).
         with moe_detail_scope("moe.experts.backward"):
-            dx_experts, dweights = self.experts.backward(
-                dy, experts_cache, return_dweights=True
-            )
+            if return_output_scale_grad:
+                dx_experts, dweights, dscale = self.experts.backward(
+                    dy,
+                    experts_cache,
+                    return_dweights=True,
+                    output_scale=output_scale,
+                    return_output_scale_grad=True,
+                )
+            else:
+                dx_experts, dweights = self.experts.backward(
+                    dy,
+                    experts_cache,
+                    return_dweights=True,
+                    output_scale=output_scale,
+                )
 
         with moe_detail_scope("moe.router.backward"):
             dx_router = self.router.backward(dweights, router_cache)
-        return dx_experts + dx_router
+        dx = dx_experts + dx_router
+        if return_output_scale_grad:
+            return dx, dscale
+        return dx

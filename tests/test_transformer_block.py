@@ -210,3 +210,112 @@ def test_bfloat16_residual_stream_uses_fp32():
     assert str(block.moe.seen_dtype) == "bfloat16"
     assert y.dtype == xp.dtype("float32")
     assert bool(xp.all(xp.isfinite(y)))
+
+
+def make_gated_block(gate_init=1.0, seed=10):
+    """Create a small TransformerBlock with learned residual gates."""
+    rng = RandomStream(seed)
+    return TransformerBlock(
+        d_model=8,
+        n_q_heads=2,
+        n_kv_heads=1,
+        d_head=4,
+        d_ff=16,
+        n_experts=3,
+        top_k=2,
+        input_std=0.08,
+        output_std=0.04,
+        rope_base=10_000.0,
+        rng=rng,
+        dtype="float64",
+        residual_gates=True,
+        residual_gate_init=gate_init,
+    )
+
+
+def test_residual_gates_disabled_preserve_parameter_layout():
+    """0064A must not alter ordinary model/checkpoint parameter layout."""
+    block = make_block()
+    names = [p.name for p in block.parameters()]
+    assert not any(name.endswith(".alpha_attn") for name in names)
+    assert not any(name.endswith(".alpha_mlp") for name in names)
+
+
+def test_zero_residual_gates_make_block_exact_identity():
+    """A newly inserted progressive block must be an exact forward identity."""
+    block = make_gated_block(gate_init=0.0, seed=31)
+    x = xp.asarray(np.random.default_rng(32).normal(size=(2, 5, 8)), dtype="float64")
+
+    y, _ = block.forward(x)
+
+    np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
+    assert block.alpha_attn.decay is False
+    assert block.alpha_mlp.decay is False
+
+
+def test_unit_residual_gates_match_ordinary_block():
+    """alpha=1 must reproduce the historical ungated Transformer exactly."""
+    ungated = make_block()
+    gated = make_gated_block(gate_init=1.0, seed=10)
+    x = xp.asarray(np.random.default_rng(33).normal(size=(2, 4, 8)), dtype="float64")
+
+    y_ref, _ = ungated.forward(x)
+    y_gate, _ = gated.forward(x)
+
+    np.testing.assert_allclose(np.asarray(y_gate), np.asarray(y_ref), rtol=0.0, atol=0.0)
+
+
+def test_zero_gate_backward_only_opens_gates_initially():
+    """At alpha=0, branch weights get zero gradient but both gates can learn."""
+    block = make_gated_block(gate_init=0.0, seed=34)
+    x = xp.asarray(np.random.default_rng(35).normal(size=(1, 5, 8)), dtype="float64")
+    dy = xp.asarray(np.random.default_rng(36).normal(size=(1, 5, 8)), dtype="float64")
+
+    _, cache = block.forward(x)
+    block.zero_grad()
+    dx = block.backward(dy, cache)
+
+    # Exact identity means the input gradient is the upstream residual gradient.
+    np.testing.assert_allclose(np.asarray(dx), np.asarray(dy), rtol=1e-12, atol=1e-12)
+
+    # Random branches should generally present a non-zero direction to the gates.
+    assert abs(float(block.alpha_attn.grad)) > 1e-12
+    assert abs(float(block.alpha_mlp.grad)) > 1e-12
+
+    # Internal residual-branch parameters are multiplied by alpha and therefore
+    # receive exactly zero gradient on the insertion step.
+    branch_params = list(block.attention.parameters()) + list(block.moe.parameters())
+    for param in branch_params:
+        assert bool(xp.all(param.grad == 0)), param.name
+
+
+def test_residual_gate_gradients_match_finite_difference():
+    """Learned alpha gradients must match the exact gated block objective."""
+    block = make_gated_block(gate_init=0.37, seed=37)
+    x = xp.asarray(np.random.default_rng(38).normal(size=(1, 4, 8)), dtype="float64")
+    dy = xp.asarray(np.random.default_rng(39).normal(size=(1, 4, 8)), dtype="float64")
+
+    _, cache = block.forward(x)
+    block.zero_grad()
+    block.backward(dy, cache)
+
+    eps = 1e-6
+    for alpha in (block.alpha_attn, block.alpha_mlp):
+        original = float(alpha.data)
+
+        alpha.data[...] = original + eps
+        y_plus, _ = block.forward(x)
+        f_plus = float(xp.sum(y_plus * dy))
+
+        alpha.data[...] = original - eps
+        y_minus, _ = block.forward(x)
+        f_minus = float(xp.sum(y_minus * dy))
+
+        alpha.data[...] = original
+        fd = (f_plus - f_minus) / (2.0 * eps)
+        analytic = float(alpha.grad)
+        rel = abs(fd - analytic) / (abs(fd) + abs(analytic) + 1e-12)
+        assert rel < 2e-5, (
+            f"gate gradient check failed for {alpha.name}: "
+            f"fd={fd}, analytic={analytic}, rel={rel}"
+        )

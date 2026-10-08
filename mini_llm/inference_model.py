@@ -120,6 +120,7 @@ class InferenceModel:
                 top_k=config.top_k,
                 dtype=self.dtype,
                 max_context=config.context_length,
+                rope_base=config.rope_base,
                 attention_config=attention_config,
                 layer_idx=layer_idx,
             )
@@ -211,8 +212,18 @@ class InferenceModel:
         # Share the embedding reference directly
         self.embedding = training_model.embedding
         
-        # Set inference block weights from training blocks
-        for i, (inf_block, train_block) in enumerate(zip(self.blocks, training_model.blocks)):
+        # Set inference block weights from the executed training prefix only.
+        # Progressive checkpoints may intentionally stop before max depth.
+        active_layers = int(
+            getattr(training_model, "active_layers", len(training_model.blocks))
+        )
+        if not 1 <= active_layers <= len(self.blocks):
+            raise ValueError("training model active depth is outside inference depth")
+        self.blocks = self.blocks[:active_layers]
+        self.n_layers = active_layers
+        for i, (inf_block, train_block) in enumerate(
+            zip(self.blocks, training_model.blocks[:active_layers])
+        ):
             inf_block.set_weights(train_block)
         
         # Set final norm weights

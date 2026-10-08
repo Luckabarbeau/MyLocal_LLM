@@ -7,6 +7,7 @@ from mini_llm.ops.router import Router
 from mini_llm.ops.experts import Experts
 from mini_llm.blocks.moe_block import MoE
 from mini_llm.performance_profiler import performance_scope
+from mini_llm.parameter import Parameter
 
 
 class TransformerBlock:
@@ -40,6 +41,8 @@ class TransformerBlock:
         dtype: str = "float32",
         attention_config=None,
         terminal_memory_config=None,
+        residual_gates: bool = False,
+        residual_gate_init: float = 1.0,
     ):
         """Initialize the Transformer block."""
         self.d_model = d_model
@@ -51,6 +54,27 @@ class TransformerBlock:
         self.top_k = top_k
         self.compute_dtype = resolve_dtype(dtype)
         self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
+        self.residual_gates = bool(residual_gates)
+
+        # 0064A: optional learned residual gates used by progressive-depth
+        # training.  Ordinary blocks leave this feature disabled, preserving the
+        # historical parameter layout and runtime exactly.  Progressive blocks
+        # use FP32 gates for low-precision models so the scalar can move smoothly
+        # away from an exact zero identity initialization.
+        self.alpha_attn = None
+        self.alpha_mlp = None
+        if getattr(self, "residual_gates", False):
+            gate_dtype = "float32" if self.use_fp32_residual else self.compute_dtype
+            self.alpha_attn = Parameter(
+                xp.asarray(float(residual_gate_init), dtype=gate_dtype),
+                name=f"{name}.alpha_attn",
+                decay=False,
+            )
+            self.alpha_mlp = Parameter(
+                xp.asarray(float(residual_gate_init), dtype=gate_dtype),
+                name=f"{name}.alpha_mlp",
+                decay=False,
+            )
         
         # First RMSNorm (input to attention)
         self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1", dtype=dtype)
@@ -94,6 +118,8 @@ class TransformerBlock:
         params.extend(self.attention.parameters())
         params.extend(self.norm2.parameters())
         params.extend(self.moe.parameters())
+        if getattr(self, "residual_gates", False):
+            params.extend((self.alpha_attn, self.alpha_mlp))
         return params
     
     def zero_grad(self):
@@ -169,6 +195,10 @@ class TransformerBlock:
             attn_out.astype("float32", copy=False)
             if self.use_fp32_residual else attn_out
         )
+        if getattr(self, "residual_gates", False):
+            # Reuse the branch output allocation.  This adds one scalar
+            # elementwise multiply but no extra activation tensor.
+            xp.multiply(attn_residual, self.alpha_attn.data, out=attn_residual)
         x = residual1 + attn_residual
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.post_attention_residual", xp.all(xp.isfinite(x))))
@@ -203,6 +233,8 @@ class TransformerBlock:
             moe_out.astype("float32", copy=False)
             if self.use_fp32_residual else moe_out
         )
+        if getattr(self, "residual_gates", False):
+            xp.multiply(moe_residual, self.alpha_mlp.data, out=moe_residual)
         y = residual2 + moe_residual
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.output", xp.all(xp.isfinite(y))))
@@ -250,9 +282,23 @@ class TransformerBlock:
             if self.use_fp32_residual else dy
         )
         
-        # Backward through MoE
+        # Backward through MoE.  With residual gating, MoE backward keeps the
+        # ungated upstream gradient long enough to recover dL/d(alpha) from the
+        # already-recomputed expert-output derivatives, then applies alpha to
+        # every ordinary MoE/router gradient.  No full MoE output is cached.
         with performance_scope("block.moe.backward"):
-            dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
+            if getattr(self, "residual_gates", False):
+                dnorm2_out, dalpha_mlp = self.moe.backward(
+                    dmoe_out,
+                    moe_cache,
+                    output_scale=self.alpha_mlp.data,
+                    return_output_scale_grad=True,
+                )
+                self.alpha_mlp.grad += dalpha_mlp.astype(
+                    self.alpha_mlp.grad.dtype, copy=False
+                )
+            else:
+                dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
         
         # Backward through second RMSNorm - this gives gradient through FFN path.
         # Fused BF16 RMSNorm consumes the BF16 branch gradient directly and emits
@@ -280,9 +326,24 @@ class TransformerBlock:
             if self.use_fp32_residual else dx_norm2
         )
         
-        # Backward through attention
+        # Backward through attention.  The attention output projection can
+        # recover dL/d(alpha) from its raw weight-gradient matrix, avoiding a
+        # retained [B,T,D] attention-output activation.
         with performance_scope("block.attention.backward"):
-            dnorm1_out = self.attention.backward(dattn_out, cache["attn_cache"])
+            if getattr(self, "residual_gates", False):
+                dnorm1_out, dalpha_attn = self.attention.backward(
+                    dattn_out,
+                    cache["attn_cache"],
+                    output_scale=self.alpha_attn.data,
+                    return_output_scale_grad=True,
+                )
+                self.alpha_attn.grad += dalpha_attn.astype(
+                    self.alpha_attn.grad.dtype, copy=False
+                )
+            else:
+                dnorm1_out = self.attention.backward(
+                    dattn_out, cache["attn_cache"]
+                )
         
         # Backward through first RMSNorm.  As above, the fused path avoids a
         # separate BF16->FP32 gradient promotion.

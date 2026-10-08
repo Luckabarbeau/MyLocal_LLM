@@ -211,8 +211,59 @@ python inference.py ...
 | `--profile-steps` | Synchronized performance profiling for the first N executed optimizer steps. Keep `0` for long runs. |
 | `--numerical-debug` | Expensive NaN/Inf tracing. Use only for diagnosis. |
 | `--runtime-profile` | `auto`, `reference`, `gpu-fast`, or `consumer-gpu`. |
+| `--progressive-depth` | Enable 0064B progressive residual depth for a new run. The final/max depth remains the preset's `n_layers`. |
+| `--initial-active-layers` | Number of Transformer blocks executed at the start of a new progressive run. Default: 1. |
+| `--progressive-growth-steps` | Comma-separated completed optimizer steps after which one additional block becomes active, e.g. `1000,3000,7000`. Omit for manual-only growth. |
 
 Run `python train_model.py --help` for the complete CLI list.
+
+### Progressive-depth experiment
+
+0064B implements deterministic/manual growth only. It deliberately does **not**
+yet implement the future automatic plateau detector or adaptive token selection.
+A new block is independently random-initialized, but both learned residual gates
+start at exact zero when that block becomes active:
+
+```text
+y = x + alpha_attn * Attention(Norm(x))
+z = y + alpha_mlp  * MoE(Norm(y))
+
+new layer: alpha_attn = alpha_mlp = 0
+```
+
+The insertion therefore preserves the current network function exactly. All
+previously active blocks remain trainable. The new block receives fresh Adam
+moments/master state and a local Adam age of one on its first update; existing
+optimizer history is not rebuilt or reset.
+
+Example deterministic research run:
+
+```bash
+MINI_LLM_BACKEND=cupy \
+python train_model.py \
+    --model wide-500m-memory-64k \
+    --precision bf16-mixed \
+    --mixed-shard-root ./token_shards_pretraining_65280 \
+    --progressive-depth \
+    --initial-active-layers 1 \
+    --progressive-growth-steps 1000,3000,7000,12000 \
+    --batch-size 2 \
+    --grad-accum-steps 32 \
+    --total-steps 20000 \
+    --warmup-steps 1000 \
+    --checkpoint-dir ./checkpoints/progressive_test
+```
+
+A growth step `N` means that `N` optimizer updates are completed at the previous
+depth; the next block is activated before update `N+1`. Checkpoints store the
+current active depth, the explicit growth schedule, and the per-parameter Adam
+birth steps. If `--progressive-growth-steps` is omitted on resume, the saved
+schedule is reused.
+
+For the first scientific comparison, use an explicit schedule or call the
+trainer's growth method manually. Automatic growth based on validation
+improvement per FLOP belongs to the next patch once the base mechanism has been
+benchmarked.
 
 ---
 

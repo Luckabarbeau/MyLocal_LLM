@@ -91,6 +91,7 @@ class ExtendedTrainer:
         source_weights: Optional[Mapping[str, float]] = None,
         profile_steps: int = 0,
         eos_token_id: Optional[int] = None,
+        progressive_growth_steps: Optional[List[int]] = None,
     ):
         """
         Initialize the extended trainer.
@@ -129,6 +130,10 @@ class ExtendedTrainer:
                 intrusive and should normally be limited to 1-3 steps.
             eos_token_id: Packed-shard EOS marker. Hierarchical-memory training
                 uses it to keep every sample inside one coherent document.
+            progressive_growth_steps: Completed optimizer-step counts at which
+                the next Transformer block becomes active before the following
+                optimizer update. Example ``[1000, 3000]`` trains the initial
+                depth for 1000 updates, then grows twice deterministically.
         """
         self.model = model
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
@@ -151,6 +156,25 @@ class ExtendedTrainer:
             model.config.memory_context if model.config.memory_context.enabled else None
         )
         self.eos_token_id = None if eos_token_id is None else int(eos_token_id)
+        raw_growth_steps = [] if progressive_growth_steps is None else list(progressive_growth_steps)
+        self.progressive_growth_steps = tuple(int(x) for x in raw_growth_steps)
+        if any(x <= 0 for x in self.progressive_growth_steps):
+            raise ValueError("progressive growth steps must be positive")
+        if tuple(sorted(set(self.progressive_growth_steps))) != self.progressive_growth_steps:
+            raise ValueError("progressive growth steps must be unique and strictly increasing")
+        if self.progressive_growth_steps and not getattr(
+            model, "progressive_depth_enabled", False
+        ):
+            raise ValueError(
+                "progressive growth steps require config.progressive_depth=True"
+            )
+        if getattr(model, "progressive_depth_enabled", False):
+            remaining = int(model.max_layers) - int(model.config.progressive_initial_layers)
+            if len(self.progressive_growth_steps) > remaining:
+                raise ValueError(
+                    "progressive growth schedule contains more activations than "
+                    "the final model depth permits"
+                )
         if self.memory_context is not None:
             if self.eos_token_id is None:
                 raise ValueError(
@@ -240,35 +264,13 @@ class ExtendedTrainer:
         # Initialize optimizer with weight decay
         # Loss scaling is handled entirely by the trainer
         self.optimization_parameters = list(model.optimization_parameters())
-        optimized_ids = {id(p) for p in self.optimization_parameters}
-        self.frozen_parameters = [
-            p for p in model.parameters() if id(p) not in optimized_ids
-        ]
-        # Only a subset of frozen tensors participates in router-only backward.
-        # Earlier frozen blocks run inference-style, output-projection backward
-        # skips W-grad, and embedding backward is disabled. Clearing every ~500M
-        # frozen gradient buffer each step would therefore be a multi-GiB memory
-        # write for no mathematical benefit.
-        self.frozen_backward_parameters = self.frozen_parameters
-        if (
-            self.memory_context is not None
-            and self.memory_context.integration_mode == "terminal_landmark"
-            and self.memory_context.memory_training == "router_only"
-        ):
-            layer = int(model.memory_attention_layer)
-            relevant = []
-            for block in model.blocks[layer:]:
-                relevant.extend(block.parameters())
-            relevant.extend(model.final_norm.parameters())
-            self.frozen_backward_parameters = [
-                p for p in relevant if id(p) not in optimized_ids
-            ]
         self.optimizer = AdamW(
             self.optimization_parameters,
             lr=peak_lr,
             weight_decay=weight_decay,
             numerical_debug=numerical_debug,
         )
+        self._refresh_parameter_partitions()
         
         # Learning rate schedule
         self.scheduler = WarmupCosineSchedule(
@@ -449,6 +451,70 @@ class ExtendedTrainer:
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Log file: {log_file}")
         
+    def _refresh_parameter_partitions(self):
+        """Refresh active/frozen parameter views after progressive growth."""
+        self.optimization_parameters = list(self.optimizer.parameters)
+        optimized_ids = {id(p) for p in self.optimization_parameters}
+        self.frozen_parameters = [
+            p for p in self.model.parameters() if id(p) not in optimized_ids
+        ]
+
+        # Only a subset of frozen tensors participates in router-only backward.
+        # Progressive depth is deliberately not enabled with terminal-landmark
+        # memory in 0064B, but preserve the established router-only behavior.
+        self.frozen_backward_parameters = self.frozen_parameters
+        if (
+            self.memory_context is not None
+            and self.memory_context.integration_mode == "terminal_landmark"
+            and self.memory_context.memory_training == "router_only"
+        ):
+            layer = int(self.model.memory_attention_layer)
+            relevant = []
+            for block in self.model.blocks[layer:]:
+                relevant.extend(block.parameters())
+            relevant.extend(self.model.final_norm.parameters())
+            self.frozen_backward_parameters = [
+                p for p in relevant if id(p) not in optimized_ids
+            ]
+
+    def activate_next_progressive_layer(self):
+        """Activate one random zero-gated block and extend Adam in place."""
+        if not getattr(self.model, "progressive_depth_enabled", False):
+            raise RuntimeError("progressive depth is disabled for this model")
+        before_ids = {id(p) for p in self.optimizer.parameters}
+        layer_idx = self.model.activate_next_layer()
+        if layer_idx is None:
+            return None
+
+        new_params = [
+            p for p in self.model.optimization_parameters()
+            if id(p) not in before_ids
+        ]
+        added = self.optimizer.add_parameters(new_params)
+        if added != len(new_params):
+            raise RuntimeError("optimizer did not add every newly active parameter")
+        self._refresh_parameter_partitions()
+        block = self.model.blocks[layer_idx]
+        print(
+            "Progressive depth: activated layer "
+            f"{layer_idx + 1}/{self.model.max_layers} with "
+            f"{added} fresh optimizer tensors; "
+            f"alpha_attn={float(block.alpha_attn.data):.6g}, "
+            f"alpha_mlp={float(block.alpha_mlp.data):.6g}"
+        )
+        return layer_idx
+
+    def _apply_scheduled_progressive_growth(self):
+        """Make the explicit growth schedule idempotent across resume."""
+        if not getattr(self.model, "progressive_depth_enabled", False):
+            return
+        initial = int(self.model.config.progressive_initial_layers)
+        due = sum(step <= int(self.step) for step in self.progressive_growth_steps)
+        target = min(int(self.model.max_layers), initial + due)
+        while int(self.model.active_layers) < target:
+            if self.activate_next_progressive_layer() is None:
+                break
+
     @staticmethod
     def _normalize_source_weights(
         source_weights: Optional[Mapping[str, float]],
@@ -1588,6 +1654,13 @@ class ExtendedTrainer:
             "current_val_source_shard_idx": self.current_val_source_shard_idx,
             "train_source_batch_counts": self.train_source_batch_counts,
             "val_source_batch_counts": self.val_source_batch_counts,
+            "progressive_active_layers": int(
+                getattr(self.model, "active_layers", len(self.model.blocks))
+            ),
+            "progressive_growth_steps": list(self.progressive_growth_steps),
+            "optimizer_parameter_birth_steps": (
+                self.optimizer.parameter_birth_step_state()
+            ),
         }
         
         # Issue #12: Include RNG states
@@ -1625,6 +1698,16 @@ class ExtendedTrainer:
         print(f"\nStarting training from step {start_step}...")
         print(f"Training for {num_steps} additional steps")
         print(f"Effective batch size: {self.effective_batch_size}")
+        if getattr(self.model, "progressive_depth_enabled", False):
+            print(
+                "Progressive depth: "
+                f"{self.model.active_layers}/{self.model.max_layers} active layers"
+            )
+            if self.progressive_growth_steps:
+                print(
+                    "Progressive growth steps: "
+                    + ", ".join(str(x) for x in self.progressive_growth_steps)
+                )
         
         start_time = time.time()
         # 0053F: precise per-optimizer-step timing. train_step() returns only
@@ -1657,6 +1740,11 @@ class ExtendedTrainer:
             target_tokens_per_optimizer_step = source_tokens_per_optimizer_step
         
         for step in range(num_steps):
+            # Growth step N means: complete N optimizer updates at the previous
+            # depth, then activate the next exact-identity block before update
+            # N+1.  Calling this before every step makes resume idempotent.
+            self._apply_scheduled_progressive_growth()
+
             # Train step
             precise_step_start = time.perf_counter()
             loss, grad_norm = self.train_step()
@@ -1762,9 +1850,15 @@ class ExtendedTrainer:
                         f"tok/s_10={rolling_source_tokens_per_sec:,.0f}"
                     )
 
+                depth_text = ""
+                if getattr(self.model, "progressive_depth_enabled", False):
+                    depth_text = (
+                        f"depth={self.model.active_layers}/{self.model.max_layers}, "
+                    )
                 print(
                     f"Step {self.step}/{num_steps + start_step}: "
                     f"loss={avg_loss:.4f}, "
+                    f"{depth_text}"
                     f"lr={lr:.6f}, "
                     f"grad_norm={grad_norm:.4f}, "
                     f"{steps_per_sec:.2f} steps/sec, "

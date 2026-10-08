@@ -1,7 +1,8 @@
 """Router for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp, is_low_precision_dtype
+from mini_llm.backend import xp
+from mini_llm.ops.topk import selected_topk_softmax_forward
 
 
 class RouterInference:
@@ -54,33 +55,14 @@ class RouterInference:
             batch_size, seq_len, self.n_experts
         )
 
-        # CuPy/Thrust cannot argsort BF16. Router logits are tiny
-        # (n_experts values/token), so promote only this selection/reduction
-        # work to FP32.
-        logits_work = (
-            logits.astype(xp.float32, copy=False)
-            if is_low_precision_dtype(logits.dtype) else logits
-        )
-
-        expert_indices = xp.argsort(
-            -logits_work, axis=-1
-        )[..., :self.k]
-
-        flat_indices = expert_indices.reshape(-1, self.k)
-        batch_idx = xp.arange(batch_size * seq_len)[:, None]
-
-        logits_flat = logits_work.reshape(-1, self.n_experts)
-        selected_logits = logits_flat[batch_idx, flat_indices].reshape(
-            batch_size, seq_len, self.k
-        )
-
-        selected_logits_max = xp.max(selected_logits, axis=-1, keepdims=True)
-        exp_selected = xp.exp(selected_logits - selected_logits_max)
-        selected_sums = xp.sum(exp_selected, axis=-1, keepdims=True)
-        output_weights_f32 = exp_selected / selected_sums
-        output_weights = (
-            output_weights_f32.astype(x.dtype, copy=False)
-            if is_low_precision_dtype(x.dtype) else output_weights_f32
+        # Use the exact same top-k + selected-softmax primitive as training.
+        # Besides avoiding duplicate logic, this guarantees identical FP32
+        # promotion, deterministic tie handling, reduction order and cast-back
+        # behavior for BF16/FP16 router outputs.
+        output_weights, expert_indices, _ = selected_topk_softmax_forward(
+            logits,
+            self.k,
+            output_dtype=x.dtype,
         )
 
         return output_weights, expert_indices

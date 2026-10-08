@@ -619,12 +619,16 @@ class Experts:
             "routing_plan": routing_plan,
         }
 
-    def _backward_concurrent(self, dy, cache, return_dweights):
+    def _backward_concurrent(
+        self, dy, cache, return_dweights, output_scale=None,
+        return_output_scale_grad=False,
+    ):
         """Sparse expert backward with independent expert math overlapped.
 
-        Expert inputs are regathered from the original MoE input.  Router
-        weight gradients are derived inside ExpertFFN.backward from H and the
-        down-projection input gradient, avoiding the cached expert output.
+        ``output_scale`` gates the complete MoE output.  Ordinary expert and
+        router gradients see the scaled branch, while raw route-weight
+        derivatives are reused to accumulate dL/d(output_scale) without
+        retaining expert outputs from forward.
         """
         x = cache["x"]
         routing_plan = cache.get("routing_plan")
@@ -642,6 +646,10 @@ class Experts:
             dweights_flat = (
                 xp.zeros((N, k), dtype=xp.float32) if return_dweights else None
             )
+            output_scale_grad = (
+                xp.asarray(0.0, dtype=xp.float32)
+                if return_output_scale_grad else None
+            )
 
         expert_caches = cache.get("expert_caches", {})
         active_experts = [
@@ -650,7 +658,6 @@ class Experts:
             if routing_plan.get_assignment_count(exp_idx) > 0
         ]
         if any(exp_idx not in expert_caches for exp_idx in active_experts):
-            # Compatibility fallback for hand-built/legacy caches.
             return None
 
         streams = self._get_expert_streams()
@@ -671,41 +678,67 @@ class Experts:
                     raw_expert_dy = dy_flat[token_indices]
 
                 with moe_detail_scope("moe.expert.backward_total"):
-                    if return_dweights:
-                        expert_dx, dweight_values = self.experts[exp_idx].backward(
+                    need_raw_dweights = return_dweights or return_output_scale_grad
+                    effective_weights = (
+                        expert_weights
+                        if output_scale is None
+                        else expert_weights * output_scale
+                    )
+                    if need_raw_dweights:
+                        expert_dx, raw_dweight_values = self.experts[exp_idx].backward(
                             raw_expert_dy,
                             expert_cache,
                             x=expert_x,
-                            route_weights=expert_weights,
+                            route_weights=effective_weights,
                             return_route_dweights=True,
                         )
+                        dweight_values = (
+                            raw_dweight_values
+                            if output_scale is None
+                            else raw_dweight_values * output_scale
+                        ) if return_dweights else None
                     else:
                         expert_dx = self.experts[exp_idx].backward(
                             raw_expert_dy,
                             expert_cache,
                             x=expert_x,
-                            route_weights=expert_weights,
+                            route_weights=effective_weights,
                         )
+                        raw_dweight_values = None
                         dweight_values = None
                 done = xp.cuda.Event()
                 done.record()
 
             pending.append(
-                (token_indices, slot_indices, dweight_values, expert_dx, done)
+                (token_indices, slot_indices, expert_weights, dweight_values,
+                 raw_dweight_values, expert_dx, done)
             )
 
         self._wait_for_expert_events([item[-1] for item in pending])
 
-        for token_indices, slot_indices, dweight_values, expert_dx, _ in pending:
+        for (
+            token_indices, slot_indices, expert_weights, dweight_values,
+            raw_dweight_values, expert_dx, _,
+        ) in pending:
             if return_dweights:
                 with moe_detail_scope("moe.dispatch.router_wgrad_scatter"):
                     dweights_flat[token_indices, slot_indices] = dweight_values
+            if return_output_scale_grad:
+                output_scale_grad += xp.sum(
+                    expert_weights.astype(xp.float32, copy=False)
+                    * raw_dweight_values.astype(xp.float32, copy=False),
+                    dtype=xp.float32,
+                )
             with moe_detail_scope("moe.dispatch.bwd_scatter"):
                 dx_flat[token_indices] += expert_dx
 
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
+        if return_dweights and return_output_scale_grad:
+            return dx, dweights_flat.reshape(batch_size, seq_len, k), output_scale_grad
         if return_dweights:
             return dx, dweights_flat.reshape(batch_size, seq_len, k)
+        if return_output_scale_grad:
+            return dx, output_scale_grad
         return dx
 
     def forward(
@@ -777,14 +810,16 @@ class Experts:
             "routing_plan": routing_plan,
         }
 
-    def backward(self, dy, cache, return_dweights=False):
+    def backward(
+        self, dy, cache, return_dweights=False, *, output_scale=None,
+        return_output_scale_grad=False,
+    ):
         """Backward pass through sparsely-routed experts.
 
-        Normal 0055A caches reuse the RoutingPlan and G/U activations, regather
-        expert_x from the original MoE input, and derive router-weight gradients
-        without a retained expert-output tensor.  A compatibility fallback is
-        retained for older/hand-built caches that still contain weights and
-        expert indices.
+        When ``output_scale`` is provided, the whole MoE branch is interpreted
+        as ``alpha * MoE(x)``.  Expert-path and router gradients are scaled by
+        alpha, while the raw per-route output derivatives are reused to obtain
+        dL/d(alpha).
         """
         x = cache["x"]
         routing_plan = cache.get("routing_plan")
@@ -811,12 +846,20 @@ class Experts:
             dweights_flat = (
                 xp.zeros((N, k), dtype=xp.float32) if return_dweights else None
             )
+            output_scale_grad = (
+                xp.asarray(0.0, dtype=xp.float32)
+                if return_output_scale_grad else None
+            )
 
         expert_caches = cache.get("expert_caches", {})
 
         if _concurrent_experts_enabled(x.dtype):
             concurrent = self._backward_concurrent(
-                dy, cache, return_dweights=return_dweights
+                dy,
+                cache,
+                return_dweights=return_dweights,
+                output_scale=output_scale,
+                return_output_scale_grad=return_output_scale_grad,
             )
             if concurrent is not None:
                 return concurrent
@@ -852,32 +895,52 @@ class Experts:
 
             expert_cache = expert_caches.get(exp_idx)
             if expert_cache is None:
-                # Legacy/hand-built cache fallback.  This intentionally pays a
-                # recompute cost only outside the normal optimized path.
                 _, expert_cache = self.experts[exp_idx].forward(expert_x)
 
             with moe_detail_scope("moe.expert.backward_total"):
-                if return_dweights:
-                    expert_dx, dweight_values = self.experts[exp_idx].backward(
+                need_raw_dweights = return_dweights or return_output_scale_grad
+                effective_weights = (
+                    expert_weights
+                    if output_scale is None
+                    else expert_weights * output_scale
+                )
+                if need_raw_dweights:
+                    expert_dx, raw_dweight_values = self.experts[exp_idx].backward(
                         raw_expert_dy,
                         expert_cache,
                         x=expert_x,
-                        route_weights=expert_weights,
+                        route_weights=effective_weights,
                         return_route_dweights=True,
                     )
-                    dweights_flat[token_indices, slot_indices] = dweight_values
+                    if return_dweights:
+                        dweight_values = (
+                            raw_dweight_values
+                            if output_scale is None
+                            else raw_dweight_values * output_scale
+                        )
+                        dweights_flat[token_indices, slot_indices] = dweight_values
+                    if return_output_scale_grad:
+                        output_scale_grad += xp.sum(
+                            expert_weights.astype(xp.float32, copy=False)
+                            * raw_dweight_values.astype(xp.float32, copy=False),
+                            dtype=xp.float32,
+                        )
                 else:
                     expert_dx = self.experts[exp_idx].backward(
                         raw_expert_dy,
                         expert_cache,
                         x=expert_x,
-                        route_weights=expert_weights,
+                        route_weights=effective_weights,
                     )
 
             with moe_detail_scope("moe.dispatch.bwd_scatter"):
                 dx_flat[token_indices] += expert_dx
 
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
+        if return_dweights and return_output_scale_grad:
+            return dx, dweights_flat.reshape(batch_size, seq_len, k), output_scale_grad
         if return_dweights:
             return dx, dweights_flat.reshape(batch_size, seq_len, k)
+        if return_output_scale_grad:
+            return dx, output_scale_grad
         return dx

@@ -237,6 +237,14 @@ class ModelConfig:
     # layer. Otherwise provide one AttentionLayerConfig per Transformer layer.
     attention_layers: tuple | None = None
 
+    # 0064B progressive-depth training.  ``n_layers`` remains the maximum/final
+    # architecture depth.  When enabled, only the first
+    # ``progressive_initial_layers`` blocks execute initially; later blocks are
+    # independently initialized but remain outside forward/backward/optimizer
+    # work until explicitly activated.
+    progressive_depth: bool = False
+    progressive_initial_layers: int = 1
+
     # Optional top-level memory selector.  This is deliberately separate from
     # per-layer sparse/retrieval attention: long addressable history is reduced
     # to a bounded active sequence *before* the expensive Transformer trunk.
@@ -252,6 +260,25 @@ class ModelConfig:
             raise ValueError("n_q_heads must be divisible by n_kv_heads.")
         if not (1 <= self.top_k <= self.n_experts):
             raise ValueError("top_k must satisfy 1 <= top_k <= n_experts.")
+        if not isinstance(self.progressive_depth, bool):
+            raise TypeError("progressive_depth must be a bool")
+        if (
+            int(self.progressive_initial_layers) != self.progressive_initial_layers
+            or not 1 <= int(self.progressive_initial_layers) <= int(self.n_layers)
+        ):
+            raise ValueError(
+                "progressive_initial_layers must be an integer in [1, n_layers]"
+            )
+        if (
+            self.progressive_depth
+            and self.memory_context.enabled
+            and self.memory_context.integration_mode == "terminal_landmark"
+        ):
+            raise ValueError(
+                "progressive depth is not yet supported with terminal_landmark "
+                "memory; use routed_prefix/pretransformer_read or disable "
+                "progressive depth"
+            )
 
         if self.attention_layers is not None:
             layers = tuple(
@@ -293,8 +320,13 @@ class ModelConfig:
                         )
             object.__setattr__(self, "attention_layers", layers)
 
-    def estimated_parameter_count(self) -> int:
+    def estimated_parameter_count(self, active_layers: int | None = None) -> int:
         """Return the exact trainable-array element count for this config.
+
+        ``active_layers`` is a 0064B convenience for estimating the optimizer
+        subset of a progressive-depth run.  It never changes the stored model
+        size: inactive blocks still exist in the checkpoint/model parameter
+        arrays, but do not receive optimizer state until activated.
 
         The calculation mirrors the explicit modules without allocating model
         tensors.  This is useful for preflighting large MoE presets before
@@ -302,11 +334,17 @@ class ModelConfig:
         """
         d = int(self.d_model)
         kv_width = int(self.n_kv_heads) * int(self.d_head)
+        if active_layers is None:
+            layer_count = int(self.n_layers)
+        else:
+            layer_count = int(active_layers)
+            if not 1 <= layer_count <= int(self.n_layers):
+                raise ValueError("active_layers must lie in [1, n_layers]")
 
         # Untied token embedding + output projection + final RMSNorm.
         total = 2 * int(self.vocab_size) * d + d
 
-        for layer_index in range(int(self.n_layers)):
+        for layer_index in range(layer_count):
             # Two RMSNorm scales per Transformer block.
             total += 2 * d
 
@@ -316,6 +354,10 @@ class ModelConfig:
             # MoE router (weight+bias) and SwiGLU expert matrices.
             total += d * int(self.n_experts) + int(self.n_experts)
             total += int(self.n_experts) * 3 * d * int(self.d_ff)
+
+            if self.progressive_depth:
+                # Learned attention/MLP residual gates (0064A/0064B).
+                total += 2
 
             if self.attention_layers is not None:
                 # Retrieval heads with the same group share one ContextRouter.

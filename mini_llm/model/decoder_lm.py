@@ -58,6 +58,17 @@ class DecoderLanguageModel:
             dtype=self.dtype
         )
         
+        # 0064B progressive depth keeps the final architecture allocated but
+        # executes/optimizes only a prefix of blocks.  Inactive blocks are
+        # independently random-initialized once and become exact identities
+        # when activated because their learned residual gates start at zero.
+        self.progressive_depth_enabled = bool(config.progressive_depth)
+        self.active_layers = (
+            int(config.progressive_initial_layers)
+            if self.progressive_depth_enabled
+            else int(config.n_layers)
+        )
+
         # Create transformer blocks
         self.blocks = []
         for layer_idx in range(config.n_layers):
@@ -81,7 +92,11 @@ class DecoderLanguageModel:
                 eps=config.rms_eps,
                 name=f"blocks.{layer_idx}",
                 dtype=self.dtype,
-                attention_config=attention_config
+                attention_config=attention_config,
+                residual_gates=self.progressive_depth_enabled,
+                residual_gate_init=(
+                    1.0 if layer_idx < self.active_layers else 0.0
+                ),
             )
             self.blocks.append(block)
         
@@ -158,6 +173,56 @@ class DecoderLanguageModel:
             params.extend(self.memory_reader.parameters())
         return params
     
+    @property
+    def max_layers(self):
+        return len(self.blocks)
+
+    def set_active_layers(self, count: int):
+        """Set the executed Transformer prefix without modifying gate values.
+
+        This is used when restoring a checkpoint/inference state.  Growth during
+        training should use :meth:`activate_next_layer`, which additionally
+        resets the newly exposed residual gates to exact zero.
+        """
+        count = int(count)
+        if not 1 <= count <= len(self.blocks):
+            raise ValueError("active layer count must lie in [1, max_layers]")
+        if not self.progressive_depth_enabled and count != len(self.blocks):
+            raise ValueError("partial depth requires config.progressive_depth=True")
+        self.active_layers = count
+
+    def activate_next_layer(self):
+        """Expose one new random block as an exact zero-gated identity.
+
+        Returns the zero-based layer index, or ``None`` if already at maximum
+        depth.  Optimizer state is intentionally managed by the trainer because
+        it must preserve existing Adam history while adding fresh state only for
+        the newly active parameters.
+        """
+        if not self.progressive_depth_enabled:
+            raise RuntimeError("progressive depth is disabled for this model")
+        if self.active_layers >= len(self.blocks):
+            return None
+        layer_idx = int(self.active_layers)
+        block = self.blocks[layer_idx]
+        if not getattr(block, "residual_gates", False):
+            raise RuntimeError("progressive block is missing residual gates")
+        block.alpha_attn.data[...] = 0.0
+        block.alpha_mlp.data[...] = 0.0
+        block.alpha_attn.zero_grad()
+        block.alpha_mlp.zero_grad()
+        block.zero_grad()
+        self.active_layers += 1
+        if hasattr(block, "refresh_compute_buffers"):
+            block.refresh_compute_buffers()
+        return layer_idx
+
+    def active_block_parameters(self):
+        params = []
+        for block in self.blocks[: self.active_layers]:
+            params.extend(block.parameters())
+        return params
+
     def memory_parameters(self):
         """Return only the 0058C trainable retrieval subsystem parameters."""
         if not self.hierarchical_memory_enabled:
@@ -178,7 +243,19 @@ class DecoderLanguageModel:
             and self.config.memory_context.memory_training == "router_only"
         ):
             return self.memory_parameters()
-        return self.parameters()
+        if not self.progressive_depth_enabled:
+            return self.parameters()
+
+        params = []
+        params.extend(self.embedding.parameters())
+        params.extend(self.active_block_parameters())
+        params.extend(self.final_norm.parameters())
+        params.extend(self.output_proj.parameters())
+        if self.memory_router is not None:
+            params.extend(self.memory_router.parameters())
+        if self.memory_reader is not None:
+            params.extend(self.memory_reader.parameters())
+        return params
 
     def zero_grad(self):
         """Zero out all gradients."""
@@ -187,7 +264,12 @@ class DecoderLanguageModel:
 
     def refresh_compute_buffers(self):
         """Refresh derived compute buffers after trainable weights change."""
-        for block in self.blocks:
+        blocks = (
+            self.blocks[: self.active_layers]
+            if self.progressive_depth_enabled
+            else self.blocks
+        )
+        for block in blocks:
             if hasattr(block, "refresh_compute_buffers"):
                 block.refresh_compute_buffers()
     
@@ -1043,7 +1125,8 @@ class DecoderLanguageModel:
         )
         block_caches = [] if (return_cache and not checkpoint_blocks) else None
         block_checkpoints = [] if checkpoint_blocks else None
-        for i, block in enumerate(self.blocks):
+        active_layers = int(self.active_layers)
+        for i, block in enumerate(self.blocks[:active_layers]):
             retain_block = bool(return_cache and i >= cache_start_layer)
             if checkpoint_blocks and retain_block:
                 block_checkpoints.append(x)
@@ -1104,6 +1187,7 @@ class DecoderLanguageModel:
             "final_norm_cache": final_norm_cache,
             "activation_checkpoint": "block" if checkpoint_blocks else "none",
             "block_cache_start_layer": cache_start_layer,
+            "active_layers": active_layers,
         }
         if checkpoint_blocks:
             cache["block_checkpoints"] = block_checkpoints
@@ -1344,17 +1428,21 @@ class DecoderLanguageModel:
             dx = self.final_norm.backward(dx, final_norm_cache)
         del final_norm_cache
 
+        active_layers = int(cache.pop("active_layers", self.active_layers))
+        if not 1 <= active_layers <= len(self.blocks):
+            raise ValueError("cached active depth lies outside model depth")
+
         if checkpoint_mode == "block":
             block_checkpoints = cache.pop("block_checkpoints")
             position_ids = cache.pop("position_ids", None)
             terminal_memory = cache.pop("terminal_memory", None)
             cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
-            expected = len(self.blocks) - cache_start_layer
+            expected = active_layers - cache_start_layer
             if len(block_checkpoints) != expected:
                 raise ValueError(
                     "block activation checkpoint count does not match retained depth"
                 )
-            for original_idx in range(len(self.blocks) - 1, cache_start_layer - 1, -1):
+            for original_idx in range(active_layers - 1, cache_start_layer - 1, -1):
                 block_input = block_checkpoints.pop()
                 with performance_scope(f"model.layer{original_idx}.recompute"):
                     recomputed_output, block_cache = self.blocks[original_idx].forward(
@@ -1379,10 +1467,10 @@ class DecoderLanguageModel:
         elif checkpoint_mode == "none":
             block_caches = cache.pop("block_caches")
             cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
-            expected = len(self.blocks) - cache_start_layer
+            expected = active_layers - cache_start_layer
             if len(block_caches) != expected:
                 raise ValueError("block cache count does not match retained depth")
-            for original_idx in range(len(self.blocks) - 1, cache_start_layer - 1, -1):
+            for original_idx in range(active_layers - 1, cache_start_layer - 1, -1):
                 block_cache = block_caches.pop()
                 with performance_scope(f"model.layer{original_idx}.backward"):
                     dx = self.blocks[original_idx].backward(dx, block_cache)

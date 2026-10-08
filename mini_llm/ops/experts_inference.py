@@ -2,6 +2,7 @@
 
 
 from mini_llm.backend import xp
+from mini_llm.ops.experts import _fused_swiglu_forward
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
 
@@ -49,8 +50,10 @@ class ExpertFFNInference:
         """
         g = x @ self.W_gate  # [..., d_ff]
         u = x @ self.W_up    # [..., d_ff]
-        a = silu(g)
-        h = a * u
+        h = _fused_swiglu_forward(g, u)
+        if h is None:
+            a = silu(g)
+            h = a * u
         y = h @ self.W_down  # [..., d_model]
         
         return y

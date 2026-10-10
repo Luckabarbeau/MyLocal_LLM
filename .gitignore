@@ -73,7 +73,25 @@ FILE_SHA256.json
 *.rar
 *.7z
 
-# Data files that might be generated
-data/
-output/
-results/
+# Generated data in project root (not mini_llm/data/ which is source)
+/data/
+/output/
+/results/
+
+# Checkpoints and model weights
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Token shards (generated data)
+token_shards/
+test_shards_output/
+
+test_full_shards/
+
+logs/
+
+tokenizers/
+
+token_shards_pretraining_65280/

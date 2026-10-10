@@ -1,0 +1,108 @@
+diff --git a/mini_llm/ops/loss.py b/mini_llm/ops/loss.py
+index 5cce8f7..82de5a4 100644
+--- a/mini_llm/ops/loss.py
++++ b/mini_llm/ops/loss.py
+@@ -14,32 +14,35 @@ def cross_entropy_forward(logits, targets):
+     n = flat_logits.shape[0]
+ 
+     if logits.dtype == "float16":
+-        # Convert to float32 for numerically stable computation
+-        logits_f32 = flat_logits.astype("float32", copy=False)
+-        
+-        # Log-sum-exp trick (stable in float32)
+-        max_logit = xp.max(logits_f32, axis=-1, keepdims=True)
+-        shifted = logits_f32 - max_logit
+-        exp_logits = xp.exp(shifted)
+-        logsumexp = max_logit.squeeze() + xp.log(xp.sum(exp_logits, axis=-1))
+-        
+-        # Get target logits
++        # One FP32 workspace for the complete stable softmax/loss path.
++        # Converting FP16 -> FP32 necessarily allocates once; after that we
++        # reuse the same array in-place instead of materializing separate
++        # shifted, exp_logits, and probs_f32 arrays (each can be hundreds of
++        # MiB at production batch/vocab sizes).
++        work = flat_logits.astype("float32", copy=True)
++
+         rows = xp.arange(n)
+-        target_logits = logits_f32[rows, flat_targets]
+-        
+-        # Loss in float32
+-        loss_f32 = xp.mean(logsumexp - target_logits)
+-        
+-        # Compute probabilities for backward (in float32)
+-        probs_f32 = exp_logits / xp.sum(exp_logits, axis=-1, keepdims=True)
+-        
++        max_logit = xp.max(work, axis=-1, keepdims=True)
++        work -= max_logit
++
++        # Save only the target shifted logits before overwriting work with exp.
++        # loss_i = log(sum_j exp(z_j-max_z)) - (z_target-max_z)
++        target_shifted = work[rows, flat_targets].copy()
++
++        xp.exp(work, out=work)
++        normalizer = xp.sum(work, axis=-1, keepdims=True)
++        loss_f32 = xp.mean(xp.log(normalizer[:, 0]) - target_shifted)
++
++        # Reuse work as the FP32 probability cache needed by backward.
++        xp.divide(work, normalizer, out=work)
++
+         cache = {
+-            "probs_f32": probs_f32,
++            "probs_f32": work,
+             "targets": flat_targets,
+             "original_shape": logits.shape,
+             "n": n,
+         }
+-        
++
+         return scalar(loss_f32.astype(logits.dtype)), cache
+     else:
+         # Float32 path - standard computation
+diff --git a/tests/test_loss.py b/tests/test_loss.py
+index 9173df9..dfbe047 100644
+--- a/tests/test_loss.py
++++ b/tests/test_loss.py
+@@ -19,3 +19,43 @@ def test_cross_entropy_backward_direction():
+     an = float(xp.sum(grad*v))
+     rel = abs(fd-an)/(abs(fd)+abs(an)+1e-12)
+     assert rel < 1e-7
++
++
++def test_cross_entropy_fp16_workspace_matches_reference():
++    rng = np.random.default_rng(123)
++    logits_np = rng.normal(size=(3, 4, 17)).astype(np.float16)
++    targets_np = rng.integers(0, 17, size=(3, 4), dtype=np.int64)
++
++    logits = xp.asarray(logits_np)
++    targets = xp.asarray(targets_np)
++    loss, cache = cross_entropy_forward(logits, targets)
++    grad = cross_entropy_backward(cache)
++
++    z = logits_np.astype(np.float32).reshape(-1, 17)
++    t = targets_np.reshape(-1)
++    z_shift = z - np.max(z, axis=-1, keepdims=True)
++    exp_z = np.exp(z_shift)
++    probs = exp_z / np.sum(exp_z, axis=-1, keepdims=True)
++    expected_loss = np.mean(
++        np.log(np.sum(exp_z, axis=-1)) - z_shift[np.arange(len(t)), t]
++    )
++    expected_grad = probs
++    expected_grad[np.arange(len(t)), t] -= 1.0
++    expected_grad /= len(t)
++    expected_grad = expected_grad.reshape(logits_np.shape).astype(np.float16)
++
++    # The public FP16 loss intentionally returns an FP16-rounded scalar.
++    assert abs(loss - float(np.float16(expected_loss))) < 1e-3
++    np.testing.assert_allclose(
++        np.asarray(grad), expected_grad, rtol=2e-3, atol=2e-4
++    )
++
++
++def test_cross_entropy_fp16_cache_reuses_single_probability_workspace():
++    logits = xp.asarray(np.zeros((2, 3, 11), dtype=np.float16))
++    targets = xp.asarray(np.zeros((2, 3), dtype=np.int64))
++    _, cache = cross_entropy_forward(logits, targets)
++    assert "probs_f32" in cache
++    assert cache["probs_f32"].dtype == "float32"
++    assert "shifted" not in cache
++    assert "exp_logits" not in cache

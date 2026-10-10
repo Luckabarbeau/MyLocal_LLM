@@ -1,4 +1,4 @@
-from .backend import xp, RandomStream
+from .backend import xp, RandomStream, resolve_dtype
 from .parameter import Parameter
 
 
@@ -8,9 +8,12 @@ def clipped_normal(shape, std, rng: RandomStream, cutoff=3.0, dtype="float32"):
 
     This is intentionally explicit. It is not rejection-sampled truncation.
     """
-    x = rng.normal(shape, std=std, dtype=dtype)
+    target_dtype = resolve_dtype(dtype)
+    x = rng.normal(shape, std=std, dtype=target_dtype)
     limit = float(cutoff) * float(std)
-    return xp.clip(x, -limit, limit)
+    # Some backends promote BF16 when clipping against Python scalars. Cast
+    # back explicitly so parameter storage always matches the requested dtype.
+    return xp.clip(x, -limit, limit).astype(target_dtype, copy=False)
 
 
 def matrix_parameter(
@@ -30,4 +33,4 @@ def matrix_parameter(
 
 
 def ones_parameter(shape, name, dtype="float32", decay=False):
-    return Parameter(xp.ones(shape, dtype=dtype), name=name, decay=decay)
+    return Parameter(xp.ones(shape, dtype=resolve_dtype(dtype)), name=name, decay=decay)

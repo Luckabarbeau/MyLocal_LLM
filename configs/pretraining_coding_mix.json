@@ -1,0 +1,41 @@
+{
+  "name": "coding_direction_v1",
+  "description": "Mixed general/scientific/code corpus with deliberate GitHub oversampling. Tokenizer weighting is more code-heavy than LM pretraining weighting.",
+  "sources": {
+    "github": {
+      "relative_path": "github",
+      "tokenizer_weight": 0.40,
+      "pretraining_weight": 0.35
+    },
+    "fineweb_edu": {
+      "relative_path": "fineweb_edu",
+      "tokenizer_weight": 0.15,
+      "pretraining_weight": 0.18
+    },
+    "fineweb": {
+      "relative_path": "fineweb",
+      "tokenizer_weight": 0.12,
+      "pretraining_weight": 0.12
+    },
+    "cosmopedia_v2": {
+      "relative_path": "cosmopedia-v2",
+      "tokenizer_weight": 0.10,
+      "pretraining_weight": 0.10
+    },
+    "wikipedia": {
+      "relative_path": "wikipedia",
+      "tokenizer_weight": 0.08,
+      "pretraining_weight": 0.08
+    },
+    "finepdfs": {
+      "relative_path": "finepdfs",
+      "tokenizer_weight": 0.08,
+      "pretraining_weight": 0.09
+    },
+    "pes2o": {
+      "relative_path": "pes2o",
+      "tokenizer_weight": 0.07,
+      "pretraining_weight": 0.08
+    }
+  }
+}

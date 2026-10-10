@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "archive" / "experimental"))
+
 import pytest
 
 from generate_mixed_pretraining_shards import parallelism_plan

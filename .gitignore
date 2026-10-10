@@ -64,14 +64,14 @@ tests/htmlcov/
 # Documentation build artifacts
 /docs/_build/
 
-# Project-specific generated files
-FILE_SHA256.json
-
 # Archive files
 *.zip
 *.tar.gz
 *.rar
 *.7z
+
+# Ignore diagnostics for archived files (they're not part of the main codebase)
+/archive/
 
 # Generated data in project root (not mini_llm/data/ which is source)
 /data/
@@ -95,3 +95,41 @@ logs/
 tokenizers/
 
 token_shards_pretraining_65280/
+
+# Debug and experimental files (archive)
+archive/
+
+# Generated tokenizers and test outputs
+tokenizer_*.json
+tokenizer_*.meta.json
+
+# Benchmark data and results (generated during runs)
+benchmarks/data/
+benchmark_results/
+benchmarks/*.csv
+benchmarks/*.txt
+
+# Note: benchmark/*.py scripts are kept as they enable important evaluation workflows.
+# Generated outputs (.csv, .txt, benchmark_results/) should be ignored.
+
+# Experimental scripts archive
+# Keep these archived files in archive/ for reference:
+# - debug_*.py (debug scripts)
+# - generate_mixed_pretraining_shards.py (experimental mixed data prep)
+# - train_mixed_tokenizer.py (experimental tokenizer training)
+# - recover_mixture_manifest.py (mixed shard manifest recovery)
+# - test_expert_forward_count.py (MoE debugging)
+# - test_inference_scaling.py (KV cache scaling tests)
+# - test_kv_cache.py (KV cache tests)
+# - test_quick_training.py (quick training utility)
+# - benchmark_inference.py (inference benchmarking)
+# - build_document_indexes.py (index building utility)
+# - prepare_smoltalk.py (smol-smoltalk data prep)
+# - tokenizer_check.py (tokenizer testing utility)
+# - validate_fused_local_softmax.py (validation utility)
+#
+# NOTE: Evaluation scripts are now in root `benchmarks/` directory:
+# - evaluate_corpus.py
+# - evaluate_lambada.py
+# - evaluate_wikitext.py
+# - prepare_external_benchmarks.py

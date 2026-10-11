@@ -29,6 +29,8 @@ Usage:
 import argparse
 import dataclasses
 import json
+import math
+import warnings
 import os
 import time
 from pathlib import Path
@@ -38,7 +40,9 @@ import numpy as np
 from mini_llm.backend import xp, BACKEND_NAME, validate_bfloat16_backend
 from mini_llm.config import ModelConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
-from mini_llm.optim.adamw import AdamW
+from mini_llm.optim.adamw import (
+    AdamW, DEFAULT_ADAM_BETA1, DEFAULT_ADAM_BETA2, DEFAULT_ADAM_EPS,
+)
 from mini_llm.train_extended import ExtendedTrainer
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile
@@ -208,6 +212,40 @@ def parse_args():
         help="Weight decay for AdamW",
     )
     
+    # 0074C: None means "inherit from resumed checkpoint"; for new runs,
+    # defaults remain the original AdamW coefficients.
+    parser.add_argument(
+        "--adam-beta1", type=float, default=None,
+        help="AdamW first-moment decay (new-run default: 0.9; resume inherits checkpoint)",
+    )
+    parser.add_argument(
+        "--adam-beta2", type=float, default=None,
+        help="AdamW second-moment decay (new-run default: 0.95; resume inherits checkpoint)",
+    )
+    parser.add_argument(
+        "--adam-eps", type=float, default=None,
+        help="AdamW denominator epsilon (new-run default: 1e-8; resume inherits checkpoint)",
+    )
+
+    # 0076A: Moonlight-scaled Muon for hidden matrices, AdamW elsewhere.
+    # Omitted optimizer kind inherits the saved checkpoint kind.
+    parser.add_argument(
+        "--optimizer", choices=["adamw", "hybrid-muon"], default=None,
+        help="Optimizer backend (default: AdamW, or inherit checkpoint on resume)",
+    )
+    parser.add_argument(
+        "--muon-momentum", type=float, default=None,
+        help="Muon first-moment decay (default: 0.95)",
+    )
+    parser.add_argument(
+        "--muon-ns-steps", type=int, default=None,
+        help="Muon Newton-Schulz iterations (default: 5)",
+    )
+    parser.add_argument(
+        "--muon-matmul-precision", choices=["bf16", "fp32"], default=None,
+        help="Muon orthogonalization GEMM precision (default: bf16 on GPU)",
+    )
+
     # Checkpointing and logging
     parser.add_argument(
         "--checkpoint-dir",
@@ -294,6 +332,25 @@ def parse_args():
         ),
     )
     
+    # 0074A: observational gradient diagnostics; no change to AdamW updates.
+    parser.add_argument("--gradient-noise-monitor", action="store_true",
+                        help="Enable read-only disjoint-half gradient diagnostics")
+    parser.add_argument("--gradient-noise-interval", type=int, default=100,
+                        help="Measure every N completed optimizer steps (default: 100)")
+    parser.add_argument("--gradient-noise-output", default="./logs/gradient_noise.csv",
+                        help="Separate gradient diagnostic CSV file")
+    parser.add_argument("--gradient-noise-accum-points", default="8,16,32",
+                        help="Even nested microbatch counts, <= grad accumulation")
+    parser.add_argument("--gradient-noise-parameter-groups",
+                        default="attention,moe,moe_router,memory,head",
+                        help="Selected parameter categories, comma separated")
+
+    # 0074B: read-only counterfactual AdamW direction diagnostics.
+    parser.add_argument("--adamw-update-monitor", action="store_true",
+                        help="Compare hypothetical AdamW updates at gradient-noise accumulation points")
+    parser.add_argument("--adamw-update-output", default="./logs/adamw_update.csv",
+                        help="Separate CSV for observational AdamW update diagnostics")
+
     # Tokenizer configuration
     parser.add_argument(
         "--tokenizer-vocab-size",
@@ -309,6 +366,50 @@ def parse_args():
     )
     
     return parser.parse_args()
+
+
+def resolve_adamw_hyperparameters(args, training_state=None):
+    """Resolve CLI overrides, saved checkpoint settings, and legacy defaults.
+
+    Old checkpoints predate 0074C and do not record hyperparameters; their
+    original AdamW defaults are used unless explicitly overridden. Overrides
+    retain the saved moments/ages, so they are not an exact optimizer resume.
+    """
+    defaults = {
+        "beta1": DEFAULT_ADAM_BETA1,
+        "beta2": DEFAULT_ADAM_BETA2,
+        "eps": DEFAULT_ADAM_EPS,
+    }
+    saved = (training_state or {}).get("adamw_hyperparameters") or {}
+    resolved = {}
+    changed = []
+    for name, default in defaults.items():
+        checkpoint_value = float(saved.get(name, default))
+        value = getattr(args, f"adam_{name}")
+        effective = checkpoint_value if value is None else float(value)
+        if name.startswith("beta"):
+            valid = math.isfinite(effective) and 0.0 <= effective < 1.0
+            required = "finite and in [0, 1)"
+        else:
+            valid = math.isfinite(effective) and effective > 0.0
+            required = "finite and > 0"
+        if not valid:
+            raise ValueError(f"--adam-{name} must be {required}; got {effective!r}")
+        if value is not None and training_state is not None and effective != checkpoint_value:
+            changed.append(f"{name}: {checkpoint_value:g} -> {effective:g}")
+        resolved[name] = effective
+    if changed:
+        warnings.warn(
+            "AdamW hyperparameters changed on checkpoint resume ("
+            + ", ".join(changed)
+            + "). Existing moments and per-parameter ages are retained. "
+            + "This is an optimizer transition, not an exact resume. "
+            + ("Legacy checkpoint hyperparameters were assumed to use the "
+               "original defaults. " if not saved else ""),
+            UserWarning,
+            stacklevel=2,
+        )
+    return resolved
 
 
 def model_config_from_name(name: str) -> ModelConfig:
@@ -1077,6 +1178,44 @@ def main():
     else:
         progressive_growth_steps = list(requested_growth_steps)
 
+    # Resolve after reading the checkpoint so omitted CLI options inherit the
+    # saved configuration rather than silently returning to the defaults.
+    adamw_hparams = resolve_adamw_hyperparameters(
+        args, training_state if args.resume_from else None,
+    )
+    saved_kind = (training_state or {}).get("optimizer_kind", "adamw")
+    if saved_kind not in {"adamw", "hybrid-muon"}:
+        raise ValueError("unknown optimizer kind in checkpoint: " + str(saved_kind))
+    optimizer_kind = args.optimizer or (saved_kind if args.resume_from else "adamw")
+    if saved_kind == "hybrid-muon" and optimizer_kind != "hybrid-muon":
+        raise ValueError("Hybrid-Muon checkpoints must resume with hybrid-muon; "
+                         "use --init-from for weights-only AdamW initialization")
+    if optimizer_kind == "hybrid-muon" and args.adamw_update_monitor:
+        raise ValueError("--adamw-update-monitor is only valid for --optimizer adamw")
+    saved_muon = ((training_state or {}).get("muon_hyperparameters") or {})
+    muon_momentum = args.muon_momentum if args.muon_momentum is not None else saved_muon.get("momentum", 0.95)
+    muon_ns_steps = args.muon_ns_steps if args.muon_ns_steps is not None else saved_muon.get("ns_steps", 5)
+    muon_precision = args.muon_matmul_precision or saved_muon.get("matmul_precision", "bf16")
+    if not math.isfinite(muon_momentum) or not 0 <= muon_momentum < 1:
+        raise ValueError("--muon-momentum must be finite and in [0,1)")
+    if not 1 <= muon_ns_steps <= 20:
+        raise ValueError("--muon-ns-steps must lie in [1,20]")
+    if saved_kind == "hybrid-muon" and args.resume_from and (
+        (args.muon_momentum is not None and muon_momentum != saved_muon.get("momentum"))
+        or (args.muon_ns_steps is not None and muon_ns_steps != saved_muon.get("ns_steps"))
+        or (args.muon_matmul_precision is not None and muon_precision != saved_muon.get("matmul_precision"))
+    ):
+        raise ValueError("Muon hyperparameters cannot change on optimizer resume; "
+                         "use --init-from to start new optimizer states")
+    print("AdamW: beta1={beta1:g}, beta2={beta2:g}, eps={eps:g}".format(**adamw_hparams))
+    if optimizer_kind == "hybrid-muon":
+        print(f"Hybrid Muon: momentum={muon_momentum:g}, ns_steps={muon_ns_steps}, "
+              f"matmul_precision={muon_precision}, RMS update scale=0.2")
+        if args.resume_from and saved_kind == "adamw":
+            print("WARNING: AdamW -> hybrid-Muon optimizer transition: "
+                  "preserving AdamW moments only for AdamW parameters, "
+                  "resetting Muon momentum to zero; optimizer dynamics will change")
+
     trainer = ExtendedTrainer(
         model=model,
         train_shard_paths=[str(p) for p in train_shards],
@@ -1102,6 +1241,20 @@ def main():
         source_weights=source_weights,
         eos_token_id=eos_token_id,
         progressive_growth_steps=progressive_growth_steps,
+        gradient_noise_monitor=args.gradient_noise_monitor,
+        gradient_noise_interval=args.gradient_noise_interval,
+        gradient_noise_output=args.gradient_noise_output,
+        gradient_noise_accum_points=args.gradient_noise_accum_points,
+        gradient_noise_parameter_groups=args.gradient_noise_parameter_groups,
+        adamw_update_monitor=args.adamw_update_monitor,
+        adamw_update_output=args.adamw_update_output,
+        adam_beta1=adamw_hparams["beta1"],
+        adam_beta2=adamw_hparams["beta2"],
+        adam_eps=adamw_hparams["eps"],
+        optimizer_kind=optimizer_kind,
+        muon_momentum=muon_momentum,
+        muon_ns_steps=muon_ns_steps,
+        muon_matmul_precision=muon_precision,
     )
 
     trainer.step = start_step
@@ -1142,80 +1295,99 @@ def main():
         optimizer_params = list(trainer.optimizer.parameters)
         param_to_idx = {p.name: i for i, p in enumerate(optimizer_params)}
 
-        # 0055C: restore exact FP32 master weights as well as moments.  When
-        # optimizer offload is active, load_checkpoint keeps these arrays on
-        # the host so resume never materializes a second optimizer-sized GPU
-        # copy.
-        master_dict = stored_optimizer_state.get("master_weights", {})
-        restored_masters = 0
-        for p in optimizer_params:
-            value = master_dict.pop(p.name, None)
-            if value is None:
-                continue
-            idx = param_to_idx[p.name]
-            if trainer.optimizer.restore_master_weight(idx, value):
-                restored_masters += 1
-            else:
-                print(
-                    f"WARNING: Master-weight shape mismatch for {p.name}: "
-                    f"stored={value.shape}, "
-                    f"current={trainer.optimizer.master_weights[idx].shape}"
-                )
-            del value
-        if master_dict is not None:
-            master_dict.clear()
-        if restored_masters:
-            print(f"Restored exact FP32 master weights for {restored_masters} parameters")
-
-        if "m" in stored_optimizer_state:
-            m_dict = stored_optimizer_state["m"]
-            v_dict = stored_optimizer_state.get("v", {})
-            saved_m_names = set(m_dict)
-            restored_count = 0
-            for p in optimizer_params:
-                if p.name in m_dict and p.name in v_dict:
-                    idx = param_to_idx[p.name]
-                    m_value = m_dict.pop(p.name)
-                    v_value = v_dict.pop(p.name)
-                    if trainer.optimizer.restore_moments(idx, m_value, v_value):
-                        restored_count += 1
-                    else:
-                        print(
-                            f"WARNING: Shape mismatch for {p.name}: "
-                            f"stored={m_value.shape}, current={trainer.optimizer.m[idx].shape}"
-                        )
-                    del m_value, v_value
-            print(f"Restored optimizer state for {restored_count} parameters")
-            missing = [
-                p.name for p in optimizer_params if p.name not in saved_m_names
-            ]
-            if missing:
-                suffix = "..." if len(missing) > 5 else ""
-                print(
-                    f"WARNING: {len(missing)} parameters not found in saved optimizer "
-                    f"state: {missing[:5]}{suffix}"
-                )
-            m_dict.clear()
-            v_dict.clear()
-
-        birth_state = (training_state or {}).get(
-            "optimizer_parameter_birth_steps", {}
-        )
-        restored_births = trainer.optimizer.restore_parameter_birth_steps(
-            birth_state
-        )
-        if restored_births:
-            print(
-                f"Restored Adam birth steps for {restored_births} parameters"
+        if optimizer_kind == "hybrid-muon":
+            from mini_llm.optim.hybrid_muon import HybridMuonAdamW
+            assert isinstance(trainer.optimizer, HybridMuonAdamW)
+            if saved_kind == "hybrid-muon":
+                expected_groups = set(saved_muon.get("group_names", []))
+                if expected_groups != trainer.optimizer.muon_names:
+                    raise ValueError("saved Muon parameter groups differ from current architecture")
+            masters, adam_restored, muon_restored = trainer.optimizer.restore_checkpoint(
+                stored_optimizer_state, from_hybrid=(saved_kind == "hybrid-muon"),
             )
+            print(f"Restored hybrid masters={masters}, AdamW moments={adam_restored}, "
+                  f"Muon momenta={muon_restored}")
+            birth_state = (training_state or {}).get("optimizer_parameter_birth_steps", {})
+            trainer.optimizer.restore_parameter_birth_steps(birth_state)
+            stored_optimizer_state.clear()
+            stored_optimizer_state = None
+            optimizer_state = None
 
-        # No checkpoint optimizer arrays are needed after the in-place restore.
-        stored_optimizer_state.clear()
-        stored_optimizer_state = None
-        optimizer_state = None
-        get_pool = getattr(xp, "get_default_memory_pool", None)
-        if get_pool is not None:
-            get_pool().free_all_blocks()
+        if optimizer_kind == "adamw":
+            # 0055C: restore exact FP32 master weights as well as moments.  When
+            # optimizer offload is active, load_checkpoint keeps these arrays on
+            # the host so resume never materializes a second optimizer-sized GPU
+            # copy.
+            master_dict = stored_optimizer_state.get("master_weights", {})
+            restored_masters = 0
+            for p in optimizer_params:
+                value = master_dict.pop(p.name, None)
+                if value is None:
+                    continue
+                idx = param_to_idx[p.name]
+                if trainer.optimizer.restore_master_weight(idx, value):
+                    restored_masters += 1
+                else:
+                    print(
+                        f"WARNING: Master-weight shape mismatch for {p.name}: "
+                        f"stored={value.shape}, "
+                        f"current={trainer.optimizer.master_weights[idx].shape}"
+                    )
+                del value
+            if master_dict is not None:
+                master_dict.clear()
+            if restored_masters:
+                print(f"Restored exact FP32 master weights for {restored_masters} parameters")
+
+            if "m" in stored_optimizer_state:
+                m_dict = stored_optimizer_state["m"]
+                v_dict = stored_optimizer_state.get("v", {})
+                saved_m_names = set(m_dict)
+                restored_count = 0
+                for p in optimizer_params:
+                    if p.name in m_dict and p.name in v_dict:
+                        idx = param_to_idx[p.name]
+                        m_value = m_dict.pop(p.name)
+                        v_value = v_dict.pop(p.name)
+                        if trainer.optimizer.restore_moments(idx, m_value, v_value):
+                            restored_count += 1
+                        else:
+                            print(
+                                f"WARNING: Shape mismatch for {p.name}: "
+                                f"stored={m_value.shape}, current={trainer.optimizer.m[idx].shape}"
+                            )
+                        del m_value, v_value
+                print(f"Restored optimizer state for {restored_count} parameters")
+                missing = [
+                    p.name for p in optimizer_params if p.name not in saved_m_names
+                ]
+                if missing:
+                    suffix = "..." if len(missing) > 5 else ""
+                    print(
+                        f"WARNING: {len(missing)} parameters not found in saved optimizer "
+                        f"state: {missing[:5]}{suffix}"
+                    )
+                m_dict.clear()
+                v_dict.clear()
+
+            birth_state = (training_state or {}).get(
+                "optimizer_parameter_birth_steps", {}
+            )
+            restored_births = trainer.optimizer.restore_parameter_birth_steps(
+                birth_state
+            )
+            if restored_births:
+                print(
+                    f"Restored Adam birth steps for {restored_births} parameters"
+                )
+
+            # No checkpoint optimizer arrays are needed after the in-place restore.
+            stored_optimizer_state.clear()
+            stored_optimizer_state = None
+            optimizer_state = None
+            get_pool = getattr(xp, "get_default_memory_pool", None)
+            if get_pool is not None:
+                get_pool().free_all_blocks()
 
     if rng_states is not None:
         trainer.train_rng.bit_generator.state = rng_states["train"]

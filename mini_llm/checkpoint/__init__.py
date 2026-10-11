@@ -60,11 +60,23 @@ def save_checkpoint(
         # This avoids corruption and memory issues with large arrays
         opt_state_dir = path / "optimizer_state"
         opt_state_dir.mkdir(exist_ok=True)
-        
+        if "muon_m" not in optimizer_state:
+            # Avoid stale Muon momentum surviving a weights-only return to AdamW.
+            old_muon_dir = opt_state_dir / "muon_m"
+            if old_muon_dir.is_dir():
+                for old_file in old_muon_dir.glob("*.npy"):
+                    old_file.unlink()
+
         for key, value in optimizer_state.items():
             if isinstance(value, dict):
                 key_dir = opt_state_dir / key
                 key_dir.mkdir(exist_ok=True)
+                # Hybrid Muon uses a smaller m/v group; remove stale AdamW
+                # tensors when saving back into the same checkpoint directory.
+                if key in {"m", "v", "muon_m"}:
+                    for old_file in key_dir.glob("*.npy"):
+                        if old_file.stem not in value:
+                            old_file.unlink()
                 for k, v in value.items():
                     if hasattr(v, '__array__'):
                         arr_np = _convert_to_numpy(v)
@@ -165,6 +177,18 @@ def load_checkpoint(
                         arr = cupy.asarray(arr)
                     optimizer_state["v"][npy_file.stem] = arr
     
+    # 0076A: Muon has only one momentum tensor; never synthesize AdamW v.
+    if optimizer_state is not None:
+        muon_path = optimizer_dir / "muon_m"
+        if muon_path.is_dir():
+            optimizer_state["muon_m"] = {}
+            for npy_file in muon_path.glob("*.npy"):
+                arr = np.load(npy_file)
+                if BACKEND_NAME == "cupy" and not keep_moments_host:
+                    import cupy
+                    arr = cupy.asarray(arr)
+                optimizer_state["muon_m"][npy_file.stem] = arr
+
     # Load training state
     training_state = None
     if not skip_training:

@@ -1,6 +1,7 @@
 """AdamW optimizer with mixed precision and optional CPU optimizer-state offload."""
 
 import os
+import math
 
 try:
     import numpy as np
@@ -8,6 +9,11 @@ except ImportError:
     np = None
 
 from ..backend import xp, BACKEND_NAME
+
+
+DEFAULT_ADAM_BETA1 = 0.9
+DEFAULT_ADAM_BETA2 = 0.95
+DEFAULT_ADAM_EPS = 1e-8
 
 
 def _offload_mode():
@@ -34,9 +40,17 @@ class AdamW:
     """
 
     def __init__(
-        self, parameters, lr=3e-4, beta1=0.9, beta2=0.95,
-        eps=1e-8, weight_decay=0.1, numerical_debug=False
+        self, parameters, lr=3e-4, beta1=DEFAULT_ADAM_BETA1,
+        beta2=DEFAULT_ADAM_BETA2, eps=DEFAULT_ADAM_EPS,
+        weight_decay=0.1, numerical_debug=False
     ):
+        # 0074C: reject invalid optimizer hyperparameters at construction,
+        # including direct Python callers that do not use the training CLI.
+        for name, value in (("beta1", beta1), ("beta2", beta2)):
+            if not math.isfinite(float(value)) or not 0.0 <= float(value) < 1.0:
+                raise ValueError(f"AdamW {name} must be finite and in [0, 1)")
+        if not math.isfinite(float(eps)) or float(eps) <= 0.0:
+            raise ValueError("AdamW eps must be finite and > 0")
         self.parameters = list(parameters)
         self.lr = float(lr)
         self.beta1 = float(beta1)

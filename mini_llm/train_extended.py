@@ -33,10 +33,14 @@ from mini_llm.data.token_shards import (
     load_or_build_packed_document_index,
 )
 from mini_llm.model.decoder_lm import DecoderLanguageModel
-from mini_llm.optim.adamw import AdamW
+from mini_llm.optim.adamw import (
+    AdamW, DEFAULT_ADAM_BETA1, DEFAULT_ADAM_BETA2, DEFAULT_ADAM_EPS,
+)
+from mini_llm.optim.hybrid_muon import HybridMuonAdamW
 from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
+from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
 from mini_llm.performance_profiler import (
     configure_performance_profiler,
     performance_report,
@@ -92,6 +96,20 @@ class ExtendedTrainer:
         profile_steps: int = 0,
         eos_token_id: Optional[int] = None,
         progressive_growth_steps: Optional[List[int]] = None,
+        gradient_noise_monitor: bool = False,
+        gradient_noise_interval: int = 100,
+        gradient_noise_output: str = "./logs/gradient_noise.csv",
+        gradient_noise_accum_points: str = "8,16,32",
+        gradient_noise_parameter_groups: str = "attention,moe,moe_router,memory,head",
+        adamw_update_monitor: bool = False,
+        adamw_update_output: str = "./logs/adamw_update.csv",
+        adam_beta1: float = DEFAULT_ADAM_BETA1,
+        adam_beta2: float = DEFAULT_ADAM_BETA2,
+        adam_eps: float = DEFAULT_ADAM_EPS,
+        optimizer_kind: str = "adamw",
+        muon_momentum: float = 0.95,
+        muon_ns_steps: int = 5,
+        muon_matmul_precision: str = "bf16",
     ):
         """
         Initialize the extended trainer.
@@ -264,14 +282,41 @@ class ExtendedTrainer:
         # Initialize optimizer with weight decay
         # Loss scaling is handled entirely by the trainer
         self.optimization_parameters = list(model.optimization_parameters())
-        self.optimizer = AdamW(
-            self.optimization_parameters,
-            lr=peak_lr,
-            weight_decay=weight_decay,
-            numerical_debug=numerical_debug,
+        if optimizer_kind not in {"adamw", "hybrid-muon"}:
+            raise ValueError("optimizer_kind must be adamw or hybrid-muon")
+        if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
+            raise ValueError("0074B AdamW counterfactual diagnostics require pure AdamW; "
+                             "disable --adamw-update-monitor for hybrid Muon")
+        self.optimizer = (
+            HybridMuonAdamW(
+                self.optimization_parameters,
+                lr=peak_lr, beta1=adam_beta1, beta2=adam_beta2, eps=adam_eps,
+                weight_decay=weight_decay, numerical_debug=numerical_debug,
+                muon_momentum=muon_momentum, muon_ns_steps=muon_ns_steps,
+                muon_matmul_precision=muon_matmul_precision,
+            ) if optimizer_kind == "hybrid-muon" else AdamW(
+                self.optimization_parameters,
+                lr=peak_lr, beta1=adam_beta1, beta2=adam_beta2,
+                eps=adam_eps, weight_decay=weight_decay,
+                numerical_debug=numerical_debug,
+            )
         )
         self._refresh_parameter_partitions()
-        
+        self.gradient_noise = (
+            GradientNoiseMonitor(
+                self.optimization_parameters,
+                accum_steps=self.grad_accum_steps,
+                accum_points=gradient_noise_accum_points,
+                categories=gradient_noise_parameter_groups,
+                output=gradient_noise_output,
+                interval=gradient_noise_interval,
+                loss_scale=self.loss_scale,
+                adamw_optimizer=self.optimizer if adamw_update_monitor else None,
+                adamw_output=adamw_update_output if adamw_update_monitor else None,
+                grad_clip=self.grad_clip,
+            ) if (gradient_noise_monitor or adamw_update_monitor) else None
+        )
+
         # Learning rate schedule
         self.scheduler = WarmupCosineSchedule(
             peak_lr=peak_lr,
@@ -494,6 +539,8 @@ class ExtendedTrainer:
         if added != len(new_params):
             raise RuntimeError("optimizer did not add every newly active parameter")
         self._refresh_parameter_partitions()
+        if self.gradient_noise is not None:
+            self.gradient_noise.refresh(self.optimization_parameters)
         block = self.model.blocks[layer_idx]
         print(
             "Progressive depth: activated layer "
@@ -1287,6 +1334,8 @@ class ExtendedTrainer:
         memory_records = {}
         memory_active = self._memory_profiled_steps < self.memory_profile_steps
         step_memory_token_stats = self._empty_memory_token_stats()
+        noise = self.gradient_noise
+        noise_active = noise is not None and noise.begin(self.step)
         if memory_active:
             self._record_memory_snapshot(memory_records, "step_start")
 
@@ -1316,6 +1365,8 @@ class ExtendedTrainer:
             )
             loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
             targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+            if noise_active:
+                noise.count_tokens(targets, loss_mask)
             self._accumulate_memory_batch_token_stats(
                 step_memory_token_stats, batch_metadata, loss_mask
             )
@@ -1473,6 +1524,8 @@ class ExtendedTrainer:
                 if target_slice is None:
                     del head_input
 
+            if noise_active:
+                noise.capture(accum_step + 1)
             if memory_active:
                 self._record_memory_snapshot(memory_records, "after_model_backward")
 
@@ -1495,6 +1548,10 @@ class ExtendedTrainer:
         avg_loss = float(_array_to_float(loss_sum_backend / self.grad_accum_steps))
         if not np.isfinite(avg_loss):
             raise ValueError(f"NaN/Inf loss detected at step {self.step}!")
+        # Read original cumulative gradients before normalization or clipping.
+        # Do not write the CSV until the optimizer update has succeeded.
+        noise_rows = noise.finish() if noise_active else []
+
         # Scale down gradients by loss_scale to cancel out the scaling
         if self.loss_scale != 1.0:
             for p in self.optimization_parameters:
@@ -1550,6 +1607,8 @@ class ExtendedTrainer:
             self._record_memory_snapshot(memory_records, "after_zero_grad")
         
         self.step += 1
+        if noise_active:
+            noise.commit(noise_rows)
 
         if memory_active:
             self._print_memory_report(memory_records)
@@ -1627,22 +1686,25 @@ class ExtendedTrainer:
         # Issue #14: Include optimizer state
         # Note: AdamW stores m and v internally, not on Parameter objects
         # We store the master weights (FP32 copies) and moments
-        optimizer_state = {
-            "step": self.optimizer.step_index,  # Use correct attribute name
-            "master_weights": {
-                p.name: self.optimizer.master_weights[i]
-                for i, p in enumerate(self.optimizer.parameters)
-            },
-            "m": {
-                p.name: self.optimizer.m[i]
-                for i, p in enumerate(self.optimizer.parameters)
-            },
-            "v": {
-                p.name: self.optimizer.v[i]
-                for i, p in enumerate(self.optimizer.parameters)
-            },
-        }
-        
+        if isinstance(self.optimizer, HybridMuonAdamW):
+            optimizer_state = self.optimizer.checkpoint_state()
+        else:
+            optimizer_state = {
+                "step": self.optimizer.step_index,
+                "master_weights": {
+                    p.name: self.optimizer.master_weights[i]
+                    for i, p in enumerate(self.optimizer.parameters)
+                },
+                "m": {
+                    p.name: self.optimizer.m[i]
+                    for i, p in enumerate(self.optimizer.parameters)
+                },
+                "v": {
+                    p.name: self.optimizer.v[i]
+                    for i, p in enumerate(self.optimizer.parameters)
+                },
+            }
+
         # Issue #16: Track tokens_processed
         training_state = {
             "step": self.step,
@@ -1661,6 +1723,21 @@ class ExtendedTrainer:
             "optimizer_parameter_birth_steps": (
                 self.optimizer.parameter_birth_step_state()
             ),
+            "optimizer_kind": "hybrid-muon" if isinstance(
+                self.optimizer, HybridMuonAdamW) else "adamw",
+            "muon_hyperparameters": ({
+                "momentum": self.optimizer.momentum,
+                "ns_steps": self.optimizer.ns_steps,
+                "matmul_precision": self.optimizer.matmul_precision,
+                "group_names": sorted(self.optimizer.muon_names),
+            } if isinstance(self.optimizer, HybridMuonAdamW) else None),
+            # 0074C: preserve the optimizer configuration across resume even
+            # when the CLI flags are omitted on the resumed run.
+            "adamw_hyperparameters": {
+                "beta1": self.optimizer.beta1,
+                "beta2": self.optimizer.beta2,
+                "eps": self.optimizer.eps,
+            },
         }
         
         # Issue #12: Include RNG states

@@ -11,6 +11,7 @@ This module provides production-ready training infrastructure including:
 """
 
 import os
+import hashlib
 import csv
 import time
 from collections import OrderedDict
@@ -26,6 +27,7 @@ from mini_llm.backend import xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
+from mini_llm.data.streaming_sources import StreamingTokenCache
 from mini_llm.data.token_shards import (
     map_token_shard,
     create_minibatch,
@@ -110,6 +112,12 @@ class ExtendedTrainer:
         muon_momentum: float = 0.95,
         muon_ns_steps: int = 5,
         muon_matmul_precision: str = "bf16",
+        stream_specs=None,
+        stream_tokenizer=None,
+        stream_segment_tokens: int = 524288,
+        stream_reuse_batches: int = 64,
+        stream_cache_dir: Optional[str] = None,
+        local_mixture_manifest_sha256: Optional[str] = None,
     ):
         """
         Initialize the extended trainer.
@@ -168,6 +176,36 @@ class ExtendedTrainer:
         )
         self.source_weights = self._normalize_source_weights(source_weights)
         self._validate_mixed_sources()
+        self.local_mixture_manifest_sha256 = local_mixture_manifest_sha256
+        self.streaming_cache = None
+        self.train_source_supervised_tokens = {}
+        # Compact cryptographic chain over the *actual* sampled input/target
+        # windows. Records their order without retaining private raw text.
+        self.sample_trace_sha256 = "00" * 32
+        self.sample_trace_microbatches = 0
+        if stream_specs:
+            if self.train_source_shards is None:
+                raise ValueError("streaming requires existing mixed local training shards")
+            if stream_tokenizer is None:
+                raise ValueError("streaming requires the checkpoint tokenizer")
+            overlap = set(self.train_source_shards) & {spec.name for spec in stream_specs}
+            if overlap:
+                raise ValueError("stream and local source names overlap: " + str(overlap))
+            self.streaming_cache = StreamingTokenCache(
+                stream_specs, stream_tokenizer, segment_tokens=stream_segment_tokens,
+                reuse_batches=stream_reuse_batches, cache_dir=stream_cache_dir,
+                checkpoint_dir=checkpoint_dir,
+            )
+            local_fraction = 1.0 - sum(spec.weight for spec in stream_specs)
+            self._train_source_names = self._source_names + [spec.name for spec in stream_specs]
+            self._train_source_probabilities = np.asarray(
+                [float(self.source_weights[name]) * local_fraction for name in self._source_names]
+                + [spec.weight for spec in stream_specs], dtype=np.float64,
+            )
+            self._train_source_probabilities /= self._train_source_probabilities.sum()
+        else:
+            self._train_source_names = self._source_names
+            self._train_source_probabilities = self._source_probabilities
         self.batch_size = batch_size
         self.seq_length = int(seq_length)
         self.memory_context = (
@@ -389,6 +427,10 @@ class ExtendedTrainer:
         print(f"ExtendedTrainer initialized:")
         print(f"  Train shards: {len(train_shard_paths)}")
         print(f"  Val shards: {len(val_shard_paths)}")
+        if self.streaming_cache is not None:
+            print("  Remote training streams (validation remains local):")
+            for spec in self.streaming_cache.specs.values():
+                print(f"    {spec.name}: {spec.dataset}@{spec.revision} ({spec.weight:.1%})")
         if self.train_source_shards is not None:
             print("  Mixed pretraining sources:")
             for name in self._source_names:
@@ -609,6 +651,12 @@ class ExtendedTrainer:
             [self.source_weights[name] for name in self._source_names],
             dtype=np.float64,
         )
+
+    def _choose_train_source(self, rng) -> str:
+        if self.streaming_cache is None:
+            return self._choose_source(rng)
+        index = int(rng.choice(len(self._train_source_names), p=self._train_source_probabilities))
+        return self._train_source_names[index]
 
     def _choose_source(self, rng) -> str:
         index = int(rng.choice(len(self._source_names), p=self._source_probabilities))
@@ -945,18 +993,36 @@ class ExtendedTrainer:
         retokenization or dataset regeneration is required.
         """
         if self.train_source_shards is not None:
-            source = self._choose_source(self.train_rng)
-            paths = self.train_source_shards[source]
-            shard_idx = self.current_train_source_shard_idx[source]
-            cache_key = (source, shard_idx)
-            shard_path = paths[shard_idx]
-            shard_data = self._get_cached_shard(
-                self.shards, cache_key, shard_path, self.load_train_shard,
-            )
-            self.current_train_source_shard_idx[source] = (
-                shard_idx + 1
-            ) % len(paths)
-            self.train_source_batch_counts[source] += 1
+            source = self._choose_train_source(self.train_rng)
+            if self.streaming_cache is not None and source in self.streaming_cache.sources:
+                shard_path, generation, retired = self.streaming_cache.next_shard(source)
+                for old_path in retired:
+                    old_key = (source, generation - 1)
+                    old_shard = self.shards.pop(old_key, None)
+                    if old_shard is not None:
+                        self._close_mapped_shard(old_shard)
+                    self.document_indices.pop(old_key, None)
+                    old_path.unlink(missing_ok=True)
+                    Path(str(old_path) + ".docidx.npy").unlink(missing_ok=True)
+                cache_key = (source, generation)
+                shard_data = self._get_cached_shard(
+                    self.shards, cache_key, shard_path, self.load_train_shard,
+                )
+                self.train_source_batch_counts[source] = (
+                    self.train_source_batch_counts.get(source, 0) + 1
+                )
+            else:
+                paths = self.train_source_shards[source]
+                shard_idx = self.current_train_source_shard_idx[source]
+                cache_key = (source, shard_idx)
+                shard_path = paths[shard_idx]
+                shard_data = self._get_cached_shard(
+                    self.shards, cache_key, shard_path, self.load_train_shard,
+                )
+                self.current_train_source_shard_idx[source] = (
+                    shard_idx + 1
+                ) % len(paths)
+                self.train_source_batch_counts[source] += 1
         else:
             shard_idx = self.current_train_shard_idx
             cache_key = shard_idx
@@ -1031,6 +1097,29 @@ class ExtendedTrainer:
                     routed_prefix_retrieval and retrieval_eligible
                 )
 
+        source_name = source if self.train_source_shards is not None else "local"
+        supervised = (
+            int((np.asarray(metadata["target_valid_lengths"]) > 0).sum())
+            if metadata is not None and "target_valid_lengths" in metadata
+                and self.memory_context is not None
+                and self.memory_context.memory_training == "router_only"
+            else (
+                int(np.asarray(metadata["target_valid_lengths"]).sum())
+                if metadata is not None and "target_valid_lengths" in metadata
+                else self.batch_size * self.seq_length
+            )
+        )
+        self.train_source_supervised_tokens[source_name] = (
+            self.train_source_supervised_tokens.get(source_name, 0) + supervised
+        )
+        if self.streaming_cache is not None:
+            audit = hashlib.sha256(bytes.fromhex(self.sample_trace_sha256))
+            audit.update(source_name.encode("utf-8"))
+            audit.update(str(cache_key).encode("utf-8"))
+            audit.update(memoryview(np.ascontiguousarray(inputs)).cast("B"))
+            audit.update(memoryview(np.ascontiguousarray(targets)).cast("B"))
+            self.sample_trace_sha256 = audit.hexdigest()
+            self.sample_trace_microbatches += 1
         self.tokens_processed += self.batch_size * self.seq_length
         if return_metadata:
             return inputs, targets, metadata
@@ -1705,6 +1794,10 @@ class ExtendedTrainer:
                 },
             }
 
+        # Persist exact active remote segment bytes before saving the checkpoint.
+        saved_stream = (self.streaming_cache.checkpoint_state(self.checkpoint_dir)
+                        if self.streaming_cache else None)
+
         # Issue #16: Track tokens_processed
         training_state = {
             "step": self.step,
@@ -1715,6 +1808,31 @@ class ExtendedTrainer:
             "current_train_source_shard_idx": self.current_train_source_shard_idx,
             "current_val_source_shard_idx": self.current_val_source_shard_idx,
             "train_source_batch_counts": self.train_source_batch_counts,
+            "train_source_supervised_tokens": self.train_source_supervised_tokens,
+            "data_provenance": {
+                "version": 1,
+                "fork": getattr(self, "data_fork", None),
+                "mixture_history": getattr(self, "mixture_history", []),
+                "mixture_phase_start_source_counts": getattr(
+                    self, "mixture_phase_start_source_counts", {}
+                ),
+                "mixture_phase_start_batch_counts": getattr(
+                    self, "mixture_phase_start_batch_counts", {}
+                ),
+                "local_mixture_manifest_sha256": self.local_mixture_manifest_sha256,
+                "tokenizer_sha256": getattr(self, "tokenizer_sha256", None),
+                "sample_trace_sha256": self.sample_trace_sha256 if self.streaming_cache else None,
+                "sample_trace_microbatches": self.sample_trace_microbatches,
+                "effective_weights": {
+                    name: float(weight) for name, weight in zip(
+                        self._train_source_names,
+                        self._train_source_probabilities
+                        if self._train_source_probabilities is not None else [],
+                    )
+                },
+                "streaming": saved_stream,
+                "short_document_packing": {"enabled": False},
+            },
             "val_source_batch_counts": self.val_source_batch_counts,
             "progressive_active_layers": int(
                 getattr(self.model, "active_layers", len(self.model.blocks))
@@ -1750,7 +1868,11 @@ class ExtendedTrainer:
             optimizer_state=optimizer_state,
             training_state=training_state,
         )
-    
+        if self.streaming_cache is not None:
+            self.streaming_cache.prune_checkpoint_snapshots(
+                self.checkpoint_dir, saved_stream,
+            )
+
     def train(
         self,
         num_steps: Optional[int] = None,
@@ -1816,6 +1938,8 @@ class ExtendedTrainer:
             active_tokens_per_optimizer_step = source_tokens_per_optimizer_step
             target_tokens_per_optimizer_step = source_tokens_per_optimizer_step
         
+        if self.streaming_cache is not None:
+            self.streaming_cache.prefetch()
         for step in range(num_steps):
             # Growth step N means: complete N optimizer updates at the previous
             # depth, then activate the next exact-identity block before update

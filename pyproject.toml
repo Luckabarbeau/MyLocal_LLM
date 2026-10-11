@@ -23,5 +23,9 @@ dev = [
     "pytest>=8.0",
 ]
 
+streaming = [
+    "datasets>=3.0",
+]
+
 [tool.setuptools.packages.find]
 include = ["mini_llm*"]

@@ -94,6 +94,8 @@ logs/
 
 tokenizers/
 
+temporary_remote_data/
+
 token_shards_pretraining_65280/
 
 # Debug and experimental files (archive)

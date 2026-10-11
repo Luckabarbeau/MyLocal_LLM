@@ -141,6 +141,31 @@ def parse_args():
             "of treating all shards as one uniform pool."
         ),
     )
+    # 0077A: optional bounded streaming training sources; never added to validation.
+    parser.add_argument(
+        "--stream-registry", default=None,
+        help="JSON registry of pinned remote training streams (version 1)",
+    )
+    parser.add_argument(
+        "--stream-segment-tokens", type=int, default=524288,
+        help="Target tokens per temporary remote segment, default 524288",
+    )
+    parser.add_argument(
+        "--stream-reuse-batches", type=int, default=64,
+        help="Training microbatches using each streamed segment before rotation",
+    )
+    parser.add_argument(
+        "--reset-remote-cursors", action="store_true",
+        help="One-time recorded recovery if old HF remote cursor cannot replay its segment",
+    )
+    parser.add_argument(
+        "--stream-cache-dir", default=None,
+        help="Directory for temporary stream segments; files cleaned up on exit",
+    )
+    parser.add_argument(
+        "--allow-streaming-fork", action="store_true",
+        help="Deprecated: data-mixture changes now start a recorded phase automatically",
+    )
     parser.add_argument(
         "--tokenizer-path",
         default=None,
@@ -633,6 +658,74 @@ def generate_shards_for_training(
     # Return tokenizer vocab size for model config update
     tokenizer_vocab_size = len(tokenizer)
     return train_shards, val_shards, tokenizer_path, tokenizer_vocab_size
+
+
+
+def plan_data_mixture_resume(*, resume_from, stored_provenance, stream_specs,
+                             segment_tokens, reuse_batches, mixture_sha):
+    """Resume exact data state when unchanged; otherwise start a new data phase.
+
+    A deliberate change to sources, revisions, weights, local manifest or
+    stream-segment policy is never an error.  It starts fresh remote cursors,
+    preserving model/optimizer state and adding an auditable phase boundary.
+    Tokenizer incompatibility is checked separately and remains fatal.
+    """
+    if not resume_from:
+        return [], False
+    prior = stored_provenance or {}
+    old_stream = prior.get("streaming")
+    old_manifest_sha = prior.get("local_mixture_manifest_sha256")
+    import hashlib
+    from mini_llm.data.streaming_sources import _canonical
+    new_registry_fp = (
+        hashlib.sha256(_canonical([spec.__dict__ for spec in stream_specs]).encode()).hexdigest()
+        if stream_specs else None
+    )
+    reasons = []
+    if bool(old_stream) != bool(stream_specs):
+        reasons.append("remote sources enabled/disabled")
+    elif old_stream and stream_specs:
+        if old_stream.get("registry_fingerprint") != new_registry_fp:
+            reasons.append("remote dataset registry/revision/weights changed")
+        if (int(old_stream.get("segment_tokens", -1)) != int(segment_tokens)
+                or int(old_stream.get("reuse_batches", -1)) != int(reuse_batches)):
+            reasons.append("remote segment/reuse policy changed")
+    if old_manifest_sha is not None and old_manifest_sha != mixture_sha:
+        reasons.append("local shard mixture manifest changed")
+    exact_stream_resume = bool(old_stream and stream_specs and not reasons)
+    return reasons, exact_stream_resume
+
+
+
+def restore_compatible_stream_cursors(cache, stored_state, *, checkpoint_dir=None):
+    """Keep exact cursors for sources whose identity and segment policy match.
+
+    Mixture weights may change without replaying remote data.  New sources and
+    sources with changed revision/content schema start fresh.  Checkpoint
+    source fingerprints are still verified when regenerated on first use.
+    """
+    if not stored_state:
+        return []
+    if (stored_state.get("segment_tokens") != cache.segment_tokens or
+            stored_state.get("reuse_batches") != cache.reuse_batches):
+        return []
+    prior_specs = {s["name"]: s for s in stored_state.get("registry", [])}
+    restored = []
+    for name, spec in cache.specs.items():
+        prior = prior_specs.get(name)
+        if prior is None or name not in stored_state.get("sources", {}):
+            continue
+        current_identity = {k: v for k, v in spec.__dict__.items() if k != "weight"}
+        previous_identity = {k: v for k, v in prior.items() if k != "weight"}
+        if current_identity == previous_identity:
+            if checkpoint_dir is None:
+                cache.sources[name].load_state_dict(stored_state["sources"][name])
+            else:
+                cache.sources[name].load_state_dict(
+                    stored_state["sources"][name], checkpoint_dir=checkpoint_dir,
+                )
+            restored.append(name)
+    return restored
 
 
 def main():
@@ -1132,6 +1225,119 @@ def main():
         tokens_processed = 0
         rng_states = None
 
+    # Data provenance must identify immutable source revisions and tokenizer.
+    import hashlib
+    from mini_llm.data.streaming_sources import load_registry
+    stream_specs = load_registry(args.stream_registry) if args.stream_registry else []
+    if stream_specs and mixed_shard_root is None:
+        raise ValueError("--stream-registry requires --mixed-shard-root")
+    manifest_path = (mixed_shard_root / "mixture_manifest.json") if mixed_shard_root else None
+    mixture_sha = (
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        if manifest_path is not None and manifest_path.is_file() else None
+    )
+    tokenizer_sha = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+    stored_provenance = ((training_state or {}).get("data_provenance") or {})
+    stored_stream = stored_provenance.get("streaming")
+    reasons, resume_stream_exactly = plan_data_mixture_resume(
+        resume_from=args.resume_from,
+        stored_provenance=stored_provenance,
+        stream_specs=stream_specs,
+        segment_tokens=args.stream_segment_tokens,
+        reuse_batches=args.stream_reuse_batches,
+        mixture_sha=mixture_sha,
+    )
+    if args.reset_remote_cursors:
+        if not args.resume_from or not stored_stream or not stream_specs:
+            raise ValueError("--reset-remote-cursors requires a streamed checkpoint resume")
+        reasons.append("explicit_remote_cursor_reset_after_unverifiable_legacy_segment")
+        resume_stream_exactly = False
+        print("WARNING: starting a new REMOTE stream cursor phase; model, optimizer, "
+              "local cursors, and source statistics are preserved. Remote documents "
+              "may repeat.")
+    # The source checkpoint may have trained with 0077E/I packing. Restarting
+    # with the streaming-only code is a distinct, auditable training-data phase.
+    old_packing = stored_provenance.get("short_document_packing") or {}
+    if old_packing.get("enabled"):
+        reasons.append("short_document_packing_disabled_streaming_only_rollback")
+    # A source change is a normal continuation, not a special CLI mode.
+    # Keep a permanent transition log *inside* subsequent checkpoints.
+    mixture_history = list(stored_provenance.get("mixture_history") or [])
+    fork_provenance = stored_provenance.get("fork")
+    phase_start_source_counts = dict(
+        stored_provenance.get("mixture_phase_start_source_counts") or {}
+    )
+    phase_start_batch_counts = dict(
+        stored_provenance.get("mixture_phase_start_batch_counts") or {}
+    )
+    if reasons:
+        state_path = checkpoint_path / "training_state.json"
+        new_sources = [spec.__dict__.copy() for spec in stream_specs]
+        event = {
+            "kind": "data_mixture_changed",
+            "start_step": int(start_step),
+            "start_tokens_processed": int(tokens_processed),
+            "reasons": reasons,
+            "parent_checkpoint": str(checkpoint_path.resolve()),
+            "parent_training_state_sha256": (
+                hashlib.sha256(state_path.read_bytes()).hexdigest()
+                if state_path.is_file() else None
+            ),
+            "previous": {
+                "local_mixture_manifest_sha256": stored_provenance.get(
+                    "local_mixture_manifest_sha256"
+                ),
+                "effective_weights": stored_provenance.get("effective_weights"),
+                "remote_registry": (stored_stream or {}).get("registry", []),
+                "remote_registry_fingerprint": (stored_stream or {}).get(
+                    "registry_fingerprint"
+                ),
+                # Includes segment hashes and cursors: preserve the previous
+                # phase's audit trail after the active stream is replaced.
+                "remote_stream_state": stored_stream,
+                "segment_tokens": (stored_stream or {}).get("segment_tokens"),
+                "reuse_batches": (stored_stream or {}).get("reuse_batches"),
+                "source_supervised_tokens_at_end": dict(
+                    (training_state or {}).get("train_source_supervised_tokens", {})
+                ),
+                "source_microbatches_at_end": dict(
+                    (training_state or {}).get("train_source_batch_counts", {})
+                ),
+                "sample_trace_sha256_at_end": stored_provenance.get(
+                    "sample_trace_sha256"
+                ),
+                "short_document_packing": old_packing or None,
+            },
+            "new": {
+                "local_mixture_manifest_sha256": mixture_sha,
+                "remote_registry": new_sources,
+                "segment_tokens": args.stream_segment_tokens if stream_specs else None,
+                "reuse_batches": args.stream_reuse_batches if stream_specs else None,
+                "short_document_packing": {"enabled": False},
+            },
+        }
+        mixture_history.append(event)
+        phase_start_source_counts = dict(
+            (training_state or {}).get("train_source_supervised_tokens", {})
+        )
+        phase_start_batch_counts = dict(
+            (training_state or {}).get("train_source_batch_counts", {})
+        )
+        if fork_provenance is None:
+            fork_provenance = event
+        print("DATA MIXTURE UPDATED AUTOMATICALLY at step "
+              f"{start_step}: {', '.join(reasons)}")
+        print("  Model/optimizer states and historical source counts retained; "
+              "unchanged remote sources keep their stream cursors.")
+        if (args.checkpoint_dir and
+                Path(args.checkpoint_dir).resolve() == checkpoint_path.resolve()):
+            print("  NOTE: checkpoint output equals the resumed directory; "
+                  "future saves overwrite the previous weights. "
+                  "The mixture transition is recorded in training_state.json.")
+    if (args.resume_from and stored_provenance.get("tokenizer_sha256") is not None
+            and stored_provenance["tokenizer_sha256"] != tokenizer_sha):
+        raise ValueError("training tokenizer differs from checkpoint provenance")
+
     if args.checkpoint_dir:
         config_path = Path(args.checkpoint_dir) / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1255,7 +1461,44 @@ def main():
         muon_momentum=muon_momentum,
         muon_ns_steps=muon_ns_steps,
         muon_matmul_precision=muon_precision,
+        stream_specs=stream_specs,
+        stream_tokenizer=tokenizer if stream_specs else None,
+        stream_segment_tokens=args.stream_segment_tokens,
+        stream_reuse_batches=args.stream_reuse_batches,
+        stream_cache_dir=args.stream_cache_dir,
+        local_mixture_manifest_sha256=mixture_sha,
     )
+    trainer.tokenizer_sha256 = tokenizer_sha
+    trainer.data_fork = fork_provenance
+    trainer.mixture_history = mixture_history
+    trainer.mixture_phase_start_source_counts = phase_start_source_counts
+    trainer.mixture_phase_start_batch_counts = phase_start_batch_counts
+    if args.resume_from and stored_provenance:
+        trainer.train_source_supervised_tokens = dict(
+            (training_state or {}).get("train_source_supervised_tokens", {})
+        )
+        if trainer.streaming_cache is not None and stored_stream is not None:
+            if args.reset_remote_cursors:
+                print("  Started new remote cursors; previous stream state is "
+                      "preserved in data_provenance.mixture_history")
+            elif resume_stream_exactly:
+                trainer.streaming_cache.load_state_dict(
+                    stored_stream, checkpoint_dir=checkpoint_path,
+                )
+            else:
+                restored = restore_compatible_stream_cursors(
+                    trainer.streaming_cache, stored_stream,
+                    checkpoint_dir=checkpoint_path,
+                )
+                if restored:
+                    print("  Retained remote cursors for unchanged sources: "
+                          + ", ".join(restored))
+        # Preserve the cumulative sample audit chain even across mixture changes.
+        if trainer.streaming_cache is not None and stored_provenance.get("sample_trace_sha256"):
+            trainer.sample_trace_sha256 = stored_provenance["sample_trace_sha256"]
+            trainer.sample_trace_microbatches = int(
+                stored_provenance.get("sample_trace_microbatches", 0)
+            )
 
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
@@ -1280,8 +1523,8 @@ def main():
             for name, value in training_state.get(
                 "train_source_batch_counts", {}
             ).items():
-                if name in trainer.train_source_batch_counts:
-                    trainer.train_source_batch_counts[name] = int(value)
+                # Keep removed-source totals for long-term provenance too.
+                trainer.train_source_batch_counts[name] = int(value)
             for name, value in training_state.get(
                 "val_source_batch_counts", {}
             ).items():
@@ -1398,10 +1641,14 @@ def main():
     print("Starting Training")
     print("=" * 60)
 
-    losses = trainer.train(
-        num_steps=args.total_steps - start_step,
-        log_interval=args.log_interval,
-    )
+    try:
+        losses = trainer.train(
+            num_steps=args.total_steps - start_step,
+            log_interval=args.log_interval,
+        )
+    finally:
+        if trainer.streaming_cache is not None:
+            trainer.streaming_cache.close()
 
     print()
     print("=" * 60)

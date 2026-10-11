@@ -22,9 +22,10 @@ declare -A CHECKPOINTS=(
   [muon_40500]="wide-500m-memory-64k_0060_30b_muon_run"
   [baseline_28500]="wide-500m-memory-64k_0060_30b_back_up_28500_before_opt_change"
   [baseline_22500]="wide-500m-memory-64k_0060_30b_back_up22500"
+  [packing_test]="wide-500m-memory-64k_0060_30b_muon_stream_70_30_packed"
 )
 
-ALL_MODELS=(control_35500 muon_40500 baseline_28500 baseline_22500)
+ALL_MODELS=(control_35500 muon_40500 baseline_28500 baseline_22500 packing_test)
 ALL_BENCHMARKS=(ptb c4 pg19_plain pg19_routed lambada wikitext_plain wikitext_routed)
 # Whitespace-delimited filters; leave unset to run all 28 combinations.
 if [[ -n "${MODELS:-}" ]]; then read -r -a SELECTED_MODELS <<< "$MODELS"; else SELECTED_MODELS=("${ALL_MODELS[@]}"); fi

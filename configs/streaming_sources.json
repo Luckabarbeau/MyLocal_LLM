@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "name": "finemath4",
+      "dataset": "HuggingFaceTB/finemath",
+      "config": "finemath-4plus",
+      "split": "train",
+      "revision": "e92b25a616738fe95dc186b64dfb19f9c8525594",
+      "text_field": "text",
+      "weight": 0.15,
+      "license": "odc-by"
+    },
+    {
+      "name": "commonpile",
+      "dataset": "common-pile/comma_v0.1_training_dataset",
+      "config": "default",
+      "split": "train",
+      "revision": "5afc546db324e7f39f297ba757c9a60547151e7c",
+      "text_field": "text",
+      "weight": 0.15,
+      "license": "mixed-sources-check-original-licenses"
+    }
+  ]
+}

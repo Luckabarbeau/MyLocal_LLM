@@ -791,6 +791,7 @@ def create_hierarchical_memory_minibatch(
     document_aware: bool = False,
     return_metadata: bool = False,
     min_history_tokens: int = 0,
+    sampling_policy: str = "legacy",
 ):
     """Sample one coherent document/fragment for hierarchical memory training.
 
@@ -803,9 +804,18 @@ def create_hierarchical_memory_minibatch(
     * documents shorter than the dense window are right-padded and accompanied
       by ``target_loss_mask`` so unrelated documents are never used as filler.
 
+    With ``sampling_policy="document_first"``, a document is selected before
+    deciding how much history can be used.  No minimum document length is
+    imposed on selection: <target_length pairs -> masked dense fragment;
+    target_length..target_length+min_history_tokens-1 pairs -> final dense
+    target_length with its genuine preceding prefix; longer fragments -> a
+    randomly positioned dense window with at least min_history_tokens of
+    preceding history. The min_history_tokens argument is a *mode threshold*,
+    not a rejection criterion, in this mode.
+
     ``document_aware=False`` preserves the 0058A contiguous-stream behavior for
-    direct callers and legacy tests.  ``ExtendedTrainer`` enables the new path
-    by default for hierarchical-memory models.
+    direct callers and legacy tests. ``sampling_policy="legacy"`` remains
+    available for reproducibility of older evaluation protocols.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -813,6 +823,8 @@ def create_hierarchical_memory_minibatch(
     target_length = int(target_length)
     batch_size = int(batch_size)
     min_history_tokens = max(0, int(min_history_tokens))
+    if sampling_policy not in ("legacy", "document_first"):
+        raise ValueError("sampling_policy must be 'legacy' or 'document_first'")
     if memory_length <= 0 or target_length <= 0 or batch_size <= 0:
         raise ValueError("batch_size, memory_length, and target_length must be positive")
 
@@ -843,53 +855,65 @@ def create_hierarchical_memory_minibatch(
         document_ends = np.empty(batch_size, dtype=np.int64)
         target_source_starts = np.empty(batch_size, dtype=np.int64)
         min_history_satisfied = np.zeros(batch_size, dtype=bool)
+        # Observational only: identify longest-document fallback selections.
+        document_selection_fallback = np.zeros(batch_size, dtype=bool)
 
         for batch_idx in range(batch_size):
             required_pairs = target_length + min_history_tokens
-            doc_start = doc_end = None
-            for _ in range(64):
-                candidate_start, candidate_end = _sample_document_span(document_index, rng)
-                if candidate_end - candidate_start - 1 >= required_pairs:
-                    doc_start, doc_end = candidate_start, candidate_end
-                    break
-                if min_history_tokens == 0:
-                    doc_start, doc_end = candidate_start, candidate_end
-                    break
-            if doc_start is None:
-                # Deterministic scan across the sidecar. Prefer a document that
-                # satisfies the requested history budget, but do not make a
-                # heterogeneous packed shard fatal when none does. In that
-                # case use the longest document in this shard; the returned
-                # metadata marks the requested full-history budget as
-                # unsatisfied.  Routed-prefix callers may still consume the
-                # genuine shorter history directly instead of discarding it.
-                previous = 0
-                best_start = None
-                best_end = None
-                best_pairs = -1
-                for end_value in document_index.ends:
-                    end = int(end_value)
-                    pairs = end - previous - 1
-                    if pairs > best_pairs:
-                        best_start, best_end, best_pairs = previous, end, pairs
-                    if pairs >= required_pairs:
-                        doc_start, doc_end = previous, end
+            if sampling_policy == "document_first":
+                # Absolutely no retry / required-length rejection / deterministic
+                # longest-document fallback. Every sample is drawn from the
+                # original length-weighted packed-document distribution.
+                doc_start, doc_end = _sample_document_span(document_index, rng)
+            else:
+                doc_start = doc_end = None
+                for _ in range(64):
+                    candidate_start, candidate_end = _sample_document_span(document_index, rng)
+                    if candidate_end - candidate_start - 1 >= required_pairs:
+                        doc_start, doc_end = candidate_start, candidate_end
                         break
-                    previous = end
+                    if min_history_tokens == 0:
+                        doc_start, doc_end = candidate_start, candidate_end
+                        break
                 if doc_start is None:
-                    if best_start is None:
-                        raise ValueError("packed shard contains no indexed documents")
-                    doc_start, doc_end = best_start, best_end
+                    document_selection_fallback[batch_idx] = True
+                    # Historical deterministic fallback, kept *only* for
+                    # reproducibility of existing fixed validation protocols.
+                    previous = 0
+                    best_start = None
+                    best_end = None
+                    best_pairs = -1
+                    for end_value in document_index.ends:
+                        end = int(end_value)
+                        pairs = end - previous - 1
+                        if pairs > best_pairs:
+                            best_start, best_end, best_pairs = previous, end, pairs
+                        if pairs >= required_pairs:
+                            doc_start, doc_end = previous, end
+                            break
+                        previous = end
+                    if doc_start is None:
+                        if best_start is None:
+                            raise ValueError("packed shard contains no indexed documents")
+                        doc_start, doc_end = best_start, best_end
 
             pair_count = int(doc_end - doc_start - 1)
             if pair_count >= target_length:
                 max_target_start = doc_end - target_length - 1
-                min_target_start = min(
-                    max_target_start, doc_start + min_history_tokens
-                )
-                target_start = int(rng.integers(min_target_start, max_target_start + 1))
+                if sampling_policy == "document_first" and pair_count < required_pairs:
+                    # 4k..~6k: predict only the final full 4k window; the
+                    # preceding tokens are genuine same-document context.
+                    # Never supervise these prefix-only positions.
+                    target_start = max_target_start
+                else:
+                    min_target_start = min(
+                        max_target_start, doc_start + min_history_tokens
+                    )
+                    target_start = int(rng.integers(min_target_start, max_target_start + 1))
                 valid_targets = target_length
             else:
+                # Shorter than 4k: supervise all genuine prediction pairs and
+                # mask padded tail. No neighboring document is ever appended.
                 target_start = int(doc_start)
                 valid_targets = pair_count
 
@@ -925,6 +949,8 @@ def create_hierarchical_memory_minibatch(
             "document_ends": document_ends,
             "target_source_starts": target_source_starts,
             "min_history_satisfied": min_history_satisfied,
+            "document_selection_fallback": document_selection_fallback,
+            "document_sampling_policy": sampling_policy,
         }
         if return_metadata:
             return source_inputs, target_labels, metadata

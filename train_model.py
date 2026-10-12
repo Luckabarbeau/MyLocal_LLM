@@ -311,6 +311,32 @@ def parse_args():
         help="Number of validation steps per check",
     )
     parser.add_argument(
+        "--val-per-source-steps", type=int, default=0,
+        help=("Fixed held-out batches per local validation source at each "
+              "--val-interval (0 disables; 2 recommended for a pilot)"),
+    )
+    parser.add_argument(
+        "--val-source-seed", type=int, default=78078,
+        help="Fixed per-source validation seed; keep identical across checkpoints",
+    )
+    parser.add_argument(
+        "--val-representative-steps", type=int, default=0,
+        help=("0078C: fixed source-token-sampled validation batches per local "
+              "source, without a minimum-history constraint (0 disables)"),
+    )
+    parser.add_argument(
+        "--val-representative-seed", type=int, default=78078,
+        help="Fixed seed for representative per-source evaluation",
+    )
+    parser.add_argument(
+        "--val-fixed-mixed-steps", type=int, default=0,
+        help="0078F: reproducible document-first, target-weighted mixed validation batches (0 disables)",
+    )
+    parser.add_argument(
+        "--val-fixed-mixed-seed", type=int, default=78078,
+        help="0078F: fixed mixed validation seed; hold constant across checkpoints",
+    )
+    parser.add_argument(
         "--save-interval",
         type=int,
         default=2000,
@@ -1477,6 +1503,12 @@ def main():
         log_file=args.log_file,
         val_interval=args.val_interval,
         val_steps=args.val_steps,
+        val_per_source_steps=args.val_per_source_steps,
+        val_source_seed=args.val_source_seed,
+        val_representative_steps=args.val_representative_steps,
+        val_representative_seed=args.val_representative_seed,
+        val_fixed_mixed_steps=args.val_fixed_mixed_steps,
+        val_fixed_mixed_seed=args.val_fixed_mixed_seed,
         save_interval=args.save_interval,
         loss_scale=1.0,
         numerical_debug=args.numerical_debug,
@@ -1539,6 +1571,12 @@ def main():
             trainer.sample_trace_microbatches = int(
                 stored_provenance.get("sample_trace_microbatches", 0)
             )
+
+    # 0078A: observational source metrics are separate from legacy counters.
+    # Older checkpoints have no source_metrics key: start a new measured epoch.
+    if args.resume_from and training_state:
+        trainer.restore_source_metrics(training_state.get("source_metrics"))
+        trainer.restore_routing_mode_stats(training_state.get("routing_mode_metrics"))
 
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed

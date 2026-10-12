@@ -25,6 +25,7 @@ declare -A CHECKPOINTS=(
   [packing_test]="wide-500m-memory-64k_0060_30b_muon_stream_70_30_packed"
   [muon_streaming]="wide-500m-memory-64k_0060_30b_muon_stream_70_30_restored"
   [muon_baseline]="wide-500m-memory-64k_0060_30b_muon_run_baseline"
+  [cosmopedia_only]="cosmopedia_medium_bf16_23500_L=1.90"
 )
 
 ALL_MODELS=(control_35500 muon_40500 baseline_28500 baseline_22500 packing_test muon_streaming muon_baseline)

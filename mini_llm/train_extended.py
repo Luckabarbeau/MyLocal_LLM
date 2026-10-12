@@ -13,6 +13,8 @@ This module provides production-ready training infrastructure including:
 import os
 import hashlib
 import csv
+import gc
+import math
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -43,6 +45,10 @@ from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
 from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
+from mini_llm.diagnostics.source_metrics import (
+    batch_coverage, empty_record, merge_record, row as source_metrics_row,
+    write_source_rows,
+)
 from mini_llm.performance_profiler import (
     configure_performance_profiler,
     performance_report,
@@ -119,6 +125,12 @@ class ExtendedTrainer:
         stream_reuse_batches: int = 64,
         stream_cache_dir: Optional[str] = None,
         local_mixture_manifest_sha256: Optional[str] = None,
+        val_per_source_steps: int = 0,
+        val_source_seed: int = 78078,
+        val_representative_steps: int = 0,
+        val_representative_seed: int = 78078,
+        val_fixed_mixed_steps: int = 0,
+        val_fixed_mixed_seed: int = 78078,
     ):
         """
         Initialize the extended trainer.
@@ -140,6 +152,8 @@ class ExtendedTrainer:
             log_file: Path to CSV log file (None = no logging)
             val_interval: Steps between validation checks
             val_steps: Number of validation steps per check
+            val_per_source_steps: Optional fixed held-out batches per local source; zero disables
+            val_source_seed: Fixed validation seed (independent of training RNG)
             save_interval: Steps between checkpoint saves
             loss_scale: Static loss scale factor for mixed precision
             rng_seed: Seed for persistent RNGs
@@ -181,6 +195,20 @@ class ExtendedTrainer:
         self.local_mixture_manifest_sha256 = local_mixture_manifest_sha256
         self.streaming_cache = None
         self.train_source_supervised_tokens = {}
+        # 0078A: new counters start when this patch first runs; historical
+        # train_source_supervised_tokens above remains backward compatible.
+        self.source_metrics = {}
+        self.source_metrics_since_step = None
+        self._source_metrics_interval = {}
+        self._last_step_source_metrics = {}
+        self._last_step_supervised_tokens = 0.0
+        self._last_step_supervised_utilization = 0.0
+        # 0078F: actual execution modes, read from the forward cache for every
+        # accumulation microbatch (not one router-diagnostic snapshot).
+        self.routing_modes_since_step = None
+        self.routing_modes_total = self._new_routing_mode_stats()
+        self._routing_modes_interval = self._new_routing_mode_stats()
+        self._last_step_routing_modes = self._new_routing_mode_stats()
         # Compact cryptographic chain over the *actual* sampled input/target
         # windows. Records their order without retaining private raw text.
         self.sample_trace_sha256 = "00" * 32
@@ -261,6 +289,24 @@ class ExtendedTrainer:
         self.log_file = Path(log_file) if log_file else None
         self.val_interval = val_interval
         self.val_steps = val_steps
+        self.val_per_source_steps = int(val_per_source_steps)
+        self.val_source_seed = int(val_source_seed)
+        self.val_representative_steps = int(val_representative_steps)
+        self.val_representative_seed = int(val_representative_seed)
+        self.val_fixed_mixed_steps = int(val_fixed_mixed_steps)
+        self.val_fixed_mixed_seed = int(val_fixed_mixed_seed)
+        if self.val_fixed_mixed_steps < 0:
+            raise ValueError("val_fixed_mixed_steps must be nonnegative")
+        if self.val_fixed_mixed_steps and self.val_source_shards is None:
+            raise ValueError("fixed mixed validation requires local validation sources")
+        if self.val_representative_steps < 0:
+            raise ValueError("val_representative_steps must be nonnegative")
+        if self.val_representative_steps and self.val_source_shards is None:
+            raise ValueError("representative validation requires mixed local validation shards")
+        if self.val_per_source_steps < 0:
+            raise ValueError("val_per_source_steps must be nonnegative")
+        if self.val_per_source_steps and self.val_source_shards is None:
+            raise ValueError("per-source validation requires mixed local validation shards")
         self.save_interval = save_interval
         self.profile_steps = max(0, int(profile_steps))
         self._profiled_steps = 0
@@ -277,6 +323,44 @@ class ExtendedTrainer:
         else:
             self.memory_profile_steps = max(0, int(memory_profile_steps_raw))
         self._memory_profiled_steps = 0
+        # 0078I: profile every N optimizer updates, rather than profiling only
+        # the first N updates of a run. 1 retains the original behavior.
+        self.memory_profile_interval = int(
+            os.environ.get("MINI_LLM_MEMORY_PROFILE_INTERVAL", "1")
+        )
+        if self.memory_profile_interval < 1:
+            raise ValueError("MINI_LLM_MEMORY_PROFILE_INTERVAL must be >= 1")
+        # Frequent inexpensive stage snapshots, separate from the heavier
+        # synchronized per-microbatch 0055A profiler.
+        self.gpu_memory_audit_train_interval = int(
+            os.environ.get("MINI_LLM_GPU_MEMORY_AUDIT_TRAIN_INTERVAL", "0")
+        )
+        if self.gpu_memory_audit_train_interval < 0:
+            raise ValueError("MINI_LLM_GPU_MEMORY_AUDIT_TRAIN_INTERVAL must be >= 0")
+        self._gpu_memory_history_shapes = {}
+        # 0078H: read-only CUDA memory accounting at validation/checkpoint
+        # boundaries.  Optional post-validation trimming releases only idle
+        # CuPy pool blocks; it never touches live arrays or changes training.
+        self.gpu_memory_audit = os.environ.get(
+            "MINI_LLM_GPU_MEMORY_AUDIT", "0"
+        ).strip().lower() in {"1", "true", "on", "yes"}
+        self.gpu_memory_trim_after_validation = os.environ.get(
+            "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION", "0"
+        ).strip().lower() in {"1", "true", "on", "yes"}
+        self.gpu_memory_trim_after_checkpoint = os.environ.get(
+            "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT", "0"
+        ).strip().lower() in {"1", "true", "on", "yes"}
+        # 0078J: opt-in GC/allocator isolation probe, executed only after
+        # validation has returned and all training microbatches have completed.
+        # Do not run cyclic GC inside forward/backward or accumulation loops.
+        self.gpu_memory_gc_probe = os.environ.get(
+            "MINI_LLM_GPU_MEMORY_GC_PROBE", "0"
+        ).strip().lower() in {"1", "true", "on", "yes"}
+        # Read-only inventory of known GPU caches (RoPE, masks, router metadata,
+        # packed QKV). Separate CSV preserves the schema of the 0078H audit.
+        self.gpu_memory_cache_audit = os.environ.get(
+            "MINI_LLM_GPU_MEMORY_CACHE_AUDIT", "0"
+        ).strip().lower() in {"1", "true", "on", "yes"}
 
         # 0056/0060B3: chunked/recomputed vocabulary head for both training
         # and validation.  A value of zero preserves the historical full-logits
@@ -900,6 +984,27 @@ class ExtendedTrainer:
                 *[int(value) for value in stats["history_hist"]],
             ])
 
+    def _source_metrics_log_path(self) -> Optional[Path]:
+        if self.log_file is None:
+            return None
+        return self.log_file.with_name(
+            f"{self.log_file.stem}.sources{self.log_file.suffix or '.csv'}"
+        )
+
+    def restore_source_metrics(self, state):
+        """Restore observational counters without backfilling older checkpoints."""
+        if not state:
+            return
+        if state.get("version") != 1:
+            raise ValueError("unsupported source metrics checkpoint version")
+        self.source_metrics_since_step = state.get("since_step")
+        self.source_metrics = {}
+        for name, saved in state.get("sources", {}).items():
+            record = empty_record()
+            record.update(saved)
+            self.source_metrics[str(name)] = record
+        self._source_metrics_interval = {}
+
     def _setup_logging(self):
         """Initialize CSV logging."""
         if self.log_file:
@@ -928,6 +1033,120 @@ class ExtendedTrainer:
                     row.get("steps_per_sec", ""),
                 ])
     
+    def _gpu_memory_boundary(self, phase: str, *, trim_idle_pool=False):
+        """0078H: diagnose live allocations versus retained CuPy pool blocks.
+
+        Collect at safe training/validation boundaries only; the optional
+        trim is *not* a remedy for live-reference leaks.  No GPU behavior is
+        changed with the default (both environment flags disabled).
+        """
+        if not (self.gpu_memory_audit or trim_idle_pool):
+            return None
+        get_pool = getattr(xp, "get_default_memory_pool", None)
+        if get_pool is None:
+            return None
+        pool = get_pool()
+        # Synchronize only at infrequent checkpoints; without this, temporary
+        # allocations still used by queued kernels can confuse the diagnosis.
+        synchronize()
+        if trim_idle_pool:
+            pool.free_all_blocks()
+        live = int(pool.used_bytes())
+        reserved = int(pool.total_bytes())
+        # Use the CUDA driver's own accounting as a complementary measure.
+        free, total = xp.cuda.runtime.memGetInfo()
+        mib = 1024.0 ** 2
+        record = {
+            "step": int(self.step),
+            "phase": str(phase),
+            "device_free_mib": round(int(free) / mib, 2),
+            "device_total_mib": round(int(total) / mib, 2),
+            "cupy_live_mib": round(live / mib, 2),
+            "cupy_reserved_mib": round(reserved / mib, 2),
+            "cupy_idle_mib": round((reserved - live) / mib, 2),
+            "trimmed": int(bool(trim_idle_pool)),
+        }
+        if self.gpu_memory_audit:
+            print(
+                f"  GPU memory [{phase}] step={record['step']}: "
+                f"CuPy live={record['cupy_live_mib']:.1f} MiB, "
+                f"reserved={record['cupy_reserved_mib']:.1f} MiB, "
+                f"idle={record['cupy_idle_mib']:.1f} MiB, "
+                f"CUDA free={record['device_free_mib']:.1f} MiB"
+            )
+            if self.log_file is not None:
+                path = self.log_file.with_name(
+                    self.log_file.stem + ".gpu_memory.csv"
+                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                new_file = not path.exists() or path.stat().st_size == 0
+                with path.open("a", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=tuple(record))
+                    if new_file:
+                        writer.writeheader()
+                    writer.writerow(record)
+            if getattr(self, "gpu_memory_cache_audit", False):
+                self._gpu_cache_snapshot(phase)
+        return record
+
+    def _gpu_cache_snapshot(self, phase: str):
+        """Log sizes of known persistent CUDA caches, without allocating GPU data."""
+        from mini_llm.diagnostics.gpu_cache_audit import persistent_gpu_cache_inventory
+
+        inventory = persistent_gpu_cache_inventory(getattr(self, "model", None))
+        mib = 1024.0 ** 2
+        parts = []
+        rows = []
+        for name, stat in sorted(inventory.items()):
+            entries = int(stat["entries"])
+            cuda_mib = float(stat["cuda_bytes"]) / mib
+            parts.append(f"{name}={entries} entries/{cuda_mib:.2f} MiB")
+            rows.append({
+                "step": int(self.step), "phase": str(phase), "cache": name,
+                "entries": entries, "cuda_mib": round(cuda_mib, 3),
+            })
+        print(f"  GPU cache inventory [{phase}] step={self.step}: " + "; ".join(parts))
+        if self.log_file is not None:
+            path = self.log_file.with_name(self.log_file.stem + ".gpu_caches.csv")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            new_file = not path.exists() or path.stat().st_size == 0
+            with path.open("a", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=(
+                    "step", "phase", "cache", "entries", "cuda_mib"
+                ))
+                if new_file:
+                    writer.writeheader()
+                writer.writerows(rows)
+        return inventory
+
+    def _gpu_memory_post_validation_gc_probe(self):
+        """Compare live/reserved before GC, after GC, and after idle-pool trim.
+
+        Requires the 0078H memory audit. Validation has already completed;
+        the last per-stage trim, if enabled, may have run. The GC probe is
+        diagnostic and never changes model parameters or training batches.
+        """
+        if not (self.gpu_memory_audit and getattr(self, "gpu_memory_gc_probe", False)):
+            return
+        # The caller already recorded 'after_all_validation' immediately
+        # before this method, providing the pre-GC snapshot.
+        synchronize()
+        started = time.perf_counter()
+        collected = gc.collect()
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        print(f"  GPU memory Python GC step={self.step}: "
+              f"collected={collected}, elapsed_ms={elapsed_ms:.1f}")
+        self._gpu_memory_boundary("after_validation_python_gc")
+        self._gpu_memory_boundary("after_validation_python_gc_trimmed", trim_idle_pool=True)
+
+    def _gpu_memory_after_validation_stage(self, phase: str):
+        """Record validation-stage usage and optionally release idle pool blocks."""
+        self._gpu_memory_boundary(phase)
+        if self.gpu_memory_trim_after_validation:
+            self._gpu_memory_boundary(
+                phase + "_trimmed", trim_idle_pool=True,
+            )
+
     def _check_finite(self, tensor, name: str):
         """Check if tensor is finite and print warning if not."""
         if self.numerical_debug:
@@ -1050,20 +1269,21 @@ class ExtendedTrainer:
             )
             routed_prefix_retrieval = None
             min_history_tokens = 0
+            sampling_policy = "legacy"
             if self.memory_context.integration_mode == "routed_prefix":
+                # 0078E: document length is an *outcome* of sampling, never
+                # a prerequisite. Keep router stochastic training probability
+                # independent of which document is selected.
+                sampling_policy = "document_first"
                 routed_prefix_retrieval = bool(
                     self.train_rng.random()
                     < float(self.memory_context.retrieval_batch_probability)
                 )
-                if routed_prefix_retrieval:
-                    # Right-aligned history can begin mid-block. K*B + (B-1)
-                    # tokens guarantees K complete block-aligned candidates.
-                    min_history_tokens = (
-                        self.memory_context.top_k_blocks
-                        * self.memory_context.block_size
-                        + self.memory_context.block_size
-                        - 1
-                    )
+                min_history_tokens = (
+                    self.memory_context.top_k_blocks
+                    * self.memory_context.block_size
+                    + self.memory_context.block_size - 1
+                )
             elif (
                 self.memory_context.integration_mode == "terminal_landmark"
                 and self.memory_context.memory_training == "router_only"
@@ -1084,25 +1304,38 @@ class ExtendedTrainer:
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
                 min_history_tokens=min_history_tokens,
+                sampling_policy=sampling_policy,
             )
             if routed_prefix_retrieval is not None:
-                history_available = (
+                available = (
                     int(self.memory_context.distant_memory_length)
                     - np.asarray(metadata["history_valid_starts"], dtype=np.int64)
                 )
-                retrieval_eligible = bool(
-                    np.all(history_available > 0)
-                    and np.all(
-                        metadata["target_valid_lengths"]
-                        == self.memory_context.target_length
-                    )
+                valid = np.asarray(metadata["target_valid_lengths"], dtype=np.int64)
+                full_target = bool(np.all(valid == self.memory_context.target_length))
+                # Without per-row attention masks, use the common genuine
+                # history suffix for medium-length mixed microbatches. It may
+                # be shorter than an individual document's full prefix.
+                direct_history = bool(
+                    full_target and np.all(available > 0)
+                    and int(np.max(available)) < min_history_tokens
                 )
+                # For long samples preserve the existing router-training
+                # probability. For short genuine partial prefixes, direct
+                # history needs no learned selection and is always enabled.
                 metadata["retrieval_requested"] = routed_prefix_retrieval
                 metadata["use_retrieval"] = bool(
-                    routed_prefix_retrieval and retrieval_eligible
+                    full_target and np.all(available > 0)
+                    and (routed_prefix_retrieval or direct_history)
+                )
+                metadata["history_mode_requested"] = (
+                    "direct_history" if direct_history else
+                    "routed_candidate" if metadata["use_retrieval"] else
+                    "dense"
                 )
 
         source_name = source if self.train_source_shards is not None else "local"
+        self._last_train_batch_source = source_name
         supervised = (
             int((np.asarray(metadata["target_valid_lengths"]) > 0).sum())
             if metadata is not None and "target_valid_lengths" in metadata
@@ -1130,22 +1363,154 @@ class ExtendedTrainer:
             return inputs, targets, metadata
         return inputs, targets
     
-    def get_val_batch(self, return_metadata: bool = False):
-        """Get one validation batch using the same document-boundary semantics."""
+    @staticmethod
+    def _new_routing_mode_stats():
+        return {
+            "microbatches": 0, "samples": 0, "supervised_token_weight": 0.0,
+            "available_history_tokens": 0, "used_history_tokens": 0,
+            "requested_microbatches": 0,
+            "dense_microbatches": 0, "direct_microbatches": 0,
+            "routed_microbatches": 0,
+            "dense_supervised_tokens": 0.0, "direct_supervised_tokens": 0.0,
+            "routed_supervised_tokens": 0.0,
+        }
+
+    @staticmethod
+    def _merge_routing_mode_stats(total, other):
+        for key in total:
+            total[key] += other[key]
+
+    def restore_routing_mode_stats(self, state):
+        """Start a new measurement epoch for old checkpoints, or resume it."""
+        self.routing_modes_total = self._new_routing_mode_stats()
+        self._routing_modes_interval = self._new_routing_mode_stats()
+        self._last_step_routing_modes = self._new_routing_mode_stats()
+        self.routing_modes_since_step = None
+        if not isinstance(state, dict) or state.get("version") != 1:
+            return
+        saved = state.get("total", {})
+        for key in self.routing_modes_total:
+            if key in saved:
+                self.routing_modes_total[key] = type(self.routing_modes_total[key])(saved[key])
+        self.routing_modes_since_step = state.get("since_step")
+
+    def _routing_mode_observation(self, cache, batch_metadata, token_weight, batch_size):
+        """Account for *used* history, not just available source history.
+
+        Runs before backward frees the context cache. Reads Python cache
+        metadata and CPU source masks only; no GPU synchronization or backward
+        computation. Exactly one execution mode is recorded per microbatch.
+        """
+        stats = self._new_routing_mode_stats()
+        stats["microbatches"] = 1
+        stats["samples"] = int(batch_size)
+        stats["supervised_token_weight"] = float(token_weight)
+        metadata = batch_metadata or {}
+        stats["requested_microbatches"] = int(bool(metadata.get("use_retrieval", False)))
+        if self.memory_context is None:
+            mode, prefix_length = "dense", 0
+        else:
+            memory_cache = cache.get("memory_context_cache") or {}
+            raw_mode = memory_cache.get("prefix_mode", "none")
+            mode_map = {"none": "dense", "direct_history": "direct",
+                        "routed_blocks": "routed"}
+            if raw_mode not in mode_map:
+                raise ValueError(f"unknown routed-prefix execution mode: {raw_mode!r}")
+            mode = mode_map[raw_mode]
+            prefix_length = int(memory_cache.get("prefix_length", 0))
+            if mode != "dense" and prefix_length <= 0:
+                raise ValueError("non-dense history mode requires a nonzero prefix")
+            starts = metadata.get("history_valid_starts")
+            if starts is not None:
+                starts_cpu = np.asarray(starts, dtype=np.int64)
+                history_capacity = int(self.memory_context.distant_memory_length)
+                stats["available_history_tokens"] = int(np.clip(
+                    history_capacity - starts_cpu, 0, history_capacity
+                ).sum())
+        stats["used_history_tokens"] = prefix_length * int(batch_size)
+        stats[mode + "_microbatches"] = 1
+        stats[mode + "_supervised_tokens"] = float(token_weight)
+        return stats
+
+    def _log_routing_mode_stats(self, interval_stats):
+        """Write interval and lifetime totals to an independent CSV."""
+        count = max(1, interval_stats["microbatches"])
+        weight = max(1., interval_stats["supervised_token_weight"])
+        print(
+            "  Actual history execution (all accumulation microbatches): "
+            f"dense={interval_stats['dense_microbatches']}/{count}, "
+            f"direct={interval_stats['direct_microbatches']}/{count}, "
+            f"routed={interval_stats['routed_microbatches']}/{count}; "
+            f"routed_target_share={100 * interval_stats['routed_supervised_tokens'] / weight:.1f}%, "
+            f"history_used={interval_stats['used_history_tokens']:,}, "
+            f"history_available={interval_stats['available_history_tokens']:,}"
+        )
+        if self.log_file is None:
+            return
+        path = self.log_file.with_name(self.log_file.stem + ".routing_modes.csv")
+        columns = (
+            "step", "scope", "since_step", *self._new_routing_mode_stats().keys(),
+            "routed_microbatch_fraction", "routed_supervised_token_fraction",
+            "actual_to_available_history_fraction",
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not path.exists() or path.stat().st_size == 0
+        with path.open("a", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            if new_file:
+                writer.writeheader()
+            for scope, record in (("interval", interval_stats),
+                                  ("cumulative_since_patch", self.routing_modes_total)):
+                row = dict(record)
+                row.update({
+                    "step": int(self.step), "scope": scope,
+                    "since_step": self.routing_modes_since_step,
+                    "routed_microbatch_fraction": record["routed_microbatches"] / max(1, record["microbatches"]),
+                    "routed_supervised_token_fraction": record["routed_supervised_tokens"] / max(1., record["supervised_token_weight"]),
+                    "actual_to_available_history_fraction": record["used_history_tokens"] / max(1, record["available_history_tokens"]),
+                })
+                writer.writerow(row)
+
+    def get_val_batch(
+        self, return_metadata: bool = False, *, source_override=None,
+        rng_override=None, shard_index_override=None,
+        min_history_override=None, sampling_policy_override=None,
+    ):
+        """Sample a validation batch; explicit source/rng/index leave validation state intact.
+
+        Explicit-source mode is used by fixed per-source and fixed mixed
+        evaluation. The ordinary mixed metric retains its mutable RNG and
+        equal-microbatch aggregation but uses document-first sampling from 0078E.
+        """
+        if source_override is None and (rng_override is not None or shard_index_override is not None or min_history_override is not None or sampling_policy_override is not None):
+            raise ValueError("validation overrides require an explicit source")
+        if min_history_override is not None and int(min_history_override) < 0:
+            raise ValueError("min_history_override must be nonnegative")
+        if sampling_policy_override not in (None, "legacy", "document_first"):
+            raise ValueError("invalid validation sampling_policy_override")
+        rng = self.val_rng if rng_override is None else rng_override
         if self.val_source_shards is not None:
-            source = self._choose_source(self.val_rng)
+            source = self._choose_source(self.val_rng) if source_override is None else str(source_override)
+            if source not in self.val_source_shards:
+                raise ValueError(f"unknown validation source: {source!r}")
             paths = self.val_source_shards[source]
-            shard_idx = self.current_val_source_shard_idx[source]
+            shard_idx = (
+                self.current_val_source_shard_idx[source]
+                if source_override is None else int(shard_index_override or 0) % len(paths)
+            )
             cache_key = (source, shard_idx)
             shard_path = paths[shard_idx]
             shard_data = self._get_cached_shard(
                 self.val_shards, cache_key, shard_path, self.load_val_shard,
             )
-            self.current_val_source_shard_idx[source] = (
-                shard_idx + 1
-            ) % len(paths)
-            self.val_source_batch_counts[source] += 1
+            if source_override is None:
+                self.current_val_source_shard_idx[source] = (
+                    shard_idx + 1
+                ) % len(paths)
+                self.val_source_batch_counts[source] += 1
         else:
+            if source_override is not None:
+                raise ValueError("per-source validation requires local validation source shards")
             shard_idx = self.current_val_shard_idx
             cache_key = shard_idx
             shard_path = self.val_shard_paths[shard_idx]
@@ -1159,7 +1524,7 @@ class ExtendedTrainer:
         metadata = None
         if self.memory_context is None:
             inputs, targets = create_minibatch(
-                shard_data, self.batch_size, self.seq_length, rng=self.val_rng
+                shard_data, self.batch_size, self.seq_length, rng=rng
             )
         else:
             document_index = self._get_document_index(
@@ -1170,26 +1535,38 @@ class ExtendedTrainer:
                 self.batch_size,
                 self.memory_context.distant_memory_length,
                 self.memory_context.target_length,
-                rng=self.val_rng,
+                rng=rng,
                 eos_token_id=self.eos_token_id,
                 document_index=document_index,
                 document_aware=(shard_data.ndim == 1),
                 return_metadata=True,
                 min_history_tokens=(
-                    (
-                        self.memory_context.top_k_blocks
-                        * self.memory_context.block_size
-                        + self.memory_context.block_size
-                        - 1
-                    )
-                    if self.memory_context.integration_mode == "routed_prefix"
+                    int(min_history_override)
+                    if min_history_override is not None
                     else (
-                        self.memory_context.min_router_history_blocks
-                        * self.memory_context.block_size
-                        if self.memory_context.integration_mode == "terminal_landmark"
-                        and self.memory_context.memory_training == "router_only"
-                        else 0
+                        (
+                            self.memory_context.top_k_blocks
+                            * self.memory_context.block_size
+                            + self.memory_context.block_size
+                            - 1
+                        )
+                        if self.memory_context.integration_mode == "routed_prefix"
+                        else (
+                            self.memory_context.min_router_history_blocks
+                            * self.memory_context.block_size
+                            if self.memory_context.integration_mode == "terminal_landmark"
+                            and self.memory_context.memory_training == "router_only"
+                            else 0
+                        )
                     )
+                ),
+                sampling_policy=(
+                    sampling_policy_override
+                    if sampling_policy_override is not None else
+                    "document_first"
+                    if self.memory_context.integration_mode == "routed_prefix"
+                    and (source_override is None or min_history_override is not None)
+                    else "legacy"
                 ),
             )
             if self.memory_context.integration_mode == "routed_prefix":
@@ -1206,11 +1583,51 @@ class ExtendedTrainer:
                 )
                 metadata["retrieval_requested"] = True
                 metadata["use_retrieval"] = retrieval_eligible
+                metadata["document_policy_validation"] = metadata.get(
+                    "document_sampling_policy", "legacy"
+                )
 
         if return_metadata:
             return inputs, targets, metadata
         return inputs, targets
     
+    def _memory_profile_due(self):
+        return (
+            self._memory_profiled_steps < self.memory_profile_steps
+            and (self.step + 1) % self.memory_profile_interval == 0
+        )
+
+    def _record_gpu_history_shape(self, cache):
+        """CPU-only histogram of the *actual* active-prefix shapes.
+
+        Used only when GPU audit is enabled; does not inspect device tensor
+        values or synchronize CUDA.  Histogram is reported at train intervals.
+        """
+        if not self.gpu_memory_audit or self.gpu_memory_audit_train_interval <= 0:
+            return
+        mem = cache.get("memory_context_cache") or {}
+        mode = str(mem.get("prefix_mode", "none"))
+        length = int(mem.get("prefix_length", 0))
+        histogram = self._gpu_memory_history_shapes.setdefault(mode, {})
+        histogram[length] = histogram.get(length, 0) + 1
+
+    def _print_gpu_history_shapes(self):
+        if not self._gpu_memory_history_shapes:
+            return
+        details = []
+        for mode in ("none", "direct_history", "routed_blocks"):
+            counts = self._gpu_memory_history_shapes.get(mode, {})
+            if not counts:
+                continue
+            details.append(
+                f"{mode}: n={sum(counts.values())}, "
+                f"distinct_lengths={len(counts)}, "
+                f"min={min(counts)}, max={max(counts)}"
+            )
+        if details:
+            print("  GPU audited history shapes: " + "; ".join(details))
+        self._gpu_memory_history_shapes.clear()
+
     def _record_memory_snapshot(self, records, label):
         """Record one synchronized CuPy/device memory snapshot for 0055A."""
         if self._memory_profiled_steps >= self.memory_profile_steps:
@@ -1232,12 +1649,27 @@ class ExtendedTrainer:
         previous = records.get(label)
         if previous is None or snapshot["device_used"] > previous["device_used"]:
             records[label] = snapshot
+        return snapshot
 
     @staticmethod
     def _format_memory_gib(value):
         return float(value) / float(1024 ** 3)
 
-    def _print_memory_report(self, records):
+    @staticmethod
+    def _update_mode_memory_peak(peaks, mode, prefix_length, phase, snapshot):
+        if snapshot is None:
+            return
+        item = peaks.setdefault(mode, {
+            "microbatches": 0, "lengths": set(), "snapshots": {}
+        })
+        item["lengths"].add(int(prefix_length))
+        if phase == "forward":
+            item["microbatches"] += 1
+        previous = item["snapshots"].get(phase)
+        if previous is None or snapshot["device_used"] > previous["device_used"]:
+            item["snapshots"][phase] = snapshot
+
+    def _print_memory_report(self, records, mode_peaks=None):
         if not records:
             return
         print()
@@ -1267,6 +1699,20 @@ class ExtendedTrainer:
             f"at {peak_label}. (Boundary sampling; short-lived kernel workspaces "
             "between boundaries can be higher.)"
         )
+        if mode_peaks:
+            print("  Per-execution-mode peaks (observed on profiled microbatches):")
+            for mode, item in sorted(mode_peaks.items()):
+                def _mib(phase, field):
+                    snap = item["snapshots"].get(phase, {})
+                    return float(snap.get(field, 0)) / (1024 ** 2)
+                print(
+                    f"    {mode}: n={item['microbatches']}, "
+                    f"prefix_lengths={sorted(item['lengths'])}, "
+                    f"forward live peak={_mib('forward', 'pool_used'):.0f} MiB, "
+                    f"backward live peak={_mib('backward', 'pool_used'):.0f} MiB, "
+                    f"released live peak={_mib('released', 'pool_used'):.0f} MiB, "
+                    f"released reserved peak={_mib('released', 'pool_reserved'):.0f} MiB"
+                )
         print()
 
     def _configure_routed_prefix_metadata(self, metadata, *, training):
@@ -1306,75 +1752,321 @@ class ExtendedTrainer:
             metadata["router_temperature"] = float(cfg.router_temperature_min)
         return metadata
 
+    def _validation_batch_loss(self, inputs, targets, batch_metadata):
+        """Apply the exact normal validation objective without backward/updates."""
+        batch_metadata = self._configure_routed_prefix_metadata(
+            batch_metadata, training=False
+        )
+        loss_mask = (
+            None if batch_metadata is None
+            else batch_metadata.get("target_loss_mask")
+        )
+        loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
+        targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+        # Retain the production validation head path. Full logits can OOM for
+        # the 65k-vocabulary model, so honor chunking for the new diagnostics.
+        if self.lm_head_chunk_tokens > 0:
+            head_input, target_slice = self.model.forward_body(
+                inputs, return_cache=False, memory_metadata=batch_metadata,
+                return_target_slice=True,
+            )
+            loss, loss_cache = self.model.chunked_lm_head_loss_forward(
+                head_input, targets,
+                chunk_tokens=self.lm_head_chunk_tokens,
+                loss_mask=loss_mask, target_slice=target_slice,
+            )
+            del loss_cache, head_input
+        else:
+            logits = self.model.forward(
+                inputs, return_cache=False, memory_metadata=batch_metadata,
+            )
+            loss, _ = self.model.compute_loss(
+                logits, targets, loss_mask=loss_mask,
+            )
+            del logits
+        return float(loss), targets, loss_mask
+
     def compute_val_loss(self) -> float:
+        """Historical mixed-source validation: mean of sampled batch losses.
+
+        This is deliberately unchanged in aggregation and RNG behavior for
+        backwards compatibility. See compute_val_loss_by_source for stable,
+        supervised-token-weighted held-out comparisons.
         """
-        Compute validation loss over multiple steps.
-        
-        Uses deterministic validation block selection (Issue #13).
-        
-        Returns float for logging, but internally accumulates on GPU/CPU
-        without host-device sync until the final mean computation.
-        
-        Note: Loss is returned as scalar() which converts to Python float.
-        We accumulate the raw float values and compute mean on backend.
-        """
-        # Accumulate losses as Python floats (minimal overhead)
-        # The main optimization is avoiding host-device sync during gradient computation
         losses = []
-        
         for _ in range(self.val_steps):
-            inputs, targets, batch_metadata = self.get_val_batch(
-                return_metadata=True
+            inputs, targets, metadata = self.get_val_batch(return_metadata=True)
+            loss, _, _ = self._validation_batch_loss(inputs, targets, metadata)
+            losses.append(loss)
+        return float(xp.mean(xp.asarray(losses, dtype="float32")))
+
+    def compute_val_loss_fixed_mixed(self):
+        """0078F: independent fixed held-out source mixture, token-weighted CE.
+
+        Source draws follow configured local weights, shard selection cycles
+        independently per source, and the whole sample trace is seeded once per
+        evaluation. The training, legacy validation, and shard cursor RNG
+        states are untouched. Repeated checkpoints use identical windows.
+        """
+        if self.val_fixed_mixed_steps <= 0:
+            return None
+        if self.val_source_shards is None:
+            raise ValueError("fixed mixed validation requires local validation sources")
+        rng = np.random.default_rng(self.val_fixed_mixed_seed)
+        counts = {name: 0 for name in self.val_source_shards}
+        digest = hashlib.sha256()
+        nll_sum, weight_sum, capacity = 0., 0., 0
+        for _ in range(self.val_fixed_mixed_steps):
+            source = self._choose_source(rng)
+            shard_idx = counts[source] % len(self.val_source_shards[source])
+            counts[source] += 1
+            inputs, targets, metadata = self.get_val_batch(
+                return_metadata=True, source_override=source,
+                rng_override=rng, shard_index_override=shard_idx,
+                sampling_policy_override="document_first",
             )
-            batch_metadata = self._configure_routed_prefix_metadata(
-                batch_metadata, training=False
+            ce, scored_targets, mask = self._validation_batch_loss(inputs, targets, metadata)
+            weight = self._supervised_token_weight(scored_targets, mask)
+            if not math.isfinite(ce):
+                raise ValueError("nonfinite fixed mixed validation loss")
+            nll_sum += ce * weight
+            weight_sum += weight
+            capacity += int(np.size(scored_targets))
+            digest.update(source.encode("utf8") + b"\0")
+            for part in (inputs, scored_targets, mask):
+                if part is None:
+                    digest.update(b"none")
+                else:
+                    arr = np.ascontiguousarray(part)
+                    digest.update(str((arr.shape, arr.dtype.str)).encode("ascii"))
+                    digest.update(memoryview(arr).cast("B"))
+        return {
+            "step": int(self.step), "ce_nats_per_target": nll_sum / weight_sum,
+            "perplexity": math.exp(nll_sum / weight_sum),
+            "supervised_token_weight": weight_sum, "target_capacity_tokens": capacity,
+            "target_fill": weight_sum / capacity,
+            "validation_batches": int(self.val_fixed_mixed_steps),
+            "fixed_seed": int(self.val_fixed_mixed_seed),
+            "sample_sha256": digest.hexdigest(),
+            "mixture_manifest_sha256": self.local_mixture_manifest_sha256 or "",
+            "tokenizer_sha256": getattr(self, "tokenizer_sha256", "") or "",
+        }
+
+    def _log_fixed_mixed_loss(self, result):
+        if result is None:
+            return
+        print("  Fixed mixed validation CE (document-first, token-weighted): "
+              f"{result['ce_nats_per_target']:.4f}, "
+              f"supervised={result['supervised_token_weight']:,.0f}, "
+              f"fill={100 * result['target_fill']:.1f}%, "
+              f"sample_sha256={result['sample_sha256'][:16]}...")
+        if self.log_file is None:
+            return
+        path = self.log_file.with_name(self.log_file.stem + ".val_fixed_mixed.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists() or path.stat().st_size == 0
+        with path.open("a", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=tuple(result))
+            if new:
+                writer.writeheader()
+            writer.writerow(result)
+
+    def compute_val_loss_by_source(self):
+        """Preserve 0078B's exact fixed long-history validation protocol."""
+        return self._compute_val_loss_by_source_impl(representative=False)
+
+    def compute_val_loss_by_source_representative(self):
+        """0078C: fixed source-token sampled windows without history-length filtering.
+
+        Preserves EOS and loss masks. For the routed-prefix configuration,
+        short contexts naturally disable retrieval when ineligible. Samples are
+        length-biased by the existing sampler; not uniform over documents.
+        """
+        return self._compute_val_loss_by_source_impl(representative=True)
+
+    def _compute_val_loss_by_source_impl(self, *, representative):
+        """Evaluate identical fixed held-out windows for each local source.
+
+        No optimizer updates, training RNG changes, or changes to the historical
+        validation RNG/shard cursors. Each source has its own fixed seed and
+        cycles over its validation shards. Means are weighted by effective CE
+        mask mass (not by microbatch count). Streaming sources are excluded:
+        their validation counterpart is intentionally local-only.
+        """
+        if self.val_source_shards is None:
+            raise ValueError("per-source validation requires local validation source shards")
+        batch_count = (self.val_representative_steps if representative
+                       else self.val_per_source_steps)
+        source_seed = (self.val_representative_seed if representative
+                       else self.val_source_seed)
+        if batch_count < 1:
+            return {}
+        output = {}
+        for source in sorted(self.val_source_shards):
+            seed_data = (f"0078C|{source_seed}|{source}" if representative
+                         else f"0078B|{source_seed}|{source}").encode("utf-8")
+            seed = int.from_bytes(hashlib.sha256(seed_data).digest()[:8], "little")
+            rng = np.random.default_rng(seed)
+            sampled = hashlib.sha256()
+            nll_sum, token_weight, token_count, capacity = 0., 0., 0, 0
+            doc_lengths = []
+            history_lengths = []
+            unique_docs = set()
+            fallback_count = 0
+            for i in range(batch_count):
+                inputs, targets, metadata = self.get_val_batch(
+                    return_metadata=True, source_override=source,
+                    rng_override=rng, shard_index_override=i,
+                    sampling_policy_override="document_first" if representative else "legacy",
+                )
+                if representative and metadata is not None and "document_starts" in metadata:
+                    starts = np.asarray(metadata["document_starts"], dtype=np.int64)
+                    ends = np.asarray(metadata["document_ends"], dtype=np.int64)
+                    lengths = ends - starts
+                    doc_lengths.extend(int(x) for x in lengths)
+                    history_starts = np.asarray(metadata["history_valid_starts"], dtype=np.int64)
+                    history_lengths.extend(int(x) for x in (
+                        self.memory_context.distant_memory_length - history_starts))
+                    shard_no = i % len(self.val_source_shards[source])
+                    unique_docs.update((shard_no, int(a), int(b))
+                                       for a, b in zip(starts, ends))
+                    fallback_count += int(np.count_nonzero(
+                        metadata.get("document_selection_fallback", np.zeros(len(starts), dtype=bool))))
+                ce, scored_targets, loss_mask = self._validation_batch_loss(
+                    inputs, targets, metadata
+                )
+                weight = self._supervised_token_weight(scored_targets, loss_mask)
+                if not math.isfinite(ce):
+                    raise ValueError(f"nonfinite validation CE for {source!r}")
+                nll_sum += ce * weight
+                token_weight += weight
+                token_count += (
+                    int(np.count_nonzero(loss_mask)) if loss_mask is not None
+                    else int(np.size(scored_targets))
+                )
+                capacity += int(np.size(scored_targets))
+                # A fingerprint of the *actual* batches and effective masks.
+                # If two checkpoints have different fingerprints, their losses
+                # must not be treated as paired measurements.
+                for part in (inputs, scored_targets, loss_mask):
+                    if part is None:
+                        sampled.update(b"none")
+                        continue
+                    array = np.ascontiguousarray(part)
+                    sampled.update(str((array.shape, array.dtype.str)).encode("ascii"))
+                    sampled.update(memoryview(array).cast("B"))
+            mean_ce = nll_sum / token_weight
+            output[source] = {
+                "step": int(self.step),
+                "source": source,
+                "schema_version": 1,
+                "mixture_manifest_sha256": self.local_mixture_manifest_sha256 or "",
+                "tokenizer_sha256": getattr(self, "tokenizer_sha256", "") or "",
+                "memory_mode": (
+                    self.memory_context.memory_training if self.memory_context
+                    else "plain"
+                ),
+                "ce_nats_per_target": mean_ce,
+                "perplexity": math.exp(mean_ce) if mean_ce < 700 else float("inf"),
+                "loss_nll_sum": nll_sum,
+                "supervised_token_weight": token_weight,
+                "supervised_tokens": token_count,
+                "target_capacity_tokens": capacity,
+                "target_fill": token_weight / capacity,
+                "validation_batches": batch_count,
+                "fixed_seed": source_seed,
+                "sample_sha256": sampled.hexdigest(),
+            }
+            if representative:
+                # Lengths describe sampled fragments, not an unbiased census
+                # of documents; individual fragments can be sampled repeatedly.
+                arr = np.asarray(doc_lengths, dtype=np.int64)
+                hist = np.asarray(history_lengths, dtype=np.int64)
+                output[source].update({
+                    "sampling_mode": "representative_token_sampled",
+                    "sampled_document_count": int(arr.size),
+                    "unique_sampled_documents": len(unique_docs),
+                    "sampled_document_length_mean": float(np.mean(arr)) if arr.size else None,
+                    "sampled_document_length_median": float(np.median(arr)) if arr.size else None,
+                    "sampled_document_length_p10": float(np.percentile(arr, 10)) if arr.size else None,
+                    "sampled_document_length_p90": float(np.percentile(arr, 90)) if arr.size else None,
+                    "short_document_fraction": (
+                        float(np.mean(arr - 1 < self.target_seq_length)) if arr.size else None
+                    ),
+                    "valid_history_mean": float(np.mean(hist)) if hist.size else None,
+                    "document_selection_fallback_count": int(fallback_count),
+                })
+        return output
+
+    def _log_val_source_losses(self, results):
+        if not results:
+            return
+        print("  Per-source held-out validation CE (fixed samples; target-weighted):")
+        for name in sorted(results):
+            rec = results[name]
+            print(
+                f"    {name}: CE={rec['ce_nats_per_target']:.4f}, "
+                f"supervised={rec['supervised_tokens']:,}, "
+                f"fill={100.0 * rec['target_fill']:.1f}%"
             )
-            loss_mask = (
-                None if batch_metadata is None
-                else batch_metadata.get("target_loss_mask")
+        if self.log_file is None:
+            return
+        path = self.log_file.with_name(self.log_file.stem + ".val_sources.csv")
+        columns = (
+            "step", "source", "schema_version", "mixture_manifest_sha256",
+            "tokenizer_sha256", "memory_mode", "ce_nats_per_target",
+            "perplexity", "loss_nll_sum",
+            "supervised_token_weight", "supervised_tokens", "target_capacity_tokens",
+            "target_fill", "validation_batches", "fixed_seed", "sample_sha256",
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not path.exists() or path.stat().st_size == 0
+        with path.open("a", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            if new_file:
+                writer.writeheader()
+            for name in sorted(results):
+                writer.writerow(results[name])
+
+    def _log_representative_source_losses(self, results):
+        """Separate 0078C output; never modify historical .val_sources.csv."""
+        if not results:
+            return
+        print("  Per-source representative validation CE (fixed token-sampled documents):")
+        for name in sorted(results):
+            r = results[name]
+            print(
+                f"    {name}: CE={r['ce_nats_per_target']:.4f}, "
+                f"supervised={r['supervised_tokens']:,}, "
+                f"fill={100 * r['target_fill']:.1f}%, "
+                f"unique_docs={r['unique_sampled_documents']}/"
+                f"{r['sampled_document_count']}, "
+                f"sampled_doc_median={r['sampled_document_length_median']}"
             )
-            loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
-            targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
-            
-            # Validation must use the same bounded vocabulary projection as
-            # training when LM-head chunking is enabled.  Materializing the
-            # complete [B, T, vocab] logits tensor here defeats the training
-            # memory optimization and can OOM at validation boundaries even
-            # though the training microbatch itself fits.
-            if self.lm_head_chunk_tokens > 0:
-                head_input, target_slice = self.model.forward_body(
-                    inputs,
-                    return_cache=False,
-                    memory_metadata=batch_metadata,
-                    return_target_slice=True,
-                )
-                loss, loss_cache = self.model.chunked_lm_head_loss_forward(
-                    head_input,
-                    targets,
-                    chunk_tokens=self.lm_head_chunk_tokens,
-                    loss_mask=loss_mask,
-                    target_slice=target_slice,
-                )
-                # No backward pass is performed in validation.  Drop the
-                # compact chunked-head cache immediately so it cannot extend
-                # hidden-state lifetimes into the next validation batch.
-                del loss_cache, head_input
-            else:
-                logits = self.model.forward(
-                    inputs,
-                    return_cache=False,
-                    memory_metadata=batch_metadata,
-                )
-                loss, _ = self.model.compute_loss(
-                    logits, targets, loss_mask=loss_mask
-                )
-                del logits
-            losses.append(loss)  # loss is already a Python float from scalar()
-        
-        # Compute mean on backend array (only sync once at the end)
-        loss_array = xp.asarray(losses, dtype="float32")
-        return float(xp.mean(loss_array))
-    
+        if self.log_file is None:
+            return
+        path = self.log_file.with_name(self.log_file.stem + ".val_sources_representative.csv")
+        columns = (
+            "step", "source", "schema_version", "sampling_mode",
+            "mixture_manifest_sha256", "tokenizer_sha256", "memory_mode",
+            "ce_nats_per_target", "perplexity", "loss_nll_sum",
+            "supervised_token_weight", "supervised_tokens", "target_capacity_tokens",
+            "target_fill", "validation_batches", "fixed_seed", "sample_sha256",
+            "sampled_document_count", "unique_sampled_documents",
+            "sampled_document_length_mean", "sampled_document_length_median",
+            "sampled_document_length_p10", "sampled_document_length_p90",
+            "short_document_fraction", "valid_history_mean",
+            "document_selection_fallback_count",
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not path.exists() or path.stat().st_size == 0
+        with path.open("a", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            if new_file:
+                writer.writeheader()
+            for name in sorted(results):
+                writer.writerow(results[name])
+
     def _effective_loss_mask(self, batch_metadata, loss_mask):
         """Restrict post-training router optimization to one terminal label."""
         if (
@@ -1445,7 +2137,8 @@ class ExtendedTrainer:
             profile_wall_start = time.perf_counter()
 
         memory_records = {}
-        memory_active = self._memory_profiled_steps < self.memory_profile_steps
+        memory_active = self._memory_profile_due()
+        mode_memory_peaks = {}
         step_memory_token_stats = self._empty_memory_token_stats()
         noise = self.gradient_noise
         noise_active = noise is not None and noise.begin(self.step)
@@ -1460,6 +2153,8 @@ class ExtendedTrainer:
         loss_sum_backend = xp.asarray(0.0, dtype="float32")
         accumulation_weight_sum = 0.0
         supervised_tokens_in_step = 0.0
+        source_observations = []   # (source, CPU coverage, on-device CE scalar)
+        step_routing_modes = self._new_routing_mode_stats()
         # Rescale by nominal token capacity before backward to avoid large
         # intermediate gradients.  The common scale cancels at normalization.
         nominal_microbatch_tokens = float(self.batch_size * self.target_seq_length)
@@ -1485,6 +2180,14 @@ class ExtendedTrainer:
             targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
             valid_tokens = self._supervised_token_weight(targets, loss_mask)
             supervised_tokens_in_step += valid_tokens
+            source = getattr(self, "_last_train_batch_source", "local")
+            coverage = batch_coverage(
+                batch_size=self.batch_size, source_length=self.seq_length,
+                target_shape=targets.shape, loss_mask=loss_mask,
+                memory_length=(self.memory_context.distant_memory_length
+                               if self.memory_context is not None else 0),
+                target_length=self.target_seq_length, metadata=batch_metadata,
+            )
             if self.gradient_accumulation_weighting == "supervised_tokens":
                 microbatch_weight = valid_tokens / nominal_microbatch_tokens
             else:
@@ -1524,7 +2227,25 @@ class ExtendedTrainer:
                         memory_metadata=batch_metadata,
                     )
             if memory_active:
-                self._record_memory_snapshot(memory_records, "after_model_forward")
+                memory_context_cache = cache.get("memory_context_cache") or {}
+                profiled_mode = memory_context_cache.get("prefix_mode", "none")
+                profiled_prefix_length = int(memory_context_cache.get("prefix_length", 0))
+                snap = self._record_memory_snapshot(memory_records, "after_model_forward")
+                self._update_mode_memory_peak(
+                    mode_memory_peaks, profiled_mode, profiled_prefix_length,
+                    "forward", snap,
+                )
+
+            self._record_gpu_history_shape(cache)
+
+            if (self.memory_context is not None and
+                    self.memory_context.integration_mode == "routed_prefix"):
+                self._merge_routing_mode_stats(
+                    step_routing_modes,
+                    self._routing_mode_observation(
+                        cache, batch_metadata, valid_tokens, int(inputs.shape[0])
+                    ),
+                )
 
             if (
                 self.memory_router_diagnostics
@@ -1547,7 +2268,7 @@ class ExtendedTrainer:
                             f"{_array_to_float(diag['max_block_attention_mean']):.3f}"
                         )
                     print(
-                        "Memory router: "
+                        "Memory router (first microbatch snapshot only): "
                         f"unique_blocks={unique_blocks}, "
                         f"valid_routes="
                         f"{100.0 * _array_to_float(diag['valid_route_fraction']):.1f}%, "
@@ -1649,10 +2370,17 @@ class ExtendedTrainer:
                 if target_slice is None:
                     del head_input
 
+            # Retain only a scalar on device, without per-microbatch GPU sync.
+            # Raw CE is not scaled by loss_scale / gradient accumulation policy.
+            source_observations.append((source, coverage, loss_backend))
             if noise_active:
                 noise.capture(accum_step + 1)
             if memory_active:
-                self._record_memory_snapshot(memory_records, "after_model_backward")
+                snap = self._record_memory_snapshot(memory_records, "after_model_backward")
+                self._update_mode_memory_peak(
+                    mode_memory_peaks, profiled_mode, profiled_prefix_length,
+                    "backward", snap,
+                )
 
             # Critical 0055A lifetime cleanup: Python evaluates the RHS of the
             # next ``logits, cache = model.forward(...)`` before replacing the
@@ -1661,7 +2389,11 @@ class ExtendedTrainer:
             # next microbatch forward, artificially doubling activation peak.
             del cache, loss_cache, inputs, targets, batch_metadata, loss_mask
             if memory_active:
-                self._record_memory_snapshot(memory_records, "after_microbatch_release")
+                snap = self._record_memory_snapshot(memory_records, "after_microbatch_release")
+                self._update_mode_memory_peak(
+                    mode_memory_peaks, profiled_mode, profiled_prefix_length,
+                    "released", snap,
+                )
 
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_grad_accum")
@@ -1742,12 +2474,38 @@ class ExtendedTrainer:
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_zero_grad")
         
+        # One device-to-host transfer per optimizer step, after the update.
+        # No new loss computation or modification of gradients is performed.
+        if source_observations:
+            losses_backend = xp.stack([item[2] for item in source_observations])
+            losses_cpu = (losses_backend.get() if hasattr(losses_backend, "get")
+                          else np.asarray(losses_backend))
+            step_source = {}
+            for (name, coverage, _), ce in zip(source_observations, losses_cpu):
+                observation = dict(coverage)
+                observation["loss_nll_sum"] = (
+                    float(ce) * float(coverage["supervised_token_weight"])
+                )
+                merge_record(step_source.setdefault(name, empty_record()), observation)
+            self._last_step_source_metrics = step_source
+            if self.source_metrics_since_step is None:
+                self.source_metrics_since_step = int(self.step)
+            for name, observation in step_source.items():
+                merge_record(self.source_metrics.setdefault(name, empty_record()), observation)
+                merge_record(self._source_metrics_interval.setdefault(name, empty_record()), observation)
+
+        if step_routing_modes["microbatches"]:
+            if self.routing_modes_since_step is None:
+                self.routing_modes_since_step = int(self.step)
+            self._last_step_routing_modes = step_routing_modes
+            self._merge_routing_mode_stats(self.routing_modes_total, step_routing_modes)
+            self._merge_routing_mode_stats(self._routing_modes_interval, step_routing_modes)
         self.step += 1
         if noise_active:
             noise.commit(noise_rows)
 
         if memory_active:
-            self._print_memory_report(memory_records)
+            self._print_memory_report(memory_records, mode_memory_peaks)
             self._memory_profiled_steps += 1
 
         if profile_active:
@@ -1858,6 +2616,16 @@ class ExtendedTrainer:
             "current_val_source_shard_idx": self.current_val_source_shard_idx,
             "train_source_batch_counts": self.train_source_batch_counts,
             "train_source_supervised_tokens": self.train_source_supervised_tokens,
+            "routing_mode_metrics": {
+                "version": 1,
+                "since_step": self.routing_modes_since_step,
+                "total": self.routing_modes_total,
+            },
+            "source_metrics": {
+                "version": 1,
+                "since_step": self.source_metrics_since_step,
+                "sources": self.source_metrics,
+            },
             "data_provenance": {
                 "version": 1,
                 "fork": getattr(self, "data_fork", None),
@@ -2014,9 +2782,31 @@ class ExtendedTrainer:
             # update.  Therefore self.step is already the completed 1-based
             # optimizer-step count here; adding one would make every periodic
             # action fire one update early.
+            if (
+                self.gpu_memory_audit
+                and self.gpu_memory_audit_train_interval > 0
+                and self.step % self.gpu_memory_audit_train_interval == 0
+            ):
+                self._gpu_memory_boundary("after_training_step")
+                self._print_gpu_history_shapes()
             if self.step % self.val_interval == 0:
+                self._gpu_memory_boundary("before_validation")
                 val_loss = self.compute_val_loss()
+                self._gpu_memory_after_validation_stage("after_standard_validation")
                 print(f"  Validation loss: {val_loss:.4f}")
+                if self.val_per_source_steps:
+                    self._log_val_source_losses(self.compute_val_loss_by_source())
+                    self._gpu_memory_after_validation_stage("after_fixed_source_validation")
+                if self.val_representative_steps:
+                    self._log_representative_source_losses(
+                        self.compute_val_loss_by_source_representative()
+                    )
+                    self._gpu_memory_after_validation_stage("after_representative_validation")
+                if self.val_fixed_mixed_steps:
+                    self._log_fixed_mixed_loss(self.compute_val_loss_fixed_mixed())
+                    self._gpu_memory_after_validation_stage("after_fixed_mixed_validation")
+                self._gpu_memory_boundary("after_all_validation")
+                self._gpu_memory_post_validation_gc_probe()
             else:
                 val_loss = None
             
@@ -2160,6 +2950,40 @@ class ExtendedTrainer:
                         elapsed_seconds=memory_interval_seconds,
                     )
 
+                # 0078A: source-level CE and token/document accounting.
+                if self._source_metrics_interval:
+                    print("  Per-source train CE (valid-target weighted; this log interval):")
+                    for name in sorted(self._source_metrics_interval):
+                        stats = self._source_metrics_interval[name]
+                        mean_ce = stats["loss_nll_sum"] / stats["supervised_token_weight"]
+                        fill = stats["supervised_token_weight"] / max(stats["target_capacity_tokens"], 1)
+                        doc_n = stats["sampled_document_spans"]
+                        doc_text = (
+                            f", sampled_doc_mean={stats['sampled_document_span_tokens_sum'] / doc_n:,.0f}"
+                            if doc_n else ""
+                        )
+                        print(f"    {name}: CE={mean_ce:.4f}, "
+                              f"supervised={stats['supervised_tokens']:,}, "
+                              f"target_fill={100.0 * fill:.1f}%{doc_text}")
+                    source_path = self._source_metrics_log_path()
+                    if source_path is not None:
+                        rows = []
+                        for name in sorted(self._source_metrics_interval):
+                            rows.append(source_metrics_row(
+                                name, self._source_metrics_interval[name], self.step,
+                                "interval", self.source_metrics_since_step,
+                            ))
+                            rows.append(source_metrics_row(
+                                name, self.source_metrics[name], self.step,
+                                "cumulative_since_patch", self.source_metrics_since_step,
+                            ))
+                        write_source_rows(source_path, rows)
+                    self._source_metrics_interval = {}
+
+                if self._routing_modes_interval["microbatches"]:
+                    self._log_routing_mode_stats(self._routing_modes_interval)
+                    self._routing_modes_interval = self._new_routing_mode_stats()
+
                 # Log to CSV
                 self._log({
                     "step": self.step,
@@ -2181,7 +3005,13 @@ class ExtendedTrainer:
             
             # Save using the completed optimizer-step count.
             if self.step % self.save_interval == 0:
+                self._gpu_memory_boundary("before_checkpoint_save")
                 self.save()
+                self._gpu_memory_boundary("after_checkpoint_save")
+                if self.gpu_memory_trim_after_checkpoint:
+                    self._gpu_memory_boundary(
+                        "after_checkpoint_save_trimmed", trim_idle_pool=True,
+                    )
         
         print(f"\nTraining complete!")
         print(f"  Final loss: {losses[-1]:.4f}")

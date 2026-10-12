@@ -1,5 +1,7 @@
 """Decoder-only language model built from Transformer blocks."""
 
+import os
+
 from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloat16_dtype
 from mini_llm.config import ModelConfig
 from mini_llm.blocks.transformer_block import TransformerBlock
@@ -43,6 +45,14 @@ class DecoderLanguageModel:
         """
         self.config = config
         self.dtype = resolve_dtype(dtype if dtype is not None else config.dtype)
+        # 0078I: bound the number of direct-history active lengths if explicitly
+        # requested. The 0078E document-first sampler is left untouched.
+        # Zero (default) retains byte-for-byte 0078E context selection.
+        self.direct_history_bucket_tokens = int(
+            os.environ.get("MINI_LLM_DIRECT_HISTORY_BUCKET_TOKENS", "0")
+        )
+        if self.direct_history_bucket_tokens < 0:
+            raise ValueError("MINI_LLM_DIRECT_HISTORY_BUCKET_TOKENS must be >= 0")
         
         # Random stream for initialization
         from mini_llm.backend import RandomStream
@@ -491,6 +501,20 @@ class DecoderLanguageModel:
             dweights,
         )
 
+    def _direct_history_length(self, available, direct_limit):
+        """0078I: floor to a bounded shape set, NEVER pad unknown history.
+
+        The exact direct_limit (cfg.retrieved_length) is the pre-existing
+        maximum prefix length. If the optional bucket is larger than available
+        history, use the dense 4k window (zero prefix); no padded tokens enter
+        attention. Router-selected full blocks are not modified.
+        """
+        length = min(int(available), int(direct_limit))
+        bucket = self.direct_history_bucket_tokens
+        if bucket > 1:
+            length = (length // bucket) * bucket
+        return length
+
     def _routed_prefix_context_forward(self, token_ids, memory_metadata=None):
         """0060A/B2: construct a real historical prefix plus the dense 4k window.
 
@@ -583,10 +607,14 @@ class DecoderLanguageModel:
             use_retrieval = False
         if use_retrieval and min_available > 0:
             if max_available < route_threshold:
-                if min_available != max_available:
+                # 0078E: different documents in one microbatch may have
+                # different amounts of genuine history. Without a per-row
+                # attention-padding mask, use the longest suffix valid for
+                # *every* sample rather than dropping all direct history.
+                prefix_length = self._direct_history_length(min_available, direct_limit)
+                if prefix_length == 0:
                     use_retrieval = False
                 else:
-                    prefix_length = min(max_available, direct_limit)
                     prefix_start = history_length - prefix_length
                     selected_token_ids = history_ids[:, prefix_start:history_length]
                     with performance_scope("memory_context.history_gather.forward"):
@@ -632,8 +660,10 @@ class DecoderLanguageModel:
                 selected_valid[...] = False
                 route_weights[...] = 0
                 route_valid[...] = False
-                if min_available == max_available and max_available > 0:
-                    prefix_length = min(max_available, direct_limit)
+                # Same safe common-prefix policy as the direct path: only
+                # real same-document history can reach the Transformer.
+                prefix_length = self._direct_history_length(min_available, direct_limit)
+                if prefix_length > 0:
                     prefix_start = history_length - prefix_length
                     selected_token_ids = history_ids[:, prefix_start:history_length]
                     with performance_scope("memory_context.history_gather.forward"):

@@ -78,6 +78,7 @@ class ExtendedTrainer:
         batch_size: int = 8,
         seq_length: int = 512,
         grad_accum_steps: int = 1,
+        gradient_accumulation_weighting: str = "microbatch",
         warmup_steps: int = 1000,
         total_steps: int = 10000,
         peak_lr: float = 3e-4,
@@ -129,6 +130,7 @@ class ExtendedTrainer:
             batch_size: Batch size per step (before accumulation)
             seq_length: Sequence length for training
             grad_accum_steps: Number of steps to accumulate gradients
+            gradient_accumulation_weighting: microbatch or supervised_tokens
             warmup_steps: Warmup steps for learning rate schedule
             total_steps: Total training steps
             peak_lr: Peak learning rate
@@ -250,6 +252,9 @@ class ExtendedTrainer:
             self.active_seq_length = self.seq_length
             self.target_seq_length = self.seq_length
         self.grad_accum_steps = grad_accum_steps
+        if gradient_accumulation_weighting not in {"microbatch", "supervised_tokens"}:
+            raise ValueError("gradient_accumulation_weighting must be microbatch or supervised_tokens")
+        self.gradient_accumulation_weighting = gradient_accumulation_weighting
         self.grad_clip = grad_clip  # Store grad_clip parameter
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
@@ -1400,6 +1405,25 @@ class ExtendedTrainer:
             loss_mask = loss_mask[:, -1:]
         return targets, loss_mask
 
+    @staticmethod
+    def _supervised_token_weight(targets, loss_mask):
+        """CE's denominator before per-microbatch averaging.
+
+        The minibatch sampler produces CPU masks.  Counting CPU-side avoids
+        an extra GPU synchronization per accumulation microstep.  Sum mask
+        values rather than count nonzeros to agree with masked CE when masks
+        are fractional.  Router-only training uses the already restricted mask.
+        """
+        if loss_mask is None:
+            return float(np.prod(targets.shape))
+        if isinstance(loss_mask, np.ndarray):
+            count = float(np.sum(loss_mask, dtype=np.float64))
+        else:
+            count = float(_array_to_float(xp.sum(loss_mask)))
+        if not np.isfinite(count) or count <= 0.0:
+            raise ValueError("a training microbatch must have positive finite supervised-token weight")
+        return count
+
     def train_step(self) -> Tuple[float, float]:
         """
         Perform one training step with gradient accumulation.
@@ -1434,7 +1458,12 @@ class ExtendedTrainer:
         # Keep microbatch losses on-device; converting each one to a
         # Python float forces a CUDA stream synchronization.
         loss_sum_backend = xp.asarray(0.0, dtype="float32")
-        
+        accumulation_weight_sum = 0.0
+        supervised_tokens_in_step = 0.0
+        # Rescale by nominal token capacity before backward to avoid large
+        # intermediate gradients.  The common scale cancels at normalization.
+        nominal_microbatch_tokens = float(self.batch_size * self.target_seq_length)
+
         for accum_step in range(self.grad_accum_steps):
             # Get learning rate for this step (use final lr of accumulated batch)
             lr = self.scheduler(self.step)
@@ -1454,6 +1483,13 @@ class ExtendedTrainer:
             )
             loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
             targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+            valid_tokens = self._supervised_token_weight(targets, loss_mask)
+            supervised_tokens_in_step += valid_tokens
+            if self.gradient_accumulation_weighting == "supervised_tokens":
+                microbatch_weight = valid_tokens / nominal_microbatch_tokens
+            else:
+                microbatch_weight = 1.0
+            accumulation_weight_sum += microbatch_weight
             if noise_active:
                 noise.count_tokens(targets, loss_mask)
             self._accumulate_memory_batch_token_stats(
@@ -1545,7 +1581,7 @@ class ExtendedTrainer:
                         logits, targets, loss_mask=loss_mask,
                         return_device_loss=True
                     )
-                loss_sum_backend += loss_backend
+                loss_sum_backend += loss_backend * microbatch_weight
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_forward")
                 del logits
@@ -1556,8 +1592,8 @@ class ExtendedTrainer:
                     d_logits = self.model.backward_loss(loss_cache)
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
-                if self.loss_scale != 1.0:
-                    d_logits = d_logits * self.loss_scale
+                if self.loss_scale * microbatch_weight != 1.0:
+                    d_logits = d_logits * (self.loss_scale * microbatch_weight)
                 with performance_scope("train.model_backward"):
                     self.model.backward(d_logits, cache)
                 del d_logits
@@ -1576,7 +1612,7 @@ class ExtendedTrainer:
                         finite_trace=finite_trace,
                         target_slice=target_slice,
                     )
-                loss_sum_backend += loss_backend
+                loss_sum_backend += loss_backend * microbatch_weight
                 if target_slice is not None:
                     # The loss cache owns a compact copy of target hidden rows;
                     # release the full active final-normalized output now.
@@ -1603,7 +1639,7 @@ class ExtendedTrainer:
 
                 with performance_scope("train.loss_backward"):
                     dx_head = self.model.chunked_lm_head_backward(
-                        loss_cache, grad_scale=self.loss_scale
+                        loss_cache, grad_scale=self.loss_scale * microbatch_weight
                     )
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
@@ -1634,7 +1670,15 @@ class ExtendedTrainer:
         self._last_step_memory_token_stats = step_memory_token_stats
 
         # Average loss - only sync once at the end
-        avg_loss = float(_array_to_float(loss_sum_backend / self.grad_accum_steps))
+        if accumulation_weight_sum <= 0.0:
+            raise ValueError("no supervised tokens in accumulated optimizer step")
+        avg_loss = float(_array_to_float(loss_sum_backend / accumulation_weight_sum))
+        self._last_step_supervised_tokens = supervised_tokens_in_step
+        self._last_step_supervised_utilization = (
+            supervised_tokens_in_step / (
+                nominal_microbatch_tokens * self.grad_accum_steps
+            )
+        )
         if not np.isfinite(avg_loss):
             raise ValueError(f"NaN/Inf loss detected at step {self.step}!")
         # Read original cumulative gradients before normalization or clipping.
@@ -1647,11 +1691,14 @@ class ExtendedTrainer:
                 if p.grad is not None:
                     p.grad[...] = p.grad / self.loss_scale
         
-        # Divide gradients by grad_accum_steps for proper averaging
-        if self.grad_accum_steps > 1:
+        # Microbatch mode: each CE-mean gradient has equal coefficient.
+        # Supervised-token mode: each valid target has equal coefficient across
+        # all accumulation microsteps. This is normalized BEFORE gradient clip.
+        # In both modes the optimizer sees an average, not a raw gradient sum.
+        if accumulation_weight_sum != 1.0:
             for p in self.optimization_parameters:
                 if p.grad is not None:
-                    p.grad[...] = p.grad / self.grad_accum_steps
+                    p.grad[...] = p.grad / accumulation_weight_sum
         
         # Global gradient clipping - returns backend array norm, no sync
         # Now returns (norm_backend, scale, is_finite) tuple
@@ -1802,6 +1849,8 @@ class ExtendedTrainer:
         training_state = {
             "step": self.step,
             "tokens_processed": self.tokens_processed,  # New: track cumulative tokens
+            "gradient_accumulation_weighting": self.gradient_accumulation_weighting,
+            "gradient_weighting_history": getattr(self, "gradient_weighting_history", []),
             "total_steps": self.total_steps,
             "current_train_shard_idx": self.current_train_shard_idx,
             "current_val_shard_idx": self.current_val_shard_idx,
@@ -2062,6 +2111,8 @@ class ExtendedTrainer:
                     f"{depth_text}"
                     f"lr={lr:.6f}, "
                     f"grad_norm={grad_norm:.4f}, "
+                    f"grad_weighting={self.gradient_accumulation_weighting}, "
+                    f"target_fill={100.0 * self._last_step_supervised_utilization:.1f}%, "
                     f"{steps_per_sec:.2f} steps/sec, "
                     f"step_time={precise_step_seconds * 1000.0:.1f} ms, "
                     f"{throughput_text}"

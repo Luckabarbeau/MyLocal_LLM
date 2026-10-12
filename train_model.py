@@ -357,6 +357,23 @@ def parse_args():
         ),
     )
     
+    parser.add_argument(
+        "--max-run-steps", type=int, default=None,
+        help=("Run at most N optimizer updates without changing the LR "
+              "scheduler's --total-steps horizon (for smoke tests)."),
+    )
+
+    # 0077K: token-normalized accumulation across variable-length microbatches.
+    parser.add_argument(
+        "--gradient-accumulation-weighting",
+        choices=["microbatch", "supervised_tokens"],
+        default=None,
+        help=("Gradient objective: 'microbatch' averages microbatch mean losses "
+              "(legacy); 'supervised_tokens' computes mean loss over all valid "
+              "targets in the accumulated optimizer step. On resume, inherit "
+              "the checkpoint mode unless explicitly overridden."),
+    )
+
     # 0074A: observational gradient diagnostics; no change to AdamW updates.
     parser.add_argument("--gradient-noise-monitor", action="store_true",
                         help="Enable read-only disjoint-half gradient diagnostics")
@@ -1422,6 +1439,27 @@ def main():
                   "preserving AdamW moments only for AdamW parameters, "
                   "resetting Muon momentum to zero; optimizer dynamics will change")
 
+    saved_weighting = (training_state or {}).get(
+        "gradient_accumulation_weighting", "microbatch"
+    )
+    gradient_weighting = args.gradient_accumulation_weighting or saved_weighting
+    gradient_weighting_history = list(
+        (training_state or {}).get("gradient_weighting_history", [])
+    )
+    if args.resume_from and gradient_weighting != saved_weighting:
+        print(
+            "GRADIENT OBJECTIVE CHANGED at step "
+            f"{start_step}: {saved_weighting} -> {gradient_weighting}; "
+            "optimizer moments preserved, not an exact training continuation"
+        )
+        gradient_weighting_history.append({
+            "step": int(start_step),
+            "from": saved_weighting,
+            "to": gradient_weighting,
+            "parent_checkpoint": str(args.resume_from),
+        })
+    print(f"Gradient accumulation weighting: {gradient_weighting}")
+
     trainer = ExtendedTrainer(
         model=model,
         train_shard_paths=[str(p) for p in train_shards],
@@ -1429,6 +1467,7 @@ def main():
         batch_size=args.batch_size,
         seq_length=run_context_length,
         grad_accum_steps=args.grad_accum_steps,
+        gradient_accumulation_weighting=gradient_weighting,
         warmup_steps=args.warmup_steps,
         total_steps=args.total_steps,
         peak_lr=args.peak_lr,
@@ -1468,6 +1507,7 @@ def main():
         stream_cache_dir=args.stream_cache_dir,
         local_mixture_manifest_sha256=mixture_sha,
     )
+    trainer.gradient_weighting_history = gradient_weighting_history
     trainer.tokenizer_sha256 = tokenizer_sha
     trainer.data_fork = fork_provenance
     trainer.mixture_history = mixture_history
@@ -1636,6 +1676,9 @@ def main():
         trainer.train_rng.bit_generator.state = rng_states["train"]
         trainer.val_rng.bit_generator.state = rng_states["val"]
 
+    if args.max_run_steps is not None and args.max_run_steps < 1:
+        raise ValueError("--max-run-steps must be >= 1")
+
     print()
     print("=" * 60)
     print("Starting Training")
@@ -1643,9 +1686,15 @@ def main():
 
     try:
         losses = trainer.train(
-            num_steps=args.total_steps - start_step,
+            num_steps=(min(args.total_steps - start_step, args.max_run_steps)
+                       if args.max_run_steps is not None
+                       else args.total_steps - start_step),
             log_interval=args.log_interval,
         )
+        # A short invocation may finish between periodic checkpoint saves.
+        # Snapshot active streamed segments before closing their backing cache.
+        if args.checkpoint_dir and trainer.step % trainer.save_interval != 0:
+            trainer.save()
     finally:
         if trainer.streaming_cache is not None:
             trainer.streaming_cache.close()
@@ -1657,8 +1706,7 @@ def main():
     print(f"Average loss: {np.mean(losses):.4f}")
 
     if args.checkpoint_dir:
-        print(f"Final checkpoint saved to: {Path(args.checkpoint_dir) / 'final'}")
-        trainer.save()
+        print(f"Final checkpoint saved to: {Path(args.checkpoint_dir)}")
 
 
 if __name__ == "__main__":

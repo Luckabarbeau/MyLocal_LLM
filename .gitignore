@@ -135,3 +135,5 @@ benchmarks/*.txt
 # - evaluate_lambada.py
 # - evaluate_wikitext.py
 # - prepare_external_benchmarks.py
+
+benchmarks/results/

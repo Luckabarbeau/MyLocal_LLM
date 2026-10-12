@@ -1,0 +1,215 @@
+{
+  "suite_name": "MyLocal_LLM generation diversity and coherence v1",
+  "purpose": "Fixed-prompt, checkpoint-to-checkpoint generation evaluation",
+  "recommended_new_tokens": 512,
+  "recommended_seeds": [
+    42,
+    123,
+    2026
+  ],
+  "recommended_control": {
+    "strategy": "top-k",
+    "top_k": 40,
+    "temperature": 0.8
+  },
+  "notes": [
+    "Short includes intentionally ambiguous fragments (e.g. Mathematics are), used as stress tests.",
+    "These are document-continuation prompts, not instructions; code prompts should be evaluated for syntax and function behavior.",
+    "Record checkpoint, generation configuration, runtime profile, and sample seeds for matched comparisons.",
+    "Suggested metrics: distinct-3/4, repeated 5-gram fraction, longest repetition, topic drift, and code correctness."
+  ],
+  "prompts": [
+    {
+      "id": "math_general_short",
+      "domain": "mathematics",
+      "topic": "general_maths",
+      "length": "short",
+      "format": "prose",
+      "prompt": "Mathematics are"
+    },
+    {
+      "id": "math_general_medium",
+      "domain": "mathematics",
+      "topic": "general_maths",
+      "length": "medium",
+      "format": "prose",
+      "prompt": "Mathematics is the study of patterns, quantities, and relationships. One reason it is useful is that"
+    },
+    {
+      "id": "math_general_long",
+      "domain": "mathematics",
+      "topic": "general_maths",
+      "length": "long",
+      "format": "prose",
+      "prompt": "Mathematics provides a language for describing patterns in the world. Some branches study abstract structures, while others focus on practical problems involving measurement, change, and uncertainty. These branches are connected by the idea that"
+    },
+    {
+      "id": "math_primes_short",
+      "domain": "mathematics",
+      "topic": "prime_numbers",
+      "length": "short",
+      "format": "prose",
+      "prompt": "Prime numbers are"
+    },
+    {
+      "id": "math_primes_medium",
+      "domain": "mathematics",
+      "topic": "prime_numbers",
+      "length": "medium",
+      "format": "prose",
+      "prompt": "A prime number is an integer greater than one with exactly two positive divisors. For example, the number seven is prime because"
+    },
+    {
+      "id": "math_primes_long",
+      "domain": "mathematics",
+      "topic": "prime_numbers",
+      "length": "long",
+      "format": "prose",
+      "prompt": "Prime numbers are fundamental objects in number theory. Every integer greater than one can be written as a product of primes, and this factorization is unique apart from the order of the factors. To see why this matters, consider the number"
+    },
+    {
+      "id": "science_fluids_short",
+      "domain": "science",
+      "topic": "fluid_dynamics",
+      "length": "short",
+      "format": "prose",
+      "prompt": "Fluid dynamics is"
+    },
+    {
+      "id": "science_fluids_medium",
+      "domain": "science",
+      "topic": "fluid_dynamics",
+      "length": "medium",
+      "format": "prose",
+      "prompt": "When water flows through a narrow pipe, its speed and pressure may change. The relationship between these quantities depends on"
+    },
+    {
+      "id": "science_fluids_long",
+      "domain": "science",
+      "topic": "fluid_dynamics",
+      "length": "long",
+      "format": "prose",
+      "prompt": "Fluid dynamics describes how liquids and gases move under the influence of forces. In a pipe, viscosity resists the relative motion of neighboring layers of fluid, while pressure differences drive the flow. When the flow rate increases, the balance between inertia and viscosity can change, leading to"
+    },
+    {
+      "id": "science_stars_short",
+      "domain": "science",
+      "topic": "stellar_evolution",
+      "length": "short",
+      "format": "prose",
+      "prompt": "Stars form"
+    },
+    {
+      "id": "science_stars_medium",
+      "domain": "science",
+      "topic": "stellar_evolution",
+      "length": "medium",
+      "format": "prose",
+      "prompt": "A star begins its life inside a cold cloud of gas and dust. Gravity pulls the cloud inward, causing the central region to"
+    },
+    {
+      "id": "science_stars_long",
+      "domain": "science",
+      "topic": "stellar_evolution",
+      "length": "long",
+      "format": "prose",
+      "prompt": "Stars are born when regions of interstellar gas become dense enough to collapse under gravity. As the material falls inward, the temperature and pressure near the center rise. If the core eventually becomes hot enough for sustained nuclear fusion, the young star"
+    },
+    {
+      "id": "code_python_short",
+      "domain": "coding",
+      "topic": "python_prime",
+      "length": "short",
+      "format": "python",
+      "prompt": "def is_prime(n):\n"
+    },
+    {
+      "id": "code_python_medium",
+      "domain": "coding",
+      "topic": "python_prime",
+      "length": "medium",
+      "format": "python",
+      "prompt": "def is_prime(n: int) -> bool:\n    \"\"\"Return True if n is a prime number.\"\"\"\n    if n < 2:\n        return False\n"
+    },
+    {
+      "id": "code_python_long",
+      "domain": "coding",
+      "topic": "python_prime",
+      "length": "long",
+      "format": "python",
+      "prompt": "def is_prime(n: int) -> bool:\n    \"\"\"Check whether an integer is prime. A prime number has exactly two positive divisors. The function should handle zero, one, and negative integers without raising an exception.\"\"\"\n    if n < 2:\n        return False\n    divisor = 2\n"
+    },
+    {
+      "id": "code_cpp_short",
+      "domain": "coding",
+      "topic": "cpp_vector",
+      "length": "short",
+      "format": "cpp",
+      "prompt": "double dot_product("
+    },
+    {
+      "id": "code_cpp_medium",
+      "domain": "coding",
+      "topic": "cpp_vector",
+      "length": "medium",
+      "format": "cpp",
+      "prompt": "#include <vector>\n#include <stdexcept>\n\ndouble dot_product(const std::vector<double>& a, const std::vector<double>& b) {\n    if (a.size() != b.size()) {\n        throw std::invalid_argument(\"size mismatch\");\n    }\n"
+    },
+    {
+      "id": "code_cpp_long",
+      "domain": "coding",
+      "topic": "cpp_vector",
+      "length": "long",
+      "format": "cpp",
+      "prompt": "// Compute the dot product of two vectors. Reject inputs with different lengths by throwing an exception. Use a simple loop so that the behavior is easy to inspect.\n#include <vector>\n#include <stdexcept>\n\ndouble dot_product(const std::vector<double>& a, const std::vector<double>& b) {\n    if (a.size() != b.size()) {\n        throw std::invalid_argument(\"size mismatch\");\n    }\n    double result = 0.0;\n"
+    },
+    {
+      "id": "story_fantasy_short",
+      "domain": "story",
+      "topic": "fantasy",
+      "length": "short",
+      "format": "story",
+      "prompt": "Once upon a time"
+    },
+    {
+      "id": "story_fantasy_medium",
+      "domain": "story",
+      "topic": "fantasy",
+      "length": "medium",
+      "format": "story",
+      "prompt": "At the edge of the forest, a young cartographer found a map that showed a road no one remembered. She decided to follow it because"
+    },
+    {
+      "id": "story_fantasy_long",
+      "domain": "story",
+      "topic": "fantasy",
+      "length": "long",
+      "format": "story",
+      "prompt": "Mira had spent seven years drawing maps for travelers who crossed the northern mountains. One rainy evening, an old woman gave her a map showing a village that was absent from every official record. At dawn, Mira packed a compass, a lantern, and enough food for three days, then"
+    },
+    {
+      "id": "story_mystery_short",
+      "domain": "story",
+      "topic": "mystery",
+      "length": "short",
+      "format": "story",
+      "prompt": "The locked door"
+    },
+    {
+      "id": "story_mystery_medium",
+      "domain": "story",
+      "topic": "mystery",
+      "length": "medium",
+      "format": "story",
+      "prompt": "The detective entered the empty train station just after midnight. On the floor beside the ticket counter, someone had left"
+    },
+    {
+      "id": "story_mystery_long",
+      "domain": "story",
+      "topic": "mystery",
+      "length": "long",
+      "format": "story",
+      "prompt": "The last train had left the station two hours earlier, yet a single light still burned in the ticket office. Detective Rowan found a wet umbrella beside the locked door and a fresh cup of tea on the desk. The stationmaster insisted that nobody had been inside since sunset, but"
+    }
+  ]
+}

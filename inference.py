@@ -184,6 +184,7 @@ class TextGenerator:
         seed: int | None = None,
         log_speed: bool = False,
         use_kv_cache: bool = True,
+        return_token_ids: bool = False,
     ) -> tuple[str, dict]:
         """
         Generate text from prompt.
@@ -198,6 +199,7 @@ class TextGenerator:
             seed: Random seed for reproducibility
             log_speed: If True, return timing information
             use_kv_cache: If True, use KV cache (faster)
+            return_token_ids: Include generated token IDs in timing_info for benchmarks
             
         Returns:
             Tuple of (generated_text, timing_info)
@@ -373,6 +375,10 @@ class TextGenerator:
                 "breakdown_is_async_approx": BACKEND_NAME == "cupy",
             }
         
+        if return_token_ids:
+            timing["generated_token_ids"] = generated_ids[len(input_ids):]
+            timing["eos_token_id"] = eos_id
+
         return output_text, timing
 
     def _ensure_inference_model(self, reset: bool = False):

@@ -430,8 +430,6 @@ class ExtendedTrainer:
             model.optimization_parameters() if self.training_objective is None
             else self.training_objective.parameters()
         )
-        if self.training_objective is not None and optimizer_kind != "adamw":
-            raise ValueError("0080M currently validates shared AdamW only")
         if optimizer_kind not in {"adamw", "hybrid-muon"}:
             raise ValueError("optimizer_kind must be adamw or hybrid-muon")
         if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
@@ -2681,7 +2679,7 @@ class ExtendedTrainer:
         if self.training_objective is None:
             return None
         schedule = self.scheduler
-        return {
+        contract = {
             "version": 1,
             "batch_size": int(self.batch_size),
             "grad_accum_steps": int(self.grad_accum_steps),
@@ -2703,6 +2701,14 @@ class ExtendedTrainer:
             },
             "source_choice_granularity": "one_source_per_microbatch",
         }
+        if isinstance(self.optimizer, HybridMuonAdamW):
+            # Preserve the exact v1 AdamW contract for 0080N/O1 checkpoints.
+            contract.update(version=2, optimizer_kind="hybrid-muon",
+                            muon_momentum=float(self.optimizer.momentum),
+                            muon_ns_steps=int(self.optimizer.ns_steps),
+                            muon_matmul_precision=self.optimizer.matmul_precision,
+                            muon_parameter_names=sorted(self.optimizer.muon_names))
+        return contract
 
     def validate_block_proposal_resume_contract(self, saved_state):
         if self.training_objective is None:

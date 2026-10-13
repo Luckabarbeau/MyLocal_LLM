@@ -18,7 +18,11 @@ def muon_eligible(parameter):
     name = parameter.name or ""
     if len(parameter.data.shape) != 2 or min(parameter.data.shape) < 2:
         return False
-    if not name.startswith("blocks."):
+    if name.startswith("block_proposal."):
+        # The learned horizon embedding represents token position, not a
+        # hidden-to-hidden transform. Only the two proposal projections qualify.
+        return name in {"block_proposal.horizon_context", "block_proposal.horizon_back"}
+    if not (name.startswith("blocks.") or name.startswith("block_decoder.")):
         return False
     # Router tensors are intentionally left to AdamW in the first comparison.
     if any(token in name.lower() for token in (
@@ -235,6 +239,7 @@ class HybridMuonAdamW:
             numerical_debug=numerical_debug,
         )
         self.beta1, self.beta2, self.eps = self.adam.beta1, self.adam.beta2, self.adam.eps
+        self.weight_decay = float(weight_decay)
         self.momentum = self.muon.momentum
         self.ns_steps = self.muon.ns_steps
         self.matmul_precision = self.muon.matmul_precision

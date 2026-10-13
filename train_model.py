@@ -1317,11 +1317,27 @@ def main():
                 missing = set(param_names) - set(loaded_params)
                 raise ValueError("incomplete 0080 checkpoint parameters: " +
                                  ", ".join(sorted(missing)[:8]))
-            if optimizer_state is None or any(
-                set((optimizer_state.get(name) or {})) != set(param_names)
-                for name in ("m", "v", "master_weights")
-            ):
+            if optimizer_state is None:
                 raise ValueError("incomplete 0080 optimizer checkpoint state")
+            saved_optimizer_kind = (training_state or {}).get("optimizer_kind", "adamw")
+            if saved_optimizer_kind not in {"adamw", "hybrid-muon"}:
+                raise ValueError("unknown 0080 checkpoint optimizer kind")
+            if saved_optimizer_kind == "hybrid-muon":
+                from mini_llm.optim.hybrid_muon import muon_eligible
+                muon_names = {p.name for p in restore_parameters if muon_eligible(p)}
+                adam_names = set(param_names) - muon_names
+                expected_components = {
+                    "master_weights": set(param_names), "m": adam_names,
+                    "v": adam_names, "muon_m": muon_names,
+                }
+            else:
+                expected_components = {
+                    "master_weights": set(param_names),
+                    "m": set(param_names), "v": set(param_names),
+                }
+            for component, names in expected_components.items():
+                if set(optimizer_state.get(component) or {}) != names:
+                    raise ValueError("incomplete 0080 optimizer checkpoint state: " + component)
         # Copy checkpoint parameters into the already-allocated model and
         # immediately drop each temporary backend copy.  On CuPy,
         # load_checkpoint() materializes checkpoint arrays on the GPU, so

@@ -11,6 +11,7 @@ import json
 
 from mini_llm.backend import xp
 from mini_llm.checkpoint import load_checkpoint,save_checkpoint
+from mini_llm.optim.hybrid_muon import HybridMuonAdamW
 
 ARCHITECTURE='probabilistic_block_proposal_prefix_decoder_v1'
 
@@ -48,16 +49,25 @@ def save_two_stage_checkpoint(path,net,*,optimizer=None,training_step=0,
     if optimizer is not None:
         if [id(p) for p in optimizer.parameters]!=[id(p) for p in params]:
             raise ValueError('optimizer parameters/order must match two-stage model')
-        opt_state={'step':int(optimizer.step_index),
-                   'm':{p.name:v for p,v in zip(params,optimizer.m)},
-                   'v':{p.name:v for p,v in zip(params,optimizer.v)},
-                   'master_weights':{p.name:v for p,v in zip(params,optimizer.master_weights)}}
+        opt_state=(optimizer.checkpoint_state()
+                   if isinstance(optimizer, HybridMuonAdamW) else {
+            'step':int(optimizer.step_index),
+            'm':{p.name:v for p,v in zip(params,optimizer.m)},
+            'v':{p.name:v for p,v in zip(params,optimizer.v)},
+            'master_weights':{p.name:v for p,v in zip(params,optimizer.master_weights)}})
     training_state=dict(architecture=architecture_metadata(net),
         step=int(training_step), supervised_tokens=int(supervised_tokens),
         tokenizer_hash=tokenizer_hash,data_provenance=data_provenance,rng_state=rng_state,
         optimizer_step=None if optimizer is None else int(optimizer.step_index),
         optimizer_options=None if optimizer is None else {
             x:float(getattr(optimizer,x)) for x in ('lr','beta1','beta2','eps','weight_decay')})
+    training_state['optimizer_kind'] = ('hybrid-muon' if isinstance(optimizer, HybridMuonAdamW)
+                                         else 'adamw')
+    if isinstance(optimizer, HybridMuonAdamW):
+        training_state['muon_hyperparameters'] = {
+            'momentum':optimizer.momentum, 'ns_steps':optimizer.ns_steps,
+            'matmul_precision':optimizer.matmul_precision,
+            'group_names':sorted(optimizer.muon_names)}
     save_checkpoint(path,{p.name:p.data for p in params},optimizer_state=opt_state,
                     training_state=training_state)
 
@@ -86,11 +96,28 @@ def load_two_stage_checkpoint(path,net,*,optimizer=None,
             raise ValueError(f'parameter shape mismatch: {p.name}')
     if optimizer is not None:
         if saved_opt is None:
-            raise ValueError('no AdamW optimizer state to resume')
+            raise ValueError('no optimizer state to resume')
         if [id(p) for p in optimizer.parameters]!=[id(p) for p in params]:
             raise ValueError('optimizer parameter order differs')
-        for name in ('m','v','master_weights'):
-            if set(saved_opt.get(name,{}))!={p.name for p in params}:
+        saved_kind=training_state.get('optimizer_kind', 'adamw')
+        hybrid=isinstance(optimizer,HybridMuonAdamW)
+        if saved_kind!=('hybrid-muon' if hybrid else 'adamw'):
+            raise ValueError('0080 optimizer kind mismatch')
+        expected={p.name for p in params}
+        if hybrid:
+            muon=set(optimizer.muon_names)
+            adam=expected-muon
+            groups={'m':adam,'v':adam,'muon_m':muon,'master_weights':expected}
+            settings=training_state.get('muon_hyperparameters') or {}
+            if settings!={'momentum':optimizer.momentum,
+                          'ns_steps':optimizer.ns_steps,
+                          'matmul_precision':optimizer.matmul_precision,
+                          'group_names':sorted(muon)}:
+                raise ValueError('incompatible Muon optimizer hyperparameters or groups')
+        else:
+            groups={name:expected for name in ('m','v','master_weights')}
+        for name, names in groups.items():
+            if set(saved_opt.get(name,{}))!=names:
                 raise ValueError(f'incomplete optimizer component: {name}')
         for key in ('lr','beta1','beta2','eps','weight_decay'):
             options=training_state.get('optimizer_options') or {}
@@ -105,9 +132,12 @@ def load_two_stage_checkpoint(path,net,*,optimizer=None,
         if hasattr(layer.attn,'refresh_compute_buffers'):
             layer.attn.refresh_compute_buffers()
     if optimizer is not None:
-        for i,p in enumerate(params):
-            if not optimizer.restore_master_weight(i,saved_opt['master_weights'][p.name]) or not optimizer.restore_moments(
-                    i,saved_opt['m'][p.name],saved_opt['v'][p.name]):
-                raise ValueError(f'incompatible AdamW tensors: {p.name}')
-        optimizer.step_index=int(saved_opt['step'])
+        if isinstance(optimizer,HybridMuonAdamW):
+            optimizer.restore_checkpoint(saved_opt,from_hybrid=True)
+        else:
+            for i,p in enumerate(params):
+                if not optimizer.restore_master_weight(i,saved_opt['master_weights'][p.name]) or not optimizer.restore_moments(
+                        i,saved_opt['m'][p.name],saved_opt['v'][p.name]):
+                    raise ValueError(f'incompatible AdamW tensors: {p.name}')
+            optimizer.step_index=int(saved_opt['step'])
     return training_state

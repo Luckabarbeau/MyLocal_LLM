@@ -200,6 +200,10 @@ class InferenceModel:
         """
         if BACKEND_NAME == "cupy" and not hasattr(last_hidden, "__cuda_array_interface__"):
             last_hidden = xp.asarray(last_hidden)
+        # 0080E: expose the latest final-normalized causal boundary vector
+        # before the shared vocabulary head; multi-horizon proposals consume
+        # this representation, never vocab logits inverted back to features.
+        self.last_hidden = last_hidden
         return last_hidden @ self.lm_head
 
     def set_weights(self, training_model):
@@ -699,6 +703,11 @@ class InferenceModel:
         for i, block in enumerate(self.blocks):
             x = block.prefill(x, state.k_cache[i], state.v_cache[i], start)
         state.length += k
+        # 0080E: the just-committed block becomes the causal history for the
+        # NEXT proposal. Preserve its boundary state without a redundant
+        # Transformer traversal or an extra large vocabulary projection.
+        norm = self.final_norm.forward(x[:, -1:, :])
+        self.last_hidden = norm[:, -1, :].astype(self.dtype, copy=False)
 
     def decode_one(self, next_ids: xp.ndarray, state: GenerationState) -> xp.ndarray:
         """

@@ -98,6 +98,8 @@ def parse_args():
     parser.add_argument("--block-proposal-decoder-width", type=int, default=None)
     parser.add_argument("--block-proposal-decoder-layers", type=int, default=None)
     parser.add_argument("--block-proposal-decoder-heads", type=int, default=None)
+    parser.add_argument("--block-proposal-decoder-ff-multiplier", type=int, default=None,
+                        help="Small decoder SwiGLU inner-width multiplier (default: 4)")
     parser.add_argument("--block-proposal-lambda", type=float, default=None)
     parser.add_argument("--block-proposal-group-size", type=int, default=8,
                         help="Bound number of K-block plans decoded together (default: 8)")
@@ -803,7 +805,8 @@ def build_training_objective(model, args, *, checkpoint_state=None):
         explicit = [name for name in (
             "block_proposal_k", "block_proposal_head_width", "block_proposal_residual_scale",
             "block_proposal_decoder_width", "block_proposal_decoder_layers",
-            "block_proposal_decoder_heads", "block_proposal_lambda")
+            "block_proposal_decoder_heads", "block_proposal_decoder_ff_multiplier",
+            "block_proposal_lambda")
             if getattr(args, name, None) is not None]
         if explicit:
             raise ValueError("block proposal options require --objective block-proposal")
@@ -836,15 +839,33 @@ def build_training_objective(model, args, *, checkpoint_state=None):
     width = int(choice("block_proposal_decoder_width", "decoder_width", 384))
     layers = int(choice("block_proposal_decoder_layers", "decoder_layers", 3))
     heads = int(choice("block_proposal_decoder_heads", "decoder_heads", 6))
+    # FF width was always checkpointed, but previously only configurable in
+    # the Python class, not the production training CLI.
+    saved_ff = previous.get("decoder_ff_width")
+    if saved_ff is not None:
+        if int(saved_ff) % width:
+            raise ValueError("checkpoint decoder FF width is not an integer multiple of width")
+        saved_multiplier = int(saved_ff) // width
+    else:
+        saved_multiplier = 4
+    explicit_multiplier = getattr(args, "block_proposal_decoder_ff_multiplier", None)
+    if explicit_multiplier is not None and checkpoint_state is not None and (
+            int(explicit_multiplier) != saved_multiplier):
+        raise ValueError("0080 checkpoint option mismatch: block_proposal_decoder_ff_multiplier")
+    multiplier = (saved_multiplier if explicit_multiplier is None
+                  else int(explicit_multiplier))
+    if multiplier < 1:
+        raise ValueError("block-proposal decoder FF multiplier must be positive")
     coefficient = float(choice("block_proposal_lambda", "lambda_proposal", .5))
-    if k < 1 or k > 64 or not 0 <= coefficient < float("inf"):
-        raise ValueError("0080 requires 1 <= K <= 64 and finite nonnegative lambda")
+    if k < 1 or k > 64 or not 0 < coefficient < float("inf"):
+        raise ValueError("0080 requires 1 <= K <= 64 and finite positive lambda")
     from mini_llm.block_proposal.proposals import HorizonProposalHead
     from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
     from mini_llm.block_proposal.objective import BlockProposalObjective
     head = HorizonProposalHead(model, block_size=k, hidden_width=head_width,
                                residual_scale=residual)
-    decoder = BlockPrefixDecoder(model, k, width=width, n_layers=layers, n_heads=heads)
+    decoder = BlockPrefixDecoder(model, k, width=width, n_layers=layers,
+                                 n_heads=heads, ff_multiplier=multiplier)
     net = TwoStageBlockModel(head, decoder, lambda_proposal=coefficient)
     objective = BlockProposalObjective(net, block_group_size=args.block_proposal_group_size)
     if checkpoint_state is not None and objective.checkpoint_metadata() != previous:

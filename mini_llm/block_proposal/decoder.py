@@ -246,6 +246,11 @@ def _cached_per_token_nll(ce_cache, targets, valid):
     BF16 probabilities give approximate log diagnostics; the loss itself
     continues to use stable loss-layer FP32 log-sum-exp arithmetic.
     """
+    row_losses = ce_cache.get('row_losses')
+    if row_losses is not None:
+        # Exactly the CE layer's stable FP32 per-target log-sum-exp, including
+        # its validity mask, rather than -log(rounded BF16 probabilities).
+        return row_losses.reshape(targets.shape)
     probs = ce_cache.get('probs_bf16')
     if probs is None:
         probs = ce_cache.get('probs_f32')
@@ -316,10 +321,10 @@ class TwoStageBlockModel:
         prop_loss,prop_cache=cross_entropy_forward(lp.copy() if copy_ce else lp,
                         safe_targets,loss_mask=valid,
                         return_device_loss=defer_metrics,
-                        normalizer_count=n_unique)
+                        normalizer_count=n_unique, return_row_losses=True)
         final_loss,final_cache=cross_entropy_forward(lf,safe_targets,loss_mask=valid,
                         return_device_loss=defer_metrics,
-                        normalizer_count=n_unique)
+                        normalizer_count=n_unique, return_row_losses=True)
         prop_nll=_cached_per_token_nll(prop_cache,targets,valid)
         final_nll=_cached_per_token_nll(final_cache,targets,valid)
         metrics={'proposal_position_ce_sums':xp.sum(prop_nll,axis=0),

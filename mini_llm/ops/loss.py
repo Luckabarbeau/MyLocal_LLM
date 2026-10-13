@@ -474,7 +474,7 @@ def chunked_bf16_cross_entropy_grad_inplace(
 
 
 def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False,
-                          normalizer_count=None):
+                          normalizer_count=None, return_row_losses=False):
     """
     Cross entropy loss with mixed precision support.
     
@@ -484,6 +484,8 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
     ``normalizer_count`` is an optional, caller-verified sum of ``loss_mask``.
     The default production AR path continues to verify the mask itself.
     0080 can supply its known compact-block count without a per-CE GPU sync.
+    ``return_row_losses`` is opt-in: AR's ordinary cache and allocation path
+    remain unchanged; 0080 gets the CE layer's stable per-target diagnostics.
     """
     if normalizer_count is not None:
         normalizer_count = float(normalizer_count)
@@ -530,7 +532,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             if fused is not None:
                 probs_bf16, targets_i32, row_losses = fused
                 loss_f32 = xp.sum(row_losses) / normalizer_count
-                return (loss_f32 if return_device_loss else scalar(loss_f32)), {
+                cache = {
                     "probs_bf16": probs_bf16,
                     "targets": targets_i32,
                     "original_shape": logits.shape,
@@ -541,6 +543,9 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
                     "fused_bf16_ce": True,
                     "inplace_bf16_ce": reuse_logits,
                 }
+                if return_row_losses:
+                    cache["row_losses"] = row_losses
+                return (loss_f32 if return_device_loss else scalar(loss_f32)), cache
 
         probs_bf16 = (
             flat_logits
@@ -548,6 +553,11 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             else xp.empty(flat_logits.shape, dtype=logits.dtype)
         )
         loss_sum = xp.asarray(0.0, dtype="float32")
+        # A single scalar per token, not another [tokens,vocab] workspace.
+        # BF16 probability caches are rounded and cannot reliably reproduce
+        # the exact FP32 log-sum-exp used by the actual objective.
+        row_losses = (xp.empty((n,), dtype=xp.float32)
+                      if return_row_losses else None)
         for start in range(0, n, token_chunk):
             end = min(start + token_chunk, n)
             work = flat_logits[start:end].astype("float32", copy=True)
@@ -563,14 +573,19 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             per_token_loss = xp.log(normalizer[:, 0]) - target_shifted
             if mask_f32 is None:
                 loss_sum += xp.sum(per_token_loss)
+                if row_losses is not None:
+                    row_losses[start:end] = per_token_loss
             else:
-                loss_sum += xp.sum(per_token_loss * mask_f32[start:end])
+                masked_losses = per_token_loss * mask_f32[start:end]
+                loss_sum += xp.sum(masked_losses)
+                if row_losses is not None:
+                    row_losses[start:end] = masked_losses
 
             xp.divide(work, normalizer, out=work)
             probs_bf16[start:end] = work.astype(logits.dtype)
 
         loss_f32 = loss_sum / normalizer_count
-        return (loss_f32 if return_device_loss else scalar(loss_f32)), {
+        cache = {
             "probs_bf16": probs_bf16,
             "targets": flat_targets,
             "original_shape": logits.shape,
@@ -580,6 +595,9 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             "token_chunk": token_chunk,
             "inplace_bf16_ce": reuse_logits,
         }
+        if row_losses is not None:
+            cache["row_losses"] = row_losses
+        return (loss_f32 if return_device_loss else scalar(loss_f32)), cache
 
     if is_low_precision_dtype(logits.dtype):
         # FP16 still needs a full FP32 probability cache: its exponent range is

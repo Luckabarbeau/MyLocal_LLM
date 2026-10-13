@@ -403,6 +403,12 @@ class ExtendedTrainer:
             raise ValueError(
                 "MINI_LLM_ACTIVATION_CHECKPOINT must be 'none' or 'block'"
             )
+        if self.training_objective is not None and self.activation_checkpoint == "block":
+            raise ValueError(
+                "0080's single-pass block objective does not currently support "
+                "MINI_LLM_ACTIVATION_CHECKPOINT=block; disabling it explicitly "
+                "avoids silently ignoring the requested memory strategy"
+            )
 
         router_diag_raw = os.environ.get(
             "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS", "0"
@@ -2066,7 +2072,9 @@ class ExtendedTrainer:
             )
         if self.log_file is None:
             return
-        path = self.log_file.with_name(self.log_file.stem + ".val_sources.csv")
+        suffix = (".val_sources.block_proposal.csv" if self.training_objective is not None
+                  else ".val_sources.csv")
+        path = self.log_file.with_name(self.log_file.stem + suffix)
         columns = (
             "step", "source", "schema_version", "mixture_manifest_sha256",
             "tokenizer_sha256", "memory_mode", "ce_nats_per_target",
@@ -2074,6 +2082,9 @@ class ExtendedTrainer:
             "supervised_token_weight", "supervised_tokens", "target_capacity_tokens",
             "target_fill", "validation_batches", "fixed_seed", "sample_sha256",
         )
+        if self.training_objective is not None:
+            extra = tuple(key for key in next(iter(results.values())) if key not in columns)
+            columns += extra
         path.parent.mkdir(parents=True, exist_ok=True)
         new_file = not path.exists() or path.stat().st_size == 0
         with path.open("a", newline="") as handle:
@@ -2100,7 +2111,9 @@ class ExtendedTrainer:
             )
         if self.log_file is None:
             return
-        path = self.log_file.with_name(self.log_file.stem + ".val_sources_representative.csv")
+        suffix = (".val_sources_representative.block_proposal.csv"
+                  if self.training_objective is not None else ".val_sources_representative.csv")
+        path = self.log_file.with_name(self.log_file.stem + suffix)
         columns = (
             "step", "source", "schema_version", "sampling_mode",
             "mixture_manifest_sha256", "tokenizer_sha256", "memory_mode",
@@ -2113,6 +2126,9 @@ class ExtendedTrainer:
             "short_document_fraction", "valid_history_mean",
             "document_selection_fallback_count",
         )
+        if self.training_objective is not None:
+            extra = tuple(key for key in next(iter(results.values())) if key not in columns)
+            columns += extra
         path.parent.mkdir(parents=True, exist_ok=True)
         new_file = not path.exists() or path.stat().st_size == 0
         with path.open("a", newline="") as handle:
@@ -2700,6 +2716,9 @@ class ExtendedTrainer:
                 "min_lr": float(schedule.min_lr),
             },
             "source_choice_granularity": "one_source_per_microbatch",
+            # Floating-point reduction order can change with decoder grouping;
+            # include it in the claimed bitwise-resume contract.
+            "block_group_size": int(self.training_objective.block_group_size),
         }
         if isinstance(self.optimizer, HybridMuonAdamW):
             # Preserve the exact v1 AdamW contract for 0080N/O1 checkpoints.
@@ -2721,6 +2740,12 @@ class ExtendedTrainer:
                   "exact schedule/accumulation continuity is unverified")
             return
         actual = self.block_proposal_resume_contract()
+        if "block_group_size" not in expected:
+            # 0080N/O1/O2 checkpoints predate group-size provenance. Keep them
+            # loadable, but do not claim bitwise-identical continuation.
+            print("WARNING: legacy 0080 resume contract omits decoder block "
+                  "group size; exact floating-point continuation is unverified")
+            actual.pop("block_group_size", None)
         if expected != actual:
             mismatched = [k for k in sorted(set(expected) | set(actual))
                           if expected.get(k) != actual.get(k)]

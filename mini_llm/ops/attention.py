@@ -906,7 +906,133 @@ class GQAAttention:
             )
         return dx2.reshape(b, t, self.d_model)
 
-    def forward(self, x, return_cache=True, position_ids=None, terminal_memory=None):
+    def forward_shared_context_block(
+        self, x, context_kv, *, context_length, valid_block_mask=None,
+        return_cache=True, block_position_starts=None, group_plans=None,
+        retrieval_tasks=None,
+    ):
+        """0079G: run *only* K active queries against read-only causal K/V.
+
+        The context cache is constructed by an ordinary causal Transformer
+        execution, using this same attention module and parameters. Only K
+        query/key/value projections and RoPE evaluations occur per refinement.
+        A bounded K+context K/V view is assembled for the indexed reference
+        kernel; no causal-context attention or FFN is rerun.
+        """
+        if self.terminal_memory is not None:
+            raise NotImplementedError("provisional terminal memory is not supported")
+        if self._retrieval_groups and (
+            retrieval_tasks is None or len(retrieval_tasks) != len(self._retrieval_groups)
+        ):
+            raise ValueError("learned retrieval needs a task for every retrieval group")
+        b, ksize, d = x.shape
+        c = int(context_length)
+        k_context, v_context = context_kv
+        expected = (b, c, self.n_kv_heads, self.d_head)
+        if k_context.shape != expected or v_context.shape != expected:
+            raise ValueError("context KV must match the active batch and causal prefix")
+        if ksize < 1 or d != self.d_model:
+            raise ValueError("expected [B,K,d_model] with K >= 1")
+        x2 = x.reshape(-1, d)
+        # The active stream uses the exact original weights and RoPE positions.
+        q_pre = (x2 @ self.Wq.data).reshape(b, ksize, self.n_q_heads, self.d_head)
+        k_pre = (x2 @ self.Wk.data).reshape(b, ksize, self.n_kv_heads, self.d_head)
+        v_active = (x2 @ self.Wv.data).reshape(b, ksize, self.n_kv_heads, self.d_head)
+        if block_position_starts is None:
+            positions = xp.broadcast_to(
+                xp.arange(c, c + ksize, dtype=xp.int64)[None, :], (b, ksize)
+            )
+        else:
+            starts = xp.asarray(block_position_starts, dtype=xp.int64)
+            if starts.shape != (b,):
+                raise ValueError("block_position_starts must have shape [B_active]")
+            positions = starts[:, None] + xp.arange(ksize, dtype=xp.int64)[None, :]
+        q, q_rope_cache = rope_forward(q_pre, self.rope_base, position_ids=positions)
+        k_active, k_rope_cache = rope_forward(k_pre, self.rope_base, position_ids=positions)
+        shared_resident = getattr(k_context, '_is_shared_indexed_kv', False)
+        if shared_resident:
+            k_full = k_context.with_active(k_active)
+            v_full = v_context.with_active(v_active)
+        else:
+            k_full = xp.concatenate((k_context, k_active), axis=1)
+            v_full = xp.concatenate((v_context, v_active), axis=1)
+        from mini_llm.predictive_refinement.compact_sparse import compact_provisional_plan
+        groups = self._static_head_groups if self.attention_config is not None else ({
+            "kind": "dense", "head_indices": tuple(range(self.n_q_heads)),
+            "window": None, "dilation": None, "offset": 0, "stride": None,
+        },)
+        pieces, group_caches = [], []
+        if group_plans is not None and len(group_plans) != len(groups):
+            raise ValueError("precomputed plan count must match attention head groups")
+        for group_idx, group in enumerate(groups):
+            heads = group["head_indices"]
+            if group_plans is not None:
+                plan = group_plans[group_idx]
+            else:
+                if block_position_starts is not None:
+                    raise ValueError("grouped starts require precomputed attention plans")
+                plan = compact_provisional_plan(
+                    c, ksize, b, kind=group["kind"], window=group["window"],
+                    dilation=group["dilation"], offset=group["offset"] or 0,
+                    stride=group["stride"], valid_block_mask=valid_block_mask,
+                )
+            indices = tuple(h // self.group_size for h in heads)
+            if return_cache:
+                out, attn_cache = indexed_attention_forward(
+                    q[:, :, heads, :], k_full, v_full, plan,
+                    kv_head_indices=indices, scale=self.scale, return_cache=True,
+                )
+                group_caches.append((heads, attn_cache))
+            else:
+                out = indexed_attention_forward(
+                    q[:, :, heads, :], k_full, v_full, plan,
+                    kv_head_indices=indices, scale=self.scale, return_cache=False,
+                )
+            pieces.append((heads, out))
+        # Q3 retrieval heads use EXACTLY the learned causal-trunk router's
+        # selected blocks and logit-bias prior. The selected keys live in the
+        # original resident context cache; no 6K K/V copy is created.
+        for task in (retrieval_tasks or ()):
+            heads = task["heads"]
+            rk, rv = task["kv"]
+            retrieval_k = rk.with_active(k_active)
+            retrieval_v = rv.with_active(v_active)
+            if return_cache:
+                out, attn_cache = indexed_attention_forward(
+                    q[:, :, heads, :], retrieval_k, retrieval_v,
+                    task["plan"], kv_head_indices=tuple(h // self.group_size for h in heads),
+                    scale=self.scale, return_cache=True,
+                )
+                group_caches.append((heads, attn_cache, task))
+            else:
+                out = indexed_attention_forward(
+                    q[:, :, heads, :], retrieval_k, retrieval_v,
+                    task["plan"], kv_head_indices=tuple(h // self.group_size for h in heads),
+                    scale=self.scale, return_cache=False,
+                )
+            pieces.append((heads, out))
+        dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+        merged_heads = xp.zeros(q.shape, dtype=dtype)
+        for heads, out in pieces:
+            merged_heads[:, :, heads, :] = out
+        merged = merged_heads.reshape(b, ksize, self.n_q_heads * self.d_head)
+        merged_compute = merged.astype(x.dtype, copy=False) if is_bfloat16_dtype(q.dtype) else merged
+        y = (merged_compute.reshape(-1, self.n_q_heads * self.d_head) @ self.Wo.data).reshape(b, ksize, d)
+        if not return_cache:
+            return y
+        return y, {
+            "shared_context_active": True, "context_length": c,
+            "x": x, "q": q, "k": k_active, "v": v_active,
+            "merged": merged, "q_rope_cache": q_rope_cache,
+            "k_rope_cache": k_rope_cache, "block_groups": group_caches,
+            "shared_resident_kv": shared_resident,
+        }
+
+    def forward(
+        self, x, return_cache=True, position_ids=None, terminal_memory=None,
+        attention_allow_mask=None, block_context_length=None,
+        block_valid_mask=None,
+    ):
         if x.ndim != 3:
             raise ValueError("attention input must have shape [B,T,D].")
         b, t, d_model = x.shape
@@ -961,6 +1087,70 @@ class GQAAttention:
                 v = xp.array(v, copy=True, order="C")
             del qkv, q_pre, k_pre
 
+        if block_context_length is not None:
+            if attention_allow_mask is not None or self.attention_config is None:
+                raise ValueError("compact block mode requires static mixed heads and no dense mask")
+            if self._retrieval_groups or self.terminal_memory is not None:
+                raise NotImplementedError("routed/terminal memory requires boundary-causal router support")
+            c = int(block_context_length)
+            if c < 0 or c >= t:
+                raise ValueError("compact block requires 0 <= context length < total length")
+            if c:
+                context, context_groups, _ = self._mixed_context_forward(
+                    x[:, :c], q[:, :c], k[:, :c], v[:, :c], return_cache
+                )
+            else:
+                context, context_groups = None, []
+            from mini_llm.predictive_refinement.compact_sparse import compact_provisional_plan
+            active_parts = []
+            block_groups = []
+            for group in self._static_head_groups:
+                heads = group["head_indices"]
+                plan = compact_provisional_plan(
+                    c, t - c, b, kind=group["kind"], window=group["window"],
+                    dilation=group["dilation"], offset=group["offset"] or 0,
+                    stride=group["stride"], valid_block_mask=block_valid_mask,
+                )
+                kv_map = tuple(h // self.group_size for h in heads)
+                if return_cache:
+                    part, part_cache = indexed_attention_forward(
+                        q[:, c:, heads, :], k, v, plan,
+                        kv_head_indices=kv_map, scale=self.scale, return_cache=True,
+                    )
+                    block_groups.append((heads, part_cache))
+                else:
+                    part = indexed_attention_forward(
+                        q[:, c:, heads, :], k, v, plan,
+                        kv_head_indices=kv_map, scale=self.scale, return_cache=False,
+                    )
+                active_parts.append((heads, part))
+            context_dtype = (
+                xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+            )
+            merged_heads = xp.zeros(q.shape, dtype=context_dtype)
+            if c:
+                merged_heads[:, :c] = context
+            for heads, part in active_parts:
+                merged_heads[:, c:, heads, :] = part
+            merged = merged_heads.reshape(b, t, self.n_q_heads * self.d_head)
+            merged_compute = merged.astype(x.dtype, copy=False) if is_bfloat16_dtype(q.dtype) else merged
+            with performance_scope("attention.output_projection.forward"):
+                y = (merged_compute.reshape(-1, merged_compute.shape[-1]) @ self.Wo.data).reshape(b, t, self.d_model)
+            if not return_cache:
+                return y
+            return y, {
+                "x": x, "q": q, "k": k, "v": v, "merged": merged,
+                "q_rope_cache": q_rope_cache, "k_rope_cache": k_rope_cache,
+                "compact_context_length": c,
+                "compact_context_groups": context_groups,
+                "compact_block_groups": block_groups,
+            }
+
+        if attention_allow_mask is not None and self.attention_config is not None:
+            raise NotImplementedError(
+                "block-causal masks require dense reference attention; "
+                "sparse/routed kernels must be audited separately"
+            )
         if self.attention_config is not None:
             context, pattern_caches, routing = self._mixed_context_forward(
                 x, q, k, v, return_cache, terminal_memory=terminal_memory
@@ -1027,8 +1217,18 @@ class GQAAttention:
         )                                               # [B,Hkv,G,T,T]
         scores = scores_grouped.reshape(b, self.n_q_heads, t, t)
 
-        causal = self._get_causal_mask(t)
-        scores_masked = xp.where(causal[None, None, :, :], -xp.inf, scores)
+        if attention_allow_mask is None:
+            causal = self._get_causal_mask(t)
+            scores_masked = xp.where(causal[None, None, :, :], -xp.inf, scores)
+        else:
+            allow = xp.asarray(attention_allow_mask, dtype=xp.bool_)
+            if allow.shape == (t, t):
+                allow = allow[None, None, :, :]
+            elif allow.shape == (b, t, t):
+                allow = allow[:, None, :, :]
+            else:
+                raise ValueError("attention_allow_mask must be [T,T] or [B,T,T]")
+            scores_masked = xp.where(allow, scores, -xp.inf)
         probs = softmax_forward(
             scores_masked,
             axis=-1,
@@ -1078,7 +1278,8 @@ class GQAAttention:
         }
 
     def backward(
-        self, dy, cache, *, output_scale=None, return_output_scale_grad=False
+        self, dy, cache, *, output_scale=None, return_output_scale_grad=False,
+        shared_context_kv_grad=None, return_shared_context_kv_grad=False,
     ):
         x = cache["x"]
         q, k, v = cache["q"], cache["k"], cache["v"]
@@ -1118,10 +1319,77 @@ class GQAAttention:
             b, t, self.n_q_heads, self.d_head
         )
 
+        if cache.get("shared_context_active", False):
+            c = int(cache["context_length"])
+            q, k_active, v_active = cache["q"], cache["k"], cache["v"]
+            b, ksize = q.shape[:2]
+            grad_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+            dq = xp.zeros(q.shape, dtype=grad_dtype)
+            shared_resident = bool(cache.get('shared_resident_kv', False))
+            dk_context = (None if shared_resident else
+                          xp.zeros((b, c, self.n_kv_heads, self.d_head), dtype=grad_dtype))
+            dv_context = (None if shared_resident else xp.zeros_like(dk_context))
+            dk_active = xp.zeros(k_active.shape, dtype=grad_dtype)
+            dv_active = xp.zeros(v_active.shape, dtype=grad_dtype)
+            for entry in cache["block_groups"]:
+                heads, group_cache = entry[:2]
+                dqa, dka, dva, dbias = indexed_attention_backward(
+                    dcontext[:, :, heads, :], group_cache
+                )
+                if len(entry) == 3 and dbias is not None:
+                    from mini_llm.predictive_refinement.routed_retrieval import accumulate_retrieval_bias_gradient
+                    accumulate_retrieval_bias_gradient(entry[2], dbias)
+                dq[:, :, heads, :] += dqa
+                if shared_resident:
+                    dk_active += dka
+                    dv_active += dva
+                else:
+                    dk_context += dka[:, :c]
+                    dv_context += dva[:, :c]
+                    dk_active += dka[:, c:]
+                    dv_active += dva[:, c:]
+            dx = self._projection_backward(x, dq, dk_active, dv_active, cache)
+            if return_shared_context_kv_grad:
+                if return_output_scale_grad:
+                    return dx, output_scale_grad, (dk_context, dv_context)
+                return dx, (dk_context, dv_context)
+            raise RuntimeError("shared-context active backward must collect context KV gradients")
+
+        if "compact_context_length" in cache:
+            c = cache["compact_context_length"]
+            work_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
+            dq = xp.zeros(q.shape, dtype=work_dtype)
+            dk = xp.zeros(k.shape, dtype=work_dtype)
+            dv = xp.zeros(v.shape, dtype=work_dtype)
+            prefix_cache = {
+                "x": x[:, :c], "q": q[:, :c], "k": k[:, :c], "v": v[:, :c],
+                "pattern_caches": cache["compact_context_groups"],
+            }
+            if c:
+                dq_c, dk_c, dv_c, _ = self._mixed_context_backward(dcontext[:, :c], prefix_cache)
+                dq[:, :c] += dq_c
+                dk[:, :c] += dk_c
+                dv[:, :c] += dv_c
+            for heads, group_cache in cache["compact_block_groups"]:
+                dq_a, dk_a, dv_a, _ = indexed_attention_backward(
+                    dcontext[:, c:, heads, :], group_cache
+                )
+                dq[:, c:, heads, :] += dq_a
+                dk += dk_a
+                dv += dv_a
+            with performance_scope("attention.qkv_projection.backward"):
+                dx = self._projection_backward(x, dq, dk, dv, cache)
+            if return_output_scale_grad:
+                return dx, output_scale_grad
+            return dx
+
         if self.attention_config is not None:
             dq, dk, dv, drouter_input = self._mixed_context_backward(
                 dcontext, cache
             )
+            if shared_context_kv_grad is not None:
+                dk += shared_context_kv_grad[0]
+                dv += shared_context_kv_grad[1]
             with performance_scope("attention.qkv_projection.backward"):
                 dx = self._projection_backward(x, dq, dk, dv, cache)
             dx = dx + drouter_input.astype(dx.dtype, copy=False)
@@ -1195,6 +1463,9 @@ class GQAAttention:
         dk = dk_heads.transpose(0, 2, 1, 3)
         dv = dv_heads.transpose(0, 2, 1, 3)
 
+        if shared_context_kv_grad is not None:
+            dk += shared_context_kv_grad[0]
+            dv += shared_context_kv_grad[1]
         with performance_scope("attention.qkv_projection.backward"):
             dx = self._projection_backward(x, dq, dk, dv, cache)
         if return_output_scale_grad:

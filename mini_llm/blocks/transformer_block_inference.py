@@ -174,6 +174,34 @@ class TransformerBlockInference:
             m_residual = m_residual * self.alpha_mlp
         return residual2 + m_residual
 
+    def forward_provisional_block(self, x, k_cache, v_cache, context_length):
+        """0079D execute this *same* complete Transformer block on K active rows.
+
+        The per-layer committed-context cache is strictly read-only.
+        """
+        if self.use_fp32_residual:
+            x = x.astype(xp.float32, copy=False)
+        residual1 = x
+        h = self.norm1.forward(x)
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
+        a = self.attention.forward_provisional_block(
+            h, k_cache, v_cache, context_length
+        )
+        a_residual = a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
+        if self.alpha_attn is not None:
+            a_residual = a_residual * self.alpha_attn
+        x = residual1 + a_residual
+        residual2 = x
+        h = self.norm2.forward(x)
+        if self.use_fp32_residual:
+            h = h.astype(self.compute_dtype, copy=False)
+        m = self.moe.prefill(h)
+        m_residual = m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
+        if self.alpha_mlp is not None:
+            m_residual = m_residual * self.alpha_mlp
+        return residual2 + m_residual
+
     def decode_one(
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
         retrieval_route_cache=None, *, cache_position=None, rope_position=None,

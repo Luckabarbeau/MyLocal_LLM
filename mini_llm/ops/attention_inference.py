@@ -1001,6 +1001,45 @@ class GQAAttentionInference:
         )
         return y[:, -1, :]
 
+    def forward_provisional_block(self, x, k_cache, v_cache, context_length):
+        """0079D dense GQA: full-depth active queries against *read-only* causal KV.
+
+        The current K provisional keys/values are ephemeral. They are visible
+        bidirectionally to all active queries, but NEVER written to the stable
+        causal cache. Only the K new positions perform QKV projections and
+        attention, so score work is O(K*(C+K)), not O((C+K)**2).
+        """
+        if self.sparse_attention:
+            raise NotImplementedError(
+                "provisional KV attention needs a separate sparse/routed layout"
+            )
+        b, k, width = x.shape
+        c = int(context_length)
+        if k < 1 or width != self.d_model or c < 0 or c > k_cache.shape[2]:
+            raise ValueError("invalid provisional block shape or context length")
+        if k_cache.shape != v_cache.shape or k_cache.shape[0] != b:
+            raise ValueError("KV cache shape mismatch")
+        qkv = (x.reshape(-1, self.d_model) @ self.Wqkv).reshape(b, k, -1)
+        q_end = self._q_width
+        kv_end = q_end + self._kv_width
+        q = self._apply_rope_absolute(
+            qkv[..., :q_end].reshape(b, k, self.n_q_heads, self.d_head), c
+        )
+        k_local = self._apply_rope_absolute(
+            qkv[..., q_end:kv_end].reshape(b, k, self.n_kv_heads, self.d_head), c
+        )
+        v_local = qkv[..., kv_end:].reshape(b, k, self.n_kv_heads, self.d_head)
+        # Two bounded compact K/V tensors, never a dense 64K^2 mask.
+        k_all = xp.concatenate(
+            (k_cache[:, :, :c, :], k_local.transpose(0, 2, 1, 3)), axis=2
+        )
+        v_all = xp.concatenate(
+            (v_cache[:, :, :c, :], v_local.transpose(0, 2, 1, 3)), axis=2
+        )
+        context = self._attention(q, k_all, v_all, causal_mask=None)
+        merged = context.reshape(b * k, self.d_model)
+        return (merged @ self.Wo).reshape(b, k, self.d_model)
+
     def prefill(
         self, x, k_cache, v_cache, start_pos, return_all=False,
         router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,

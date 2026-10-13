@@ -537,6 +537,24 @@ class DecoderLanguageModel:
         history_ids = source_ids[:, :history_length]
         working_ids = source_ids[:, history_length:]
 
+        # 0079Q1: a block-refinement training window must not choose its
+        # historical prefix using *any* real token within that window. This
+        # opt-in mode asks the unchanged production router using the last
+        # router_query_length tokens of the PRE-WINDOW history. The normal
+        # autoregressive training/inference behavior stays unchanged.
+        causal_prefix_query = bool(
+            memory_metadata is not None
+            and memory_metadata.get("causal_prefix_query", False)
+        )
+        query_ids = None
+        if causal_prefix_query:
+            query_length = int(cfg.router_query_length)
+            if query_length > history_length:
+                raise ValueError(
+                    "causal_prefix_query needs router_query_length <= history length"
+                )
+            query_ids = history_ids[:, history_length - query_length:]
+
         if memory_metadata is None:
             history_valid_starts = xp.zeros((batch,), dtype=xp.int64)
             target_valid_lengths = xp.full((batch,), working_length, dtype=xp.int64)
@@ -567,10 +585,28 @@ class DecoderLanguageModel:
             use_retrieval = False
         if history_valid_starts.shape != (batch,) or target_valid_lengths.shape != (batch,):
             raise ValueError("hierarchical memory metadata batch shape mismatch")
-        if use_retrieval and bool(xp.any(target_valid_lengths != working_length)):
-            # The base Transformer has no padding attention mask.  Short target
-            # fragments therefore remain ordinary dense-window examples.
+        masked_refinement = bool(
+            memory_metadata is not None
+            and memory_metadata.get("causal_masked_target_refinement", False)
+        )
+        if masked_refinement and not causal_prefix_query:
+            raise ValueError("masked refinement requires causal_prefix_query")
+        if bool(xp.any((target_valid_lengths < 0) | (target_valid_lengths > working_length))):
+            raise ValueError("invalid target_valid_lengths")
+        if use_retrieval and bool(xp.any(target_valid_lengths != working_length)) and not masked_refinement:
+            # The ordinary autoregressive model has no per-row padding mask.
+            # Q4 instead applies explicit valid-block masks to every provisional
+            # read, and the causal trunk cannot expose tail padding to earlier
+            # valid positions. Keep the production behavior unchanged otherwise.
             use_retrieval = False
+        insufficient_pre_window_query = bool(xp.any(
+            history_valid_starts > history_length - int(cfg.router_query_length)
+        ))
+        if causal_prefix_query and use_retrieval and insufficient_pre_window_query and not masked_refinement:
+            # Strict Q1 behavior remains unchanged unless Q4 explicitly opts in.
+            raise ValueError(
+                "causal_prefix_query requires a fully valid pre-window router query"
+            )
 
         with performance_scope("memory_context.working_embedding.forward"):
             working_x = self.embedding.W.data[working_ids]
@@ -606,7 +642,12 @@ class DecoderLanguageModel:
         if use_retrieval and min_available <= 0:
             use_retrieval = False
         if use_retrieval and min_available > 0:
-            if max_available < route_threshold:
+            if max_available < route_threshold or (
+                masked_refinement and insufficient_pre_window_query
+            ):
+                # With ragged genuine histories the router query cannot be
+                # constructed from an invalid/padded pre-window prefix.
+                # Instead reopen the largest common genuine history suffix.
                 # 0078E: different documents in one microbatch may have
                 # different amounts of genuine history. Without a per-row
                 # attention-padding mask, use the longest suffix valid for
@@ -643,7 +684,8 @@ class DecoderLanguageModel:
                     router_cache,
                 ) = self.memory_router.forward_routed_prefix(
                     history_x,
-                    working_x,
+                    (self.embedding.W.data[query_ids]
+                     if causal_prefix_query else working_x),
                     history_valid_starts=history_valid_starts,
                     stochastic=(stochastic and bool(cfg.router_gumbel_noise)),
                     gumbel_seed=gumbel_seed,
@@ -725,6 +767,7 @@ class DecoderLanguageModel:
             "mode": "routed_prefix",
             "history_ids": history_ids,
             "working_ids": working_ids,
+            "causal_prefix_query_ids": query_ids,
             "selected_token_ids": selected_token_ids,
             "history_valid_starts": history_valid_starts,
             "router_cache": router_cache,
@@ -734,6 +777,7 @@ class DecoderLanguageModel:
             "route_valid": route_valid,
             "retrieval_active": bool(prefix_length > 0),
             "prefix_mode": prefix_mode,
+            "allow_unaligned_refinement_blocks": bool(masked_refinement),
             "prefix_length": int(prefix_length),
             "target_slice": (prefix_length, prefix_length + working_length),
         }
@@ -743,6 +787,7 @@ class DecoderLanguageModel:
         """Backward for exact direct-history and ST-routed historical prefixes."""
         working_ids = cache.pop("working_ids")
         history_ids = cache.pop("history_ids")
+        query_ids = cache.pop("causal_prefix_query_ids", None)
         selected_token_ids = cache.pop("selected_token_ids")
         router_cache = cache.pop("router_cache")
         cache.pop("selected_blocks", None)
@@ -753,6 +798,7 @@ class DecoderLanguageModel:
         prefix_mode = cache.pop("prefix_mode", "routed_blocks")
         prefix_length = int(cache.pop("prefix_length"))
         cache.pop("history_valid_starts", None)
+        cache.pop("allow_unaligned_refinement_blocks", None)
 
         if not retrieval_active:
             with performance_scope("memory_context.embedding.backward"):
@@ -777,16 +823,22 @@ class DecoderLanguageModel:
                 selected_x,
                 router_cache,
             )
-        dworking_total = dworking_direct + dworking_router.astype(
-            dworking_direct.dtype, copy=False
-        )
         with performance_scope("memory_context.embedding.backward"):
-            # Direct deep-prefix gradient goes only to the exact reopened tokens;
-            # router pooling adds its separate shallow gradient over all history.
+            # Direct deep-prefix gradient goes only to exact reopened tokens.
+            # The straight-through router also backpropagates through *all*
+            # candidate history embeddings. In 0079Q1, its query is historical
+            # too: routing gradients must NEVER be written into future targets.
             self.embedding.backward(dhistory_router, {"token_ids": history_ids})
             self.embedding.backward(dselected, {"token_ids": selected_token_ids})
-            self.embedding.backward(dworking_total, {"token_ids": working_ids})
-        del selected_x, dhistory_router, dworking_router, dworking_total
+            if query_ids is not None:
+                self.embedding.backward(dworking_router, {"token_ids": query_ids})
+                self.embedding.backward(dworking_direct, {"token_ids": working_ids})
+            else:
+                dworking_total = dworking_direct + dworking_router.astype(
+                    dworking_direct.dtype, copy=False
+                )
+                self.embedding.backward(dworking_total, {"token_ids": working_ids})
+        del selected_x, dhistory_router, dworking_router
 
     def _terminal_landmark_context_forward(self, token_ids, memory_metadata=None):
         """0058C: route once from the full working window, keep exact old K/V.
@@ -1086,7 +1138,8 @@ class DecoderLanguageModel:
     def forward_body(
         self, token_ids, finite_trace=None, return_cache=True,
         activation_checkpoint=False, position_ids=None, memory_metadata=None,
-        return_target_slice=False,
+        return_target_slice=False, input_embeddings=None, attention_allow_mask=None,
+        block_context_length=None, block_valid_mask=None,
     ):
         """Run embedding/Transformer/final-norm without materializing logits.
 
@@ -1095,6 +1148,20 @@ class DecoderLanguageModel:
         training window; explicit source positions preserve its location within
         the long sample for RoPE.
         """
+        if input_embeddings is not None and self.hierarchical_memory_enabled:
+            raise NotImplementedError(
+                "external active-block embeddings require direct dense context; "
+                "routed-memory support needs separate causal cache integration"
+            )
+        if block_context_length is not None:
+            if self.hierarchical_memory_enabled:
+                raise NotImplementedError("0079F does not support routed hierarchical memory")
+            if attention_allow_mask is not None:
+                raise ValueError("use either dense attention_allow_mask or compact block mode")
+            if input_embeddings is None:
+                raise ValueError("compact refinement requires explicit input embeddings")
+        if attention_allow_mask is not None and self.hierarchical_memory_enabled:
+            raise NotImplementedError("block masks do not support routed-memory mode")
         memory_context_cache = None
         target_slice = None
         terminal_memory = None
@@ -1129,8 +1196,14 @@ class DecoderLanguageModel:
                 raise ValueError(
                     "memory_metadata is only valid for hierarchical-memory models"
                 )
-            with performance_scope("model.embedding.forward"):
-                x, embed_cache = self.embedding.forward(token_ids)
+            if input_embeddings is not None:
+                if input_embeddings.ndim != 3 or input_embeddings.shape[-1] != self.config.d_model:
+                    raise ValueError("input_embeddings must have shape [B,T,d_model]")
+                x = input_embeddings
+                embed_cache = None
+            else:
+                with performance_scope("model.embedding.forward"):
+                    x, embed_cache = self.embedding.forward(token_ids)
             effective_position_ids = position_ids
             if finite_trace is not None:
                 finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
@@ -1170,6 +1243,9 @@ class DecoderLanguageModel:
                         terminal_memory=(
                             terminal_memory if i == self.memory_attention_layer else None
                         ),
+                        attention_allow_mask=attention_allow_mask,
+                        block_context_length=block_context_length,
+                        block_valid_mask=block_valid_mask,
                     )
             elif retain_block and not checkpoint_blocks:
                 with performance_scope(f"model.layer{i}.forward"):
@@ -1181,6 +1257,9 @@ class DecoderLanguageModel:
                         terminal_memory=(
                             terminal_memory if i == self.memory_attention_layer else None
                         ),
+                        attention_allow_mask=attention_allow_mask,
+                        block_context_length=block_context_length,
+                        block_valid_mask=block_valid_mask,
                     )
                 block_caches.append(block_cache)
             else:
@@ -1194,6 +1273,9 @@ class DecoderLanguageModel:
                         terminal_memory=(
                             terminal_memory if i == self.memory_attention_layer else None
                         ),
+                        attention_allow_mask=attention_allow_mask,
+                        block_context_length=block_context_length,
+                        block_valid_mask=block_valid_mask,
                     )
 
         with performance_scope("model.final_norm.forward"):
@@ -1224,6 +1306,9 @@ class DecoderLanguageModel:
             # Replay must use exactly the same explicit source positions.
             cache["position_ids"] = effective_position_ids
             cache["terminal_memory"] = terminal_memory
+            cache["attention_allow_mask"] = attention_allow_mask
+            cache["block_context_length"] = block_context_length
+            cache["block_valid_mask"] = block_valid_mask
         else:
             cache["block_caches"] = block_caches
 
@@ -1232,11 +1317,14 @@ class DecoderLanguageModel:
             cache["target_slice"] = target_slice
         else:
             cache["embed_cache"] = embed_cache
+            cache["external_input_embeddings"] = input_embeddings is not None
         return head_input, cache
 
     def forward(
         self, token_ids, finite_trace=None, return_cache=True,
         activation_checkpoint=False, position_ids=None, memory_metadata=None,
+        input_embeddings=None, attention_allow_mask=None,
+        block_context_length=None, block_valid_mask=None,
     ):
         """Full decoder forward.
 
@@ -1250,6 +1338,10 @@ class DecoderLanguageModel:
                 activation_checkpoint=activation_checkpoint,
                 position_ids=position_ids,
                 memory_metadata=memory_metadata,
+                input_embeddings=input_embeddings,
+                attention_allow_mask=attention_allow_mask,
+                block_context_length=block_context_length,
+                block_valid_mask=block_valid_mask,
             )
             target_slice = cache.get("target_slice")
         else:
@@ -1257,6 +1349,10 @@ class DecoderLanguageModel:
                 token_ids, finite_trace=finite_trace, return_cache=False,
                 position_ids=position_ids, memory_metadata=memory_metadata,
                 return_target_slice=True,
+                input_embeddings=input_embeddings,
+                attention_allow_mask=attention_allow_mask,
+                block_context_length=block_context_length,
+                block_valid_mask=block_valid_mask,
             )
 
         head_for_logits = head_input
@@ -1442,7 +1538,86 @@ class DecoderLanguageModel:
         # loss_cache is the cache dict returned by compute_loss (second element)
         return cross_entropy_backward(loss_cache)
     
-    def backward_body(self, dx, cache):
+    def forward_shared_context_block(self, active_embeddings, context_kv, *,
+                                     context_length, valid_block_mask=None,
+                                     return_cache=True, block_position_starts=None,
+                                     layer_group_plans=None, layer_retrieval_tasks=None):
+        """Only K provisional rows traverse the complete shared Transformer.
+
+        This is a bounded research path; it never alters committed-context
+        hidden states or the standard autoregressive forward implementation.
+        """
+        if self.hierarchical_memory_enabled:
+            if (self.config.memory_context.integration_mode != "routed_prefix"
+                    or any(b.attention.terminal_memory is not None
+                           for b in self.blocks[:self.active_layers])):
+                raise NotImplementedError("provisional terminal memory not supported")
+            if any(b.attention._retrieval_groups for b in self.blocks[:self.active_layers]) \
+                    and layer_retrieval_tasks is None:
+                raise ValueError("learned retrieval requires causal Q3 route tasks")
+        if len(context_kv) != self.active_layers:
+            raise ValueError("context KV count must equal active Transformer depth")
+        x = active_embeddings
+        caches = []
+        if layer_group_plans is not None and len(layer_group_plans) != self.active_layers:
+            raise ValueError("layer_group_plans must match the active depth")
+        if layer_retrieval_tasks is not None and len(layer_retrieval_tasks) != self.active_layers:
+            raise ValueError("layer_retrieval_tasks must match the active depth")
+        for layer_idx, (layer, kv) in enumerate(zip(self.blocks[:self.active_layers], context_kv)):
+            if return_cache:
+                x, cache = layer.forward(
+                    x, shared_context_kv=kv,
+                    shared_context_length=context_length,
+                    block_valid_mask=valid_block_mask, return_cache=True,
+                    shared_context_block_starts=block_position_starts,
+                    shared_context_plans=(
+                        None if layer_group_plans is None else layer_group_plans[layer_idx]
+                    ),
+                    shared_context_retrieval_tasks=(
+                        None if layer_retrieval_tasks is None else layer_retrieval_tasks[layer_idx]
+                    ),
+                )
+                caches.append(cache)
+            else:
+                x = layer.forward(
+                    x, shared_context_kv=kv,
+                    shared_context_length=context_length,
+                    block_valid_mask=valid_block_mask, return_cache=False,
+                    shared_context_block_starts=block_position_starts,
+                    shared_context_plans=(
+                        None if layer_group_plans is None else layer_group_plans[layer_idx]
+                    ),
+                    shared_context_retrieval_tasks=(
+                        None if layer_retrieval_tasks is None else layer_retrieval_tasks[layer_idx]
+                    ),
+                )
+        if is_low_precision_dtype(self.dtype):
+            head, norm_cache = self.final_norm.forward_compute(x, self.dtype)
+        else:
+            head, norm_cache = self.final_norm.forward(x)
+        logits, output_cache = self.output_proj.forward(head)
+        if not return_cache:
+            return logits
+        return logits, (caches, norm_cache, output_cache)
+
+    def backward_shared_context_block(self, dlogits, cache):
+        """Return K input gradients and per-layer causal-context K/V grads."""
+        blocks, norm_cache, output_cache = cache
+        # Match the original decoder backward's BF16 projection contract.
+        dlogits = (
+            dlogits.astype(self.dtype, copy=False)
+            if is_bfloat16_dtype(self.dtype) else dlogits
+        )
+        dx = self.output_proj.backward(dlogits, output_cache)
+        dx = self.final_norm.backward(dx, norm_cache)
+        kv_grads = [None] * len(blocks)
+        for index in range(len(blocks) - 1, -1, -1):
+            dx, kv_grads[index] = self.blocks[index].backward(
+                dx, blocks[index], return_shared_context_kv_grad=True,
+            )
+        return dx, kv_grads
+
+    def backward_body(self, dx, cache, *, shared_context_kv_grads=None):
         """Backpropagate from the final-normalized hidden representation.
 
         In 0057 ``activation_checkpoint="block"`` stores only each block's
@@ -1466,6 +1641,9 @@ class DecoderLanguageModel:
             block_checkpoints = cache.pop("block_checkpoints")
             position_ids = cache.pop("position_ids", None)
             terminal_memory = cache.pop("terminal_memory", None)
+            attention_allow_mask = cache.pop("attention_allow_mask", None)
+            block_context_length = cache.pop("block_context_length", None)
+            block_valid_mask = cache.pop("block_valid_mask", None)
             cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
             expected = active_layers - cache_start_layer
             if len(block_checkpoints) != expected:
@@ -1481,12 +1659,21 @@ class DecoderLanguageModel:
                         terminal_memory=(
                             terminal_memory if original_idx == self.memory_attention_layer else None
                         ),
+                        attention_allow_mask=attention_allow_mask,
+                        block_context_length=block_context_length,
+                        block_valid_mask=block_valid_mask,
                     )
                 # The backward only needs the reconstructed cache; dropping the
                 # replay output before launching backward minimizes transient VRAM.
                 del recomputed_output, block_input
                 with performance_scope(f"model.layer{original_idx}.backward"):
-                    dx = self.blocks[original_idx].backward(dx, block_cache)
+                    dx = self.blocks[original_idx].backward(
+                        dx, block_cache,
+                        shared_context_kv_grad=(
+                            None if shared_context_kv_grads is None
+                            else shared_context_kv_grads[original_idx]
+                        ),
+                    )
                 del block_cache
                 if (
                     self.hierarchical_memory_enabled
@@ -1503,7 +1690,13 @@ class DecoderLanguageModel:
             for original_idx in range(active_layers - 1, cache_start_layer - 1, -1):
                 block_cache = block_caches.pop()
                 with performance_scope(f"model.layer{original_idx}.backward"):
-                    dx = self.blocks[original_idx].backward(dx, block_cache)
+                    dx = self.blocks[original_idx].backward(
+                        dx, block_cache,
+                        shared_context_kv_grad=(
+                            None if shared_context_kv_grads is None
+                            else shared_context_kv_grads[original_idx]
+                        ),
+                    )
                 del block_cache
                 if (
                     self.hierarchical_memory_enabled
@@ -1525,9 +1718,14 @@ class DecoderLanguageModel:
                 self._hierarchical_context_backward(dx, memory_context_cache)
         else:
             embed_cache = cache.pop("embed_cache")
+            if cache.pop("external_input_embeddings", False):
+                # The caller owns the gradient: soft positions backpropagate
+                # through QE; actual-token prefix positions use scatter-add.
+                return dx
             with performance_scope("model.embedding.backward"):
                 self.embedding.backward(dx, embed_cache)
             del embed_cache
+        return None
 
     def backward(self, d_logits, cache):
         """Full historical backward from a materialized logits gradient."""
@@ -1556,5 +1754,5 @@ class DecoderLanguageModel:
             dx = xp.zeros(full_shape, dtype=dx_target.dtype)
             dx[:, start:stop, :] = dx_target
             del dx_target
-        self.backward_body(dx, cache)
+        return self.backward_body(dx, cache)
 

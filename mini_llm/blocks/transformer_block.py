@@ -134,7 +134,11 @@ class TransformerBlock:
     
     def forward(
         self, x, finite_trace=None, layer_idx=None, return_cache=True,
-        position_ids=None, terminal_memory=None,
+        position_ids=None, terminal_memory=None, attention_allow_mask=None,
+        block_context_length=None, block_valid_mask=None,
+        shared_context_kv=None, shared_context_length=None,
+        shared_context_block_starts=None, shared_context_plans=None,
+        shared_context_retrieval_tasks=None,
     ):
         """
         Forward pass through the Transformer block.
@@ -178,7 +182,22 @@ class TransformerBlock:
                     kwargs["position_ids"] = position_ids
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
-                attn_out, attn_cache = self.attention.forward(norm1_compute, **kwargs)
+                if attention_allow_mask is not None:
+                    kwargs["attention_allow_mask"] = attention_allow_mask
+                if block_context_length is not None:
+                    kwargs["block_context_length"] = block_context_length
+                    kwargs["block_valid_mask"] = block_valid_mask
+                if shared_context_kv is not None:
+                    attn_out, attn_cache = self.attention.forward_shared_context_block(
+                        norm1_compute, shared_context_kv,
+                        context_length=shared_context_length,
+                        valid_block_mask=block_valid_mask,
+                        block_position_starts=shared_context_block_starts,
+                        group_plans=shared_context_plans,
+                        retrieval_tasks=shared_context_retrieval_tasks,
+                    )
+                else:
+                    attn_out, attn_cache = self.attention.forward(norm1_compute, **kwargs)
         else:
             with performance_scope("block.attention.forward"):
                 kwargs = {"return_cache": False}
@@ -186,7 +205,22 @@ class TransformerBlock:
                     kwargs["position_ids"] = position_ids
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
-                attn_out = self.attention.forward(norm1_compute, **kwargs)
+                if attention_allow_mask is not None:
+                    kwargs["attention_allow_mask"] = attention_allow_mask
+                if block_context_length is not None:
+                    kwargs["block_context_length"] = block_context_length
+                    kwargs["block_valid_mask"] = block_valid_mask
+                if shared_context_kv is not None:
+                    attn_out = self.attention.forward_shared_context_block(
+                        norm1_compute, shared_context_kv,
+                        context_length=shared_context_length,
+                        valid_block_mask=block_valid_mask, return_cache=False,
+                        block_position_starts=shared_context_block_starts,
+                        group_plans=shared_context_plans,
+                        retrieval_tasks=shared_context_retrieval_tasks,
+                    )
+                else:
+                    attn_out = self.attention.forward(norm1_compute, **kwargs)
             attn_cache = None
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
@@ -253,7 +287,8 @@ class TransformerBlock:
         
         return y, cache
     
-    def backward(self, dy, cache):
+    def backward(self, dy, cache, *, shared_context_kv_grad=None,
+                 return_shared_context_kv_grad=False):
         """
         Backward pass through the Transformer block.
         
@@ -330,20 +365,31 @@ class TransformerBlock:
         # recover dL/d(alpha) from its raw weight-gradient matrix, avoiding a
         # retained [B,T,D] attention-output activation.
         with performance_scope("block.attention.backward"):
+            attn_kwargs = {
+                "shared_context_kv_grad": shared_context_kv_grad,
+                "return_shared_context_kv_grad": return_shared_context_kv_grad,
+            }
             if getattr(self, "residual_gates", False):
-                dnorm1_out, dalpha_attn = self.attention.backward(
-                    dattn_out,
-                    cache["attn_cache"],
+                result = self.attention.backward(
+                    dattn_out, cache["attn_cache"],
                     output_scale=self.alpha_attn.data,
-                    return_output_scale_grad=True,
+                    return_output_scale_grad=True, **attn_kwargs,
                 )
+                if return_shared_context_kv_grad:
+                    dnorm1_out, dalpha_attn, context_kv_grad = result
+                else:
+                    dnorm1_out, dalpha_attn = result
                 self.alpha_attn.grad += dalpha_attn.astype(
                     self.alpha_attn.grad.dtype, copy=False
                 )
             else:
-                dnorm1_out = self.attention.backward(
-                    dattn_out, cache["attn_cache"]
+                result = self.attention.backward(
+                    dattn_out, cache["attn_cache"], **attn_kwargs,
                 )
+                if return_shared_context_kv_grad:
+                    dnorm1_out, context_kv_grad = result
+                else:
+                    dnorm1_out = result
         
         # Backward through first RMSNorm.  As above, the fused path avoids a
         # separate BF16->FP32 gradient promotion.
@@ -362,4 +408,6 @@ class TransformerBlock:
         # Combine gradients for residual1 and norm1 in the residual dtype.
         dx = dresidual1 + dx_norm1
         
+        if return_shared_context_kv_grad:
+            return dx, context_kv_grad
         return dx

@@ -2482,6 +2482,9 @@ def indexed_attention_forward(
 
     batch, query_length, n_q_heads, d_head = q.shape
     k_batch, key_length, n_kv_heads, k_d_head = k.shape
+    shared_resident = getattr(k, '_is_shared_indexed_kv', False)
+    if shared_resident != getattr(v, '_is_shared_indexed_kv', False):
+        raise ValueError('K/V must both use the same storage representation')
     if k_batch != batch or k_d_head != d_head:
         raise ValueError("q/k batch or head width mismatch")
 
@@ -2547,7 +2550,8 @@ def indexed_attention_forward(
         # Gather only this query chunk.  For the 4k medium preset this changes
         # the largest local-head BF16 gather from [1,4,4096,1024,64] to
         # [1,4,chunk,1024,64].
-        k_selected = k[batch_ids, chunk_indices, kv_ids, :]
+        k_selected = (k.gather(batch_ids, chunk_indices, kv_ids)
+                      if shared_resident else k[batch_ids, chunk_indices, kv_ids, :])
         if bf16_attention:
             q_score = q_chunk.astype("float32") * scale
             k_score = k_selected.astype("float32")
@@ -2576,7 +2580,8 @@ def indexed_attention_forward(
         # gathering V so peak memory is bounded by one selected-value tensor.
         del scores, k_score, k_selected
 
-        v_selected = v[batch_ids, chunk_indices, kv_ids, :]
+        v_selected = (v.gather(batch_ids, chunk_indices, kv_ids)
+                      if shared_resident else v[batch_ids, chunk_indices, kv_ids, :])
         if bf16_attention:
             probs_compute = probs_chunk
             v_compute = v_selected.astype("float32")
@@ -2611,6 +2616,140 @@ def indexed_attention_forward(
         "query_chunk_size": query_chunk_size,
     }
     return context, cache
+
+
+
+# 0079O: optional, memory-bounded accumulation of indexed-attention K/V
+# gradients.  The existing NumPy/CuPy scatter path remains the reference.
+_INDEXED_DIRECT_BWD_MODULE = None
+
+
+def _direct_indexed_bwd_enabled():
+    """Enable the BF16/FP32-accumulating CUDA K/V backward scatter explicitly.
+
+    This changes neither key selection nor gradient propagation.  Keep opt-in
+    until GPU numerical and throughput tests have been run on the target card.
+    """
+    raw = os.environ.get("MINI_LLM_DIRECT_INDEXED_BWD", "0").strip().lower()
+    return BACKEND_NAME == "cupy" and raw not in {"", "0", "false", "off", "no"}
+
+
+def _get_direct_indexed_bwd_kernel():
+    """Lazy CUDA compilation; report errors rather than silently falling back."""
+    global _INDEXED_DIRECT_BWD_MODULE
+    if _INDEXED_DIRECT_BWD_MODULE is not None:
+        return _INDEXED_DIRECT_BWD_MODULE.get_function("indexed_bwd_scatter_f32")
+    code = r"""
+    extern "C" __global__ void indexed_bwd_scatter_f32(
+        const float* __restrict__ q,           // [B,H,Q,D]
+        const float* __restrict__ dc,          // [B,H,Q,D]
+        const float* __restrict__ p,           // [B,H,Q,S]
+        const float* __restrict__ ds,          // [B,H,Q,S]
+        const long long* __restrict__ keys,    // [B,H,Q,S]
+        const bool* __restrict__ valid,        // [B,H,Q,S]
+        const long long* __restrict__ kv_map,  // [H]
+        float* __restrict__ dk,                // [B,T,Hkv,D]
+        float* __restrict__ dv,                // [B,T,Hkv,D]
+        long long n_elements,
+        int n_heads, int n_query, int n_slots, int d_head,
+        int n_keys, int n_kv_heads, float scale)
+    {
+        for (long long linear = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             linear < n_elements;
+             linear += (long long)blockDim.x * gridDim.x) {
+            long long t = linear;
+            int d = (int)(t % d_head); t /= d_head;
+            int slot = (int)(t % n_slots); t /= n_slots;
+            int query = (int)(t % n_query); t /= n_query;
+            int head = (int)(t % n_heads); t /= n_heads;
+            int batch = (int)t;
+            long long pair = ((((long long)batch * n_heads + head)
+                                * n_query + query) * n_slots + slot);
+            if (!valid[pair]) continue;
+            long long key = keys[pair];
+            long long kvh = kv_map[head];
+            if (key < 0 || key >= n_keys || kvh < 0 || kvh >= n_kv_heads)
+                continue;
+            long long query_idx = ((((long long)batch * n_heads + head)
+                                    * n_query + query) * d_head + d);
+            long long dest = ((((long long)batch * n_keys + key)
+                               * n_kv_heads + kvh) * d_head + d);
+            // The entire O(B*H*Q*S*D) dK/dV outer product disappears.
+            // Atomic additions handle repeated positions and shared GQA heads.
+            atomicAdd(&dk[dest], ds[pair] * q[query_idx] * scale);
+            atomicAdd(&dv[dest], p[pair] * dc[query_idx]);
+        }
+    }
+    """
+    try:
+        module = xp.RawModule(
+            code=code, options=("--std=c++11",),
+            name_expressions=("indexed_bwd_scatter_f32",),
+        )
+        module.get_function("indexed_bwd_scatter_f32")
+    except Exception as exc:
+        raise RuntimeError(
+            "MINI_LLM_DIRECT_INDEXED_BWD=1: failed to compile the indexed "
+            "attention gradient scatter. Disable the flag to use the "
+            "reference backward implementation."
+        ) from exc
+    _INDEXED_DIRECT_BWD_MODULE = module
+    return module.get_function("indexed_bwd_scatter_f32")
+
+
+def _direct_indexed_kv_backward_scatter(
+    q_float, dc_float, probs, dscores, key_indices, valid_mask,
+    kv_head_indices, dk, dv, scale,
+):
+    """Accumulate K/V gradients without selected-value outer-product arrays.
+
+    All temporary input views are bounded by [B,H,Q,S] or [B,H,Q,D], never
+    [B,H,Q,S,D].  No host/device transfers or synchronizations are performed.
+    The kernel is restricted to the BF16 attention path, whose backward uses
+    FP32 probabilities, score gradients, and destination gradient buffers.
+    """
+    batch, n_heads, n_query, n_slots = map(int, probs.shape)
+    d_head = int(q_float.shape[-1])
+    n_keys, n_kv_heads = map(int, dk.shape[1:3])
+    if not (q_float.dtype == dc_float.dtype == probs.dtype ==
+            dscores.dtype == dk.dtype == dv.dtype == xp.float32):
+        raise TypeError("direct indexed backward requires FP32 accumulation")
+    if key_indices.dtype != xp.int64 or kv_head_indices.dtype != xp.int64:
+        raise TypeError("direct indexed backward requires int64 key/head indices")
+    if valid_mask.dtype != xp.bool_:
+        raise TypeError("direct indexed backward requires boolean valid mask")
+    if tuple(q_float.shape) != (batch, n_heads, n_query, d_head):
+        raise ValueError("direct indexed backward query shape mismatch")
+    if tuple(dc_float.shape) != tuple(q_float.shape):
+        raise ValueError("direct indexed backward upstream gradient shape mismatch")
+    if tuple(dk.shape) != tuple(dv.shape) or int(dk.shape[0]) != batch:
+        raise ValueError("direct indexed backward destination shape mismatch")
+
+    kernel = _get_direct_indexed_bwd_kernel()
+    # The attention plan is often a broadcast view.  Make the *indices*
+    # contiguous, not the much larger selected K/V vectors.
+    q_float = xp.ascontiguousarray(q_float)
+    dc_float = xp.ascontiguousarray(dc_float)
+    probs = xp.ascontiguousarray(probs)
+    dscores = xp.ascontiguousarray(dscores)
+    key_indices = xp.ascontiguousarray(key_indices)
+    valid_mask = xp.ascontiguousarray(valid_mask)
+    kv_head_indices = xp.ascontiguousarray(kv_head_indices)
+    if not (dk.flags.c_contiguous and dv.flags.c_contiguous):
+        raise ValueError("direct indexed backward requires contiguous destinations")
+    n_elements = batch * n_heads * n_query * n_slots * d_head
+    if n_elements == 0:
+        return
+    block_size = 256
+    grid = min(65535, (n_elements + block_size - 1) // block_size)
+    kernel((grid,), (block_size,), (
+        q_float, dc_float, probs, dscores, key_indices, valid_mask,
+        kv_head_indices, dk, dv, np.int64(n_elements),
+        np.int32(n_heads), np.int32(n_query), np.int32(n_slots),
+        np.int32(d_head), np.int32(n_keys), np.int32(n_kv_heads),
+        np.float32(scale),
+    ))
+
 
 def indexed_attention_backward(dcontext, cache):
     """Explicit chunked backward for :func:`indexed_attention_forward`.
@@ -2647,14 +2786,21 @@ def indexed_attention_backward(dcontext, cache):
     batch_ids = xp.arange(batch, dtype=xp.int64)[:, None, None, None]
     kv_ids = kv_head_indices[None, :, None, None]
     grad_dtype = xp.float32 if bf16_attention else q.dtype
+    shared_resident = getattr(k, '_is_shared_indexed_kv', False)
     dq_heads = xp.zeros(q_heads.shape, dtype=grad_dtype)
-    dk = xp.zeros(k.shape, dtype=grad_dtype)
-    dv = xp.zeros(v.shape, dtype=grad_dtype)
+    # Shared-resident history gradients accumulate in the *single* causal
+    # buffers; only the K active-token gradients are returned per model pass.
+    dk = xp.zeros(k.active.shape if shared_resident else k.shape, dtype=grad_dtype)
+    dv = xp.zeros(v.active.shape if shared_resident else v.shape, dtype=grad_dtype)
     dlogit_bias = (
         xp.zeros(probs.shape, dtype=probs.dtype)
         if cache["has_logit_bias"]
         else None
     )
+    # Reference execution is unchanged unless explicitly opted into the CUDA
+    # BF16 scatter.  FP32 accumulation is required by this specialized kernel.
+    direct_scatter = _direct_indexed_bwd_enabled() and bf16_attention
+    split_cuda = shared_resident and bf16_attention and BACKEND_NAME == 'cupy'
 
     for q_start, q_end in _query_chunks(query_length, query_chunk_size):
         chunk_indices = key_indices[:, :, q_start:q_end, :]
@@ -2678,25 +2824,26 @@ def indexed_attention_backward(dcontext, cache):
 
         # V branch: dP and dV. Gather and release V before K is gathered so the
         # two largest selected-value buffers do not coexist.
-        v_selected = v[batch_ids, chunk_indices, kv_ids, :]
+        v_selected = (v.gather(batch_ids, chunk_indices, kv_ids)
+                      if shared_resident else v[batch_ids, chunk_indices, kv_ids, :])
         v_compute = (
             v_selected.astype("float32") if bf16_attention else v_selected
         )
         dprobs = xp.matmul(
             dcontext_compute[..., None, :], v_compute.swapaxes(-1, -2)
         )[..., 0, :]
-        dv_selected = (
-            probs_compute[..., None] * dcontext_compute[..., None, :]
-        )
-
-        scatter_batch = xp.broadcast_to(batch_ids, chunk_indices.shape)
-        scatter_kv = xp.broadcast_to(kv_ids, chunk_indices.shape)
-        xp.add.at(
-            dv,
-            (scatter_batch, chunk_indices, scatter_kv),
-            dv_selected.astype(grad_dtype, copy=False),
-        )
-        del v_compute, v_selected, dv_selected
+        if not direct_scatter and not split_cuda:
+            dv_selected = probs_compute[..., None] * dcontext_compute[..., None, :]
+            if shared_resident:
+                v.add_gradient(chunk_indices, chunk_valid, kv_head_indices,
+                               dv_selected.astype(grad_dtype, copy=False), dv)
+            else:
+                scatter_batch = xp.broadcast_to(batch_ids, chunk_indices.shape)
+                scatter_kv = xp.broadcast_to(kv_ids, chunk_indices.shape)
+                xp.add.at(dv, (scatter_batch, chunk_indices, scatter_kv),
+                          dv_selected.astype(grad_dtype, copy=False))
+            del dv_selected
+        del v_compute, v_selected
 
         # probs is zero at every invalid key, so the softmax Jacobian gives an
         # exactly zero score gradient there (including completely empty rows).
@@ -2717,7 +2864,8 @@ def indexed_attention_backward(dcontext, cache):
         # K/Q branch.  The Q gradient is another batched [1,K] @ [K,D]
         # product; only dK requires an explicit outer-product tensor, and that
         # tensor is bounded by the query chunk.
-        k_selected = k[batch_ids, chunk_indices, kv_ids, :]
+        k_selected = (k.gather(batch_ids, chunk_indices, kv_ids)
+                      if shared_resident else k[batch_ids, chunk_indices, kv_ids, :])
         k_compute = (
             k_selected.astype("float32") if bf16_attention else k_selected
         )
@@ -2725,14 +2873,31 @@ def indexed_attention_backward(dcontext, cache):
             xp.matmul(dscores_compute[..., None, :], k_compute)[..., 0, :]
             * scale
         )
-        dk_selected = (
-            dscores_compute[..., None] * q_compute[..., None, :] * scale
-        )
-        xp.add.at(
-            dk,
-            (scatter_batch, chunk_indices, scatter_kv),
-            dk_selected.astype(grad_dtype, copy=False),
-        )
+        # K is no longer needed once dQ is computed.  Release the selected
+        # gather before launching direct scatter, reducing the live peak.
+        del k_compute, k_selected, dprobs
+        if split_cuda:
+            from mini_llm.ops.shared_indexed_kv import scatter_split_pair_cuda
+            scatter_split_pair_cuda(
+                q_compute, dcontext_compute, probs_chunk, dscores_compute,
+                chunk_indices, chunk_valid, kv_head_indices,
+                k, v, dk, dv, scale,
+            )
+        elif direct_scatter:
+            _direct_indexed_kv_backward_scatter(
+                q_compute, dcontext_compute, probs_chunk, dscores_compute,
+                chunk_indices, chunk_valid, kv_head_indices, dk, dv, scale,
+            )
+        else:
+            dk_selected = (
+                dscores_compute[..., None] * q_compute[..., None, :] * scale
+            )
+            if shared_resident:
+                k.add_gradient(chunk_indices, chunk_valid, kv_head_indices,
+                               dk_selected.astype(grad_dtype, copy=False), dk)
+            else:
+                xp.add.at(dk, (scatter_batch, chunk_indices, scatter_kv),
+                          dk_selected.astype(grad_dtype, copy=False))
 
     dq = dq_heads.transpose(0, 2, 1, 3)
     return dq, dk, dv, dlogit_bias

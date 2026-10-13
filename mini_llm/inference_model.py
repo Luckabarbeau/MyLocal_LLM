@@ -649,6 +649,57 @@ class InferenceModel:
         
         return logits
 
+    def forward_provisional_block(self, active_embeddings, state):
+        """0079D: K active provisional queries with reused committed-context KV.
+
+        Only available for direct, dense GQA. This does not mutate the cache;
+        provisional bidirectional states are never reusable causal entries.
+        """
+        if self.sparse_attention or state.long_memory_enabled:
+            raise NotImplementedError(
+                "predictive refinement cache supports direct dense attention only"
+            )
+        if self.embedding is None or self.lm_head is None:
+            raise RuntimeError("load training weights before provisional inference")
+        if active_embeddings.ndim != 3 or active_embeddings.shape[0] != state.batch_size or active_embeddings.shape[-1] != self.d_model:
+            raise ValueError("active_embeddings must be [B,K,d_model]")
+        k = int(active_embeddings.shape[1])
+        if k <= 0 or not state.has_capacity(k):
+            raise ValueError("provisional block exceeds KV horizon")
+        x = active_embeddings
+        for i, block in enumerate(self.blocks):
+            x = block.forward_provisional_block(
+                x, state.k_cache[i], state.v_cache[i], state.length
+            )
+        x = self.final_norm.forward(x)
+        head = x.astype(self.dtype, copy=False).reshape(-1, self.d_model)
+        return self._lm_head_forward(head).reshape(state.batch_size, k, self.vocab_size)
+
+    def append_causal_block(self, committed_ids, state):
+        """0079D: append actual tokens causally; never reuse provisional KV.
+
+        A single prefix-append prefill processes the K fixed tokens together,
+        with the existing triangular attention over new tokens and the
+        immutable preceding cache. State length advances only on success.
+        """
+        if self.sparse_attention or state.long_memory_enabled:
+            raise NotImplementedError(
+                "predictive refinement cache append supports direct dense attention only"
+            )
+        ids = xp.asarray(committed_ids, dtype=xp.int32)
+        if ids.ndim != 2 or ids.shape[0] != state.batch_size:
+            raise ValueError("committed_ids must be [B,K]")
+        k = int(ids.shape[1])
+        if k == 0:
+            return
+        if not state.has_capacity(k):
+            raise ValueError("committed block exceeds KV capacity")
+        x = self._embedding_lookup(ids)
+        start = int(state.length)
+        for i, block in enumerate(self.blocks):
+            x = block.prefill(x, state.k_cache[i], state.v_cache[i], start)
+        state.length += k
+
     def decode_one(self, next_ids: xp.ndarray, state: GenerationState) -> xp.ndarray:
         """
         Decode one token using cached K/V.

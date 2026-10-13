@@ -175,6 +175,14 @@ class ContextRetrievalAttention:
             # This profiler scope remains for continuity with earlier traces.
             pass
 
+        # Q3: provisional blocks reuse the original causal route decisions.
+        # Accumulate their attention-prior gradients into this ONE router
+        # backward, rather than rerunning a historical router for every pass.
+        extra = cache.pop("refinement_extra_dweights", None)
+        if extra is not None:
+            if extra.shape != dweights.shape:
+                raise ValueError("refinement route gradient has incorrect shape")
+            dweights = dweights + extra
         with performance_scope("retrieval.router.backward"):
             drouter_input = self.router.backward(
                 dweights,

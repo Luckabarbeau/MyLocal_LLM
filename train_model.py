@@ -88,6 +88,20 @@ def parse_args():
         ),
     )
     
+    # 0080N: optional shared production objective. None preserves the original
+    # AR CLI; a resumed 0080 checkpoint selects its stored objective by default.
+    parser.add_argument("--objective", choices=["ar", "block-proposal"], default=None,
+                        help="Prediction objective (default: AR, or saved checkpoint objective)")
+    parser.add_argument("--block-proposal-k", type=int, default=None)
+    parser.add_argument("--block-proposal-head-width", type=int, default=None)
+    parser.add_argument("--block-proposal-residual-scale", type=float, default=None)
+    parser.add_argument("--block-proposal-decoder-width", type=int, default=None)
+    parser.add_argument("--block-proposal-decoder-layers", type=int, default=None)
+    parser.add_argument("--block-proposal-decoder-heads", type=int, default=None)
+    parser.add_argument("--block-proposal-lambda", type=float, default=None)
+    parser.add_argument("--block-proposal-group-size", type=int, default=8,
+                        help="Bound number of K-block plans decoded together (default: 8)")
+
     # Progressive-depth training (0064B)
     parser.add_argument(
         "--progressive-depth",
@@ -771,6 +785,73 @@ def restore_compatible_stream_cursors(cache, stored_state, *, checkpoint_dir=Non
     return restored
 
 
+def build_training_objective(model, args, *, checkpoint_state=None):
+    """Construct only the 0080-specific objective, reusing production model.
+
+    A resume must agree *exactly* with serialized 0080 architecture. The
+    existing --model/config factory remains the source of all trunk settings.
+    """
+    from mini_llm.block_proposal.checkpoint import ARCHITECTURE
+    saved = checkpoint_state or {}
+    old = saved.get("prediction_objective", "block-proposal" if
+                    (saved.get("architecture") or {}).get("type") == ARCHITECTURE
+                    else "ar")
+    requested = args.objective or old
+    if checkpoint_state is not None and requested != old:
+        raise ValueError("cannot change checkpoint prediction objective on resume")
+    if requested == "ar":
+        explicit = [name for name in (
+            "block_proposal_k", "block_proposal_head_width", "block_proposal_residual_scale",
+            "block_proposal_decoder_width", "block_proposal_decoder_layers",
+            "block_proposal_decoder_heads", "block_proposal_lambda")
+            if getattr(args, name, None) is not None]
+        if explicit:
+            raise ValueError("block proposal options require --objective block-proposal")
+        return None
+    if requested != "block-proposal":
+        raise ValueError("unknown objective")
+    previous = (saved.get("architecture") or {}) if checkpoint_state is not None else {}
+    if checkpoint_state is not None and previous.get("type") != ARCHITECTURE:
+        raise ValueError("0080 resume requires a saved two-stage architecture")
+    if model.config.progressive_depth:
+        raise ValueError("0080 does not yet support progressive depth")
+    if model.config.memory_context.enabled and (
+        model.config.memory_context.integration_mode != "routed_prefix"
+        or model.config.memory_context.memory_training != "joint"
+    ):
+        raise ValueError("0080 requires joint routed-prefix learned memory")
+
+    def choice(flag, key, default):
+        value = getattr(args, flag, None)
+        saved_value = previous.get(key)
+        if saved_value is not None and value is not None and value != saved_value:
+            raise ValueError("0080 checkpoint option mismatch: " + flag)
+        return saved_value if value is None and saved_value is not None else (
+            default if value is None else value)
+
+    k = int(choice("block_proposal_k", "block_size", 8))
+    head_width = int(choice("block_proposal_head_width", "proposal_hidden_width",
+                            model.config.d_model))
+    residual = float(choice("block_proposal_residual_scale", "proposal_residual_scale", .1))
+    width = int(choice("block_proposal_decoder_width", "decoder_width", 384))
+    layers = int(choice("block_proposal_decoder_layers", "decoder_layers", 3))
+    heads = int(choice("block_proposal_decoder_heads", "decoder_heads", 6))
+    coefficient = float(choice("block_proposal_lambda", "lambda_proposal", .5))
+    if k < 1 or k > 64 or not 0 <= coefficient < float("inf"):
+        raise ValueError("0080 requires 1 <= K <= 64 and finite nonnegative lambda")
+    from mini_llm.block_proposal.proposals import HorizonProposalHead
+    from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
+    from mini_llm.block_proposal.objective import BlockProposalObjective
+    head = HorizonProposalHead(model, block_size=k, hidden_width=head_width,
+                               residual_scale=residual)
+    decoder = BlockPrefixDecoder(model, k, width=width, n_layers=layers, n_heads=heads)
+    net = TwoStageBlockModel(head, decoder, lambda_proposal=coefficient)
+    objective = BlockProposalObjective(net, block_group_size=args.block_proposal_group_size)
+    if checkpoint_state is not None and objective.checkpoint_metadata() != previous:
+        raise ValueError("0080 checkpoint architecture mismatch (model configuration or decoder FF width)")
+    return objective
+
+
 def main():
     args = parse_args()
     if args.resume_from and args.init_from:
@@ -1171,6 +1252,19 @@ def main():
             )
 
     model = setup_model(config, dtype=model_dtype)
+    saved_objective_state = None
+    if args.resume_from:
+        resume_metadata = checkpoint_path / "training_state.json"
+        if not resume_metadata.is_file():
+            raise ValueError("checkpoint missing training_state.json")
+        with resume_metadata.open(encoding="utf8") as handle:
+            saved_objective_state = json.load(handle)
+    training_objective = build_training_objective(
+        model, args, checkpoint_state=saved_objective_state)
+    if training_objective is not None:
+        print("Prediction objective: probabilistic K-block proposal + prefix decoder")
+        print("  K:", training_objective.net.proposal_head.block_size,
+              "decoder groups:", training_objective.block_group_size)
 
     if args.init_from:
         init_path = Path(args.init_from)
@@ -1208,23 +1302,45 @@ def main():
         print(f"Resuming from checkpoint: {checkpoint_path}")
         from mini_llm.checkpoint import load_checkpoint
 
-        param_names = [p.name for p in model.parameters()]
+        restore_parameters = (list(model.parameters()) if training_objective is None
+                              else training_objective.parameters())
+        param_names = [p.name for p in restore_parameters]
         loaded_params, optimizer_state, training_state = load_checkpoint(
             checkpoint_path,
             param_names=param_names,
         )
+        if training_objective is not None:
+            # AR historically tolerates missing tensors for architecture
+            # migrations. 0080 joint resume must *never* silently initialize
+            # absent horizon/decoder parameters or optimizer components.
+            if set(loaded_params) != set(param_names):
+                missing = set(param_names) - set(loaded_params)
+                raise ValueError("incomplete 0080 checkpoint parameters: " +
+                                 ", ".join(sorted(missing)[:8]))
+            if optimizer_state is None or any(
+                set((optimizer_state.get(name) or {})) != set(param_names)
+                for name in ("m", "v", "master_weights")
+            ):
+                raise ValueError("incomplete 0080 optimizer checkpoint state")
         # Copy checkpoint parameters into the already-allocated model and
         # immediately drop each temporary backend copy.  On CuPy,
         # load_checkpoint() materializes checkpoint arrays on the GPU, so
         # retaining loaded_params would otherwise keep a second complete model
         # resident throughout resumed training.
-        for p in model.parameters():
+        for p in restore_parameters:
             loaded = loaded_params.pop(p.name, None)
             if loaded is not None:
                 p.data[...] = loaded
                 del loaded
         loaded_params.clear()
         del loaded_params
+        if training_objective is not None:
+            for block in model.blocks:
+                if hasattr(block, "refresh_compute_buffers"):
+                    block.refresh_compute_buffers()
+            for layer in training_objective.net.decoder.layers:
+                if hasattr(layer.attn, "refresh_compute_buffers"):
+                    layer.attn.refresh_compute_buffers()
 
         # Return now-unreferenced CuPy blocks to the device before constructing
         # the trainer.  NumPy has no memory-pool API, so this is a no-op there.
@@ -1264,6 +1380,7 @@ def main():
             rng_states = None
     else:
         stored_optimizer_state = None
+        training_state = None  # New run: there is no checkpoint metadata.
         start_step = 0
         tokens_processed = 0
         rng_states = None
@@ -1468,7 +1585,11 @@ def main():
     saved_weighting = (training_state or {}).get(
         "gradient_accumulation_weighting", "microbatch"
     )
-    gradient_weighting = args.gradient_accumulation_weighting or saved_weighting
+    gradient_weighting = args.gradient_accumulation_weighting or (
+        "supervised_tokens" if training_objective is not None and not args.resume_from
+        else saved_weighting)
+    if training_objective is not None and gradient_weighting != "supervised_tokens":
+        raise ValueError("0080 requires --gradient-accumulation-weighting supervised_tokens")
     gradient_weighting_history = list(
         (training_state or {}).get("gradient_weighting_history", [])
     )
@@ -1538,7 +1659,10 @@ def main():
         stream_reuse_batches=args.stream_reuse_batches,
         stream_cache_dir=args.stream_cache_dir,
         local_mixture_manifest_sha256=mixture_sha,
+        training_objective=training_objective,
     )
+    if training_objective is not None and args.resume_from:
+        trainer.validate_block_proposal_resume_contract(training_state or {})
     trainer.gradient_weighting_history = gradient_weighting_history
     trainer.tokenizer_sha256 = tokenizer_sha
     trainer.data_fork = fork_provenance
@@ -1566,7 +1690,7 @@ def main():
                     print("  Retained remote cursors for unchanged sources: "
                           + ", ".join(restored))
         # Preserve the cumulative sample audit chain even across mixture changes.
-        if trainer.streaming_cache is not None and stored_provenance.get("sample_trace_sha256"):
+        if (trainer.streaming_cache is not None or training_objective is not None) and stored_provenance.get("sample_trace_sha256"):
             trainer.sample_trace_sha256 = stored_provenance["sample_trace_sha256"]
             trainer.sample_trace_microbatches = int(
                 stored_provenance.get("sample_trace_microbatches", 0)
@@ -1580,6 +1704,8 @@ def main():
 
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
+    if training_objective is not None and training_state:
+        trainer._block_proposal_supervised_tokens = int(training_state.get("supervised_tokens", 0))
     if args.resume_from and training_state:
         trainer.current_train_shard_idx = int(
             training_state.get("current_train_shard_idx", 0)
@@ -1655,6 +1781,8 @@ def main():
                         f"current={trainer.optimizer.master_weights[idx].shape}"
                     )
                 del value
+            if training_objective is not None and restored_masters != len(optimizer_params):
+                raise ValueError("0080 resume did not restore every FP32 master weight")
             if master_dict is not None:
                 master_dict.clear()
             if restored_masters:
@@ -1678,6 +1806,8 @@ def main():
                                 f"stored={m_value.shape}, current={trainer.optimizer.m[idx].shape}"
                             )
                         del m_value, v_value
+                if training_objective is not None and restored_count != len(optimizer_params):
+                    raise ValueError("0080 resume did not restore every AdamW moment")
                 print(f"Restored optimizer state for {restored_count} parameters")
                 missing = [
                     p.name for p in optimizer_params if p.name not in saved_m_names

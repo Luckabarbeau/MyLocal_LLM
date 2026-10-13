@@ -473,13 +473,22 @@ def chunked_bf16_cross_entropy_grad_inplace(
     return flat.reshape(logits.shape)
 
 
-def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False):
+def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False,
+                          normalizer_count=None):
     """
     Cross entropy loss with mixed precision support.
     
     Performs log-sum-exp in float32 for numerical stability,
     especially important for FP16/BF16 inputs where underflow is common.
+
+    ``normalizer_count`` is an optional, caller-verified sum of ``loss_mask``.
+    The default production AR path continues to verify the mask itself.
+    0080 can supply its known compact-block count without a per-CE GPU sync.
     """
+    if normalizer_count is not None:
+        normalizer_count = float(normalizer_count)
+        if not (0.0 < normalizer_count < float("inf")):
+            raise ValueError("normalizer_count must be positive and finite")
     vocab = logits.shape[-1]
     flat_logits = logits.reshape(-1, vocab)
     flat_targets = targets.reshape(-1)
@@ -497,17 +506,19 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
 
         if loss_mask is None:
             mask_f32 = None
-            normalizer_count = float(n)
+            if normalizer_count is None:
+                normalizer_count = float(n)
         else:
             mask_f32 = xp.asarray(loss_mask, dtype="float32").reshape(-1)
             if mask_f32.shape[0] != n:
                 raise ValueError(
                     f"loss_mask has {mask_f32.shape[0]} elements, expected {n}"
                 )
-            normalizer_count_backend = xp.sum(mask_f32)
-            normalizer_count = float(normalizer_count_backend.item())
-            if normalizer_count <= 0.0:
-                raise ValueError("loss_mask must select at least one target token")
+            if normalizer_count is None:
+                normalizer_count_backend = xp.sum(mask_f32)
+                normalizer_count = float(normalizer_count_backend.item())
+                if normalizer_count <= 0.0:
+                    raise ValueError("loss_mask must select at least one target token")
 
         reuse_logits = _inplace_bf16_ce_enabled(logits.dtype)
 
@@ -586,17 +597,19 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
         if loss_mask is None:
             loss_f32 = xp.mean(per_token_loss)
             mask_f32 = None
-            normalizer_count = float(n)
+            if normalizer_count is None:
+                normalizer_count = float(n)
         else:
             mask_f32 = xp.asarray(loss_mask, dtype="float32").reshape(-1)
             if mask_f32.shape[0] != n:
                 raise ValueError(
                     f"loss_mask has {mask_f32.shape[0]} elements, expected {n}"
                 )
-            normalizer_count_backend = xp.sum(mask_f32)
-            normalizer_count = float(normalizer_count_backend.item())
-            if normalizer_count <= 0.0:
-                raise ValueError("loss_mask must select at least one target token")
+            if normalizer_count is None:
+                normalizer_count_backend = xp.sum(mask_f32)
+                normalizer_count = float(normalizer_count_backend.item())
+                if normalizer_count <= 0.0:
+                    raise ValueError("loss_mask must select at least one target token")
             loss_f32 = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
         xp.divide(work, normalizer, out=work)
@@ -622,17 +635,19 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
         if loss_mask is None:
             loss = xp.mean(per_token_loss)
             mask_f32 = None
-            normalizer_count = float(n)
+            if normalizer_count is None:
+                normalizer_count = float(n)
         else:
             mask_f32 = xp.asarray(loss_mask, dtype="float32").reshape(-1)
             if mask_f32.shape[0] != n:
                 raise ValueError(
                     f"loss_mask has {mask_f32.shape[0]} elements, expected {n}"
                 )
-            normalizer_count_backend = xp.sum(mask_f32)
-            normalizer_count = float(normalizer_count_backend.item())
-            if normalizer_count <= 0.0:
-                raise ValueError("loss_mask must select at least one target token")
+            if normalizer_count is None:
+                normalizer_count_backend = xp.sum(mask_f32)
+                normalizer_count = float(normalizer_count_backend.item())
+                if normalizer_count <= 0.0:
+                    raise ValueError("loss_mask must select at least one target token")
             loss = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
         return (loss if return_device_loss else scalar(loss)), {

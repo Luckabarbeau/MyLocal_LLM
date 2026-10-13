@@ -9,7 +9,7 @@ This trainer does not perform optimizer updates, checkpointing, or GPU peak
 profiling; those belong to 0080F. Calls are synchronous and train one window.
 """
 
-from mini_llm.backend import xp, asnumpy, is_low_precision_dtype
+from mini_llm.backend import xp, asnumpy, is_low_precision_dtype, BACKEND_NAME
 from mini_llm.performance_profiler import performance_scope
 from .contracts import block_schedule
 
@@ -28,7 +28,8 @@ class SinglePassBlockTrainer:
     def train_window(self,source_inputs,target_labels,*,valid_target_mask,
                      memory_metadata=None,block_group_size=8,
                      compute_gradients=True,grad_scale=1.0,
-                     plan_condition='normal',prefix_condition='normal'):
+                     plan_condition='normal',prefix_condition='normal',
+                     defer_metrics=None):
         """Perform one shared causal forward/backward for an original LM batch.
 
         source_inputs: production [D history | T *current* inputs], not Q4
@@ -39,6 +40,11 @@ class SinglePassBlockTrainer:
         accumulating gradient across microbatches, caller should pass a
         per-microbatch ``grad_scale`` proportional to its unique target count.
         """
+        # GPU production training retains loss scalars on device until a
+        # bounded logging/optimizer boundary; standalone CPU references use
+        # the historical Python-float reporting contract by default.
+        if defer_metrics is None:
+            defer_metrics = BACKEND_NAME == 'cupy'
         if target_labels.ndim!=2 or source_inputs.ndim!=2:
             raise ValueError('expected source [B,D+T] and targets [B,T]')
         b,t=map(int,target_labels.shape)
@@ -97,6 +103,11 @@ class SinglePassBlockTrainer:
             prefix=int(trunk_cache['memory_context_cache']['prefix_length']) if trunk_cache is not None else int(main_hidden.shape[1]-t)
         else:
             prefix=0
+        # Reuse production routing-mode accounting without retaining the full
+        # backward cache / large intermediate tensors across microbatches.
+        used_mode = ((trunk_cache.get('memory_context_cache') or {}).get('prefix_mode', 'none')
+                     if trunk_cache is not None else ('routed_blocks' if prefix else 'none'))
+        routing_cache = {'prefix_mode': used_mode, 'prefix_length': int(prefix)}
         if int(main_hidden.shape[1])!=prefix+t:
             raise RuntimeError('unexpected main hidden working-window length')
         # Reusable gradient buffer is [B,selected_2K+T,d], never 64K.
@@ -109,6 +120,12 @@ class SinglePassBlockTrainer:
         selected_rows=schedule.source_row
         boundaries=schedule.boundary_working_index+prefix
         nblocks=int(schedule.targets.shape[0])
+        # One compact device->host transfer for all block counts, rather
+        # than one implicit GPU synchronization per group and per CE loss.
+        # The same schedule also establishes the global unique denominator.
+        block_counts=asnumpy(xp.sum(schedule.valid,axis=1)).astype('int64')
+        if int(block_counts.sum()) != nvalid:
+            raise RuntimeError('block schedule supervised-token count mismatch')
         shuffled_plan_bank=None
         shuffled_indices=None
         if plan_condition=='shuffled':
@@ -153,7 +170,9 @@ class SinglePassBlockTrainer:
                           if shuffled_plan_bank is not None else None)
                 metrics,cache=self.net.forward(h,y,valid,
                     plan_condition=plan_condition,prefix_condition=prefix_condition,
-                    plan_override=override)
+                    plan_override=override,defer_metrics=defer_metrics,
+                    known_valid_count=int(block_counts[start:end].sum()),
+                    trusted_block_schedule=True)
             ng=int(metrics['unique_supervised_tokens'])
             group_weight=ng/nvalid
             for key in sums:
@@ -180,4 +199,4 @@ class SinglePassBlockTrainer:
                     row_final_ce_sums=row_final_sum,
                     main_forward_passes=1,
                     main_backward_passes=1 if compute_gradients else 0,
-                    routed_prefix_slots=prefix)
+                    routed_prefix_slots=prefix, routing_cache=routing_cache)

@@ -131,6 +131,7 @@ class ExtendedTrainer:
         val_representative_seed: int = 78078,
         val_fixed_mixed_steps: int = 0,
         val_fixed_mixed_seed: int = 78078,
+        training_objective=None,
     ):
         """
         Initialize the extended trainer.
@@ -178,6 +179,17 @@ class ExtendedTrainer:
                 depth for 1000 updates, then grows twice deterministically.
         """
         self.model = model
+        # None is the historical/optimized AR objective, with identical calls
+        # and runtime defaults. Non-AR objective must share this model object.
+        if training_objective is not None:
+            from mini_llm.block_proposal.objective import BlockProposalObjective
+            if (not isinstance(training_objective, BlockProposalObjective)
+                    or training_objective.model is not model):
+                raise ValueError("training_objective must be a BlockProposalObjective bound to model")
+        self.training_objective = training_objective
+        self._last_step_block_proposal_metrics = None
+        self._last_block_validation_metrics = None
+        self._block_proposal_supervised_tokens = 0
         self.train_shard_paths = [Path(p) for p in train_shard_paths]
         self.val_shard_paths = [Path(p) for p in val_shard_paths]
         self.train_source_shards = (
@@ -282,6 +294,12 @@ class ExtendedTrainer:
         self.grad_accum_steps = grad_accum_steps
         if gradient_accumulation_weighting not in {"microbatch", "supervised_tokens"}:
             raise ValueError("gradient_accumulation_weighting must be microbatch or supervised_tokens")
+        if (self.training_objective is not None
+                and gradient_accumulation_weighting != "supervised_tokens"):
+            raise ValueError(
+                "0080 requires gradient_accumulation_weighting='supervised_tokens' "
+                "so every unique valid target has equal accumulated gradient weight"
+            )
         self.gradient_accumulation_weighting = gradient_accumulation_weighting
         self.grad_clip = grad_clip  # Store grad_clip parameter
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
@@ -408,7 +426,12 @@ class ExtendedTrainer:
         
         # Initialize optimizer with weight decay
         # Loss scaling is handled entirely by the trainer
-        self.optimization_parameters = list(model.optimization_parameters())
+        self.optimization_parameters = list(
+            model.optimization_parameters() if self.training_objective is None
+            else self.training_objective.parameters()
+        )
+        if self.training_objective is not None and optimizer_kind != "adamw":
+            raise ValueError("0080M currently validates shared AdamW only")
         if optimizer_kind not in {"adamw", "hybrid-muon"}:
             raise ValueError("optimizer_kind must be adamw or hybrid-muon")
         if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
@@ -1350,12 +1373,23 @@ class ExtendedTrainer:
         self.train_source_supervised_tokens[source_name] = (
             self.train_source_supervised_tokens.get(source_name, 0) + supervised
         )
-        if self.streaming_cache is not None:
+        if self.streaming_cache is not None or self.training_objective is not None:
             audit = hashlib.sha256(bytes.fromhex(self.sample_trace_sha256))
             audit.update(source_name.encode("utf-8"))
             audit.update(str(cache_key).encode("utf-8"))
             audit.update(memoryview(np.ascontiguousarray(inputs)).cast("B"))
             audit.update(memoryview(np.ascontiguousarray(targets)).cast("B"))
+            if self.training_objective is not None and metadata is not None:
+                # 0080 traces also pin valid-target and true-history masks.
+                # Empty/padded rows must not collide with fully valid rows.
+                for name in ("target_loss_mask", "target_valid_lengths",
+                             "history_valid_starts", "document_starts", "document_ends"):
+                    value = metadata.get(name)
+                    if value is not None:
+                        array = np.ascontiguousarray(value)
+                        audit.update(name.encode("ascii") + b"\0")
+                        audit.update(str((array.shape, array.dtype.str)).encode("ascii"))
+                        audit.update(memoryview(array).cast("B"))
             self.sample_trace_sha256 = audit.hexdigest()
             self.sample_trace_microbatches += 1
         self.tokens_processed += self.batch_size * self.seq_length
@@ -1763,6 +1797,14 @@ class ExtendedTrainer:
         )
         loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
         targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+        if self.training_objective is not None:
+            metrics = self.training_objective.evaluate_batch(
+                inputs, targets, loss_mask, batch_metadata,
+            )
+            # Retain only compact per-horizon sums; full decoder caches are
+            # already released by the objective after this call.
+            self._last_block_validation_metrics = metrics
+            return float(metrics["final_ce"]), targets, loss_mask
         # Retain the production validation head path. Full logits can OOM for
         # the 65k-vocabulary model, so honor chunking for the new diagnostics.
         if self.lm_head_chunk_tokens > 0:
@@ -1816,6 +1858,9 @@ class ExtendedTrainer:
         counts = {name: 0 for name in self.val_source_shards}
         digest = hashlib.sha256()
         nll_sum, weight_sum, capacity = 0., 0., 0
+        from mini_llm.block_proposal.objective import BlockValidationAccumulator
+        block_metrics = (BlockValidationAccumulator(self.training_objective.net.proposal_head.block_size)
+                         if self.training_objective is not None else None)
         for _ in range(self.val_fixed_mixed_steps):
             source = self._choose_source(rng)
             shard_idx = counts[source] % len(self.val_source_shards[source])
@@ -1826,6 +1871,8 @@ class ExtendedTrainer:
                 sampling_policy_override="document_first",
             )
             ce, scored_targets, mask = self._validation_batch_loss(inputs, targets, metadata)
+            if block_metrics is not None:
+                block_metrics.add(self._last_block_validation_metrics)
             weight = self._supervised_token_weight(scored_targets, mask)
             if not math.isfinite(ce):
                 raise ValueError("nonfinite fixed mixed validation loss")
@@ -1840,7 +1887,7 @@ class ExtendedTrainer:
                     arr = np.ascontiguousarray(part)
                     digest.update(str((arr.shape, arr.dtype.str)).encode("ascii"))
                     digest.update(memoryview(arr).cast("B"))
-        return {
+        output = {
             "step": int(self.step), "ce_nats_per_target": nll_sum / weight_sum,
             "perplexity": math.exp(nll_sum / weight_sum),
             "supervised_token_weight": weight_sum, "target_capacity_tokens": capacity,
@@ -1851,6 +1898,9 @@ class ExtendedTrainer:
             "mixture_manifest_sha256": self.local_mixture_manifest_sha256 or "",
             "tokenizer_sha256": getattr(self, "tokenizer_sha256", "") or "",
         }
+        if block_metrics is not None:
+            output.update(block_metrics.summary())
+        return output
 
     def _log_fixed_mixed_loss(self, result):
         if result is None:
@@ -1909,6 +1959,9 @@ class ExtendedTrainer:
             rng = np.random.default_rng(seed)
             sampled = hashlib.sha256()
             nll_sum, token_weight, token_count, capacity = 0., 0., 0, 0
+            from mini_llm.block_proposal.objective import BlockValidationAccumulator
+            block_metrics = (BlockValidationAccumulator(self.training_objective.net.proposal_head.block_size)
+                             if self.training_objective is not None else None)
             doc_lengths = []
             history_lengths = []
             unique_docs = set()
@@ -1935,6 +1988,8 @@ class ExtendedTrainer:
                 ce, scored_targets, loss_mask = self._validation_batch_loss(
                     inputs, targets, metadata
                 )
+                if block_metrics is not None:
+                    block_metrics.add(self._last_block_validation_metrics)
                 weight = self._supervised_token_weight(scored_targets, loss_mask)
                 if not math.isfinite(ce):
                     raise ValueError(f"nonfinite validation CE for {source!r}")
@@ -1977,6 +2032,8 @@ class ExtendedTrainer:
                 "fixed_seed": source_seed,
                 "sample_sha256": sampled.hexdigest(),
             }
+            if block_metrics is not None:
+                output[source].update(block_metrics.summary())
             if representative:
                 # Lengths describe sampled fragments, not an unbiased census
                 # of documents; individual fragments can be sampled repeatedly.
@@ -2154,6 +2211,7 @@ class ExtendedTrainer:
         accumulation_weight_sum = 0.0
         supervised_tokens_in_step = 0.0
         source_observations = []   # (source, CPU coverage, on-device CE scalar)
+        block_step_metrics = None
         step_routing_modes = self._new_routing_mode_stats()
         # Rescale by nominal token capacity before backward to avoid large
         # intermediate gradients.  The common scale cancels at normalization.
@@ -2199,6 +2257,55 @@ class ExtendedTrainer:
                 step_memory_token_stats, batch_metadata, loss_mask
             )
             
+            if self.training_objective is not None:
+                # Objective-specific math delegates to the existing 0080
+                # single-pass trainer; optimizer/accumulation remain here.
+                # This branch never runs for the default production AR path.
+                with performance_scope("train.block_proposal.forward_backward"):
+                    metrics = self.training_objective.forward_backward(
+                        inputs, targets, loss_mask, batch_metadata,
+                        grad_scale=self.loss_scale * microbatch_weight,
+                    )
+                if int(metrics["unique_supervised_tokens"]) != int(valid_tokens):
+                    raise ValueError("0080/production supervised-token denominators disagree")
+                if (self.memory_context is not None and
+                        self.memory_context.integration_mode == "routed_prefix"):
+                    self._merge_routing_mode_stats(
+                        step_routing_modes,
+                        self._routing_mode_observation(
+                            {"memory_context_cache": metrics["routing_cache"]},
+                            batch_metadata, valid_tokens, int(inputs.shape[0]),
+                        ),
+                    )
+                loss_sum_backend += xp.asarray(metrics["total_loss"], dtype=xp.float32) * microbatch_weight
+                source_observations.append((source, coverage, xp.asarray(metrics["final_ce"], dtype=xp.float32)))
+                if noise_active:
+                    noise.capture(accum_step + 1)
+                if memory_active:
+                    self._record_memory_snapshot(memory_records, "after_model_backward")
+                if block_step_metrics is None:
+                    block_step_metrics = {
+                        "unique_supervised_tokens": 0,
+                        "position_counts": xp.zeros_like(metrics["position_counts"]),
+                        "proposal_position_ce_sums": xp.zeros_like(metrics["proposal_position_ce_sums"]),
+                        "final_position_ce_sums": xp.zeros_like(metrics["final_position_ce_sums"]),
+                        # Compact device-resident scalars: no .item() or
+                        # float() on every 0080 microbatch. These are read at
+                        # the original bounded training logging cadence.
+                        "proposal_nll_sum": xp.zeros((), dtype=xp.float64),
+                        "final_nll_sum": xp.zeros((), dtype=xp.float64),
+                        "joint_loss_sum": xp.zeros((), dtype=xp.float64),
+                    }
+                block_step_metrics["unique_supervised_tokens"] += int(valid_tokens)
+                for name in ("position_counts", "proposal_position_ce_sums", "final_position_ce_sums"):
+                    block_step_metrics[name] += metrics[name]
+                for dst, key in (("proposal_nll_sum", "proposal_ce"),
+                                 ("final_nll_sum", "final_ce"),
+                                 ("joint_loss_sum", "total_loss")):
+                    block_step_metrics[dst] += xp.asarray(metrics[key], dtype=xp.float64) * valid_tokens
+                del inputs, targets, batch_metadata, loss_mask
+                continue
+
             # Forward pass.  0056 can stop before the vocabulary projection so
             # the LM head is evaluated in bounded token tiles instead of one
             # batch-sized [B,T,V] allocation.
@@ -2406,6 +2513,9 @@ class ExtendedTrainer:
             raise ValueError("no supervised tokens in accumulated optimizer step")
         avg_loss = float(_array_to_float(loss_sum_backend / accumulation_weight_sum))
         self._last_step_supervised_tokens = supervised_tokens_in_step
+        if block_step_metrics is not None:
+            self._last_step_block_proposal_metrics = block_step_metrics
+            self._block_proposal_supervised_tokens += block_step_metrics["unique_supervised_tokens"]
         self._last_step_supervised_utilization = (
             supervised_tokens_in_step / (
                 nominal_microbatch_tokens * self.grad_accum_steps
@@ -2562,6 +2672,92 @@ class ExtendedTrainer:
         # Sync grad_norm only at the end (necessary for logging)
         return avg_loss, float(_array_to_float(grad_norm_backend))
     
+    def block_proposal_resume_contract(self):
+        """Fields which must match to call an 0080 optimizer resume exact.
+
+        Intentionally excludes run directories/logging intervals and corpus
+        transitions: data fork provenance has its own production protocol.
+        """
+        if self.training_objective is None:
+            return None
+        schedule = self.scheduler
+        return {
+            "version": 1,
+            "batch_size": int(self.batch_size),
+            "grad_accum_steps": int(self.grad_accum_steps),
+            "seq_length": int(self.seq_length),
+            "target_seq_length": int(self.target_seq_length),
+            "eos_token_id": self.eos_token_id,
+            "gradient_accumulation_weighting": self.gradient_accumulation_weighting,
+            "grad_clip": float(self.grad_clip),
+            "loss_scale": float(self.loss_scale),
+            "weight_decay": float(self.optimizer.weight_decay),
+            "adam_beta1": float(self.optimizer.beta1),
+            "adam_beta2": float(self.optimizer.beta2),
+            "adam_eps": float(self.optimizer.eps),
+            "schedule": {
+                "peak_lr": float(schedule.peak_lr),
+                "warmup_steps": int(schedule.warmup_steps),
+                "total_steps": int(schedule.total_steps),
+                "min_lr": float(schedule.min_lr),
+            },
+            "source_choice_granularity": "one_source_per_microbatch",
+        }
+
+    def validate_block_proposal_resume_contract(self, saved_state):
+        if self.training_objective is None:
+            return
+        expected = saved_state.get("block_proposal_resume_contract")
+        if expected is None:
+            # Legacy 0080M and 0080I checkpoints have no such fingerprint.
+            # Loading is permitted but exact scheduling cannot be certified.
+            print("WARNING: legacy 0080 checkpoint lacks production resume contract; "
+                  "exact schedule/accumulation continuity is unverified")
+            return
+        actual = self.block_proposal_resume_contract()
+        if expected != actual:
+            mismatched = [k for k in sorted(set(expected) | set(actual))
+                          if expected.get(k) != actual.get(k)]
+            raise ValueError("0080 resume training contract mismatch: " +
+                             ", ".join(mismatched))
+
+    def _log_block_proposal_step(self):
+        """Log K-horizon statistics at existing bounded logging cadence."""
+        metrics = self._last_step_block_proposal_metrics
+        if self.training_objective is None or metrics is None:
+            return
+        from mini_llm.backend import asnumpy
+        import numpy as np
+        counts = np.asarray(asnumpy(metrics["position_counts"]), dtype=np.float64)
+        proposal = np.asarray(asnumpy(metrics["proposal_position_ce_sums"]), dtype=np.float64)
+        final = np.asarray(asnumpy(metrics["final_position_ce_sums"]), dtype=np.float64)
+        total = int(metrics["unique_supervised_tokens"])
+        # Logging is a bounded synchronization point. Convert the two joint
+        # CE sums once here, not in every decoder group / microbatch.
+        proposal_sum = float(asnumpy(metrics["proposal_nll_sum"]))
+        final_sum = float(asnumpy(metrics["final_nll_sum"]))
+        print("  0080: final CE={:.4f}, proposal CE={:.4f}, gain={:+.4f}, "
+              "unique_targets={:,}, K={}".format(
+                  final_sum / total, proposal_sum / total,
+                  (proposal_sum-final_sum) / total, total, len(counts)))
+        if self.log_file is None:
+            return
+        path = self.log_file.with_name(self.log_file.stem + ".block_proposal.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", newline="") as handle:
+            columns = ("step", "horizon", "count", "proposal_ce", "final_ce", "decoder_gain")
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            if handle.tell() == 0:
+                writer.writeheader()
+            for idx, count in enumerate(counts):
+                count = int(count)
+                writer.writerow({
+                    "step": self.step, "horizon": idx+1, "count": count,
+                    "proposal_ce": proposal[idx] / count if count else "",
+                    "final_ce": final[idx] / count if count else "",
+                    "decoder_gain": (proposal[idx]-final[idx]) / count if count else "",
+                })
+
     def save(self):
         """
         Issue #14: Save checkpoint with full state for resume.
@@ -2575,7 +2771,10 @@ class ExtendedTrainer:
         if self.checkpoint_dir is None:
             return
         
-        params = {p.name: p.data for p in self.model.parameters()}
+        params = {p.name: p.data for p in (
+            self.model.parameters() if self.training_objective is None
+            else self.training_objective.parameters()
+        )}
         
         # Issue #14: Include optimizer state
         # Note: AdamW stores m and v internally, not on Parameter objects
@@ -2638,7 +2837,8 @@ class ExtendedTrainer:
                 ),
                 "local_mixture_manifest_sha256": self.local_mixture_manifest_sha256,
                 "tokenizer_sha256": getattr(self, "tokenizer_sha256", None),
-                "sample_trace_sha256": self.sample_trace_sha256 if self.streaming_cache else None,
+                "sample_trace_sha256": self.sample_trace_sha256 if (
+                    self.streaming_cache or self.training_objective is not None) else None,
                 "sample_trace_microbatches": self.sample_trace_microbatches,
                 "effective_weights": {
                     name: float(weight) for name, weight in zip(
@@ -2675,6 +2875,22 @@ class ExtendedTrainer:
             },
         }
         
+        if self.training_objective is not None:
+            # Discriminates joint 0080 checkpoints from AR checkpoints. Loading
+            # and strict provenance checks remain in the 0080N milestone.
+            training_state["architecture"] = self.training_objective.checkpoint_metadata()
+            training_state["prediction_objective"] = self.training_objective.name
+            # The existing 0080 legacy reader checks these exact fields.
+            # The full production resume/provenance bridge is deferred to 0080N.
+            training_state["optimizer_step"] = int(self.optimizer.step_index)
+            training_state["optimizer_options"] = {
+                key: float(getattr(self.optimizer, key))
+                for key in ("lr", "beta1", "beta2", "eps", "weight_decay")
+            }
+            training_state["tokenizer_hash"] = getattr(self, "tokenizer_sha256", None)
+            training_state["supervised_tokens"] = int(self._block_proposal_supervised_tokens)
+            training_state["block_proposal_resume_contract"] = self.block_proposal_resume_contract()
+
         # Issue #12: Include RNG states
         training_state["train_rng_state"] = self.train_rng.bit_generator.state
         training_state["val_rng_state"] = self.val_rng.bit_generator.state
@@ -2908,6 +3124,8 @@ class ExtendedTrainer:
                     f"{throughput_text}"
                 )
 
+                if self.training_objective is not None:
+                    self._log_block_proposal_step()
                 if (
                     self.memory_context is not None
                     and memory_interval_stats is not None

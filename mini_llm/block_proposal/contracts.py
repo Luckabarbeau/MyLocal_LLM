@@ -11,7 +11,8 @@ never consumed as previous-token decoder inputs.
 """
 
 from dataclasses import dataclass
-from mini_llm.backend import xp
+import numpy as np
+from mini_llm.backend import xp, asnumpy
 
 
 @dataclass(frozen=True)
@@ -49,33 +50,36 @@ def block_schedule(labels, valid_mask, block_size, *, vocab_size=None):
         raise ValueError('valid targets must be prefix-contiguous within each document')
     if vocab_size is not None and bool(xp.any(valid & ((labels < 0) | (labels >= int(vocab_size))))):
         raise ValueError('valid target IDs outside vocabulary')
-    ids = xp.where(valid, labels, 0)
-    rows, starts, blocks, masks = [], [], [], []
-    for b in range(batch):
-        for start in range(0, time, k):
-            if not bool(xp.any(valid[b, start:start+k])):
-                continue
-            end = min(time, start + k)
-            length = end - start
-            block = xp.zeros((k,), dtype=labels.dtype)
-            mask = xp.zeros((k,), dtype=xp.bool_)
-            block[:length] = ids[b, start:end]
-            mask[:length] = valid[b, start:end]
-            rows.append(b)
-            starts.append(start)
-            blocks.append(block)
-            masks.append(mask)
-    if not blocks:
+    # The mask is prefix-contiguous (verified above). Copy only B valid
+    # lengths to the host, then construct compact block indices in one batch.
+    # The historical per-block xp.any() caused one GPU synchronization for
+    # *every* K-block (e.g. 1,024 syncs for B=2, T=4096, K=8).
+    lengths = asnumpy(xp.sum(valid, axis=1)).astype(np.int64)
+    counts = (lengths + k - 1) // k
+    nblocks = int(counts.sum())
+    if nblocks == 0:
         raise ValueError('no supervised targets in batch')
+    rows_host = np.repeat(np.arange(batch, dtype=np.int64), counts)
+    starts_host = np.concatenate([
+        np.arange(int(count) * k, dtype=np.int64)[::k]
+        for count in counts if count
+    ])
+    rows = xp.asarray(rows_host, dtype=xp.int64)
+    starts = xp.asarray(starts_host, dtype=xp.int64)
+    columns = starts[:, None] + xp.arange(k, dtype=xp.int64)[None, :]
+    masks = columns < xp.asarray(lengths, dtype=xp.int64)[rows, None]
+    # Clamping handles a short final block before masking padded values.
+    gather_columns = xp.minimum(columns, time - 1)
+    blocks = xp.where(masks, labels[rows[:, None], gather_columns], 0)
     return BlockSchedule(
-        source_row=xp.asarray(rows, dtype=xp.int64),
-        boundary_working_index=xp.asarray(starts, dtype=xp.int64),
-        targets=xp.stack(blocks), valid=xp.stack(masks),
-        unique_supervised_tokens=int(xp.sum(valid)),
+        source_row=rows, boundary_working_index=starts,
+        targets=blocks, valid=masks,
+        unique_supervised_tokens=int(lengths.sum()),
     )
 
 
-def shifted_decoder_tokens(target_blocks, valid_mask, *, bos_token=-1):
+def shifted_decoder_tokens(target_blocks, valid_mask, *, bos_token=-1,
+                           trusted_prefix_contiguous=False):
     """Teacher-forcing inputs: [BOS,y1,...,y(K-1)], never y_j itself.
 
     ``bos_token`` is a *symbol*, not an input vocabulary ID. The decoder maps
@@ -87,7 +91,7 @@ def shifted_decoder_tokens(target_blocks, valid_mask, *, bos_token=-1):
     valid = xp.asarray(valid_mask, dtype=xp.bool_)
     if valid.shape != target_blocks.shape:
         raise ValueError('target validity shape mismatch')
-    if bool(xp.any(valid[:, 1:] & ~valid[:, :-1])):
+    if not trusted_prefix_contiguous and bool(xp.any(valid[:, 1:] & ~valid[:, :-1])):
         raise ValueError('valid block slots must be prefix-contiguous')
     shifted = xp.full(target_blocks.shape, int(bos_token), dtype=xp.int64)
     shifted[:, 1:] = xp.where(valid[:, :-1] & valid[:, 1:], target_blocks[:, :-1], int(bos_token))

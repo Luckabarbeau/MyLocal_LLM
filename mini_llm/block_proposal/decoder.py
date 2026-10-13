@@ -131,7 +131,8 @@ class BlockPrefixDecoder:
             p.zero_grad()
 
     def forward(self,proposal_logits,targets,valid,*,plan_condition='normal',
-                prefix_condition='normal',plan_override=None):
+                prefix_condition='normal',plan_override=None,
+                trusted_block_schedule=False):
         """Return final prior-plus-correction logits and differentiable tape.
 
         ``targets`` are consumed only *shifted*, so DEC_j sees y_<j. They
@@ -142,7 +143,7 @@ class BlockPrefixDecoder:
         n,k,v=proposal_logits.shape
         if targets.shape != (n,k) or valid.shape != (n,k):
             raise ValueError('target/mask must be [N,K]')
-        if not bool(xp.any(valid)):
+        if not trusted_block_schedule and not bool(xp.any(valid)):
             raise ValueError('no valid proposal tokens')
         if plan_condition not in ('normal','neutral','shuffled','external'):
             raise ValueError('unknown plan conditioning ablation')
@@ -150,12 +151,13 @@ class BlockPrefixDecoder:
             raise ValueError('unknown committed-prefix ablation')
         if (plan_condition in ('shuffled','external')) != (plan_override is not None):
             raise ValueError('shuffled/external plan conditioning requires a plan bank')
-        shifted=shifted_decoder_tokens(targets,valid)
+        shifted=shifted_decoder_tokens(
+            targets,valid,trusted_prefix_contiguous=trusted_block_schedule)
         if prefix_condition=='masked':
             # Mask *all* committed-token content, retaining DEC positions,
             # PLAN attention, BOS embedding, and all original prior logits.
             shifted=xp.full_like(shifted,-1)
-        if bool(xp.any((shifted>=v) | (shifted < -1))):
+        if not trusted_block_schedule and bool(xp.any((shifted>=v) | (shifted < -1))):
             raise ValueError('committed decoder token ID outside vocabulary')
         z,expectation_cache=self.expectation.forward(proposal_logits)
         if plan_condition=='neutral':
@@ -226,10 +228,11 @@ class BlockPrefixDecoder:
             if self.low_precision else xp.where(valid_previous[:,:,None],d_real,0),
             cache.token_linear_cache)
         # Use only previous genuine tokens. Never scatter padding or BOS into E.
-        if bool(xp.any(valid_previous)):
-            xp.add.at(self.model.embedding.W.grad,
-                      cache.shifted[valid_previous],
-                      d_tokens[valid_previous])
+        # Empty indexed scatter is a no-op, avoiding an implicit GPU
+        # synchronization for every decoder group.
+        xp.add.at(self.model.embedding.W.grad,
+                  cache.shifted[valid_previous],
+                  d_tokens[valid_previous])
         d_prop_from_plan=self.expectation.backward(d_z,cache.expectation_cache)
         return d_final_logits + d_prop_from_plan
 
@@ -291,26 +294,43 @@ class TwoStageBlockModel:
         self.decoder.zero_grad()
 
     def forward(self,main_boundaries,targets,valid,*,plan_condition='normal',
-                prefix_condition='normal',plan_override=None):
+                prefix_condition='normal',plan_override=None,
+                defer_metrics=False,known_valid_count=None,
+                trusted_block_schedule=False):
         lp,cp=self.proposal_head.forward(main_boundaries)
         lf,cd=self.decoder.forward(lp,targets,valid,
             plan_condition=plan_condition,prefix_condition=prefix_condition,
-            plan_override=plan_override)
+            plan_override=plan_override,
+            trusted_block_schedule=trusted_block_schedule)
         # In-place BF16 CE may overwrite the logits buffer; preserve raw
         # proposal logits for the 0080C backward and diagnostics.
         copy_ce=self.decoder.low_precision and os.environ.get('MINI_LLM_INPLACE_BF16_CE','0') not in ('0','false','off','')
+        # Production 0080 supplies the verified group count once per group
+        # from its compact block schedule. Legacy research calls retain the
+        # old independently verified count and host-scalar metrics.
+        n_unique=(int(known_valid_count) if known_valid_count is not None
+                  else int(xp.sum(valid)))
+        if n_unique < 1 or n_unique > int(valid.size):
+            raise ValueError('invalid group supervised-token count')
+        safe_targets=xp.where(valid,targets,0)
         prop_loss,prop_cache=cross_entropy_forward(lp.copy() if copy_ce else lp,
-                        xp.where(valid,targets,0),loss_mask=valid)
-        final_loss,final_cache=cross_entropy_forward(lf,xp.where(valid,targets,0),loss_mask=valid)
-        n_unique=int(xp.sum(valid))
+                        safe_targets,loss_mask=valid,
+                        return_device_loss=defer_metrics,
+                        normalizer_count=n_unique)
+        final_loss,final_cache=cross_entropy_forward(lf,safe_targets,loss_mask=valid,
+                        return_device_loss=defer_metrics,
+                        normalizer_count=n_unique)
         prop_nll=_cached_per_token_nll(prop_cache,targets,valid)
         final_nll=_cached_per_token_nll(final_cache,targets,valid)
         metrics={'proposal_position_ce_sums':xp.sum(prop_nll,axis=0),
                  'final_position_ce_sums':xp.sum(final_nll,axis=0),
                  'position_counts':xp.sum(valid.astype(xp.int64),axis=0),
                  'block_row_final_ce_sums':xp.sum(final_nll,axis=1),
-                 'proposal_ce':float(prop_loss),'final_ce':float(final_loss),
-                 'total_loss':float(final_loss)+self.lambda_proposal*float(prop_loss),
+                 'proposal_ce':prop_loss if defer_metrics else float(prop_loss),
+                 'final_ce':final_loss if defer_metrics else float(final_loss),
+                 'total_loss':(final_loss+self.lambda_proposal*prop_loss
+                               if defer_metrics else
+                               float(final_loss)+self.lambda_proposal*float(prop_loss)),
                  'unique_supervised_tokens':n_unique}
         return metrics,JointCache(cp,cd,final_cache,prop_cache,n_unique)
 

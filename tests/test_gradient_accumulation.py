@@ -51,12 +51,21 @@ class TestGradientAccumulation:
                 warmup_steps=10,
             )
 
-            # Run a few steps - should not raise any errors
-            for _ in range(3):
-                loss, grad_norm = trainer.train_step()
-                assert isinstance(loss, float)
-                assert isinstance(grad_norm, float)
-                assert np.isfinite(loss)
+            try:
+                # Run a few steps - should not raise any errors
+                for _ in range(3):
+                    loss, grad_norm = trainer.train_step()
+                    assert isinstance(loss, float)
+                    assert isinstance(grad_norm, float)
+                    assert np.isfinite(loss)
+            finally:
+                # ExtendedTrainer holds read-only memmaps in its LRU caches.
+                # On Windows, TemporaryDirectory cannot unlink a mapped file.
+                # Close these test-only mappings before removing the directory.
+                for cache in (trainer.shards, trainer.val_shards):
+                    for shard in cache.values():
+                        trainer._close_mapped_shard(shard)
+                    cache.clear()
 
 
 class TestLossScaling:

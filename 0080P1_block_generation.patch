@@ -1,0 +1,436 @@
+diff --git a/benchmarks/evaluate_generation.py b/benchmarks/evaluate_generation.py
+index b9140dd..b5c7e73 100644
+--- a/benchmarks/evaluate_generation.py
++++ b/benchmarks/evaluate_generation.py
+@@ -240,9 +240,33 @@ def load_generator(checkpoint: Path, requested_context: int | None,
+     }
+ 
+ 
++def load_block_generator(checkpoint: Path, tokenizer_path: Path | None,
++                         requested_context: int | None):
++    """Strict 0080I loader; never silently evaluate a block model as AR."""
++    from mini_llm.block_proposal.benchmark_adapter import (
++        load_0080i_block_checkpoint, BlockProposalTextGenerator)
++    state = json.loads((checkpoint / "training_state.json").read_text(encoding="utf-8"))
++    signature = state.get("data_provenance", {})
++    default_tokenizer = Path(signature.get("mixture_root", "")) / "tokenizer.json"
++    tokenizer_path = tokenizer_path or default_tokenizer
++    net, tokenizer, info = load_0080i_block_checkpoint(checkpoint, tokenizer_path)
++    limit = int(requested_context) if requested_context is not None else info["context"]
++    generator = BlockProposalTextGenerator(net, tokenizer, max_context=limit)
++    info.update(context=limit,
++        runtime_env={k: v for k, v in sorted(os.environ.items()) if k.startswith("MINI_LLM_")})
++    print(f"Loaded two-stage block checkpoint step={info['step']}, K={info['block_size']}, "
++          f"context={limit}, backend={info['backend']}", flush=True)
++    return generator, info
++
++
+ def main(argv: list[str] | None = None) -> int:
+     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     parser.add_argument("--checkpoint", type=Path, required=True)
++    parser.add_argument("--architecture", choices=("autoregressive", "block-proposal-0080i"),
++                        default="autoregressive",
++                        help="Explicit model path; block-proposal-0080i loads both proposal and decoder weights")
++    parser.add_argument("--tokenizer-path", type=Path,
++                        help="Required if the saved 0080I mixture root is unavailable")
+     parser.add_argument("--output-dir", type=Path, required=True)
+     parser.add_argument("--prompt-suite", type=Path, default=DEFAULT_SUITE)
+     parser.add_argument("--prompt-ids", help="Comma-separated IDs; default is all 24")
+@@ -264,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
+     parser.add_argument("--runtime-profile", choices=("auto", "gpu-fast", "consumer-gpu", "reference"))
+     parser.add_argument("--resume", action="store_true", help="Continue a matching interrupted benchmark")
+     parser.add_argument("--dry-run", action="store_true", help="Show selection without loading model")
++    parser.add_argument("--print-generations", action="store_true",
++                        help="Print generated prose/code excerpts after each sample")
+     args = parser.parse_args(argv)
+ 
+     raw_suite = args.prompt_suite.read_bytes()
+@@ -304,6 +330,10 @@ def main(argv: list[str] | None = None) -> int:
+         "max_context_request": args.max_context,
+         "runtime_profile_request": args.runtime_profile,
+     }
++    if args.architecture == "block-proposal-0080i":
++        config.update(architecture=args.architecture,
++                      tokenizer_path_request=(str(args.tokenizer_path.resolve())
++                                              if args.tokenizer_path else None))
+     print(f"Generation suite: {len(prompts)} prompts x {len(seeds)} seeds "
+           f"x {len(variants)} strategies = {expected} samples", flush=True)
+     for variant in variants:
+@@ -337,7 +367,13 @@ def main(argv: list[str] | None = None) -> int:
+         print("Already complete; summaries refreshed.")
+         return 0
+ 
+-    generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile)
++    if args.architecture == "block-proposal-0080i":
++        if args.backend != "kv-cache":
++            parser.error("block-proposal-0080i currently supports only --backend kv-cache")
++        generator, meta = load_block_generator(args.checkpoint, args.tokenizer_path,
++                                               args.max_context)
++    else:
++        generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile)
+     if args.resume:
+         previous = old["checkpoint_metadata"]
+         if (previous.get("step") != meta["step"] or
+@@ -390,6 +426,9 @@ def main(argv: list[str] | None = None) -> int:
+                                    "prefill_time_s": timing.get("prefill_time_s"),
+                                    "tokens_per_sec": timing.get("tokens_per_sec")},
+                     }
++                    if args.print_generations:
++                        print("    Generated:\n" + generated_text[:1200] +
++                              ("..." if len(generated_text) > 1200 else ""), flush=True)
+                     handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                     handle.flush()
+                     records.append(row)
+diff --git a/mini_llm/block_proposal/benchmark_adapter.py b/mini_llm/block_proposal/benchmark_adapter.py
+new file mode 100644
+index 0000000..c369df7
+--- /dev/null
++++ b/mini_llm/block_proposal/benchmark_adapter.py
+@@ -0,0 +1,131 @@
++"""0080P1: frozen two-stage checkpoint adapter for the existing prompt benchmark.
++
++Supports the 0080I small CPU research checkpoint layout.  The big-model
++0080N/0080O production checkpoint format requires a separately verified loader;
++this adapter deliberately refuses to misinterpret it as conventional AR.
++"""
++from __future__ import annotations
++
++import json
++import time
++from pathlib import Path
++
++import numpy as np
++
++from mini_llm.backend import xp, BACKEND_NAME, synchronize
++from mini_llm.model.decoder_lm import DecoderLanguageModel
++from mini_llm.inference_model import InferenceModel
++from mini_llm.block_proposal.proposals import HorizonProposalHead
++from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
++from mini_llm.block_proposal.checkpoint import ARCHITECTURE, load_two_stage_checkpoint
++from mini_llm.block_proposal.generation import SequentialCommitBlockGenerator
++from mini_llm.predictive_refinement.real_data import sha256
++from mini_llm.tokenizer.tokenizer import FastBPETokenizer
++
++
++def load_0080i_block_checkpoint(checkpoint: Path, tokenizer_path: Path):
++    """Load exact 0080I weights/config without opening the original train shards."""
++    from examples.evaluate_block_proposal_ablations_0080j import _reconstruct
++
++    checkpoint = Path(checkpoint).expanduser().resolve()
++    tokenizer_path = Path(tokenizer_path).expanduser().resolve()
++    state = json.loads((checkpoint / 'training_state.json').read_text(encoding='utf-8'))
++    if not isinstance(state.get('architecture'), dict) or state['architecture'].get('type') != ARCHITECTURE:
++        raise ValueError('expected a two-stage 0080I research checkpoint; conventional AR is not supported here')
++    signature = state.get('data_provenance')
++    if not isinstance(signature, dict) or signature.get('version') != '0080I-v1':
++        raise ValueError('0080P1 needs an 0080I-v1 checkpoint; production 500M format is not yet supported')
++    tokenizer = FastBPETokenizer.load(str(tokenizer_path))
++    if state.get('tokenizer_hash') != sha256(tokenizer_path):
++        raise ValueError('checkpoint tokenizer checksum differs from the selected tokenizer')
++    a, cfg = _reconstruct(signature, len(tokenizer))
++    main = DecoderLanguageModel(cfg, rng_seed=a.seed, dtype=a.dtype)
++    head = HorizonProposalHead(main, a.block_size, hidden_width=a.proposal_width, rng_seed=a.seed+1)
++    decoder = BlockPrefixDecoder(main, a.block_size, width=a.decoder_width,
++        n_layers=a.decoder_layers, n_heads=a.decoder_heads, rng_seed=a.seed+2)
++    net = TwoStageBlockModel(head, decoder, lambda_proposal=a.lambda_proposal)
++    # Check both the complete exact architecture fingerprint and tokenizer hash.
++    load_two_stage_checkpoint(checkpoint, net, optimizer=None,
++        expected_tokenizer_hash=sha256(tokenizer_path),
++        expected_data_provenance=signature)
++    if int(state['step']) < 0:
++        raise ValueError('invalid training step')
++    return net, tokenizer, dict(step=int(state['step']), context=int(cfg.memory_context.memory_length),
++        model_dtype=cfg.dtype, backend=BACKEND_NAME, tokenizer_path=str(tokenizer_path),
++        architecture='0080I_two_stage', block_size=a.block_size)
++
++
++class BlockProposalTextGenerator:
++    """Same generate() contract as TextGenerator for benchmarks/evaluate_generation.py."""
++
++    def __init__(self, net, tokenizer, *, max_context):
++        self.net = net
++        self.tokenizer = tokenizer
++        self.max_context = int(max_context)
++        self.model = net.proposal_head.model
++        mc = self.model.config.memory_context
++        max_trained = int(mc.memory_length) if mc.enabled else int(self.model.config.context_length)
++        if self.max_context < 1 or self.max_context > max_trained:
++            raise ValueError(f'context {self.max_context} outside checkpoint range [1,{max_trained}]')
++        self.inference = InferenceModel(self.model.config, dtype=self.model.dtype)
++        self.inference.set_weights(self.model)
++        self.eos_id = self.tokenizer._tokenizer.token_to_id(self.tokenizer.eos_token)
++        if self.eos_id is None:
++            raise ValueError('tokenizer EOS token missing')
++
++    def generate(self, prompt, max_new_tokens=50, strategy='greedy', temperature=1.,
++                 top_k=None, top_p=None, seed=None, log_speed=False,
++                 use_kv_cache=True, return_token_ids=False):
++        from inference import greedy_decode, temperature_sample, top_k_sample, top_p_sample
++
++        if not use_kv_cache:
++            raise NotImplementedError('block-proposal reference requires causal KV cache')
++        if int(max_new_tokens) <= 0:
++            raise ValueError('max_new_tokens must be positive')
++        if seed is not None:
++            np.random.seed(seed)
++            xp.random.seed(seed)
++        ids = list(self.tokenizer.encode(prompt))
++        if not ids:
++            raise ValueError('prompt tokenization produced no tokens; supply non-empty prompt')
++        if len(ids) >= self.max_context:
++            raise ValueError('prompt fills the entire context: use a shorter prompt or larger max context')
++        ids = ids[-self.max_context:]
++        capacity = min(self.max_context, len(ids) + int(max_new_tokens))
++        state = self.inference.create_generation_state(batch_size=1, max_length=capacity)
++
++        def chooser(scores):
++            if strategy == 'greedy':
++                return greedy_decode(scores)
++            if strategy == 'temperature':
++                return temperature_sample(scores, temperature)
++            if strategy == 'top-k':
++                return top_k_sample(scores, top_k, temperature)
++            if strategy == 'top-p':
++                return top_p_sample(scores, top_p, temperature)
++            raise ValueError(f'unsupported sampling strategy: {strategy}')
++
++        if log_speed:
++            synchronize()
++        start = time.perf_counter()
++        self.inference.prefill(xp.asarray([ids], dtype=xp.int32), state)
++        if log_speed:
++            synchronize()
++        prefill = time.perf_counter() - start
++        gen = SequentialCommitBlockGenerator(self.inference, self.net.proposal_head,
++            self.net.decoder, chooser=chooser, eos_token_id=self.eos_id)
++        output = gen.generate(state, min(int(max_new_tokens), capacity-len(ids)))
++        if log_speed:
++            synchronize()
++        elapsed = time.perf_counter() - start
++        tokens = output['tokens']
++        text = self.tokenizer.decode(tokens)
++        timing = {'tokens_per_sec': len(tokens)/elapsed if elapsed else 0.,
++                  'total_time_s': elapsed, 'prefill_time_s': prefill,
++                  'block_proposal_implementation': output['implementation'],
++                  'proposal_blocks': output['proposal_blocks'],
++                  'causal_main_updates': output['causal_main_updates'],
++                  'benchmark_warning': 'reference sequential main-KV updates; not a block speed measurement'}
++        if return_token_ids:
++            timing.update(generated_token_ids=tokens, eos_token_id=self.eos_id)
++        return text, timing
+diff --git a/mini_llm/block_proposal/generation.py b/mini_llm/block_proposal/generation.py
+index a493368..f172abf 100644
+--- a/mini_llm/block_proposal/generation.py
++++ b/mini_llm/block_proposal/generation.py
+@@ -85,3 +85,71 @@ class DirectCachedBlockGenerator:
+         return {'tokens':result,'main_updates':updates,
+                 'eos':bool(self.config.eos_token_id is not None and
+                            result and result[-1]==self.config.eos_token_id)}
++
++
++class SequentialCommitBlockGenerator:
++    """Correctness-first K-proposal generation with tokenwise causal main KV updates.
++
++    Unlike ``DirectCachedBlockGenerator``, this path supports the configured
++    sparse attention and routed-prefix inference modes through their original
++    ``InferenceModel.decode_one`` implementation.  Crucially it NEVER calls the
++    original AR sampler to choose a token: choices are from the prefix decoder.
++
++    Not a speed benchmark for batched K-token KV updates.  Such updates remain
++    unsupported for sparse/routed caches and need separate correctness testing.
++    """
++
++    def __init__(self, inference_model, proposal_head, decoder, *, chooser,
++                 eos_token_id=None):
++        if proposal_head.model is not decoder.model or proposal_head.block_size != decoder.block_size:
++            raise ValueError('proposal and decoder must share the same model and block size')
++        if inference_model.lm_head is not proposal_head.model.output_proj.W.data:
++            raise ValueError('inference main model does not share checkpoint model weights')
++        if not callable(chooser):
++            raise TypeError('chooser must take one corrected-vocabulary logits vector')
++        self.inference = inference_model
++        self.proposal = proposal_head
++        self.decoder = decoder
++        self.choose = chooser
++        self.eos_token_id = eos_token_id
++
++    def generate(self, state, max_new_tokens):
++        if state.batch_size != 1:
++            raise NotImplementedError('only batch=1 generation is supported')
++        if not hasattr(self.inference, 'last_hidden'):
++            raise RuntimeError('call inference_model.prefill(prompt,state) first')
++        remaining = int(max_new_tokens)
++        if remaining < 0:
++            raise ValueError('max_new_tokens must be nonnegative')
++        tokens = []
++        proposals = 0
++        causal_updates = 0
++        eos = False
++        while remaining > 0 and state.remaining_capacity() > 0:
++            k = min(self.proposal.block_size, remaining, state.remaining_capacity())
++            # All K proposals are conditioned on the SAME causal boundary,
++            # with no ground-truth future tokens available.
++            logits = self.proposal.forward(self.inference.last_hidden, return_cache=False)
++            plan = self.decoder.prepare_plan_cache(logits)
++            proposals += 1
++            committed = []
++            for j in range(k):
++                previous = None if j == 0 else xp.asarray([committed[-1]], dtype=xp.int64)
++                corrected = self.decoder.cached_step(plan, previous)
++                selected = int(self.choose(corrected[0]))
++                if not 0 <= selected < self.inference.vocab_size:
++                    raise ValueError('decoder sampler returned an invalid token ID')
++                committed.append(selected)
++                tokens.append(selected)
++                remaining -= 1
++                # We must make the REAL token part of the main causal state.
++                # Never cache provisional states as if they were committed.
++                self.inference.decode_one(xp.asarray([[selected]], dtype=xp.int32), state)
++                causal_updates += 1
++                if self.eos_token_id is not None and selected == self.eos_token_id:
++                    eos = True
++                    break
++            if eos:
++                break
++        return dict(tokens=tokens, eos=eos, proposal_blocks=proposals,
++                    causal_main_updates=causal_updates, implementation='sequential_main_kv')
+diff --git a/tests/test_block_proposal_0080p_generation.py b/tests/test_block_proposal_0080p_generation.py
+new file mode 100644
+index 0000000..c947d87
+--- /dev/null
++++ b/tests/test_block_proposal_0080p_generation.py
+@@ -0,0 +1,134 @@
++"""0080P1: actual two-stage token generation, not teacher-forced text."""
++
++import numpy as np
++import pytest
++
++from mini_llm.backend import xp, asnumpy
++from mini_llm.inference_model import InferenceModel
++from mini_llm.block_proposal.generation import (
++    SequentialCommitBlockGenerator, DirectCachedBlockGenerator)
++from tests.test_block_proposal_0080c import _joint
++
++
++def test_sequential_commit_matches_validated_chunk_generator_dense():
++    net, _, _, _ = _joint()
++    model = net.proposal_head.model
++    a = InferenceModel(model.config, dtype=model.dtype)
++    b = InferenceModel(model.config, dtype=model.dtype)
++    a.set_weights(model)
++    b.set_weights(model)
++    sa = a.create_generation_state(1, 16)
++    sb = b.create_generation_state(1, 16)
++    prompt = xp.asarray([[1, 2, 3, 4]], dtype=xp.int32)
++    a.prefill(prompt, sa)
++    b.prefill(prompt, sb)
++    one = DirectCachedBlockGenerator(a, net.proposal_head, net.decoder)
++    two = SequentialCommitBlockGenerator(b, net.proposal_head, net.decoder,
++                                         chooser=lambda logits: int(xp.argmax(logits)))
++    expected = one.generate(sa, 6)
++    actual = two.generate(sb, 6)
++    assert actual['tokens'] == expected['tokens']
++    assert actual['proposal_blocks'] == expected['main_updates'] == 2
++    assert actual['causal_main_updates'] == 6
++    assert sa.length == sb.length == 10
++    np.testing.assert_allclose(asnumpy(a.last_hidden), asnumpy(b.last_hidden), rtol=1e-10, atol=1e-10)
++
++
++def test_eos_partial_block_and_invalid_sampler():
++    net, _, _, _ = _joint()
++    model = net.proposal_head.model
++    inf = InferenceModel(model.config, dtype=model.dtype)
++    inf.set_weights(model)
++    state = inf.create_generation_state(1, 12)
++    inf.prefill(xp.asarray([[1,2,3]], dtype=xp.int32), state)
++    gen = SequentialCommitBlockGenerator(inf, net.proposal_head, net.decoder,
++                                          chooser=lambda logits: 7, eos_token_id=7)
++    result = gen.generate(state, 8)
++    assert result['tokens'] == [7]
++    assert result['eos'] and result['proposal_blocks'] == 1
++    assert state.length == 4
++    gen_bad = SequentialCommitBlockGenerator(inf, net.proposal_head, net.decoder,
++                                              chooser=lambda logits: 19)
++    with pytest.raises(ValueError, match='invalid token ID'):
++        gen_bad.generate(state, 1)
++    assert state.length == 4
++
++
++def test_short_sparse_routed_model_proposals_update_causal_cache():
++    from types import SimpleNamespace
++    from examples.train_block_proposal_routed_text import _model_config
++    from mini_llm.model.decoder_lm import DecoderLanguageModel
++    from mini_llm.block_proposal.proposals import HorizonProposalHead
++    from mini_llm.block_proposal.decoder import BlockPrefixDecoder
++    cfg = _model_config(SimpleNamespace(model_preset='cpu_tiny', dtype='float32'), 33)
++    large = DecoderLanguageModel(cfg, rng_seed=1, dtype='float32')
++    head = HorizonProposalHead(large, 4, hidden_width=16, rng_seed=2)
++    decoder = BlockPrefixDecoder(large, 4, width=16, n_layers=1, n_heads=2, rng_seed=3)
++    inference = InferenceModel(cfg, dtype='float32')
++    inference.set_weights(large)
++    state = inference.create_generation_state(1, 40)
++    assert state.long_memory_enabled  # activates original routed inference
++    inference.prefill(xp.asarray([[1,2,3,4,5]], dtype=xp.int32), state)
++    gen = SequentialCommitBlockGenerator(inference, head, decoder,
++                                         chooser=lambda logits: int(xp.argmax(logits)))
++    result = gen.generate(state, 36)
++    assert len(result['tokens']) == 36
++    assert state.length == 41  # sliding routed horizon permits continual generation
++    assert result['proposal_blocks'] == 9
++    assert result['causal_main_updates'] == 36
++    assert state.routed_prefix_refresh_count >= 2
++
++
++def test_checkpoint_loader_uses_both_model_parts_and_checks_tokenizer(tmp_path, monkeypatch):
++    """Rebuild an 0080I-style artifact without requiring the original shard data."""
++    from types import SimpleNamespace
++    from mini_llm.block_proposal.benchmark_adapter import load_0080i_block_checkpoint
++    from mini_llm.block_proposal.checkpoint import save_two_stage_checkpoint
++    from mini_llm.model.decoder_lm import DecoderLanguageModel
++    from mini_llm.block_proposal.proposals import HorizonProposalHead
++    from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
++    from mini_llm.predictive_refinement.real_data import sha256
++    from examples.train_block_proposal_routed_text import _model_config
++
++    options = dict(seed=13, batch_size=1, grad_accum=1, block_size=4,
++                   block_group_size=1, proposal_width=16, decoder_width=16,
++                   decoder_layers=1, decoder_heads=2, lambda_proposal=0.5,
++                   learning_rate=0.0003, weight_decay=0.1, clip_grad_norm=1.0)
++    tok_file = tmp_path/'tokenizer.json'
++    tok_file.write_text('{"synthetic":true}')
++    class FakeTokenizer:
++        eos_token = '<|eos|>'
++        def __init__(self):
++            self._tokenizer = self
++        def __len__(self): return 33
++        def token_to_id(self, token): return 1 if token == self.eos_token else None
++        def encode(self, text): return [3 + (ord(c) % 30) for c in text]
++        def decode(self, ids): return ''.join(chr(97 + int(i)%26) for i in ids)
++    monkeypatch.setattr('mini_llm.block_proposal.benchmark_adapter.FastBPETokenizer.load',
++                        lambda path: FakeTokenizer())
++    config = _model_config(SimpleNamespace(model_preset='cpu_tiny', dtype='float32'),33)
++    main = DecoderLanguageModel(config,rng_seed=13,dtype='float32')
++    head = HorizonProposalHead(main,4,hidden_width=16,rng_seed=14)
++    decoder = BlockPrefixDecoder(main,4,width=16,n_layers=1,n_heads=2,rng_seed=15)
++    net = TwoStageBlockModel(head,decoder,lambda_proposal=0.5)
++    signature = dict(version='0080I-v1', model_config=repr(config),
++                     **options)
++    path = tmp_path/'checkpoint'
++    save_two_stage_checkpoint(path,net,training_step=500,
++                              tokenizer_hash=sha256(tok_file),data_provenance=signature)
++    loaded, token, info = load_0080i_block_checkpoint(path,tok_file)
++    assert info['step']==500 and info['block_size']==4
++    from mini_llm.block_proposal.benchmark_adapter import BlockProposalTextGenerator
++    generator = BlockProposalTextGenerator(loaded, token, max_context=config.memory_context.memory_length)
++    generated, timing = generator.generate('math', max_new_tokens=9,
++                                           strategy='greedy', seed=42,
++                                           log_speed=True, return_token_ids=True)
++    assert timing['block_proposal_implementation'] == 'sequential_main_kv'
++    assert 1 <= len(timing['generated_token_ids']) <= 9
++    assert len(generated) == len(timing['generated_token_ids'])
++    assert len(loaded.parameters()) == len(net.parameters())
++    for first, second in zip(loaded.parameters(),net.parameters()):
++        np.testing.assert_array_equal(asnumpy(first.data),asnumpy(second.data))
++    tok_file.write_text('{"synthetic":false}')
++    with pytest.raises(ValueError, match='checksum differs'):
++        load_0080i_block_checkpoint(path,tok_file)

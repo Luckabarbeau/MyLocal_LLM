@@ -95,7 +95,13 @@ def main(argv=None):
         target_length=cfg.memory_context.target_length,
         min_history_tokens=(cfg.memory_context.top_k_blocks+1)*cfg.memory_context.block_size-1)
         for _ in signature['validation_digests']]
-    if _signature(a,cfg,root,tok,train,val,records)!=signature:
+    # 0080P2 weight-only warm starts preserve immutable source-checkpoint metadata.
+    # It is historical lineage, not a property that can be reconstructed from
+    # the current corpus. Compare every reproducible field without dropping the
+    # strict checks on tokenizer, sampler, model config, or validation digests.
+    expected_current = {key: value for key, value in signature.items()
+                        if key != 'warm_start'}
+    if _signature(a,cfg,root,tok,train,val,records)!=expected_current:
         raise ValueError('validation samples/tokenizer/mixture do not match checkpoint provenance')
     model=DecoderLanguageModel(cfg,rng_seed=a.seed,dtype=a.dtype)
     head=HorizonProposalHead(model,a.block_size,hidden_width=a.proposal_width,rng_seed=a.seed+1)

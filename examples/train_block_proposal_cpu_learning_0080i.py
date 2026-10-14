@@ -62,6 +62,8 @@ def parse_args(argv=None):
     p.add_argument('--output', type=Path, default=Path('benchmarks/results/0080i_cpu_learning'))
     p.add_argument('--order', choices=('ar-first', 'two-stage-first'), default='ar-first')
     p.add_argument('--resume', action='store_true', help='restore the newest checkpoint per architecture in --output')
+    p.add_argument('--warm-start-checkpoint', type=Path, default=None,
+                   help='initialize a NEW two_stage run from this 0080I checkpoint, retaining model weights only')
     a = p.parse_args(argv)
     if BACKEND_NAME != 'numpy':
         p.error('0080I is a NumPy CPU experiment; set MINI_LLM_BACKEND=numpy')
@@ -70,6 +72,8 @@ def parse_args(argv=None):
               'decoder_width', 'decoder_layers', 'decoder_heads'):
         if getattr(a, k) < 1:
             p.error(f'--{k.replace("_", "-")} must be >= 1')
+    if a.warm_start_checkpoint is not None and a.architecture != 'two_stage':
+        p.error('--warm-start-checkpoint currently supports --architecture two_stage only')
     if a.warmup_steps < 0:
         p.error('--warmup-steps must be nonnegative')
     if a.decoder_width % a.decoder_heads:
@@ -258,6 +262,15 @@ def _run_arch(name, a, cfg, train, fixed_validation, signature):
     else:
         if any(p.exists() for p in (log_path,val_path,summary_path)) or ckpt_dir.exists():
             raise FileExistsError(f'{name}: output already exists; choose new --output or use --resume')
+        if a.warm_start_checkpoint is not None:
+            origin = load_two_stage_checkpoint(a.warm_start_checkpoint, net, optimizer=None,
+                expected_tokenizer_hash=signature['tokenizer_sha256'])
+            # Construct fresh AdamW masters AFTER loading the trained weights.
+            # Reusing the optimizer built against random initialization would
+            # silently update from stale master weights at the first step.
+            opt = AdamW(trainer.parameters(), lr=a.learning_rate, weight_decay=a.weight_decay)
+            print(f'{name}: weight-only warm start from {a.warm_start_checkpoint} '
+                  f'(source step {origin["step"]}, fresh AdamW and sampling RNG)', flush=True)
         records=[]
         validations=[_evaluate(name,trainer,fixed_validation,a,step=0)]
         validations[0]['cumulative_training_seconds']=0.
@@ -367,6 +380,16 @@ def main(argv=None):
          min_history_tokens=(cfg.memory_context.top_k_blocks+1)*cfg.memory_context.block_size-1)
          for _ in range(a.val_batches)]
     sig=_signature(a,cfg,root,tokenizer_path,train,val,fixed_validation)
+    if a.warm_start_checkpoint is not None:
+        source = a.warm_start_checkpoint.expanduser().resolve()
+        state_file = source / 'training_state.json'
+        if not state_file.is_file():
+            raise FileNotFoundError(f'missing warm-start checkpoint metadata: {state_file}')
+        source_state = json.loads(state_file.read_text(encoding='utf8'))
+        sig['warm_start'] = dict(source_checkpoint=str(source),
+            source_metadata_sha256=sha256(state_file),
+            source_step=int(source_state['step']),
+            source_supervised_tokens=int(source_state['supervised_tokens']))
     order=(['standard_ar','two_stage'] if a.order=='ar-first'
            else ['two_stage','standard_ar']) if a.architecture=='both' else [a.architecture]
     print(f'0080I paired learning on {BACKEND_NAME}: {order}, '

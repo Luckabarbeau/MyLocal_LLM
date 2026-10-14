@@ -11,6 +11,7 @@ later expanded back to full-resolution tokens/KV by ``context_blocks``.
 
 import math
 import os
+from collections import OrderedDict
 
 import numpy as np
 
@@ -948,12 +949,27 @@ class ContextRouter:
         # ContextRouterConfig values. Reuse these small device tensors across
         # microbatches instead of rebuilding aranges, masks and query-window
         # indices 128 times per optimizer update.
-        self._routing_metadata_cache = {}
+        # 0080O12: compact target windows + unbucketed genuine history
+        # generate many distinct active sequence lengths. Each metadata value
+        # retains device query-index [n_routes, query_window] arrays. This
+        # router is instantiated in EACH Transformer layer, so an unbounded
+        # dictionary grows throughout long-running document-first training.
+        # LRU eviction only discards reusable planning metadata; any live
+        # forward/backward cache holds its own array references until consumed.
+        raw_limit = os.environ.get("MINI_LLM_ROUTER_METADATA_CACHE_ENTRIES", "16")
+        try:
+            self._routing_metadata_cache_limit = int(raw_limit)
+        except ValueError as exc:
+            raise ValueError("router metadata cache entries must be an integer") from exc
+        if self._routing_metadata_cache_limit < 0:
+            raise ValueError("router metadata cache entries must be >= 0")
+        self._routing_metadata_cache = OrderedDict()
 
     def _routing_metadata(self, seq_len):
         seq_len = int(seq_len)
         cached = self._routing_metadata_cache.get(seq_len)
         if cached is not None:
+            self._routing_metadata_cache.move_to_end(seq_len)
             return cached
 
         route_starts = eligible_route_starts(seq_len, self.config)
@@ -972,7 +988,10 @@ class ContextRouter:
             "candidate_mask": candidate_mask,
             "n_blocks": int(n_blocks),
         }
-        self._routing_metadata_cache[seq_len] = cached
+        if self._routing_metadata_cache_limit:
+            self._routing_metadata_cache[seq_len] = cached
+            while len(self._routing_metadata_cache) > self._routing_metadata_cache_limit:
+                self._routing_metadata_cache.popitem(last=False)
         return cached
 
     def parameters(self):

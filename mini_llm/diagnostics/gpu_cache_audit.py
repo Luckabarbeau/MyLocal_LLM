@@ -66,4 +66,28 @@ def persistent_gpu_cache_inventory(model=None):
         "entries": len(packed),
         "cuda_bytes": _cuda_array_bytes(packed, set()),
     }
+
+    # 0080O12: separate learned retrieval routers live in EACH attention
+    # layer. The old 'routing_metadata' inventory only inspects the shallow
+    # model.memory_router, so it missed the per-layer CUDA caches entirely.
+    layer_cache_entries = 0
+    layer_cache_payloads = []
+    seen_routers = set()
+    for block in blocks:
+        attention = getattr(block, "attention", None)
+        for group in getattr(attention, "_retrieval_groups", ()):
+            module = group.get("module") if isinstance(group, dict) else None
+            router = getattr(module, "router", None)
+            if router is None or id(router) in seen_routers:
+                continue
+            seen_routers.add(id(router))
+            metadata = getattr(router, "_routing_metadata_cache", None)
+            if not isinstance(metadata, dict):
+                continue
+            layer_cache_entries += len(metadata)
+            layer_cache_payloads.append(metadata)
+    inventory["layer_retrieval_routing_metadata"] = {
+        "entries": layer_cache_entries,
+        "cuda_bytes": _cuda_array_bytes(layer_cache_payloads, set()),
+    }
     return inventory

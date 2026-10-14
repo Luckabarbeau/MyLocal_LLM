@@ -67,3 +67,78 @@ def test_resume_matches_uninterrupted_training(prepared,tmp_path,name):
     assert rfull['validation_final_ce']==pytest.approx(rsplit['validation_final_ce'],abs=1e-9)
     assert rfull['validation_initial_ce']==pytest.approx(rsplit['validation_initial_ce'],abs=1e-9)
     assert (full/'checkpoints'/name/'step_00000002'/'training_state.json').exists()
+
+
+def test_weight_only_warm_start_expanded_data_and_resume(prepared, tmp_path, monkeypatch):
+    """Changed data rejects full resume, but exact-architecture weight loading works."""
+    import shutil
+    from mini_llm.optim.adamw import AdamW
+
+    old_output = tmp_path / 'old_training'
+    learn.main(_argv(prepared, old_output, '--architecture', 'two_stage'))
+    source = old_output/'checkpoints'/'two_stage'/'step_00000002'
+    expanded = tmp_path/'expanded_data'
+    shutil.copytree(prepared, expanded)
+    # Retain tokenizer bytes while extending a train shard and updating the
+    # recorded token count; this is a different training corpus.
+    import numpy as np
+    arr = np.asarray([3, 7, 9, 1], dtype=np.uint16)
+    with (expanded/'fine_edu'/'train_shard_00000.bin').open('ab') as fd:
+        fd.write(arr.tobytes())
+    manifest_path = expanded/'mixture_manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['sources']['fine_edu']['train_tokens'] += len(arr)
+    manifest_path.write_text(json.dumps(manifest))
+
+    new_output = tmp_path / 'warm_training'
+    base = _argv(expanded, new_output, '--architecture','two_stage',
+                 '--warm-start-checkpoint', str(source), '--learning-rate','0.0001')
+    original_step = AdamW.step
+    step_observations = []
+
+    def check_fresh_master(opt, *args, **kwargs):
+        if not step_observations:
+            assert opt.step_index == 0
+            for i, p in enumerate(opt.parameters):
+                np.testing.assert_allclose(opt.master_weights[i], p.data, atol=1e-6, rtol=0)
+            step_observations.append(True)
+        return original_step(opt, *args, **kwargs)
+    monkeypatch.setattr(AdamW, 'step', check_fresh_master)
+    one = base.copy()
+    one[one.index('--steps')+1]='1'
+    learn.main(one)
+    assert step_observations
+    new_state = json.loads((new_output/'checkpoints'/'two_stage'/'step_00000001'/'training_state.json').read_text())
+    assert new_state['data_provenance']['warm_start']['source_step'] == 2
+    assert new_state['data_provenance']['warm_start']['source_supervised_tokens'] > 0
+    assert new_state['optimizer_step']==1
+    assert new_state['tokenizer_hash']==json.loads((source/'training_state.json').read_text())['tokenizer_hash']
+    assert new_state['data_provenance']['mixture_root']==str(expanded.resolve())
+    # Full resume from the new checkpoint works while keeping the warm-start identity.
+    learn.main(base+['--resume'])
+    assert (new_output/'checkpoints'/'two_stage'/'step_00000002'/'training_state.json').exists()
+    assert source.is_dir()
+    # Ordinary checkpoint resume from the old run is not permitted with the new dataset.
+    with pytest.raises((ValueError, FileNotFoundError)):
+        learn.main(_argv(expanded, old_output, '--architecture','two_stage','--resume'))
+
+
+def test_weight_only_warm_start_rejects_tokenizer_mismatch(prepared, tmp_path):
+    old_output = tmp_path/'old'
+    learn.main(_argv(prepared, old_output, '--architecture','two_stage'))
+    source = old_output/'checkpoints'/'two_stage'/'step_00000002'
+    expanded = tmp_path/'different_tokenizer'
+    import shutil
+    shutil.copytree(prepared, expanded)
+    (expanded/'tokenizer.json').write_text('{"toy":false}',encoding='utf8')
+    # Make the expanded dataset internally consistent, but mismatched with
+    # the original checkpoint tokenizer identity.
+    from mini_llm.predictive_refinement.real_data import sha256
+    manifest_path = expanded/'mixture_manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['tokenizer_sha256'] = sha256(expanded/'tokenizer.json')
+    manifest_path.write_text(json.dumps(manifest))
+    new_output = tmp_path/'warm'
+    with pytest.raises(ValueError, match='tokenizer hash mismatch'):
+        learn.main(_argv(expanded, new_output, '--architecture', 'two_stage',
+                         '--warm-start-checkpoint', str(source)))

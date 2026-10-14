@@ -240,9 +240,36 @@ def load_generator(checkpoint: Path, requested_context: int | None,
     }
 
 
+def load_block_generator(checkpoint: Path, tokenizer_path: Path | None,
+                         requested_context: int | None, commit_stride: int | None = None):
+    """Strict 0080I loader; never silently evaluate a block model as AR."""
+    from mini_llm.block_proposal.benchmark_adapter import (
+        load_0080i_block_checkpoint, BlockProposalTextGenerator)
+    state = json.loads((checkpoint / "training_state.json").read_text(encoding="utf-8"))
+    signature = state.get("data_provenance", {})
+    default_tokenizer = Path(signature.get("mixture_root", "")) / "tokenizer.json"
+    tokenizer_path = tokenizer_path or default_tokenizer
+    net, tokenizer, info = load_0080i_block_checkpoint(checkpoint, tokenizer_path)
+    limit = int(requested_context) if requested_context is not None else info["context"]
+    generator = BlockProposalTextGenerator(net, tokenizer, max_context=limit,
+                                          commit_stride=commit_stride)
+    info.update(context=limit, commit_stride=generator.commit_stride,
+        runtime_env={k: v for k, v in sorted(os.environ.items()) if k.startswith("MINI_LLM_")})
+    print(f"Loaded two-stage block checkpoint step={info['step']}, K={info['block_size']}, "
+          f"context={limit}, backend={info['backend']}", flush=True)
+    return generator, info
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--architecture", choices=("autoregressive", "block-proposal-0080i"),
+                        default="autoregressive",
+                        help="Explicit model path; block-proposal-0080i loads both proposal and decoder weights")
+    parser.add_argument("--commit-stride", type=int, default=None,
+                        help="0080I only: number of tokens to commit per K-plan (default: K; try 1,2,4)")
+    parser.add_argument("--tokenizer-path", type=Path,
+                        help="Required if the saved 0080I mixture root is unavailable")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--prompt-suite", type=Path, default=DEFAULT_SUITE)
     parser.add_argument("--prompt-ids", help="Comma-separated IDs; default is all 24")
@@ -264,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-profile", choices=("auto", "gpu-fast", "consumer-gpu", "reference"))
     parser.add_argument("--resume", action="store_true", help="Continue a matching interrupted benchmark")
     parser.add_argument("--dry-run", action="store_true", help="Show selection without loading model")
+    parser.add_argument("--print-generations", action="store_true",
+                        help="Print generated prose/code excerpts after each sample")
     args = parser.parse_args(argv)
 
     raw_suite = args.prompt_suite.read_bytes()
@@ -282,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--top-k must be positive")
     if "top-p" in strategies and not 0 < top_p <= 1:
         parser.error("--top-p must be in (0, 1]")
+    if args.commit_stride is not None and (args.architecture != "block-proposal-0080i" or args.commit_stride < 1):
+        parser.error("--commit-stride requires block-proposal-0080i and must be positive")
     if args.max_context is not None and args.max_context <= 0:
         parser.error("--max-context must be positive")
 
@@ -304,6 +335,14 @@ def main(argv: list[str] | None = None) -> int:
         "max_context_request": args.max_context,
         "runtime_profile_request": args.runtime_profile,
     }
+    if args.architecture == "block-proposal-0080i":
+        config.update(architecture=args.architecture,
+                      tokenizer_path_request=(str(args.tokenizer_path.resolve())
+                                              if args.tokenizer_path else None))
+        # Keep 0080P1 default-run manifests resume compatible. Explicit stride
+        # sweeps are distinguished in the manifest and require separate dirs.
+        if args.commit_stride is not None:
+            config['commit_stride_request'] = args.commit_stride
     print(f"Generation suite: {len(prompts)} prompts x {len(seeds)} seeds "
           f"x {len(variants)} strategies = {expected} samples", flush=True)
     for variant in variants:
@@ -337,7 +376,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Already complete; summaries refreshed.")
         return 0
 
-    generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile)
+    if args.architecture == "block-proposal-0080i":
+        if args.backend != "kv-cache":
+            parser.error("block-proposal-0080i currently supports only --backend kv-cache")
+        generator, meta = load_block_generator(args.checkpoint, args.tokenizer_path,
+                                               args.max_context, args.commit_stride)
+    else:
+        generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile)
     if args.resume:
         previous = old["checkpoint_metadata"]
         if (previous.get("step") != meta["step"] or
@@ -388,8 +433,15 @@ def main(argv: list[str] | None = None) -> int:
                         "metrics": measured,
                         "timing": {"total_time_s": timing.get("total_time_s"),
                                    "prefill_time_s": timing.get("prefill_time_s"),
-                                   "tokens_per_sec": timing.get("tokens_per_sec")},
+                                   "tokens_per_sec": timing.get("tokens_per_sec"),
+                                   "commit_stride": timing.get("commit_stride"),
+                                   "proposal_horizon": timing.get("proposal_horizon"),
+                                   "proposal_blocks": timing.get("proposal_blocks"),
+                                   "causal_main_updates": timing.get("causal_main_updates")},
                     }
+                    if args.print_generations:
+                        print("    Generated:\n" + generated_text[:1200] +
+                              ("..." if len(generated_text) > 1200 else ""), flush=True)
                     handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                     handle.flush()
                     records.append(row)

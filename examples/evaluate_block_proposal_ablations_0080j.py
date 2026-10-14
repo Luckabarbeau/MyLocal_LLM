@@ -151,7 +151,11 @@ def main(argv=None):
         min_history_tokens=(cfg.memory_context.top_k_blocks+1)*cfg.memory_context.block_size-1)
         for _ in signature['validation_digests']]
     reconstructed=_signature(a,cfg,root,tok_path,train,val,validation)
-    if reconstructed!=signature:
+    # Historical weight-only warm-start lineage is stored in the checkpoint,
+    # but is not reconstructible from the current held-out corpus.
+    expected_current = {key: value for key, value in signature.items()
+                        if key != 'warm_start'}
+    if reconstructed!=expected_current:
         raise ValueError('tokenizer/data, checkpoint hyperparameters or fixed validation changed; '
                          'refusing to compare mismatched batches')
     model=DecoderLanguageModel(cfg,rng_seed=a.seed,dtype=a.dtype)

@@ -534,8 +534,18 @@ class DecoderLanguageModel:
         batch = int(source_ids.shape[0])
         history_length = int(cfg.distant_memory_length)
         working_length = int(cfg.target_length)
+        if memory_metadata is not None and 'compact_working_length' in memory_metadata:
+            # Only the block-proposal objective supplies this override. The
+            # raw source remains [B, D+4096], preserving router coordinates,
+            # dataset provenance, and the exact pre-window causal query.
+            if not (memory_metadata.get('causal_prefix_query') is True and
+                    memory_metadata.get('causal_masked_target_refinement') is True):
+                raise ValueError('compact working window requires causal block refinement')
+            working_length = int(memory_metadata['compact_working_length'])
+            if working_length <= 0 or working_length > int(cfg.target_length):
+                raise ValueError('compact working length outside configured target window')
         history_ids = source_ids[:, :history_length]
-        working_ids = source_ids[:, history_length:]
+        working_ids = source_ids[:, history_length:history_length + working_length]
 
         # 0079Q1: a block-refinement training window must not choose its
         # historical prefix using *any* real token within that window. This
@@ -858,8 +868,18 @@ class DecoderLanguageModel:
         batch = int(source_ids.shape[0])
         history_length = int(cfg.distant_memory_length)
         working_length = int(cfg.target_length)
+        if memory_metadata is not None and 'compact_working_length' in memory_metadata:
+            # Only the block-proposal objective supplies this override. The
+            # raw source remains [B, D+4096], preserving router coordinates,
+            # dataset provenance, and the exact pre-window causal query.
+            if not (memory_metadata.get('causal_prefix_query') is True and
+                    memory_metadata.get('causal_masked_target_refinement') is True):
+                raise ValueError('compact working window requires causal block refinement')
+            working_length = int(memory_metadata['compact_working_length'])
+            if working_length <= 0 or working_length > int(cfg.target_length):
+                raise ValueError('compact working length outside configured target window')
         history_ids = source_ids[:, :history_length]
-        working_ids = source_ids[:, history_length:]
+        working_ids = source_ids[:, history_length:history_length + working_length]
 
         if memory_metadata is None:
             history_valid_starts = xp.zeros((batch,), dtype=xp.int64)

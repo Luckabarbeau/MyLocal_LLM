@@ -7,6 +7,7 @@ Two implementations:
 
 from ..backend import xp, BACKEND_NAME, is_bfloat16_dtype
 import os
+import re
 import numpy as np
 from .routing_plan import RoutingPlan
 from ..performance_profiler import moe_detail_scope
@@ -157,6 +158,135 @@ def _fused_swiglu_backward(dh, g, u):
     return dg, du
 
 
+def _moe_recompute_gate_up_enabled():
+    """0080O7: trade extra expert GEMMs in backward for smaller training tapes.
+
+    The Experts dispatcher already retains the MoE input and routing plan.
+    Consequently G/U can be regenerated from the identical routed inputs in
+    backward without storing both [top-k routed tokens, d_ff] tensors per layer.
+    No full-history or dense attention activation is materialized here.
+    """
+    raw = os.environ.get("MINI_LLM_MOE_RECOMPUTE_GATE_UP", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no", ""}
+
+
+def _moe_cpu_offload_enabled(name):
+    """Select the first N MoE layers for pinned-memory G/U offload.
+
+    Only the compact expert activations are moved; routing, the original MoE
+    input and all other Transformer caches remain on the GPU.  Unnamed MoE
+    fixtures are eligible for unit tests.
+    """
+    raw = os.environ.get("MINI_LLM_MOE_OFFLOAD_GATE_UP", "0").strip().lower()
+    if raw in {"0", "false", "off", "no", ""}:
+        return False
+    if BACKEND_NAME != "cupy":
+        raise RuntimeError("MoE pinned activation offload requires MINI_LLM_BACKEND=cupy")
+    if _moe_recompute_gate_up_enabled():
+        raise ValueError(
+            "MINI_LLM_MOE_OFFLOAD_GATE_UP and MINI_LLM_MOE_RECOMPUTE_GATE_UP "
+            "are mutually exclusive"
+        )
+    try:
+        layers = int(os.environ.get("MINI_LLM_MOE_OFFLOAD_LAYERS", "6"))
+    except ValueError as exc:
+        raise ValueError("MINI_LLM_MOE_OFFLOAD_LAYERS must be an integer") from exc
+    if not 0 <= layers <= 1024:
+        raise ValueError("MINI_LLM_MOE_OFFLOAD_LAYERS must be between 0 and 1024")
+    layer_match = re.search(r"(?:^|\.)blocks\.(\d+)(?:\.|$)", name)
+    return layers > 0 and (layer_match is None or int(layer_match.group(1)) < layers)
+
+
+class _PinnedMoEProjection:
+    """Exact BF16/FP32 G/U tape stored as bytes in CUDA pinned host memory.
+
+    D2H starts after a producer event and runs on the layer's offload stream.
+    Source GPU references remain alive until ``finish_offload``.  Restoring
+    onto the *current* CUDA stream provides correct H2D -> GEMM ordering.
+    The ticket stays in the training tape until all backward kernels complete,
+    thereby retaining the pinned source during asynchronous H2D transfer.
+    """
+
+    def __init__(self, g, u, *, stream, packed=None):
+        if BACKEND_NAME != "cupy":
+            raise RuntimeError("Pinned projection storage is only supported on CUDA")
+        if g.dtype != u.dtype or g.shape != u.shape:
+            raise ValueError("Offloaded gate and up must have identical dtype/shape")
+        self.shape = tuple(g.shape)
+        self.dtype = g.dtype
+        self.nbytes = int(g.nbytes + u.nbytes)
+        self.part_bytes = int(g.nbytes)
+        self.packed = packed is not None
+        self.host = xp.cuda.alloc_pinned_memory(self.nbytes)
+        self._sources = (packed,) if self.packed else (g, u)
+        if self.packed:
+            if not packed.flags.c_contiguous or packed.nbytes != self.nbytes:
+                raise ValueError("Packed gate/up source must be contiguous")
+        elif not g.flags.c_contiguous or not u.flags.c_contiguous:
+            raise ValueError("Gate/up sources must be contiguous for byte-copy offload")
+        producer_ready = xp.cuda.Event()
+        producer_ready.record(xp.cuda.get_current_stream())
+        stream.wait_event(producer_ready)
+        copy_kind = xp.cuda.runtime.memcpyDeviceToHost
+        ptr = int(self.host.ptr)
+        if self.packed:
+            xp.cuda.runtime.memcpyAsync(
+                ptr, int(packed.data.ptr), self.nbytes, copy_kind, stream.ptr
+            )
+        else:
+            xp.cuda.runtime.memcpyAsync(
+                ptr, int(g.data.ptr), self.part_bytes, copy_kind, stream.ptr
+            )
+            xp.cuda.runtime.memcpyAsync(
+                ptr + self.part_bytes, int(u.data.ptr), self.part_bytes,
+                copy_kind, stream.ptr,
+            )
+        self._offload_done = xp.cuda.Event()
+        self._offload_done.record(stream)
+
+    def finish_offload(self):
+        """Wait before releasing device allocation owners (one wait per layer)."""
+        if self._sources is not None:
+            self._offload_done.synchronize()
+            self._sources = None
+
+    def to_device(self):
+        if self._sources is not None:
+            raise RuntimeError("MoE offload must finish before backward prefetch")
+        current = xp.cuda.get_current_stream()
+        kind = xp.cuda.runtime.memcpyHostToDevice
+        if self.packed:
+            packed = xp.empty((*self.shape[:-1], self.shape[-1] * 2), dtype=self.dtype)
+            xp.cuda.runtime.memcpyAsync(
+                int(packed.data.ptr), int(self.host.ptr), self.nbytes, kind,
+                current.ptr,
+            )
+            g = packed[..., :self.shape[-1]]
+            u = packed[..., self.shape[-1]:]
+        else:
+            g = xp.empty(self.shape, dtype=self.dtype)
+            u = xp.empty(self.shape, dtype=self.dtype)
+            xp.cuda.runtime.memcpyAsync(
+                int(g.data.ptr), int(self.host.ptr), self.part_bytes, kind,
+                current.ptr,
+            )
+            xp.cuda.runtime.memcpyAsync(
+                int(u.data.ptr), int(self.host.ptr) + self.part_bytes,
+                self.part_bytes, kind, current.ptr,
+            )
+        self._restore_done = xp.cuda.Event()
+        self._restore_done.record(current)
+        return g, u
+
+    def finish_restore(self):
+        # The tape may be destroyed after the layer's backward returns.  Wait
+        # only for H2D reads to finish before pinned storage becomes recyclable.
+        done = getattr(self, "_restore_done", None)
+        if done is not None:
+            done.synchronize()
+            self._restore_done = None
+
+
 def _concurrent_experts_enabled(dtype):
     """Whether to overlap independent sparse experts on CUDA streams.
 
@@ -256,7 +386,7 @@ class ExpertFFN:
 
     _forward_call_count = 0  # Class-level counter for profiling
 
-    def forward(self, x, return_cache=True, cache_input=True):
+    def forward(self, x, return_cache=True, cache_input=True, *, offload_stream=None):
         """
         Forward pass through the expert.
         
@@ -313,10 +443,25 @@ class ExpertFFN:
         # duplicates all routed tokens (top-k times) until backward.  Cache only
         # the two expensive SwiGLU projection activations; the dispatcher
         # regathers expert_x from the original input during backward.
-        cache = {
-            "g": g,
-            "u": u,
-        }
+        recompute_gate_up = _moe_recompute_gate_up_enabled()
+        if recompute_gate_up:
+            # Retain no gate/up activations: the dispatcher retains the original
+            # MoE input and regathers each expert's selected tokens in backward.
+            # Remember the packing decision so forward and recompute follow the
+            # same GEMM order even if an environment variable changes later.
+            cache = {
+                "recompute_gate_up": True,
+                "packed_gate_up": _fused_expert_gemm_enabled(),
+            }
+        elif offload_stream is not None:
+            # The parent dispatcher owns the copy stream and synchronizes the
+            # D2H transfers before releasing the GPU source allocations.
+            cache = {"offloaded_gu": _PinnedMoEProjection(
+                g, u, stream=offload_stream,
+                packed=gate_up if _fused_expert_gemm_enabled() else None,
+            )}
+        else:
+            cache = {"g": g, "u": u}
         if cache_input:
             cache["x"] = x
         
@@ -349,8 +494,29 @@ class ExpertFFN:
             x = cache.get("x")
         if x is None:
             raise ValueError("ExpertFFN.backward requires x or a legacy cache['x']")
-        g = cache["g"]
-        u = cache["u"]
+        if cache.get("recompute_gate_up", False):
+            # The weights have not changed between forward and backward.
+            # Recompute G/U one expert at a time, after regathering its routed
+            # tokens, to avoid keeping every expert's projection activations
+            # alive across all Transformer layers. All parameter, input and
+            # router gradients below remain the original exact formulation.
+            with moe_detail_scope("moe.expert.recompute_gate_up"):
+                if cache["packed_gate_up"]:
+                    packed = xp.concatenate(
+                        (self.W_gate.data, self.W_up.data), axis=1
+                    )
+                    gate_up = x @ packed
+                    g = gate_up[..., : self.d_ff]
+                    u = gate_up[..., self.d_ff :]
+                else:
+                    g = x @ self.W_gate.data
+                    u = x @ self.W_up.data
+        elif "offloaded_gu" in cache:
+            with moe_detail_scope("moe.expert.restore_pinned_gate_up"):
+                g, u = cache["offloaded_gu"].to_device()
+        else:
+            g = cache["g"]
+            u = cache["u"]
 
         # Recompute only the down-projection input.  The fused BF16 path
         # produces H directly from cached G/U and avoids materializing A.
@@ -481,6 +647,8 @@ class Experts:
         self.d_model = d_model
         self.d_ff = d_ff
         self.n_experts = n_experts
+        self.name = str(name)
+        self._offload_stream = None
         # Lazily-created non-blocking CUDA streams used only by the opt-in
         # concurrent-expert path.  Keeping them on the Experts instance avoids
         # stream creation in the hot loop.
@@ -763,6 +931,15 @@ class Experts:
                 expert_indices, weights, k, n_experts=self.n_experts
             )
 
+        offload = bool(return_cache and _moe_cpu_offload_enabled(self.name))
+        if offload and _concurrent_experts_enabled(x.dtype):
+            raise RuntimeError(
+                "Pinned MoE offload does not yet support concurrent expert streams; "
+                "set MINI_LLM_CONCURRENT_EXPERTS=0"
+            )
+        if offload and self._offload_stream is None:
+            self._offload_stream = xp.cuda.Stream(non_blocking=True)
+
         if _concurrent_experts_enabled(x.dtype):
             return self._forward_concurrent(
                 x, weights, expert_indices, routing_plan, return_cache
@@ -786,7 +963,8 @@ class Experts:
             if return_cache:
                 with moe_detail_scope("moe.expert.forward_total"):
                     expert_out, expert_cache = self.experts[exp_idx].forward(
-                        expert_x, cache_input=False
+                        expert_x, cache_input=False,
+                        offload_stream=self._offload_stream if offload else None,
                     )
                 expert_caches[exp_idx] = expert_cache
             else:
@@ -799,6 +977,15 @@ class Experts:
                 weighted_out = expert_weights[:, xp.newaxis] * expert_out
             with moe_detail_scope("moe.dispatch.fwd_scatter"):
                 y_flat[token_indices] += weighted_out
+
+        # D2H runs on a dedicated stream and overlaps with later experts in
+        # this layer.  Finish at the *layer boundary* so device source buffers
+        # can be safely returned to CuPy's pool before the next MoE layer.
+        # This conservative boundary wait is intentional: async lifetime and
+        # numerical correctness come first; cross-layer overlap is separate.
+        if offload:
+            for expert_cache in expert_caches.values():
+                expert_cache["offloaded_gu"].finish_offload()
 
         y = y_flat.reshape(batch_size, seq_len, d_model)
         if not return_cache:
@@ -935,6 +1122,13 @@ class Experts:
 
             with moe_detail_scope("moe.dispatch.bwd_scatter"):
                 dx_flat[token_indices] += expert_dx
+
+        # Guarantee asynchronous H2D has finished before training-tape pinned
+        # buffers can be reclaimed.  This is a bounded layer-level wait.
+        for expert_cache in expert_caches.values():
+            ticket = expert_cache.get("offloaded_gu") if expert_cache else None
+            if ticket is not None:
+                ticket.finish_restore()
 
         dx = dx_flat.reshape(batch_size, seq_len, d_model)
         if return_dweights and return_output_scale_grad:

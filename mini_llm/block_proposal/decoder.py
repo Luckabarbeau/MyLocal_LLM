@@ -21,6 +21,7 @@ from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.swiglu import SwiGLU
 from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 from mini_llm.predictive_refinement.soft_embeddings import SoftTokenExpectation
+from mini_llm.performance_profiler import block_proposal_detail_scope
 from .contracts import prefix_lm_allow_mask, shifted_decoder_tokens
 
 
@@ -159,7 +160,8 @@ class BlockPrefixDecoder:
             shifted=xp.full_like(shifted,-1)
         if not trusted_block_schedule and bool(xp.any((shifted>=v) | (shifted < -1))):
             raise ValueError('committed decoder token ID outside vocabulary')
-        z,expectation_cache=self.expectation.forward(proposal_logits)
+        with block_proposal_detail_scope('block_proposal.expectation.forward'):
+            z,expectation_cache=self.expectation.forward(proposal_logits)
         if plan_condition=='neutral':
             # Mean of all vocabulary embeddings = uniform-proposal expectation.
             # No additional full [N,K,V] logits/probability tensor is needed.
@@ -179,14 +181,16 @@ class BlockPrefixDecoder:
         real=real + self.dec_positions.data[None,:,:]
         x=xp.concatenate((plan,real),axis=1)
         cache_layers=[]
-        for layer in self.layers:
-            x,c=layer.forward(x,self.allow)
-            cache_layers.append(c)
+        with block_proposal_detail_scope('block_proposal.small_decoder.layers.forward'):
+            for layer in self.layers:
+                x,c=layer.forward(x,self.allow)
+                cache_layers.append(c)
         decoded=x[:,k:,:]
         normalized,norm_cache=self.final_norm.forward(decoded)
         normalized=normalized.astype(self.model.dtype,copy=False) if self.low_precision else normalized
         up,up_cache=self.up.forward(normalized)
-        delta,output_cache=self.model.output_proj.forward(up)
+        with block_proposal_detail_scope('block_proposal.correction_vocab.forward'):
+            delta,output_cache=self.model.output_proj.forward(up)
         # Main distribution remains a soft and correctable additive prior.
         final_logits=proposal_logits+delta
         return final_logits,DecoderCache(
@@ -205,15 +209,17 @@ class BlockPrefixDecoder:
         if d_final_logits.ndim!=3 or d_final_logits.shape[1]!=k:
             raise ValueError('expected final logits gradient [N,K,V]')
         df=d_final_logits.astype(self.model.dtype,copy=False) if self.low_precision else d_final_logits
-        d_up=self.model.output_proj.backward(df,cache.output_cache)
+        with block_proposal_detail_scope('block_proposal.correction_vocab.backward'):
+            d_up=self.model.output_proj.backward(df,cache.output_cache)
         d_norm=self.up.backward(d_up,cache.up_cache)
         d_decode=self.final_norm.backward(d_norm.astype(xp.float32,copy=False)
                                                if self.low_precision else d_norm,
                                             cache.norm_cache)
         d_hidden=xp.zeros((d_decode.shape[0],2*k,self.width),dtype=xp.float32 if self.low_precision else d_decode.dtype)
         d_hidden[:,k:,:]=d_decode
-        for layer,c in reversed(list(zip(self.layers,cache.layer_caches))):
-            d_hidden=layer.backward(d_hidden,c)
+        with block_proposal_detail_scope('block_proposal.small_decoder.layers.backward'):
+            for layer,c in reversed(list(zip(self.layers,cache.layer_caches))):
+                d_hidden=layer.backward(d_hidden,c)
         d_plan=d_hidden[:,:k,:]
         d_real=d_hidden[:,k:,:]
         self.plan_positions.grad+=xp.sum(d_plan.astype(self.plan_positions.grad.dtype,copy=False),axis=0)
@@ -227,13 +233,38 @@ class BlockPrefixDecoder:
             xp.where(valid_previous[:,:,None],d_real,0).astype(self.model.dtype,copy=False)
             if self.low_precision else xp.where(valid_previous[:,:,None],d_real,0),
             cache.token_linear_cache)
-        # Use only previous genuine tokens. Never scatter padding or BOS into E.
-        # Empty indexed scatter is a no-op, avoiding an implicit GPU
-        # synchronization for every decoder group.
-        xp.add.at(self.model.embedding.W.grad,
-                  cache.shifted[valid_previous],
-                  d_tokens[valid_previous])
-        d_prop_from_plan=self.expectation.backward(d_z,cache.expectation_cache)
+        # Use only previous genuine tokens; padding and BOS must contribute
+        # exactly zero to the shared vocabulary embedding gradient.
+        with block_proposal_detail_scope('block_proposal.token_embedding_scatter'):
+            # 0080O10 opt-in: CuPy Boolean-indexing a GPU array creates a
+            # variable-size result and may synchronize to determine its length.
+            # Keep N*K indices instead, routing BOS/padding to ID 0 with an
+            # *exactly zero* gradient. There is no CPU-dependent output shape,
+            # and valid-token indices retain their original order.
+            fixed_scatter=(os.environ.get('MINI_LLM_BLOCK_DECODER_FIXED_SCATTER', '0')
+                           .strip().lower() not in ('0', 'false', 'off', 'no', ''))
+            if fixed_scatter:
+                ids=xp.maximum(cache.shifted, 0).reshape(-1)
+                values=xp.where(valid_previous[:,:,None], d_tokens, 0)
+                xp.add.at(self.model.embedding.W.grad,
+                          ids, values.reshape(-1, d_tokens.shape[-1]))
+            else:
+                xp.add.at(self.model.embedding.W.grad,
+                          cache.shifted[valid_previous],
+                          d_tokens[valid_previous])
+        with block_proposal_detail_scope('block_proposal.expectation.backward'):
+            d_prop_from_plan=self.expectation.backward(d_z,cache.expectation_cache)
+        # 0080O5 opt-in: the expectation's *owned* FP32 probability buffer
+        # becomes the VJP output and is no longer needed as P. Accumulate the
+        # identity-gradient in that same buffer, avoiding one more [N,K,V]
+        # allocation. Only the explicitly destructive CUDA mode takes this
+        # path; the reference and other ablations retain the old semantics.
+        if (os.environ.get('MINI_LLM_INPLACE_EXPECTATION_VJP', '0').strip().lower()
+                not in ('0', 'false', 'off', 'no', '')
+                and getattr(d_prop_from_plan, 'dtype', None) == xp.float32
+                and d_prop_from_plan is cache.expectation_cache.probs):
+            xp.add(d_prop_from_plan, d_final_logits, out=d_prop_from_plan)
+            return d_prop_from_plan
         return d_final_logits + d_prop_from_plan
 
 
@@ -302,7 +333,8 @@ class TwoStageBlockModel:
                 prefix_condition='normal',plan_override=None,
                 defer_metrics=False,known_valid_count=None,
                 trusted_block_schedule=False):
-        lp,cp=self.proposal_head.forward(main_boundaries)
+        with block_proposal_detail_scope('block_proposal.proposal_head.forward'):
+            lp,cp=self.proposal_head.forward(main_boundaries)
         lf,cd=self.decoder.forward(lp,targets,valid,
             plan_condition=plan_condition,prefix_condition=prefix_condition,
             plan_override=plan_override,
@@ -318,13 +350,22 @@ class TwoStageBlockModel:
         if n_unique < 1 or n_unique > int(valid.size):
             raise ValueError('invalid group supervised-token count')
         safe_targets=xp.where(valid,targets,0)
-        prop_loss,prop_cache=cross_entropy_forward(lp.copy() if copy_ce else lp,
-                        safe_targets,loss_mask=valid,
-                        return_device_loss=defer_metrics,
-                        normalizer_count=n_unique, return_row_losses=True)
-        final_loss,final_cache=cross_entropy_forward(lf,safe_targets,loss_mask=valid,
-                        return_device_loss=defer_metrics,
-                        normalizer_count=n_unique, return_row_losses=True)
+        with block_proposal_detail_scope('block_proposal.proposal_ce.forward'):
+            prop_loss,prop_cache=cross_entropy_forward(lp.copy() if copy_ce else lp,
+                            safe_targets,loss_mask=valid,
+                            return_device_loss=defer_metrics,
+                            normalizer_count=n_unique, return_row_losses=True)
+        # 0080O6: final_logits is a new, exclusively owned residual-addition
+        # tensor. Unlike lp it is not cached for any later gradient pathway;
+        # opt-in CE may safely overwrite it with FP32 probabilities/gradients.
+        # The loss op still checks dtype, ownership and contiguity itself.
+        reuse_final_fp32=(os.environ.get('MINI_LLM_INPLACE_FP32_FINAL_CE','0')
+                          .strip().lower() not in ('0','false','off','no',''))
+        with block_proposal_detail_scope('block_proposal.final_ce.forward'):
+            final_loss,final_cache=cross_entropy_forward(lf,safe_targets,loss_mask=valid,
+                            return_device_loss=defer_metrics,
+                            normalizer_count=n_unique, return_row_losses=True,
+                            reuse_fp32_logits=reuse_final_fp32)
         prop_nll=_cached_per_token_nll(prop_cache,targets,valid)
         final_nll=_cached_per_token_nll(final_cache,targets,valid)
         metrics={'proposal_position_ce_sums':xp.sum(prop_nll,axis=0),
@@ -340,10 +381,21 @@ class TwoStageBlockModel:
         return metrics,JointCache(cp,cd,final_cache,prop_cache,n_unique)
 
     def backward(self,cache,*,scale=1.0):
-        d_final=cross_entropy_backward(cache.final_ce_cache)*float(scale)
-        d_prop=self.decoder.backward(d_final,cache.decoder_cache)
-        d_prop+=cross_entropy_backward(cache.proposal_ce_cache)*(self.lambda_proposal*float(scale))
-        return self.proposal_head.backward(d_prop,cache.head_cache)
+        with block_proposal_detail_scope('block_proposal.final_ce.backward'):
+            d_final=cross_entropy_backward(cache.final_ce_cache)
+        if cache.final_ce_cache.get('consume_fp32_probs',False):
+            # 0080O6: avoid one more full-vocab gradient allocation when
+            # applying the accumulation weight to the exclusively owned CE
+            # output. The proposal/other loss paths retain their semantics.
+            xp.multiply(d_final,float(scale),out=d_final)
+        else:
+            d_final=d_final*float(scale)
+        with block_proposal_detail_scope('block_proposal.small_decoder.backward'):
+            d_prop=self.decoder.backward(d_final,cache.decoder_cache)
+        with block_proposal_detail_scope('block_proposal.proposal_ce.backward'):
+            d_prop+=cross_entropy_backward(cache.proposal_ce_cache)*(self.lambda_proposal*float(scale))
+        with block_proposal_detail_scope('block_proposal.proposal_head.backward'):
+            return self.proposal_head.backward(d_prop,cache.head_cache)
 
 @dataclass
 class PrefixDecoderGenerationState:

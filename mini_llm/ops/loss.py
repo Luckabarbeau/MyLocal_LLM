@@ -474,7 +474,8 @@ def chunked_bf16_cross_entropy_grad_inplace(
 
 
 def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=False,
-                          normalizer_count=None, return_row_losses=False):
+                          normalizer_count=None, return_row_losses=False,
+                          reuse_fp32_logits=False):
     """
     Cross entropy loss with mixed precision support.
     
@@ -486,6 +487,11 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
     0080 can supply its known compact-block count without a per-CE GPU sync.
     ``return_row_losses`` is opt-in: AR's ordinary cache and allocation path
     remain unchanged; 0080 gets the CE layer's stable per-target diagnostics.
+
+    0080O6: ``reuse_fp32_logits`` explicitly authorizes consuming an OWNED,
+    C-contiguous FP32 input as the probability cache. It is only suitable for
+    temporary final logits whose values are not needed after this call. The
+    original AR and proposal-loss callers remain non-destructive by default.
     """
     if normalizer_count is not None:
         normalizer_count = float(normalizer_count)
@@ -641,11 +647,29 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
         }
         return (loss_f32 if return_device_loss else scalar(loss_f32)), cache
     else:
-        # Float32 path - standard computation
-        max_logit = xp.max(flat_logits, axis=-1, keepdims=True)
-        shifted = flat_logits - max_logit
-        exp_logits = xp.exp(shifted)
-        probs = exp_logits / xp.sum(exp_logits, axis=-1, keepdims=True)
+        # 0080O6 optional zero-full-vocabulary-workspace path. Only the
+        # newly allocated *final* logits of the block decoder may be consumed;
+        # proposal logits and callers that retain logits use the reference path.
+        # Float64 keeps the original reference path for finite-difference tests.
+        consume_fp32 = (
+            bool(reuse_fp32_logits)
+            and flat_logits.dtype == xp.float32
+            and logits.flags.c_contiguous
+            and logits.flags.owndata
+        )
+        if consume_fp32:
+            probs = flat_logits
+            max_logit = xp.max(probs, axis=-1, keepdims=True)
+            xp.subtract(probs, max_logit, out=probs)
+            xp.exp(probs, out=probs)
+            denominator = xp.sum(probs, axis=-1, keepdims=True)
+            xp.divide(probs, denominator, out=probs)
+        else:
+            # Existing default, entirely unchanged.
+            max_logit = xp.max(flat_logits, axis=-1, keepdims=True)
+            shifted = flat_logits - max_logit
+            exp_logits = xp.exp(shifted)
+            probs = exp_logits / xp.sum(exp_logits, axis=-1, keepdims=True)
 
         rows = xp.arange(n)
         target_probs = probs[rows, flat_targets]
@@ -668,7 +692,7 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
                     raise ValueError("loss_mask must select at least one target token")
             loss = xp.sum(per_token_loss * mask_f32) / normalizer_count
 
-        return (loss if return_device_loss else scalar(loss)), {
+        cache = {
             "probs": probs,
             "targets": flat_targets,
             "original_shape": logits.shape,
@@ -676,6 +700,13 @@ def cross_entropy_forward(logits, targets, loss_mask=None, return_device_loss=Fa
             "loss_mask_f32": mask_f32,
             "normalizer_count": normalizer_count,
         }
+        if consume_fp32:
+            cache["consume_fp32_probs"] = True
+            if return_row_losses:
+                # Save FP32 diagnostics before backward consumes the cache.
+                cache["row_losses"] = (per_token_loss if mask_f32 is None
+                                       else per_token_loss * mask_f32)
+        return (loss if return_device_loss else scalar(loss)), cache
 
 
 def cross_entropy_backward(cache):
@@ -720,6 +751,10 @@ def cross_entropy_backward(cache):
     probs_f32 = cache.get("probs_f32", None)
     if probs_f32 is not None:
         probs = probs_f32.copy()
+    elif cache.get("consume_fp32_probs", False):
+        # 0080O6: the final-logit buffer is exclusively owned by this cache.
+        # Backward uses it in-place instead of allocating another [N,K,V].
+        probs = cache.pop("probs")
     else:
         probs = cache["probs"].copy()
 

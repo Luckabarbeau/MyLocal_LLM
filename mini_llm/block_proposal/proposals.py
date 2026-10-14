@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from mini_llm.backend import xp, RandomStream, is_low_precision_dtype
 from mini_llm.init import matrix_parameter
 from mini_llm.parameter import Parameter
+from mini_llm.performance_profiler import block_proposal_detail_scope
 from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 
 
@@ -87,7 +88,8 @@ class HorizonProposalHead:
             delta = (states.reshape(-1, states.shape[-1]) @ self.W_back.data).reshape(n,k-1,-1)
             later = compute[:, None, :] + self.residual_scale * delta
             u = xp.concatenate((compute[:, None, :], later), axis=1)
-        logits, output_cache = self.model.output_proj.forward(u)
+        with block_proposal_detail_scope('block_proposal.proposal_vocab.forward'):
+            logits, output_cache = self.model.output_proj.forward(u)
         if not return_cache:
             return logits
         return logits, HorizonCache(
@@ -108,7 +110,8 @@ class HorizonProposalHead:
         # existing backward handles its FP32 Parameter.grad accumulator.
         compute_dy = (d_logits.astype(self.model.dtype, copy=False)
                       if is_low_precision_dtype(self.model.dtype) else d_logits)
-        d_u = self.model.output_proj.backward(compute_dy, cache.output_cache)
+        with block_proposal_detail_scope('block_proposal.proposal_vocab.backward'):
+            d_u = self.model.output_proj.backward(compute_dy, cache.output_cache)
         d_h = xp.sum(d_u.astype(xp.float32, copy=False), axis=1)
         if self.block_size > 1:
             n = int(d_u.shape[0]); width = self.W_back.shape[0]

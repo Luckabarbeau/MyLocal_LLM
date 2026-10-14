@@ -2300,6 +2300,9 @@ class ExtendedTrainer:
                 if block_step_metrics is None:
                     block_step_metrics = {
                         "unique_supervised_tokens": 0,
+                        # Host integers only; no extra CUDA synchronization.
+                        "compact_working_tokens": 0,
+                        "compact_padding_saved_tokens": 0,
                         "position_counts": xp.zeros_like(metrics["position_counts"]),
                         "proposal_position_ce_sums": xp.zeros_like(metrics["proposal_position_ce_sums"]),
                         "final_position_ce_sums": xp.zeros_like(metrics["final_position_ce_sums"]),
@@ -2311,6 +2314,12 @@ class ExtendedTrainer:
                         "joint_loss_sum": xp.zeros((), dtype=xp.float64),
                     }
                 block_step_metrics["unique_supervised_tokens"] += int(valid_tokens)
+                block_step_metrics["compact_working_tokens"] += (
+                    int(metrics["trunk_working_tokens_per_row"]) * int(inputs.shape[0])
+                )
+                block_step_metrics["compact_padding_saved_tokens"] += (
+                    int(metrics["trunk_padding_tokens_saved_per_row"]) * int(inputs.shape[0])
+                )
                 for name in ("position_counts", "proposal_position_ce_sums", "final_position_ce_sums"):
                     block_step_metrics[name] += metrics[name]
                 for dst, key in (("proposal_nll_sum", "proposal_ce"),
@@ -2771,6 +2780,13 @@ class ExtendedTrainer:
               "unique_targets={:,}, K={}".format(
                   final_sum / total, proposal_sum / total,
                   (proposal_sum-final_sum) / total, total, len(counts)))
+        saved = int(metrics.get("compact_padding_saved_tokens", 0))
+        if saved:
+            executed = int(metrics["compact_working_tokens"])
+            print("  0080O11: compact working positions={:,}/{:,} "
+                  "(padded positions avoided={:,}, {:.1f}% of configured window)".format(
+                      executed, executed + saved, saved,
+                      100.0 * saved / (executed + saved)))
         if self.log_file is None:
             return
         path = self.log_file.with_name(self.log_file.stem + ".block_proposal.csv")

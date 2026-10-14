@@ -9,9 +9,33 @@ This trainer does not perform optimizer updates, checkpointing, or GPU peak
 profiling; those belong to 0080F. Calls are synchronous and train one window.
 """
 
+import os
+
 from mini_llm.backend import xp, asnumpy, is_low_precision_dtype, BACKEND_NAME
-from mini_llm.performance_profiler import performance_scope
+from mini_llm.performance_profiler import performance_scope, block_proposal_scope, block_proposal_detail_scope
 from .contracts import block_schedule
+
+
+def compact_working_length(full_length, maximum_valid, block_size):
+    """Choose a compact causal working-window bucket without changing samples.
+
+    Default 4096-token windows use 512/1024/2048/4096. Smaller test
+    configurations use proportionally smaller buckets. Intermediate buckets
+    remain multiples of K; the configured full length may be nondivisible and
+    its final partial K block is preserved.
+    """
+    full_length, maximum_valid, block_size = (
+        int(full_length), int(maximum_valid), int(block_size)
+    )
+    if full_length <= 0 or block_size <= 0:
+        raise ValueError("working-window length and K must be positive")
+    if maximum_valid < 1 or maximum_valid > full_length:
+        raise ValueError("valid target extent outside configured working window")
+    bucket = max(block_size, full_length // 8)
+    bucket = min(full_length, ((bucket + block_size - 1) // block_size) * block_size)
+    while bucket < maximum_valid:
+        bucket = min(full_length, bucket * 2)
+    return bucket
 
 
 class SinglePassBlockTrainer:
@@ -86,6 +110,37 @@ class SinglePassBlockTrainer:
             if memory_metadata is not None:
                 raise ValueError('memory_metadata requires routed main model')
             metadata=None
+        # 0080O11: keep document-first sampling and the entire [D|4096]
+        # source unchanged. Only the trailing *working* padding is absent from
+        # the shared Transformer. The compact length is common to this B-row
+        # microbatch; no per-row attention mask or large 64K activation exists.
+        full_working_length = t
+        if (compute_gradients and
+                os.environ.get('MINI_LLM_BLOCK_PROPOSAL_COMPACT_TARGET', '0') == '1'):
+            # Validate the *original* full-length mask before slicing. A
+            # non-prefix mask must never hide valid later targets by reducing
+            # the apparent extent to its population count.
+            full_valid = xp.asarray(valid_target_mask, dtype=xp.bool_)
+            if full_valid.shape != target_labels.shape or bool(xp.any(
+                    full_valid[:, 1:] & ~full_valid[:, :-1])):
+                raise ValueError('compact targets require a full-length prefix-valid mask')
+            if memory_enabled:
+                # Already checked against valid_target_mask, and retained on
+                # CPU by the original document-first sampler.
+                maximum_valid = max(int(x) for x in metadata['target_valid_lengths'])
+            else:
+                maximum_valid = int(asnumpy(xp.max(xp.sum(valid_target_mask, axis=1))))
+            compact_length = compact_working_length(
+                full_working_length, maximum_valid, self.net.proposal_head.block_size
+            )
+            if compact_length < t:
+                target_labels = target_labels[:, :compact_length]
+                valid_target_mask = valid_target_mask[:, :compact_length]
+                if memory_enabled:
+                    metadata['compact_working_length'] = compact_length
+                else:
+                    source_inputs = source_inputs[:, :compact_length]
+                t = compact_length
         schedule=block_schedule(target_labels,valid_target_mask,
                                 self.net.proposal_head.block_size,
                                 vocab_size=self.model.config.vocab_size)
@@ -165,7 +220,7 @@ class SinglePassBlockTrainer:
             h=main_hidden[rows,positions,:].copy()
             y=schedule.targets[start:end]
             valid=schedule.valid[start:end]
-            with performance_scope('block_proposal.decoder_group.forward'):
+            with block_proposal_scope('block_proposal.decoder_group.forward'):
                 override=(shuffled_plan_bank[shuffled_indices[start:end]]
                           if shuffled_plan_bank is not None else None)
                 metrics,cache=self.net.forward(h,y,valid,
@@ -182,9 +237,10 @@ class SinglePassBlockTrainer:
             final_horizon_sum+=metrics['final_position_ce_sums']
             xp.add.at(row_final_sum,rows,metrics['block_row_final_ce_sums'])
             if compute_gradients:
-                with performance_scope('block_proposal.decoder_group.backward'):
+                with block_proposal_scope('block_proposal.decoder_group.backward'):
                     boundary_grad=self.net.backward(cache,scale=float(grad_scale)*group_weight)
-                xp.add.at(dh_buffer,(rows,positions),boundary_grad.astype(dh_buffer.dtype,copy=False))
+                with block_proposal_detail_scope('block_proposal.boundary_gradient.scatter'):
+                    xp.add.at(dh_buffer,(rows,positions),boundary_grad.astype(dh_buffer.dtype,copy=False))
             del h,cache
         del main_hidden
         if compute_gradients:
@@ -199,4 +255,6 @@ class SinglePassBlockTrainer:
                     row_final_ce_sums=row_final_sum,
                     main_forward_passes=1,
                     main_backward_passes=1 if compute_gradients else 0,
-                    routed_prefix_slots=prefix, routing_cache=routing_cache)
+                    routed_prefix_slots=prefix, routing_cache=routing_cache,
+                    trunk_working_tokens_per_row=t,
+                    trunk_padding_tokens_saved_per_row=full_working_length-t)

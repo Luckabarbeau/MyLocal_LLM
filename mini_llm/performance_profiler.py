@@ -13,8 +13,15 @@ import os
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .backend import BACKEND_NAME, synchronize, xp
+
+# The ordinary per-kernel profiler synchronizes at every boundary.  Suppress
+# these nested scopes *only inside* the detailed decoder-group interval so
+# hundreds of groups remain asynchronous. The enclosing main Transformer
+# still uses the original synchronized instrumentation.
+_SUPPRESS_COARSE_SCOPE = ContextVar('block_proposal_suppress_coarse_scope', default=False)
 
 
 class _PerformanceProfiler:
@@ -34,6 +41,12 @@ class _PerformanceProfiler:
             "MINI_LLM_RETRIEVAL_ROUTER_DETAIL_PROFILE", "0"
         ).strip().lower()
         self.retrieval_router_detail_enabled = raw_retrieval_detail not in {
+            "0", "false", "off", "no", ""
+        }
+        raw_block_detail = os.environ.get(
+            "MINI_LLM_BLOCK_PROPOSAL_DETAIL_PROFILE", "0"
+        ).strip().lower()
+        self.block_proposal_detail_enabled = raw_block_detail not in {
             "0", "false", "off", "no", ""
         }
         raw_rmsnorm_detail = os.environ.get(
@@ -58,7 +71,7 @@ class _PerformanceProfiler:
 
     @contextmanager
     def scope(self, name: str):
-        if not self.enabled:
+        if not self.enabled or _SUPPRESS_COARSE_SCOPE.get():
             yield
             return
 
@@ -114,6 +127,52 @@ class _PerformanceProfiler:
                 self._pending_gpu_events.append(
                     (f"{name}.gpu", start_event, end_event)
                 )
+
+    @contextmanager
+    def block_proposal_scope(self, name: str):
+        """Use low-overhead deferred CUDA timing when block detail is enabled.
+
+        Normal --profile-steps retains historical synchronized timing.  The
+        detailed mode deliberately avoids synchronizing at each of hundreds
+        of small decoder groups; the already-existing main-trunk boundaries
+        still establish synchronized, separate forward/backward totals.
+        """
+        if self.enabled and self.block_proposal_detail_enabled:
+            token = _SUPPRESS_COARSE_SCOPE.set(True)
+            try:
+                with self.block_proposal_detail_scope(name):
+                    yield
+            finally:
+                _SUPPRESS_COARSE_SCOPE.reset(token)
+        else:
+            with self.scope(name):
+                yield
+
+    @contextmanager
+    def block_proposal_detail_scope(self, name: str):
+        """Report .host and .gpu times without a per-group CUDA sync.
+
+        CUDA events are resolved only at the end-of-step profiler report.
+        The .gpu time is stream elapsed time, not isolated kernel occupancy;
+        nested scopes overlap and should never be summed blindly.
+        """
+        if not self.enabled or not self.block_proposal_detail_enabled:
+            yield
+            return
+        host_start = time.perf_counter()
+        if BACKEND_NAME == "cupy":
+            start_event = xp.cuda.Event()
+            end_event = xp.cuda.Event()
+            start_event.record()
+        else:
+            start_event = end_event = None
+        try:
+            yield
+        finally:
+            self._record(f"{name}.host", time.perf_counter() - host_start)
+            if BACKEND_NAME == "cupy":
+                end_event.record()
+                self._pending_gpu_events.append((f"{name}.gpu", start_event, end_event))
 
     @contextmanager
     def local_detail_scope(self, name: str):
@@ -304,3 +363,13 @@ def local_detail_scope(name: str):
 
 def retrieval_router_detail_scope(name: str):
     return PERFORMANCE_PROFILER.retrieval_router_detail_scope(name)
+
+
+def block_proposal_scope(name: str):
+    """Coarse legacy timing, or deferred timing for selected decoder groups."""
+    return PERFORMANCE_PROFILER.block_proposal_scope(name)
+
+
+def block_proposal_detail_scope(name: str):
+    """Opt-in deferred event/host timing for 0080 grouped computations."""
+    return PERFORMANCE_PROFILER.block_proposal_detail_scope(name)

@@ -2226,6 +2226,14 @@ class ExtendedTrainer:
         supervised_tokens_in_step = 0.0
         source_observations = []   # (source, CPU coverage, on-device CE scalar)
         block_step_metrics = None
+        # 0080AA: deep audit is explicitly opt-in and never changes the normal
+        # optimizer/training path. Audit only the next requested run's steps.
+        live_block_audit = None
+        if (self.training_objective is not None and
+                os.environ.get("MINI_LLM_BLOCK_PROPOSAL_LIVE_AUDIT", "0") == "1"):
+            from mini_llm.diagnostics.block_proposal_live_audit import LiveBlockProposalAudit
+            live_block_audit = LiveBlockProposalAudit(
+                self.training_objective.net.proposal_head.block_size)
         step_routing_modes = self._new_routing_mode_stats()
         # Rescale by nominal token capacity before backward to avoid large
         # intermediate gradients.  The common scale cancels at normalization.
@@ -2282,6 +2290,19 @@ class ExtendedTrainer:
                     )
                 if int(metrics["unique_supervised_tokens"]) != int(valid_tokens):
                     raise ValueError("0080/production supervised-token denominators disagree")
+                if live_block_audit is not None:
+                    # Compare identical *live* samples/metadata/weights. No
+                    # optimizer update or RNG resampling occurs between calls.
+                    # The evaluation branch is forward-only and leaves the
+                    # already-accumulated training gradients untouched.
+                    same_batch_eval = self.training_objective.evaluate_batch(
+                        inputs, targets, loss_mask, batch_metadata,
+                    )
+                    live_block_audit.add(
+                        source, metrics, same_batch_eval, batch_metadata,
+                        self.target_seq_length,
+                    )
+                    del same_batch_eval
                 if (self.memory_context is not None and
                         self.memory_context.integration_mode == "routed_prefix"):
                     self._merge_routing_mode_stats(
@@ -2536,6 +2557,8 @@ class ExtendedTrainer:
             raise ValueError("no supervised tokens in accumulated optimizer step")
         avg_loss = float(_array_to_float(loss_sum_backend / accumulation_weight_sum))
         self._last_step_supervised_tokens = supervised_tokens_in_step
+        if live_block_audit is not None:
+            print(live_block_audit.format_report(self.step, block_step_metrics), flush=True)
         if block_step_metrics is not None:
             self._last_step_block_proposal_metrics = block_step_metrics
             self._block_proposal_supervised_tokens += block_step_metrics["unique_supervised_tokens"]
@@ -2591,9 +2614,19 @@ class ExtendedTrainer:
             self.memory_context is not None
             and self.memory_context.memory_training == "router_only"
         )
-        if refresh_backbone_buffers and hasattr(self.model, "refresh_compute_buffers"):
+        if refresh_backbone_buffers:
             with performance_scope("train.refresh_compute_buffers"):
-                self.model.refresh_compute_buffers()
+                if hasattr(self.model, "refresh_compute_buffers"):
+                    self.model.refresh_compute_buffers()
+                # 0080AB: The block decoder owns independent attention layers.
+                # Their cached packed-QKV matrices must be rebuilt after every
+                # optimizer update, just like those of the main Transformer.
+                # Otherwise continuous training uses stale decoder QKV while a
+                # checkpoint reload rebuilds them from the current weights.
+                if self.training_objective is not None:
+                    for layer in self.training_objective.net.decoder.layers:
+                        if hasattr(layer.attn, "refresh_compute_buffers"):
+                            layer.attn.refresh_compute_buffers()
         with performance_scope("train.zero_grad"):
             self.optimizer.zero_grad()
             # Handwritten backward still computes some input gradients through

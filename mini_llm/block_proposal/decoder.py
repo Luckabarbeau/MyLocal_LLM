@@ -23,7 +23,7 @@ from mini_llm.ops.loss import cross_entropy_forward, cross_entropy_backward
 from mini_llm.predictive_refinement.soft_embeddings import SoftTokenExpectation
 from mini_llm.performance_profiler import block_proposal_detail_scope
 from .contracts import prefix_lm_allow_mask, shifted_decoder_tokens
-from .context_attention import context_attention_forward, context_attention_backward
+from .decoder_context_kv import decoder_context_forward, decoder_context_backward
 from .soft_interface_config import SoftInterfaceConfig
 from .soft_vocab_read import SoftVocabularyRead
 
@@ -50,22 +50,44 @@ class DenseDecoderLayer:
         return (self.norm1.parameters()+self.attn.parameters()+
                 self.norm2.parameters()+self.ffn.parameters())
 
-    def forward(self,x,allow):
+    def forward(self,x,allow,*,context_memory=None,context_valid=None):
         if self.low_precision:
             x = x.astype(xp.float32,copy=False)
         n1,c1 = self.norm1.forward(x)
         n1 = n1.astype(self.dtype,copy=False) if self.low_precision else n1
-        a,ca = self.attn.forward(n1,attention_allow_mask=allow)
+        context_norm_cache=None
+        if context_memory is None:
+            if context_valid is not None:
+                raise ValueError('context validity supplied without memory')
+            a,ca = self.attn.forward(n1,attention_allow_mask=allow)
+        else:
+            if context_valid is None:
+                raise ValueError('0080BK requires a contextual validity mask')
+            # Read-only past states: use the existing trained RMSNorm and Q/K/V/O
+            # of THIS layer; do not run context states through decoder FFNs.
+            clean_memory=xp.where(context_valid[:,:,None],context_memory,0.)
+            norm_input=(clean_memory.astype(xp.float32,copy=False)
+                        if self.low_precision else clean_memory)
+            memory_norm,context_norm_cache=self.norm1.forward(norm_input)
+            memory_norm=(memory_norm.astype(self.dtype,copy=False)
+                         if self.low_precision else memory_norm)
+            a,ca=decoder_context_forward(self.attn,n1,memory_norm,context_valid,allow)
         mid = x + a.astype(xp.float32,copy=False) if self.low_precision else x+a
         n2,c2 = self.norm2.forward(mid)
         n2 = n2.astype(self.dtype,copy=False) if self.low_precision else n2
         f,cf = self.ffn.forward(n2.reshape(-1,self.width))
         f = f.reshape(mid.shape)
         y = mid+f.astype(xp.float32,copy=False) if self.low_precision else mid+f
-        return y,(c1,ca,c2,cf)
+        if context_norm_cache is None:
+            return y,(c1,ca,c2,cf)  # Exact legacy no-context cache contract.
+        return y,(c1,ca,c2,cf,context_norm_cache,context_valid)
 
     def backward(self,dy,caches):
-        c1,ca,c2,cf = caches
+        if len(caches)==4:
+            c1,ca,c2,cf=caches
+            context_norm_cache=context_valid=None
+        else:
+            c1,ca,c2,cf,context_norm_cache,context_valid=caches
         if self.low_precision:
             dy = dy.astype(xp.float32,copy=False)
         d_ff = dy.astype(self.dtype,copy=False) if self.low_precision else dy
@@ -73,9 +95,19 @@ class DenseDecoderLayer:
         dn2 = self.norm2.backward(df.astype(xp.float32,copy=False) if self.low_precision else df,c2)
         dmid = dy+dn2
         da = dmid.astype(self.dtype,copy=False) if self.low_precision else dmid
-        dn1 = self.attn.backward(da,ca)
+        if context_norm_cache is None:
+            dn1=self.attn.backward(da,ca)
+        else:
+            dn1,dmem_norm=decoder_context_backward(da,ca)
         dnorm1 = self.norm1.backward(dn1.astype(xp.float32,copy=False) if self.low_precision else dn1,c1)
-        return dmid+dnorm1
+        dx=dmid+dnorm1
+        if context_norm_cache is None:
+            return dx
+        dmem=self.norm1.backward(
+            dmem_norm.astype(xp.float32,copy=False) if self.low_precision else dmem_norm,
+            context_norm_cache)
+        dmem=xp.where(context_valid[:,:,None],dmem,0.)
+        return dx,dmem
 
 
 @dataclass(frozen=True)
@@ -335,18 +367,24 @@ class BlockPrefixDecoder:
                 if self.low_precision else boundary_h)
             real=real+projected[:,None,:]
         x=xp.concatenate((plan,real),axis=1)
-        context_cache=None
-        if context_memory is not None:
-            # 0080BJ: M <= 128 causal main-trunk states are K/V only.
-            with block_proposal_detail_scope('block_proposal.context_attention.forward'):
-                x,context_cache=context_attention_forward(x,context_memory,context_valid)
-        elif context_valid is not None:
+        # 0080BK: eliminate 0080BJ's fixed 0.1 context residual. Each layer
+        # reads the same causal trunk states using its OWN trained attention.
+        if context_memory is None and context_valid is not None:
             raise ValueError('context validity supplied without memory')
+        if context_memory is not None and not self.direct_latents:
+            raise ValueError('0080BK contextual KV requires v5 direct latents')
+        if context_memory is not None and not getattr(self,'_bk_context_reported',False):
+            print(f'0080BK ACTIVE: {context_memory.shape[1]} causal context states '
+                  f'as learned K/V in all {len(self.layers)} decoder layers')
+            self._bk_context_reported=True
+        context_cache=(True if context_memory is not None else None)
         cache_layers=[]
         read_cache=None
         with block_proposal_detail_scope('block_proposal.small_decoder.layers.forward'):
             for i, layer in enumerate(self.layers):
-                x,c=layer.forward(x,self.allow)
+                x,c=layer.forward(x,self.allow,
+                                  context_memory=context_memory,
+                                  context_valid=context_valid)
                 cache_layers.append(c)
                 if self.vocab_read is not None and i == self.soft_interface_config.read_layer:
                     # Query after a causally masked layer: DEC_j sees y_<j,
@@ -403,6 +441,7 @@ class BlockPrefixDecoder:
         d_hidden=xp.zeros((d_decode.shape[0],2*k,self.width),dtype=xp.float32 if self.low_precision else d_decode.dtype)
         d_hidden[:,k:,:]=d_decode
         d_prop_from_read=None
+        d_context=None
         with block_proposal_detail_scope('block_proposal.small_decoder.layers.backward'):
             for i in reversed(range(len(self.layers))):
                 if self.vocab_read is not None and i == self.soft_interface_config.read_layer:
@@ -411,14 +450,14 @@ class BlockPrefixDecoder:
                     with block_proposal_detail_scope('block_proposal.vocab_read.backward'):
                         d_read_state,d_prop_from_read=self.vocab_read.backward(
                             d_hidden[:,k:,:],cache.vocab_read_cache)
-                    # Derivative of residual update is the identity PLUS
-                    # the read-query branch; leave all PLAN rows unchanged.
+                    # Preserve the existing residual vocabulary-read VJP.
                     d_hidden[:,k:,:]+=d_read_state
-                d_hidden=self.layers[i].backward(d_hidden,cache.layer_caches[i])
-        d_context=None
-        if cache.context_attention_cache is not None:
-            with block_proposal_detail_scope('block_proposal.context_attention.backward'):
-                d_hidden,d_context=context_attention_backward(d_hidden,cache.context_attention_cache)
+                result=self.layers[i].backward(d_hidden,cache.layer_caches[i])
+                if isinstance(result,tuple):
+                    d_hidden,dmem=result
+                    d_context=dmem if d_context is None else d_context+dmem
+                else:
+                    d_hidden=result
         d_plan=d_hidden[:,:k,:]
         d_real=d_hidden[:,k:,:]
         d_boundary=None
@@ -704,7 +743,7 @@ def _cached_attend_one(attn, x, prefix_keys, prefix_values, position):
 
 def _decoder_prepare_plan(self,proposal_logits,*,boundary_h=None,proposal_latents=None):
     if int(os.environ.get('MINI_LLM_BLOCK_DECODER_CONTEXT_TOKENS','0')):
-        raise NotImplementedError('0080BJ contextual KV inference cache is not implemented; do not generate without the same context')
+        raise NotImplementedError('0080BK contextual decoder KV inference is not implemented; do not generate without the same context')
     """Run all K PLAN tokens once, caching their learned K/V at every layer."""
     if proposal_logits.ndim!=3 or proposal_logits.shape[1]!=self.block_size:
         raise ValueError('proposal logits must be [B,K,V]')

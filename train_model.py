@@ -63,7 +63,8 @@ def parse_args():
             "wide-500m-context-16k", "wide-500m-context-32k",
             "wide-500m-context-64k",
             "wide-500m-memory-16k", "wide-500m-memory-32k",
-            "wide-500m-memory-64k", "large",
+            "wide-500m-memory-64k", "deep-500m-memory-64k",
+            "wide24-500m-memory-64k", "wide24-500m-dense-memory-64k", "large",
         ],
         default="mini",
         help="Model size configuration",
@@ -101,6 +102,27 @@ def parse_args():
     parser.add_argument("--block-proposal-decoder-ff-multiplier", type=int, default=None,
                         help="Small decoder SwiGLU inner-width multiplier (default: 4)")
     parser.add_argument("--block-proposal-lambda", type=float, default=None)
+    # 0080AE: explicit future soft-interface contract. Only the legacy
+    # expectation/off combination is executable in this patch; experimental
+    # selections fail before model allocation until the kernels are complete.
+    parser.add_argument("--block-proposal-soft-interface", choices=["expectation", "full_vocab", "probability_embedding", "probability_embedding_direct", "proposal_latents_direct"],
+                        default=None)
+    parser.add_argument("--block-proposal-prob-embedding-dim", type=int, default=None,
+                        help="Trainable full-probability embedding dimension (v3 only)")
+    parser.add_argument("--block-proposal-vocab-read-source", choices=["own", "all"], default=None)
+    parser.add_argument("--block-proposal-vocab-read-heads", type=int, default=None)
+    parser.add_argument("--block-proposal-vocab-read-layer", type=int, default=None)
+    parser.add_argument("--block-proposal-vocab-read-temperature", type=float, default=None)
+    parser.add_argument("--block-proposal-vocab-read-scale", type=float, default=None)
+    parser.add_argument("--block-proposal-boundary-condition", choices=["off", "dec_residual"],
+                        default=None)
+    parser.add_argument("--block-proposal-vocab-read-algorithm",
+                        choices=["source_loop", "source_mixture", "batched_mixture", "fused_mixture"],
+                        default=None)
+    parser.add_argument("--block-proposal-vocab-read-tile", type=int, default=None)
+    parser.add_argument("--block-proposal-vocab-read-block-tile", type=int, default=None)
+    parser.add_argument("--block-proposal-init-from-v1", type=str, default=None,
+                        help="Full-model v1 weights-only transfer; new v2 optimizer and checkpoint directory")
     parser.add_argument("--block-proposal-group-size", type=int, default=8,
                         help="Bound number of K-block plans decoded together (default: 8)")
 
@@ -527,6 +549,12 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.wide_500m_memory_32k()
     if name == "wide-500m-memory-64k":
         return ModelConfig.wide_500m_memory_64k()
+    if name == "deep-500m-memory-64k":
+        return ModelConfig.deep_500m_memory_64k()
+    if name == "wide24-500m-memory-64k":
+        return ModelConfig.wide24_500m_memory_64k()
+    if name == "wide24-500m-dense-memory-64k":
+        return ModelConfig.wide24_500m_dense_memory_64k()
     if name == "large":
         return ModelConfig.large()
     raise ValueError(f"unknown model preset: {name}")
@@ -787,16 +815,54 @@ def restore_compatible_stream_cursors(cache, stored_state, *, checkpoint_dir=Non
     return restored
 
 
+def populate_v1_warmstart_options(args):
+    """Resolve unchanged K/head/decoder dimensions directly from the source v1 manifest.
+
+    New v2 fields remain independently selected. Refuse a contradictory CLI
+    flag before allocating the 500M model or touching source checkpoint data.
+    """
+    source=getattr(args,'block_proposal_init_from_v1',None)
+    if not source:
+        return None
+    from mini_llm.block_proposal.checkpoint import ARCHITECTURE
+    source_path=Path(source).expanduser().resolve()
+    with (source_path/'training_state.json').open(encoding='utf8') as handle:
+        stored=json.load(handle)
+    architecture=stored.get('architecture') or {}
+    if architecture.get('type')!=ARCHITECTURE:
+        raise ValueError('weights-only v2 initialization requires a complete v1 block checkpoint')
+    decoder_width=int(architecture['decoder_width'])
+    ff_width=int(architecture['decoder_ff_width'])
+    if ff_width%decoder_width:
+        raise ValueError('source v1 decoder FF width is not divisible by decoder width')
+    shared={
+        'block_proposal_k':int(architecture['block_size']),
+        'block_proposal_head_width':int(architecture['proposal_hidden_width']),
+        'block_proposal_residual_scale':float(architecture['proposal_residual_scale']),
+        'block_proposal_decoder_width':decoder_width,
+        'block_proposal_decoder_layers':int(architecture['decoder_layers']),
+        'block_proposal_decoder_heads':int(architecture['decoder_heads']),
+        'block_proposal_decoder_ff_multiplier':ff_width//decoder_width,
+        'block_proposal_lambda':float(architecture['lambda_proposal']),
+    }
+    for option,value in shared.items():
+        current=getattr(args,option,None)
+        if current is not None and current!=value:
+            raise ValueError('v1 warm-start architecture option mismatch: '+option)
+        setattr(args,option,value)
+    return architecture
+
+
 def build_training_objective(model, args, *, checkpoint_state=None):
     """Construct only the 0080-specific objective, reusing production model.
 
     A resume must agree *exactly* with serialized 0080 architecture. The
     existing --model/config factory remains the source of all trunk settings.
     """
-    from mini_llm.block_proposal.checkpoint import ARCHITECTURE
+    from mini_llm.block_proposal.checkpoint import ARCHITECTURE, ARCHITECTURE_V2, ARCHITECTURE_V3, ARCHITECTURE_V4, ARCHITECTURE_V5
     saved = checkpoint_state or {}
     old = saved.get("prediction_objective", "block-proposal" if
-                    (saved.get("architecture") or {}).get("type") == ARCHITECTURE
+                    (saved.get("architecture") or {}).get("type") in (ARCHITECTURE,ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4,ARCHITECTURE_V5)
                     else "ar")
     requested = args.objective or old
     if checkpoint_state is not None and requested != old:
@@ -806,7 +872,13 @@ def build_training_objective(model, args, *, checkpoint_state=None):
             "block_proposal_k", "block_proposal_head_width", "block_proposal_residual_scale",
             "block_proposal_decoder_width", "block_proposal_decoder_layers",
             "block_proposal_decoder_heads", "block_proposal_decoder_ff_multiplier",
-            "block_proposal_lambda")
+            "block_proposal_lambda", "block_proposal_soft_interface",
+            "block_proposal_prob_embedding_dim",
+            "block_proposal_vocab_read_source", "block_proposal_vocab_read_heads",
+            "block_proposal_vocab_read_layer", "block_proposal_vocab_read_temperature",
+            "block_proposal_vocab_read_scale", "block_proposal_boundary_condition",
+            "block_proposal_vocab_read_algorithm", "block_proposal_vocab_read_tile",
+            "block_proposal_vocab_read_block_tile", "block_proposal_init_from_v1")
             if getattr(args, name, None) is not None]
         if explicit:
             raise ValueError("block proposal options require --objective block-proposal")
@@ -814,7 +886,7 @@ def build_training_objective(model, args, *, checkpoint_state=None):
     if requested != "block-proposal":
         raise ValueError("unknown objective")
     previous = (saved.get("architecture") or {}) if checkpoint_state is not None else {}
-    if checkpoint_state is not None and previous.get("type") != ARCHITECTURE:
+    if checkpoint_state is not None and previous.get("type") not in (ARCHITECTURE,ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4,ARCHITECTURE_V5):
         raise ValueError("0080 resume requires a saved two-stage architecture")
     if model.config.progressive_depth:
         raise ValueError("0080 does not yet support progressive depth")
@@ -859,13 +931,86 @@ def build_training_objective(model, args, *, checkpoint_state=None):
     coefficient = float(choice("block_proposal_lambda", "lambda_proposal", .5))
     if k < 1 or k > 64 or not 0 < coefficient < float("inf"):
         raise ValueError("0080 requires 1 <= K <= 64 and finite positive lambda")
+    from mini_llm.block_proposal.soft_interface_config import SoftInterfaceConfig
+    field_flags = {
+        'mode':'block_proposal_soft_interface',
+        'source_scope':'block_proposal_vocab_read_source',
+        'read_heads':'block_proposal_vocab_read_heads',
+        'read_layer':'block_proposal_vocab_read_layer',
+        'temperature':'block_proposal_vocab_read_temperature',
+        'read_scale':'block_proposal_vocab_read_scale',
+        'boundary_condition':'block_proposal_boundary_condition',
+        'probability_embedding_dim':'block_proposal_prob_embedding_dim',
+    }
+    defaults=SoftInterfaceConfig()
+    stored_interface=previous.get('soft_interface') or {}
+    values={}
+    for fld,flag in field_flags.items():
+        requested_value=getattr(args,flag,None)
+        saved_value=stored_interface.get(fld,getattr(defaults,fld))
+        if checkpoint_state is not None and requested_value is not None and requested_value!=saved_value:
+            raise ValueError('v2 soft interface resume mismatch: '+flag)
+        values[fld]=(saved_value if checkpoint_state is not None else
+                     (getattr(defaults,fld) if requested_value is None else requested_value))
+    # In the direct mode the embedding width is structurally tied to d_model.
+    # A fresh v4 run needs no independent probability-dimension flag.
+    if checkpoint_state is None and values['mode']=='probability_embedding_direct' and (
+            getattr(args,'block_proposal_prob_embedding_dim',None) is None):
+        values['probability_embedding_dim']=int(model.config.d_model)
+    interface=SoftInterfaceConfig(**values).validate(
+        model_width=model.config.d_model,decoder_layers=layers,block_size=k)
+    v2=not interface.is_v1_baseline
+    read_state=previous.get('vocab_read_execution') or {}
+    algorithm=choice('block_proposal_vocab_read_algorithm','_unused',
+                     'fused_mixture' if interface.mode=='full_vocab' and interface.source_scope=='all' else 'source_mixture')
+    vocab_tile=int(choice('block_proposal_vocab_read_tile','_unused_tile',2048))
+    block_tile=int(choice('block_proposal_vocab_read_block_tile','_unused_block_tile',8))
+    if checkpoint_state is not None and read_state:
+        for flag,value,key in (
+            ('block_proposal_vocab_read_algorithm',algorithm,'algorithm'),
+            ('block_proposal_vocab_read_tile',vocab_tile,'vocab_tile'),
+            ('block_proposal_vocab_read_block_tile',block_tile,'block_tile')):
+            requested_value=getattr(args,flag,None)
+            saved_value=read_state[key]
+            if requested_value is not None and requested_value!=saved_value:
+                raise ValueError('v2 vocabulary read resume mismatch: '+flag)
+            if key=='algorithm': algorithm=saved_value
+            elif key=='vocab_tile': vocab_tile=int(saved_value)
+            else: block_tile=int(saved_value)
+    if not v2:
+        interface.require_implemented()
+        if any(getattr(args,flag,None) is not None for flag in (
+            'block_proposal_vocab_read_algorithm','block_proposal_vocab_read_tile',
+            'block_proposal_vocab_read_block_tile')):
+            raise ValueError('vocab read algorithm/tile flags require v2')
+    if v2 and interface.mode!='full_vocab' and read_state:
+        raise ValueError('non-full-vocabulary variant cannot own vocab read metadata')
+    if interface.mode not in ('probability_embedding','probability_embedding_direct') and getattr(args,'block_proposal_prob_embedding_dim',None) is not None:
+        raise ValueError('probability embedding dimension requires probability_embedding interface')
+    if v2 and interface.mode!='full_vocab' and any(
+            getattr(args,flag,None) is not None for flag in (
+            'block_proposal_vocab_read_algorithm','block_proposal_vocab_read_tile',
+            'block_proposal_vocab_read_block_tile')):
+        raise ValueError('vocabulary read execution flags require full_vocab interface')
+    if v2 and interface.mode=='full_vocab' and interface.source_scope!='all' and algorithm!='source_mixture':
+        raise ValueError('own-source requires source_mixture algorithm')
+    from mini_llm.backend import BACKEND_NAME
+    if v2 and BACKEND_NAME!='cupy' and model.config.vocab_size>512:
+        raise NotImplementedError('v2 large-vocabulary experiments require CuPy')
+    if v2 and BACKEND_NAME!='cupy' and algorithm=='fused_mixture':
+        algorithm='source_mixture' if checkpoint_state is None else algorithm
     from mini_llm.block_proposal.proposals import HorizonProposalHead
     from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
     from mini_llm.block_proposal.objective import BlockProposalObjective
     head = HorizonProposalHead(model, block_size=k, hidden_width=head_width,
                                residual_scale=residual)
     decoder = BlockPrefixDecoder(model, k, width=width, n_layers=layers,
-                                 n_heads=heads, ff_multiplier=multiplier)
+                                 n_heads=heads, ff_multiplier=multiplier,
+                                 soft_interface_config=interface,
+                                 experimental_gpu_full_vocab=(v2 and BACKEND_NAME=='cupy'),
+                                 experimental_cpu_full_vocab=(v2 and BACKEND_NAME!='cupy'),
+                                 vocab_read_algorithm=algorithm,
+                                 vocab_read_tile=vocab_tile,vocab_read_block_tile=block_tile)
     net = TwoStageBlockModel(head, decoder, lambda_proposal=coefficient)
     objective = BlockProposalObjective(net, block_group_size=args.block_proposal_group_size)
     if checkpoint_state is not None and objective.checkpoint_metadata() != previous:
@@ -875,8 +1020,8 @@ def build_training_objective(model, args, *, checkpoint_state=None):
 
 def main():
     args = parse_args()
-    if args.resume_from and args.init_from:
-        raise ValueError("--resume-from and --init-from are mutually exclusive")
+    if sum(bool(x) for x in (args.resume_from,args.init_from,args.block_proposal_init_from_v1))>1:
+        raise ValueError('--resume-from, --init-from and --block-proposal-init-from-v1 are mutually exclusive')
 
     np.random.seed(args.seed)
     xp.random.seed(args.seed)
@@ -1083,6 +1228,9 @@ def main():
                 "wide-500m-memory-16k",
                 "wide-500m-memory-32k",
                 "wide-500m-memory-64k",
+                "deep-500m-memory-64k",
+                "wide24-500m-memory-64k",
+                "wide24-500m-dense-memory-64k",
             }:
                 raise RuntimeError(
                     f"{args.model} requires pre-generated packed shards. "
@@ -1280,9 +1428,21 @@ def main():
             raise ValueError("checkpoint missing training_state.json")
         with resume_metadata.open(encoding="utf8") as handle:
             saved_objective_state = json.load(handle)
+    if args.block_proposal_init_from_v1:
+        populate_v1_warmstart_options(args)
     training_objective = build_training_objective(
         model, args, checkpoint_state=saved_objective_state)
     if training_objective is not None:
+        # Never overwrite a v1 or previously completed v2 run, including for
+        # completely fresh v2 initialization (not only v1 warm-start).
+        from mini_llm.block_proposal.checkpoint import ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4,ARCHITECTURE_V5
+        if (not args.resume_from and
+                training_objective.checkpoint_metadata()['type'] in (ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4,ARCHITECTURE_V5)):
+            if not args.checkpoint_dir:
+                raise ValueError('new v2 training requires a checkpoint directory')
+            dest=Path(args.checkpoint_dir).resolve()
+            if dest.exists() and any(dest.iterdir()):
+                raise ValueError('v2 checkpoint directory must be NEW and empty; never overwrite an existing run')
         print("Prediction objective: probabilistic K-block proposal + prefix decoder")
         print("  K:", training_objective.net.proposal_head.block_size,
               "decoder groups:", training_objective.block_group_size)
@@ -1316,6 +1476,26 @@ def main():
                 + preview
             )
         get_pool = getattr(xp, "get_default_memory_pool", None)
+        if get_pool is not None:
+            get_pool().free_all_blocks()
+
+    if args.block_proposal_init_from_v1:
+        if training_objective is None:
+            raise ValueError('--block-proposal-init-from-v1 requires block-proposal v2 objective')
+        if args.checkpoint_dir is None:
+            raise ValueError('v2 warm start requires a NEW checkpoint directory')
+        source_path=Path(args.block_proposal_init_from_v1).resolve()
+        target_path=Path(args.checkpoint_dir).resolve()
+        if source_path==target_path or source_path in target_path.parents:
+            raise ValueError('never save v2 checkpoints over/inside a source v1 checkpoint')
+        if target_path.exists() and any(target_path.iterdir()):
+            raise ValueError('v2 checkpoint destination must be new and empty')
+        from mini_llm.block_proposal.checkpoint import warmstart_v2_from_v1
+        identity=hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+        detail=warmstart_v2_from_v1(source_path,training_objective.net,
+                                    expected_tokenizer_hash=identity)
+        print('v1 -> v2 complete weights-only transfer:',detail)
+        get_pool=getattr(xp,'get_default_memory_pool',None)
         if get_pool is not None:
             get_pool().free_all_blocks()
 

@@ -67,7 +67,7 @@ class HorizonProposalHead:
         for p in self.parameters():
             p.zero_grad()
 
-    def forward(self, h, *, return_cache=True):
+    def forward(self, h, *, return_cache=True, return_latents=False):
         """h: [number_of_active_blocks,d_model] in production normalized space."""
         if h.ndim != 2 or h.shape[-1] != self.model.config.d_model:
             raise ValueError('expected [Nblocks,d_model] normalized causal h')
@@ -91,14 +91,15 @@ class HorizonProposalHead:
         with block_proposal_detail_scope('block_proposal.proposal_vocab.forward'):
             logits, output_cache = self.model.output_proj.forward(u)
         if not return_cache:
-            return logits
-        return logits, HorizonCache(
+            return (logits, u) if return_latents else logits
+        cache = HorizonCache(
             context=None if k==1 else context,
             states=states, main_hidden=compute,
             output_cache=output_cache,
         )
+        return (logits, cache, u) if return_latents else (logits, cache)
 
-    def backward(self, d_logits, cache: HorizonCache):
+    def backward(self, d_logits, cache: HorizonCache, *, d_latents=None):
         """Accumulate W_vocab and horizon grads; return [N,d] main boundary grad.
 
         Call model.backward_body() exactly once later with the *scattered*
@@ -112,10 +113,20 @@ class HorizonProposalHead:
                       if is_low_precision_dtype(self.model.dtype) else d_logits)
         with block_proposal_detail_scope('block_proposal.proposal_vocab.backward'):
             d_u = self.model.output_proj.backward(compute_dy, cache.output_cache)
+        # 0080BD: correction gradients flow directly from decoder PLAN to
+        # the pre-unembedding proposal vectors. Keep FP32 addition before
+        # rounding to BF16; proposal CE still flows through shared W_vocab.
+        if d_latents is not None:
+            if d_latents.shape != d_u.shape:
+                raise ValueError('latent gradient must have shape [N,K,d_model]')
+            d_u = (d_u.astype(xp.float32, copy=False) +
+                   d_latents.astype(xp.float32, copy=False))
         d_h = xp.sum(d_u.astype(xp.float32, copy=False), axis=1)
         if self.block_size > 1:
             n = int(d_u.shape[0]); width = self.W_back.shape[0]
             d_later = (d_u[:,1:,:] * self.residual_scale).reshape(-1,d_u.shape[-1])
+            if is_low_precision_dtype(self.model.dtype):
+                d_later = d_later.astype(self.model.dtype, copy=False)
             states = cache.states.reshape(-1,width)
             self.W_back.grad += states.T @ d_later
             d_states = (d_later @ self.W_back.data.T).reshape(n,self.block_size-1,width)

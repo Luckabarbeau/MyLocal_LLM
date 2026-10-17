@@ -41,7 +41,7 @@ def test_stable_bf16_ce_diagnostics_use_actual_row_losses(monkeypatch):
     assert loss_ops.cross_entropy_backward(cache).shape == logits.shape
 
 
-def test_group_size_is_an_exact_resume_contract_field(tmp_path, capsys):
+def test_group_size_is_resume_provenance_not_architecture(tmp_path, capsys, monkeypatch):
     shard = _docs(tmp_path)
     left = _hybrid(shard)
     right = _hybrid(shard)
@@ -49,9 +49,23 @@ def test_group_size_is_an_exact_resume_contract_field(tmp_path, capsys):
         saved = left.block_proposal_resume_contract()
         assert saved['block_group_size'] == 2
         right.training_objective.block_group_size = 1
+        # Changing a computational tile size does not invalidate the loaded
+        # model/optimizer states or the supervised-token normalized objective.
+        right.validate_block_proposal_resume_contract(
+            {'block_proposal_resume_contract': saved})
+        out = capsys.readouterr().out
+        assert '2 -> 1' in out and 'bitwise-identical' in out
+        # Unrelated optimizer/schedule changes remain strictly rejected.
+        incompatible = dict(saved, adam_beta2=saved['adam_beta2'] - 0.01)
+        with pytest.raises(ValueError, match='adam_beta2'):
+            right.validate_block_proposal_resume_contract(
+                {'block_proposal_resume_contract': incompatible})
+        # Users requiring a bitwise-identical experiment can restore strictness.
+        monkeypatch.setenv('MINI_LLM_STRICT_BLOCK_GROUP_RESUME', '1')
         with pytest.raises(ValueError, match='block_group_size'):
             right.validate_block_proposal_resume_contract(
                 {'block_proposal_resume_contract': saved})
+        monkeypatch.delenv('MINI_LLM_STRICT_BLOCK_GROUP_RESUME')
         # Existing 0080N/O1/O2 checkpoints did not record this dimension.
         legacy = dict(saved)
         legacy.pop('block_group_size')

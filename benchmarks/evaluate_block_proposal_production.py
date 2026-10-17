@@ -22,7 +22,8 @@ from pathlib import Path
 import numpy as np
 
 from mini_llm.backend import BACKEND_NAME, xp, synchronize
-from mini_llm.block_proposal.checkpoint import ARCHITECTURE, architecture_metadata
+from mini_llm.block_proposal.checkpoint import ARCHITECTURE, ARCHITECTURE_V2, ARCHITECTURE_V3, ARCHITECTURE_V4, architecture_metadata
+from mini_llm.block_proposal.soft_interface_config import SoftInterfaceConfig
 from mini_llm.block_proposal.decoder import BlockPrefixDecoder, TwoStageBlockModel
 from mini_llm.block_proposal.diagnostics import SCOPES, score_window
 from mini_llm.block_proposal.objective import BlockProposalObjective, BlockValidationAccumulator
@@ -52,7 +53,7 @@ def load_production(checkpoint, mixture_root=None):
     config = ModelConfig(**json.loads((checkpoint / 'config.json').read_text()))
     state = json.loads((checkpoint / 'training_state.json').read_text())
     arch = state.get('architecture', {})
-    if state.get('prediction_objective') != 'block-proposal' or arch.get('type') != ARCHITECTURE:
+    if state.get('prediction_objective') != 'block-proposal' or arch.get('type') not in (ARCHITECTURE,ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4):
         raise ValueError('not a production 0080 block-proposal checkpoint; refusing AR fallback')
     tokenizer, tokenizer_path = load_tokenizer(checkpoint)
     token_hash = sha256(tokenizer_path)
@@ -81,10 +82,18 @@ def load_production(checkpoint, mixture_root=None):
     ff_width = int(arch['decoder_ff_width'])
     if ff_width % width:
         raise ValueError('non-integral decoder FF multiplier')
+    v2=arch['type'] in (ARCHITECTURE_V2,ARCHITECTURE_V3,ARCHITECTURE_V4)
+    config_read=arch.get('vocab_read_execution') or {}
     decoder = BlockPrefixDecoder(model, int(arch['block_size']), width=width,
                                  n_layers=int(arch['decoder_layers']),
                                  n_heads=int(arch['decoder_heads']),
-                                 ff_multiplier=ff_width // width)
+                                 ff_multiplier=ff_width // width,
+                                 soft_interface_config=SoftInterfaceConfig(**arch['soft_interface']) if v2 else None,
+                                 experimental_cpu_full_vocab=(v2 and BACKEND_NAME=='numpy'),
+                                 experimental_gpu_full_vocab=(v2 and BACKEND_NAME=='cupy'),
+                                 vocab_read_algorithm=config_read.get('algorithm','source_mixture'),
+                                 vocab_read_tile=int(config_read.get('vocab_tile',2048)),
+                                 vocab_read_block_tile=int(config_read.get('block_tile',8)))
     net = TwoStageBlockModel(head, decoder, lambda_proposal=float(arch['lambda_proposal']))
     if architecture_metadata(net) != arch:
         raise ValueError('reconstructed production architecture differs from checkpoint')
@@ -216,6 +225,8 @@ def heldout_benchmark(net, sources, eos, *, batches, batch_size, seed, group_siz
                       checkpoint_step=0):
     memory = net.proposal_head.model.config.memory_context
     k = int(net.proposal_head.block_size)
+    if ablations and net.decoder.boundary_projection is not None:
+        raise NotImplementedError('v2 direct-boundary ablations require a boundary-aware diagnostics path')
     report = {}
     for source in sources:
         counts = np.zeros(k, dtype=np.int64)

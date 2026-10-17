@@ -17,10 +17,10 @@ def test_router_forward_shape():
     assert expert_indices.shape == (2, 3, 2), f"Expected indices shape (2, 3, 2), got {expert_indices.shape}"
     assert weights.ndim == 3
     assert xp.all(weights >= 0) and xp.all(weights <= 1), "Weights should be in [0, 1]"
-    # Weights are renormalized softmax probabilities for the top-k selected experts
-    # They sum to 1 across the k selected experts
+    # Selected weights come from the full-expert softmax and are NOT re-normalized.
+    # This preserves nonzero top-1 routing gradients.
     weight_sums = xp.sum(weights, axis=-1)
-    assert xp.allclose(weight_sums, 1.0, atol=1e-6), "Selected weights should sum to 1"
+    assert xp.all(weight_sums < 1.0) and xp.all(weight_sums > 0.0)
 
 
 def test_router_forward_deterministic():

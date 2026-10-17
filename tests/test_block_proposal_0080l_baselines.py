@@ -1,9 +1,9 @@
-"""0080L: frozen NumPy baselines from the unmodified 0080K archive.
+"""0080L regression methodology with a versioned 0080AP MoE reference.
 
-No objective adapter is introduced in 0080L.  ``_production_ar_step`` is a
-literal invocation of the existing model forward/loss/backward interface, used
-to pin the future 0080M AR adapter without changing production training.
-The JSON reference was captured before any production source was modified.
+The original `0080l_cpu_reference.json` remains unchanged as the historical
+selected-only-softmax baseline. `0080ap_cpu_reference.json` instead pins the
+new full-expert-softmax MoE semantics for exact CPU comparisons. The two
+references must not be compared as though they used identical routing.
 """
 import hashlib
 import json
@@ -28,7 +28,7 @@ from mini_llm.block_proposal.training import SinglePassBlockTrainer
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import AdamW
 
-REF = Path(__file__).parent / 'fixtures' / '0080l_cpu_reference.json'
+REF = Path(__file__).parent / 'fixtures' / '0080ap_cpu_reference.json'
 pytestmark = pytest.mark.skipif(BACKEND_NAME != 'numpy', reason='frozen CPU float64 reference')
 
 

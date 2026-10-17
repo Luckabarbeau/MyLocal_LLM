@@ -1,0 +1,180 @@
+{
+  "ar": {
+    "final_ce": 4.605687127595008,
+    "gradients": {
+      "embedding": {
+        "l2": 1.101121155800735,
+        "max_abs": 0.23634756983097024,
+        "parameter_count": 1
+      },
+      "layer_retrieval": {
+        "l2": 0.0004480902520977233,
+        "max_abs": 0.00015881130812073687,
+        "parameter_count": 8
+      },
+      "main_trunk": {
+        "l2": 0.24380782108802618,
+        "max_abs": 0.043400112999085215,
+        "parameter_count": 25
+      },
+      "output_proj": {
+        "l2": 1.1036982085704135,
+        "max_abs": 0.18527152492296015,
+        "parameter_count": 1
+      },
+      "top_level_router": {
+        "l2": 3.431429476942688e-10,
+        "max_abs": 1.5194751375702774e-10,
+        "parameter_count": 2
+      }
+    },
+    "optimizer_delta_l2": 0.010010534247834565
+  },
+  "backend": "numpy",
+  "baseline": "0080AP unified full-expert softmax / select top-k without renormalization",
+  "data": {
+    "manifest_sha256": "bc9506f65f44c6965c0416607838183473bd67df2a996dd604c9174b1918674b",
+    "sampler_trace_sha256": "feb14d5a6b16cc7447ef90d573caf743b55a4a971ac1d3f6c0a8b8a2ea320158",
+    "shard_sha256": "3ba7981385c8c49a36c168e202374e01c77bbbdc0d9ab752a047a1f42687df34",
+    "supervised_tokens": 62,
+    "tokenizer_sha256": "c7eedf8e278beaf9d3044e0459d85466b4b59aeba142e1e7ff1f45a7f7d7650e"
+  },
+  "dtype": "float64",
+  "two_stage": {
+    "1": {
+      "final_ce": 4.60563330446602,
+      "gradients": {
+        "decoder": {
+          "l2": 0.0642906425774216,
+          "max_abs": 0.029264310294153186,
+          "parameter_count": 16
+        },
+        "embedding": {
+          "l2": 1.6516774789069089,
+          "max_abs": 0.3545199344747709,
+          "parameter_count": 1
+        },
+        "layer_retrieval": {
+          "l2": 0.0006721392626818937,
+          "max_abs": 0.00023821935191538964,
+          "parameter_count": 8
+        },
+        "main_trunk": {
+          "l2": 0.3657086835959528,
+          "max_abs": 0.06509897726522557,
+          "parameter_count": 25
+        },
+        "output_proj": {
+          "l2": 1.655832280899048,
+          "max_abs": 0.2774285854600753,
+          "parameter_count": 1
+        },
+        "proposal": {
+          "l2": 0.0,
+          "max_abs": 0.0,
+          "parameter_count": 3
+        },
+        "top_level_router": {
+          "l2": 5.146704681367621e-10,
+          "max_abs": 2.279081161028872e-10,
+          "parameter_count": 2
+        }
+      },
+      "horizon_counts": [
+        13
+      ],
+      "horizon_final_ce": [
+        4.605633405538706
+      ],
+      "horizon_proposal_ce": [
+        4.605687104738676
+      ],
+      "k": 1,
+      "main_backward_passes": 1,
+      "main_forward_passes": 1,
+      "optimizer_delta_l2": 0.011322674854995994,
+      "optimizer_step": 1,
+      "proposal_ce": 4.605687127595008,
+      "supervised_tokens": 13,
+      "total_loss": 6.908476868263524
+    },
+    "8": {
+      "final_ce": 4.627102971168445,
+      "gradients": {
+        "decoder": {
+          "l2": 0.07425827718101258,
+          "max_abs": 0.015135408788342469,
+          "parameter_count": 16
+        },
+        "embedding": {
+          "l2": 1.775808024250425,
+          "max_abs": 1.0441968424804513,
+          "parameter_count": 1
+        },
+        "layer_retrieval": {
+          "l2": 0.0006507639988331169,
+          "max_abs": 0.00016315730400359078,
+          "parameter_count": 8
+        },
+        "main_trunk": {
+          "l2": 0.3561552518337223,
+          "max_abs": 0.1051729505633617,
+          "parameter_count": 25
+        },
+        "output_proj": {
+          "l2": 1.6229043798588634,
+          "max_abs": 0.24107881183322988,
+          "parameter_count": 1
+        },
+        "proposal": {
+          "l2": 0.0007454424012086526,
+          "max_abs": 0.00017900179411638073,
+          "parameter_count": 3
+        },
+        "top_level_router": {
+          "l2": 1.219782134535725e-09,
+          "max_abs": 4.090981122288637e-10,
+          "parameter_count": 2
+        }
+      },
+      "horizon_counts": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "horizon_final_ce": [
+        4.596173286437988,
+        4.634139060974121,
+        4.679221153259277,
+        4.570058822631836,
+        4.703391075134277,
+        4.53424596786499,
+        4.655057430267334,
+        4.597066879272461
+      ],
+      "horizon_proposal_ce": [
+        4.596020221710205,
+        4.633731842041016,
+        4.6793718338012695,
+        4.570034027099609,
+        4.703234672546387,
+        4.534151554107666,
+        4.654801368713379,
+        4.597157955169678
+      ],
+      "k": 8,
+      "main_backward_passes": 1,
+      "main_forward_passes": 1,
+      "optimizer_delta_l2": 0.011917021835447334,
+      "optimizer_step": 1,
+      "proposal_ce": 4.626991925206582,
+      "supervised_tokens": 13,
+      "total_loss": 6.940598933771736
+    }
+  }
+}

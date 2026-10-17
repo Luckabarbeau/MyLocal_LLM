@@ -48,7 +48,7 @@ class MoE:
             input_std=input_std,
             rng=rng,
             name=f"{name}.router",
-            dtype=dtype
+            dtype=dtype,
         )
         
         # Expert FFN layers

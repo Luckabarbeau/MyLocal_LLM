@@ -25,6 +25,18 @@ from .cublas_grouped import (
 )
 
 
+def _local_prob_recompute_enabled():
+    """0080BA: do not retain O(B*H*T*window) local probabilities.
+
+    Only the local-attention backward cache changes. The original forward,
+    masking, GQA mapping, and decoder/model state are preserved. Off by
+    default for controlled comparisons with historical checkpoints.
+    """
+    return os.environ.get(
+        "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS", "0"
+    ).strip().lower() not in {"0", "false", "off", "no", ""}
+
+
 def _bf16_mixed_context_enabled(dtype):
     """Mirror the mixed-attention BF16 context-storage fast-path flag."""
     if not is_bfloat16_dtype(dtype):
@@ -3160,7 +3172,15 @@ def _local_grouped_forward(
     context = context_heads.transpose(0, 2, 1, 3)
     if not return_cache:
         return context
+    # This is the dominant backward-state allocation in the 32-layer model:
+    # BF16 [B, local_heads, Q_chunk, K_chunk] buffers (about 192 MiB per
+    # layer for B=2,T=4096). Q/K and chunk geometry are already cached.
+    recompute_probs = _local_prob_recompute_enabled()
+    if recompute_probs:
+        for chunk in chunks:
+            del chunk["probs"]
     return context, {
+        "recompute_local_probs": recompute_probs,
         "q": q, "k": k, "v": v,
         "window": window, "scale": scale,
         "bf16_attention": True,
@@ -3178,6 +3198,8 @@ def _local_grouped_forward(
 
 def _local_grouped_backward(dcontext, cache):
     """0053/0053E cuBLAS local backward."""
+    if cache.get("recompute_local_probs", False):
+        return _local_grouped_backward_recomputed(dcontext, cache)
     cublas_mode = cache.get("cublas_local_mode", _cublas_local_mode())
     profile_prefix = f"local.{cublas_mode}"
     q, k, v = cache["q"], cache["k"], cache["v"]
@@ -3310,6 +3332,145 @@ def _local_grouped_backward(dcontext, cache):
             ):
                 return None
         del chunk["dscores"]
+
+    return dq, dk, dv
+
+
+def _local_grouped_reconstruct_chunk(q, k, chunk, kv_map_host, scale, window):
+    """Recreate forward-identical BF16 probabilities for one local chunk.
+
+    Uses the same grouped cuBLAS score GEMM and BF16 fused softmax as forward.
+    Nothing in the reconstructed score/probability tensors is retained once
+    that chunk's gradients have been accumulated.
+    """
+    batch, _, n_q_heads, d_head = map(int, q.shape)
+    q_start, key_start = chunk["q_start"], chunk["key_start"]
+    q_count, k_count = chunk["q_count"], chunk["k_count"]
+    q_row, k_row = _row_stride_elems(q, 1), _row_stride_elems(k, 1)
+    scores = xp.empty((batch, n_q_heads, q_count, k_count), dtype=q.dtype)
+    probs = xp.empty_like(scores)
+    problems = []
+    for b in range(batch):
+        for h in range(n_q_heads):
+            kvh = int(kv_map_host[h])
+            problems.append(RowMajorGemmProblem(
+                int(q.data.ptr) + b * int(q.strides[0])
+                + q_start * int(q.strides[1]) + h * int(q.strides[2]),
+                int(k.data.ptr) + b * int(k.strides[0])
+                + key_start * int(k.strides[1]) + kvh * int(k.strides[2]),
+                int(scores.data.ptr) + b * int(scores.strides[0])
+                + h * int(scores.strides[1]),
+                q_count, k_count, d_head, q_row, k_row, k_count,
+                False, True,
+            ))
+    with local_detail_scope("local.grouped.recompute_score_gemm"):
+        if not _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
+            raise RuntimeError("0080BA grouped BF16 recompute score GEMM failed")
+    with local_detail_scope("local.grouped.recompute_softmax"):
+        if _local_causal_softmax_forward_bf16_cuda(
+            scores, probs, q_start, key_start, window, scale
+        ) is None:
+            raise RuntimeError("0080BA grouped BF16 recompute softmax failed")
+    return probs
+
+
+def _local_grouped_backward_recomputed(dcontext, cache):
+    """Bounded-memory grouped backward: one reconstructed chunk at a time.
+
+    Preserves forward precision, the exact GQA mapping and BF16 Jacobian.
+    Unlike the original grouped backward, neither probabilities nor dP/dS
+    for all query chunks coexist. Peak workspaces are bounded to one chunk.
+    """
+    q, k, v = cache["q"], cache["k"], cache["v"]
+    batch, _, n_q_heads, d_head = map(int, q.shape)
+    kv_map_host = cache["kv_head_indices_host"]
+    kv_map = cache["kv_head_indices"]
+    scale = float(cache["scale"])
+    q_row, k_row, v_row = (
+        _row_stride_elems(a, 1) for a in (q, k, v)
+    )
+    dc = xp.ascontiguousarray(dcontext.astype(q.dtype, copy=False))
+    dc_row = _row_stride_elems(dc, 1)
+    dq = xp.zeros(q.shape, dtype=xp.float32)
+    dk = xp.zeros(k.shape, dtype=xp.float32)
+    dv = xp.zeros(v.shape, dtype=xp.float32)
+
+    for chunk in cache["chunks"]:
+        q_start, key_start = chunk["q_start"], chunk["key_start"]
+        q_count, k_count = chunk["q_count"], chunk["k_count"]
+        with local_detail_scope("local.grouped.recompute_chunk"):
+            probs = _local_grouped_reconstruct_chunk(
+                q, k, chunk, kv_map_host, scale, cache["window"]
+            )
+            dprobs = xp.empty_like(probs)
+            problems = []
+            for b in range(batch):
+                for h in range(n_q_heads):
+                    kvh = int(kv_map_host[h])
+                    problems.append(RowMajorGemmProblem(
+                        int(dc.data.ptr) + b * int(dc.strides[0])
+                        + q_start * int(dc.strides[1]) + h * int(dc.strides[2]),
+                        int(v.data.ptr) + b * int(v.strides[0])
+                        + key_start * int(v.strides[1]) + kvh * int(v.strides[2]),
+                        int(dprobs.data.ptr) + b * int(dprobs.strides[0])
+                        + h * int(dprobs.strides[1]),
+                        q_count, k_count, d_head, dc_row, v_row, k_count,
+                        False, True,
+                    ))
+            with local_detail_scope("local.grouped.recompute_dprobs_gemm"):
+                if not _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
+                    raise RuntimeError("0080BA grouped dP GEMM failed")
+            with local_detail_scope("local.grouped.recompute_softmax_backward"):
+                ds = _local_causal_softmax_backward_bf16_cuda(
+                    dprobs, probs, q_start, key_start, cache["window"]
+                )
+                if ds is None:
+                    raise RuntimeError("0080BA grouped BF16 softmax backward failed")
+            del dprobs
+
+            dq_tmp = xp.empty((batch, n_q_heads, q_count, d_head), dtype=q.dtype)
+            dk_tmp = xp.empty((batch, n_q_heads, k_count, d_head), dtype=q.dtype)
+            dv_tmp = xp.empty_like(dk_tmp)
+            grad_groups = []
+            dq_problems, dk_problems, dv_problems = [], [], []
+            for b in range(batch):
+                for h in range(n_q_heads):
+                    kvh = int(kv_map_host[h])
+                    ds_ptr = int(ds.data.ptr) + b * int(ds.strides[0]) + h * int(ds.strides[1])
+                    p_ptr = int(probs.data.ptr) + b * int(probs.strides[0]) + h * int(probs.strides[1])
+                    q_ptr = int(q.data.ptr) + b * int(q.strides[0]) + q_start * int(q.strides[1]) + h * int(q.strides[2])
+                    k_ptr = int(k.data.ptr) + b * int(k.strides[0]) + key_start * int(k.strides[1]) + kvh * int(k.strides[2])
+                    dc_ptr = int(dc.data.ptr) + b * int(dc.strides[0]) + q_start * int(dc.strides[1]) + h * int(dc.strides[2])
+                    dq_ptr = int(dq_tmp.data.ptr) + b * int(dq_tmp.strides[0]) + h * int(dq_tmp.strides[1])
+                    dk_ptr = int(dk_tmp.data.ptr) + b * int(dk_tmp.strides[0]) + h * int(dk_tmp.strides[1])
+                    dv_ptr = int(dv_tmp.data.ptr) + b * int(dv_tmp.strides[0]) + h * int(dv_tmp.strides[1])
+                    dq_problems.append(RowMajorGemmProblem(
+                        ds_ptr, k_ptr, dq_ptr, q_count, d_head, k_count,
+                        k_count, k_row, d_head, False, False,
+                    ))
+                    dk_problems.append(RowMajorGemmProblem(
+                        ds_ptr, q_ptr, dk_ptr, k_count, d_head, q_count,
+                        k_count, q_row, d_head, True, False,
+                    ))
+                    dv_problems.append(RowMajorGemmProblem(
+                        p_ptr, dc_ptr, dv_ptr, k_count, d_head, q_count,
+                        k_count, dc_row, d_head, True, False,
+                    ))
+            grad_groups.extend((
+                RowMajorGemmGroup(tuple(dq_problems)),
+                RowMajorGemmGroup(tuple(dk_problems)),
+                RowMajorGemmGroup(tuple(dv_problems)),
+            ))
+            with local_detail_scope("local.grouped.recompute_grad_gemm"):
+                if not _cublas_grouped_bf16_gemm(tuple(grad_groups)):
+                    raise RuntimeError("0080BA grouped gradient GEMMs failed")
+            with local_detail_scope("local.grouped.recompute_grad_store"):
+                if not _local_grouped_store_grads(
+                    dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
+                    q_start, key_start, scale,
+                ):
+                    raise RuntimeError("0080BA grouped gradient store failed")
+            del probs, ds, dq_tmp, dk_tmp, dv_tmp, grad_groups
 
     return dq, dk, dv
 
@@ -3583,9 +3744,11 @@ def local_window_attention_forward(
                     probs_compute, v_compute
                 )
             if return_cache:
-                group_probs.append(
-                    (kvh, head_group, _cache_probs_for_backward(probs_chunk, q.dtype))
-                )
+                group_probs.append((
+                    kvh, head_group,
+                    None if _local_prob_recompute_enabled() else
+                    _cache_probs_for_backward(probs_chunk, q.dtype),
+                ))
 
         if return_cache:
             chunk_caches.append(
@@ -3603,6 +3766,7 @@ def local_window_attention_forward(
         "window": window,
         "scale": scale,
         "bf16_attention": bf16_attention,
+        "recompute_local_probs": _local_prob_recompute_enabled(),
         "bf16_tensorcore": bf16_tensorcore,
         "bf16_pipeline": bf16_pipeline,
         "kv_head_indices_host": kv_map_host,
@@ -3610,6 +3774,61 @@ def local_window_attention_forward(
         "chunks": chunk_caches,
         "query_chunk_size": query_chunk_size,
     }
+
+
+def _local_reconstruct_group_probs(
+    q_chunk, k_native, q_start, key_start, window, scale, valid,
+    bf16_tensorcore, bf16_pipeline, bf16_attention,
+):
+    """Rebuild a local GQA group with the original forward arithmetic.
+
+    This is the general/CPU fallback; grouped-cuBLAS BF16 uses the specialized
+    grouped GEMM reconstruction above. No persistent probability cache exists.
+    """
+    batch, heads, q_count, d_head = map(int, q_chunk.shape)
+    k_count = int(k_native.shape[2])
+    if bf16_tensorcore:
+        dtype = q_chunk.dtype
+        probs = xp.empty(
+            (batch, heads, q_count, k_count),
+            dtype=dtype if bf16_pipeline else xp.float32,
+        )
+        for batch_idx in range(batch):
+            q_2d = xp.ascontiguousarray(q_chunk[batch_idx].reshape(heads*q_count, d_head))
+            k_2d = xp.ascontiguousarray(k_native[batch_idx, 0])
+            score_bf16 = q_2d @ k_2d.T
+            if bf16_pipeline:
+                out = _local_causal_softmax_forward_bf16_cuda(
+                    score_bf16.reshape(heads, q_count, k_count),
+                    probs[batch_idx], q_start, key_start, window, scale,
+                )
+                if out is None:
+                    raise RuntimeError("0080BA BF16 local softmax recomputation failed")
+            else:
+                scores = score_bf16.reshape(heads, q_count, k_count).astype('float32') * scale
+                p = _local_causal_softmax_forward_cuda(scores, q_start, key_start, window, 1.0)
+                if p is None:
+                    p = _masked_softmax_forward(scores, valid, logit_multiplier=1.0)
+                probs[batch_idx] = p
+        return _cache_probs_for_backward(probs, dtype)
+    # Match the original non-TensorCore floating-point score scaling.
+    if bf16_attention:
+        q_score = q_chunk.astype('float32') * scale
+        k_score = k_native.astype('float32')
+        prescale = 1.0
+    else:
+        prescale = 1.0 / 32.0 if q_chunk.dtype == xp.float16 else 1.0
+        q_score = q_chunk * (scale * prescale)
+        k_score = k_native
+    scores = xp.matmul(q_score, k_score.swapaxes(-1, -2))
+    probs = _local_causal_softmax_forward_cuda(
+        scores, q_start, key_start, window, 1.0 / prescale
+    )
+    if probs is None:
+        probs = _masked_softmax_forward(
+            scores, valid, logit_multiplier=1.0 / prescale,
+        )
+    return _cache_probs_for_backward(probs, q_chunk.dtype)
 
 
 def local_window_attention_backward(dcontext, cache):
@@ -3659,6 +3878,12 @@ def local_window_attention_backward(dcontext, cache):
             dcontext_chunk = dcontext_heads[:, head_group, q_start:q_end, :]
             k_native = k[:, key_start:key_end, kvh, :][:, None, :, :]
             v_native = v[:, key_start:key_end, kvh, :][:, None, :, :]
+            if probs_chunk is None:
+                probs_chunk = _local_reconstruct_group_probs(
+                    q_chunk, k_native, q_start, key_start,
+                    cache["window"], scale, valid,
+                    bf16_tensorcore, bf16_pipeline, bf16_attention,
+                )
 
             if bf16_tensorcore:
                 if bf16_pipeline:

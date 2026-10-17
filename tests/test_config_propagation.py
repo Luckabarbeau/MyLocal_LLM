@@ -48,8 +48,8 @@ class TestConfigPropagation:
 
         assert router.k == config.top_k
 
-    def test_router_weights_renormalized_after_topk(self):
-        """Test that selected weights sum to 1."""
+    def test_router_weights_retain_full_softmax_mass_after_topk(self):
+        """Selected routing weights keep their mass from the full expert softmax."""
         config = ModelConfig(n_experts=5, top_k=2)
 
         from mini_llm.backend import RandomStream
@@ -69,9 +69,15 @@ class TestConfigPropagation:
 
         output_weights, expert_indices, cache = router.forward(x)
 
-        # Selected weights should sum to 1 (within numerical tolerance)
+        # The full softmax sums to one; omitted experts retain nonzero mass.
         weight_sums = np.sum(output_weights, axis=-1)
-        np.testing.assert_allclose(weight_sums, 1.0, atol=1e-6)
+        assert np.all(weight_sums > 0.0) and np.all(weight_sums < 1.0)
+        logits = x @ router.W_router_param.data + router.b_router_param.data
+        exp_logits = np.exp(logits - logits.max(axis=-1, keepdims=True))
+        full_prob = exp_logits / exp_logits.sum(axis=-1, keepdims=True)
+        np.testing.assert_allclose(
+            output_weights, np.take_along_axis(full_prob, expert_indices, axis=-1)
+        )
 
     def test_transformer_block_uses_config_n_experts(self):
         """Test that transformer block uses n_experts from config."""

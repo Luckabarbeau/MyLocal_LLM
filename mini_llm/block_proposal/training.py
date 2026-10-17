@@ -14,6 +14,7 @@ import os
 from mini_llm.backend import xp, asnumpy, is_low_precision_dtype, BACKEND_NAME
 from mini_llm.performance_profiler import performance_scope, block_proposal_scope, block_proposal_detail_scope
 from .contracts import block_schedule
+from .context_attention import gather_causal_working_context
 
 
 def compact_working_length(full_length, maximum_valid, block_size):
@@ -175,6 +176,13 @@ class SinglePassBlockTrainer:
         selected_rows=schedule.source_row
         boundaries=schedule.boundary_working_index+prefix
         nblocks=int(schedule.targets.shape[0])
+        context_tokens=int(os.environ.get('MINI_LLM_BLOCK_DECODER_CONTEXT_TOKENS','0'))
+        if context_tokens not in (0,32,64,128):
+            raise ValueError('decoder context tokens must be 0, 32, 64, or 128')
+        if context_tokens and not getattr(self.net.decoder,'direct_latents',False):
+            raise ValueError('0080BJ context only supports direct-latent decoder v5')
+        context_offsets=(xp.arange(context_tokens-1,-1,-1,dtype=xp.int64)
+                         if context_tokens else None)
         # One compact device->host transfer for all block counts, rather
         # than one implicit GPU synchronization per group and per CE loss.
         # The same schedule also establishes the global unique denominator.
@@ -218,6 +226,14 @@ class SinglePassBlockTrainer:
             rows=selected_rows[start:end]
             positions=boundaries[start:end]
             h=main_hidden[rows,positions,:].copy()
+            context_memory=context_valid=context_indices=None
+            if context_tokens:
+                # A block at working position p can ONLY see <= p.  The
+                # routed prefix is intentionally excluded from this local read.
+                context_memory,context_valid,context_indices=(
+                    gather_causal_working_context(
+                        main_hidden,rows,positions,prefix,context_tokens,
+                        offsets=context_offsets))
             y=schedule.targets[start:end]
             valid=schedule.valid[start:end]
             with block_proposal_scope('block_proposal.decoder_group.forward'):
@@ -227,7 +243,8 @@ class SinglePassBlockTrainer:
                     plan_condition=plan_condition,prefix_condition=prefix_condition,
                     plan_override=override,defer_metrics=defer_metrics,
                     known_valid_count=int(block_counts[start:end].sum()),
-                    trusted_block_schedule=True)
+                    trusted_block_schedule=True,
+                    context_memory=context_memory,context_valid=context_valid)
             ng=int(metrics['unique_supervised_tokens'])
             group_weight=ng/nvalid
             for key in sums:
@@ -238,10 +255,17 @@ class SinglePassBlockTrainer:
             xp.add.at(row_final_sum,rows,metrics['block_row_final_ce_sums'])
             if compute_gradients:
                 with block_proposal_scope('block_proposal.decoder_group.backward'):
-                    boundary_grad=self.net.backward(cache,scale=float(grad_scale)*group_weight)
+                    gradients=self.net.backward(cache,scale=float(grad_scale)*group_weight)
+                    boundary_grad,context_grad=(gradients if context_tokens else (gradients,None))
                 with block_proposal_detail_scope('block_proposal.boundary_gradient.scatter'):
                     xp.add.at(dh_buffer,(rows,positions),boundary_grad.astype(dh_buffer.dtype,copy=False))
-            del h,cache
+                    if context_tokens:
+                        # Mask out repeated clipped positions before the one
+                        # existing main-trunk backward; all accumulation FP32.
+                        d_context=xp.where(context_valid[:,:,None],context_grad,0.)
+                        xp.add.at(dh_buffer,(rows[:,None],context_indices),
+                                  d_context.astype(dh_buffer.dtype,copy=False))
+            del h,cache,context_memory,context_valid,context_indices
         del main_hidden
         if compute_gradients:
             with performance_scope('block_proposal.main_trunk.backward'):

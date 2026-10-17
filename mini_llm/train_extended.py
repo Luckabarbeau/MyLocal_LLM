@@ -45,6 +45,9 @@ from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
 from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
+from mini_llm.diagnostics.moe_usage import (
+    ExpertUsageCollector, EXPERT_USAGE_COLUMNS, summarize_usage,
+)
 from mini_llm.diagnostics.source_metrics import (
     batch_coverage, empty_record, merge_record, row as source_metrics_row,
     write_source_rows,
@@ -305,6 +308,16 @@ class ExtendedTrainer:
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.log_file = Path(log_file) if log_file else None
+        # 0080AQ: optional per-layer training expert selection diagnostics.
+        # 0 disables without touching the router's fast path. The normal
+        # launcher samples one complete accumulation microbatch every 10 steps.
+        self.expert_usage_interval = int(os.environ.get(
+            "MINI_LLM_EXPERT_USAGE_INTERVAL", "0"))
+        self.expert_usage_microbatches = int(os.environ.get(
+            "MINI_LLM_EXPERT_USAGE_MICROBATCHES", "1"))
+        if self.expert_usage_interval < 0 or self.expert_usage_microbatches < 1:
+            raise ValueError("expert usage interval must be >=0 and microbatches >=1")
+        self._last_step_expert_usage = None
         self.val_interval = val_interval
         self.val_steps = val_steps
         self.val_per_source_steps = int(val_per_source_steps)
@@ -1060,6 +1073,47 @@ class ExtendedTrainer:
                     row.get("steps_per_sec", ""),
                 ])
     
+    def _expert_usage_log_path(self):
+        if self.log_file is None:
+            return None
+        return self.log_file.with_name(
+            self.log_file.stem + ".expert_usage.csv"
+        )
+
+    def _write_expert_usage(self, collector):
+        """Persist every expert in every layer, even if never selected."""
+        rows = collector.rows(self.step)
+        if not rows:
+            return
+        path = self._expert_usage_log_path()
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            exists = path.exists() and path.stat().st_size > 0
+            with path.open("a", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=EXPERT_USAGE_COLUMNS)
+                if not exists:
+                    writer.writeheader()
+                writer.writerows(rows)
+        stats = summarize_usage(rows)
+        print(
+            f"  MoE expert usage (sampled {collector.sampled_microbatches}/"
+            f"{self.grad_accum_steps} train microbatches, "
+            f"all computed positions incl. padding): "
+            f"layers={stats['layers']}, "
+            f"min_select={100 * stats['min_expert_share']:.1f}%, "
+            f"max_select={100 * stats['max_expert_share']:.1f}%, "
+            f"mean_router_entropy={stats['mean_entropy']:.3f}, "
+            f"mean_selected_mass={stats['mean_selected_mass']:.3f}, "
+            f"experts_below_1pct={stats['under_one_percent']}"
+        )
+        for layer in stats["worst_layers"]:
+            print(
+                f"    layer {layer['layer']:02d}: min={100 * layer['min_share']:.1f}%, "
+                f"max={100 * layer['max_share']:.1f}%, "
+                f"router_entropy={layer['entropy']:.3f}, "
+                f"selected_mass={layer['selected_mass']:.3f}"
+            )
+
     def _gpu_memory_boundary(self, phase: str, *, trim_idle_pool=False):
         """0078H: diagnose live allocations versus retained CuPy pool blocks.
 
@@ -2235,11 +2289,27 @@ class ExtendedTrainer:
             live_block_audit = LiveBlockProposalAudit(
                 self.training_objective.net.proposal_head.block_size)
         step_routing_modes = self._new_routing_mode_stats()
+        self._last_step_expert_usage = None
+        observe_experts = bool(
+            getattr(self.model.config, "ffn_mode", "moe") == "moe"
+            and self.expert_usage_interval
+            and (self.step + 1) % self.expert_usage_interval == 0
+        )
+        expert_collector = ExpertUsageCollector() if observe_experts else None
+        active_routers = (
+            [block.moe.router for block in self.model.blocks[:self.model.active_layers]]
+            if observe_experts else []
+        )
         # Rescale by nominal token capacity before backward to avoid large
         # intermediate gradients.  The common scale cancels at normalization.
         nominal_microbatch_tokens = float(self.batch_size * self.target_seq_length)
 
         for accum_step in range(self.grad_accum_steps):
+            if expert_collector is not None:
+                sampled = accum_step < self.expert_usage_microbatches
+                for layer, router in enumerate(active_routers):
+                    router.usage_collector = expert_collector if sampled else None
+                    router.usage_layer = layer
             # Get learning rate for this step (use final lr of accumulated batch)
             lr = self.scheduler(self.step)
             self.optimizer.lr = lr
@@ -2546,6 +2616,14 @@ class ExtendedTrainer:
                     "released", snap,
                 )
 
+        if expert_collector is not None:
+            for router in active_routers:
+                router.usage_collector = None
+            expert_collector.sampled_microbatches = min(
+                self.grad_accum_steps, self.expert_usage_microbatches
+            )
+            self._last_step_expert_usage = expert_collector
+
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_grad_accum")
 
@@ -2782,12 +2860,60 @@ class ExtendedTrainer:
                   "exact schedule/accumulation continuity is unverified")
             return
         actual = self.block_proposal_resume_contract()
+        # Grouping is an execution/memory setting, not a model parameter or
+        # optimizer hyperparameter. Preserve it as checkpoint provenance, but
+        # allow an explicit change in group size at resume: the same blocks and
+        # supervised-token normalization are retained, although FP reduction
+        # order (and therefore bitwise reproducibility) may change.
+        expected = dict(expected)
+        # 0080BB: batch size and microbatch accumulation are runtime training
+        # choices, not architectural requirements of a saved checkpoint.
+        # This trainer normalizes accumulated gradients by supervised tokens,
+        # so either control can change while preserving model/optimizer state.
+        # The training trajectory and microbatch RNG sequence WILL change.
+        # An opt-in strict mode remains available for exact-run reproduction.
+        runtime_changes = []
+        for key in ("batch_size", "grad_accum_steps"):
+            if key not in expected:
+                print(f"WARNING: legacy 0080 resume contract lacks {key}; "
+                      "runtime batch continuity is unverified")
+            elif expected[key] != actual[key]:
+                if os.environ.get("MINI_LLM_STRICT_BATCH_ACCUM_RESUME", "0") == "1":
+                    raise ValueError("0080 resume training contract mismatch: " + key +
+                                     " (MINI_LLM_STRICT_BATCH_ACCUM_RESUME=1)")
+                runtime_changes.append(f"{key}: {expected[key]} -> {actual[key]}")
+            expected.pop(key, None)
+            actual.pop(key, None)
+        if runtime_changes:
+            old = saved_state["block_proposal_resume_contract"]
+            old_batch = old.get("batch_size")
+            old_accum = old.get("grad_accum_steps")
+            new_batch = self.batch_size
+            new_accum = self.grad_accum_steps
+            old_effective = (old_batch * old_accum if isinstance(old_batch, int)
+                             and isinstance(old_accum, int) else "unknown")
+            print("WARNING: 0080 runtime batch/accumulation changed at resume (" +
+                  ", ".join(runtime_changes) + "). " +
+                  f"Effective batch: {old_effective} -> {new_batch * new_accum}. " +
+                  "Model/optimizer state is preserved and accumulated gradients "
+                  "remain normalized by supervised tokens; optimizer trajectory, "
+                  "sample RNG schedule, and bitwise reproducibility may change.")
         if "block_group_size" not in expected:
-            # 0080N/O1/O2 checkpoints predate group-size provenance. Keep them
-            # loadable, but do not claim bitwise-identical continuation.
+            # 0080N/O1/O2 checkpoints predate group-size provenance.
             print("WARNING: legacy 0080 resume contract omits decoder block "
                   "group size; exact floating-point continuation is unverified")
             actual.pop("block_group_size", None)
+        elif expected["block_group_size"] != actual["block_group_size"]:
+            if os.environ.get("MINI_LLM_STRICT_BLOCK_GROUP_RESUME", "0") == "1":
+                raise ValueError("0080 resume training contract mismatch: block_group_size "
+                                 "(MINI_LLM_STRICT_BLOCK_GROUP_RESUME=1)")
+            print("WARNING: 0080 decoder block group size changed at resume "
+                  f"({expected['block_group_size']} -> {actual['block_group_size']}). "
+                  "Model/optimizer state and token-normalized objective are preserved; "
+                  "floating-point reduction order may differ, so bitwise-identical "
+                  "continuation is not guaranteed.")
+            expected.pop("block_group_size")
+            actual.pop("block_group_size")
         if expected != actual:
             mismatched = [k for k in sorted(set(expected) | set(actual))
                           if expected.get(k) != actual.get(k)]
@@ -3062,6 +3188,9 @@ class ExtendedTrainer:
             # Train step
             precise_step_start = time.perf_counter()
             loss, grad_norm = self.train_step()
+            if self._last_step_expert_usage is not None:
+                self._write_expert_usage(self._last_step_expert_usage)
+                self._last_step_expert_usage = None
             precise_step_seconds = time.perf_counter() - precise_step_start
             recent_step_seconds.append(precise_step_seconds)
             if self.memory_context is not None:

@@ -118,6 +118,7 @@ class InferenceModel:
                 d_ff=config.d_ff,
                 n_experts=config.n_experts,
                 top_k=config.top_k,
+                ffn_mode=getattr(config, "ffn_mode", "moe"),
                 dtype=self.dtype,
                 max_context=config.context_length,
                 rope_base=config.rope_base,

@@ -1,158 +1,133 @@
-"""Router mechanism for Mixture of Experts.
+"""Mixture-of-Experts router with one differentiable top-k weighting rule.
 
-Implements the selected-top-k softmax with proper gradient computation.
-For a token y = sum_{i=1}^{k} w_i E_i(x), the gradient with respect to
-selected router logits z_i is:
+For every number of experts ``E`` and active experts ``k``:
 
-    dL/dz_i = w_i * (dL/dw_i - sum_j(w_j * dL/dw_j))
+    p = softmax(logits over ALL E experts)
+    chosen = argsort(-logits)[:k]
+    weights = gather(p, chosen)
 
-where w = softmax(z_selected) and top-k selection is treated with a
-straight-through estimator (fixed selection during gradient computation).
+Only the selected experts execute. The chosen weights are deliberately **not**
+renormalized: their sum is the probability mass assigned to selected experts.
+This rule gives nonzero, exact (with fixed indices) gradients for top-1 and
+higher-k without a model-specific routing flag. Discrete index selection has
+no gradient; unselected expert *logits* still receive gradients through the
+softmax denominator, but unselected expert *weights* do not execute/update.
 """
 
 from ..backend import xp, resolve_dtype, is_low_precision_dtype
-from .topk import selected_topk_softmax_forward, selected_topk_softmax_backward
 from ..performance_profiler import moe_detail_scope
 
 
-class Router:
-    """
-    Router for Mixture of Experts.
-    
-    Computes expert weights from input and selects top-k experts.
-    Uses straight-through estimator for gradient through top-k selection.
-    """
+def expert_topk_forward(logits, k, output_dtype=None, return_cache=True):
+    """Full-expert softmax, followed by top-k selection without renormalization.
 
-    def __init__(
-        self, d_model, n_experts, k, input_std, rng, name="router", dtype="float32"
-    ):
-        """
-        Initialize the router.
-        
-        Args:
-            d_model: Model dimension
-            n_experts: Number of experts
-            k: Number of top experts to select
-            input_std: Standard deviation for weight initialization
-            rng: Random stream
-            name: Name prefix for parameters
-            dtype: Data type
-        """
+    Same function is used for both training and inference to enforce parity.
+    """
+    if logits.ndim < 1 or not (1 <= int(k) <= int(logits.shape[-1])):
+        raise ValueError("expert router expects 1 <= k <= n_experts")
+    work = (
+        logits.astype(xp.float32, copy=False)
+        if is_low_precision_dtype(logits.dtype) else logits
+    )
+    centered = work - xp.max(work, axis=-1, keepdims=True)
+    unnormalized = xp.exp(centered)
+    full_probs = unnormalized / xp.sum(unnormalized, axis=-1, keepdims=True)
+    indices = xp.argsort(-work, axis=-1)[..., :int(k)]
+    selected_probs = xp.take_along_axis(full_probs, indices, axis=-1)
+    weights = (
+        selected_probs.astype(output_dtype, copy=False)
+        if output_dtype is not None and is_low_precision_dtype(output_dtype)
+        else selected_probs
+    )
+    cache = (full_probs, indices) if return_cache else None
+    return weights, indices, cache
+
+
+def expert_topk_backward(dweights, cache):
+    """Exact local softmax VJP while holding discrete selected indices fixed.
+
+    For selected weights w_i = p_i, let a_j = dL/dw_j (selected only):
+
+        dL/dz_i = p_i (a_i - sum_{j selected} p_j a_j)
+
+    and a_i = 0 for unselected logits. Thus unselected router logits get a
+    gradient, even for k=1. Works equally for k=1, k<E, and k=E.
+    """
+    full_probs, indices = cache
+    dwork = (
+        dweights.astype(xp.float32, copy=False)
+        if is_low_precision_dtype(dweights.dtype) else dweights
+    )
+    if dwork.shape != indices.shape:
+        raise ValueError("dweights shape does not match selected routing weights")
+    selected_probs = xp.take_along_axis(full_probs, indices, axis=-1)
+    weighted_grad = selected_probs * dwork
+    correction = xp.sum(weighted_grad, axis=-1, keepdims=True)
+    dlogits = -full_probs * correction
+    flat = dlogits.reshape(-1, full_probs.shape[-1])
+    flat_indices = indices.reshape(flat.shape[0], -1)
+    flat[xp.arange(flat.shape[0])[:, None], flat_indices] += weighted_grad.reshape(flat_indices.shape)
+    return dlogits
+
+
+class Router:
+    """Select k experts using probabilities normalized across all experts."""
+
+    def __init__(self, d_model, n_experts, k, input_std, rng, name="router", dtype="float32"):
         self.d_model = d_model
         self.n_experts = n_experts
-        self.k = min(k, n_experts)  # Ensure k <= n_experts
-        
-        # Router weights: map d_model -> n_experts
-        std = input_std
-        self.W_router = xp.asarray(
-            rng.normal((d_model, n_experts), std=std, dtype=dtype)
-        )
-        self.b_router = xp.zeros((n_experts,), dtype=resolve_dtype(dtype))
-        
-        # Gradient accumulators (as Parameter objects for consistency)
+        if not (1 <= int(k) <= int(n_experts)):
+            raise ValueError("expert router expects 1 <= k <= n_experts")
+        self.k = int(k)
+        # 0080AQ: optional read-only per-layer device statistics. Disabled by default.
+        self.usage_collector = None
+        self.usage_layer = None
         from ..parameter import Parameter
-        self.W_router_param = Parameter(self.W_router.copy(), name=f"{name}.W_router")
-        self.b_router_param = Parameter(self.b_router.copy(), name=f"{name}.b_router")
+        W_router = xp.asarray(rng.normal((d_model, n_experts), std=input_std, dtype=dtype))
+        b_router = xp.zeros((n_experts,), dtype=resolve_dtype(dtype))
+        self.W_router_param = Parameter(W_router.copy(), name=f"{name}.W_router")
+        self.b_router_param = Parameter(b_router.copy(), name=f"{name}.b_router")
+        # Keep the legacy aliases: non-Parameter code may read them directly.
+        self.W_router = W_router
+        self.b_router = b_router
 
     def parameters(self):
-        """Return trainable parameters."""
         return [self.W_router_param, self.b_router_param]
 
     def zero_grad(self):
-        """Zero out gradients."""
         self.W_router_param.zero_grad()
         self.b_router_param.zero_grad()
 
     def forward(self, x):
-        """
-        Forward pass through the router.
-        
-        Uses selected-top-k softmax:
-        1. Compute full logits for all experts
-        2. Select top-k indices (fixed during backward)
-        3. Apply softmax only to selected logits
-        4. Return selected weights that sum to 1 across k experts
-        
-        Args:
-            x: Input tensor of shape (B, T, d_model)
-            
-        Returns:
-            output_weights: Weights for top-k experts, shape (B, T, k)
-            expert_indices: Indices of top-k experts, shape (B, T, k)
-            cache: Dictionary for backward pass
-        """
         batch_size, seq_len, _ = x.shape
-        
-        # Flatten leading dimensions so BF16 uses CuPy's supported 2-D GEMM
-        # path rather than its generic N-D batched tensordot implementation.
         x_2d = x.reshape(-1, self.d_model)
         with moe_detail_scope("moe.router.logits"):
             logits = (x_2d @ self.W_router_param.data).reshape(
                 batch_size, seq_len, self.n_experts
             ) + self.b_router_param.data
-
-        # Top-K selection and selected softmax are shared with the context
-        # router.  The helper preserves the original deterministic argsort and
-        # FP32 routing math for FP16/BF16 inputs.
         with moe_detail_scope("moe.router.topk"):
-            output_weights, expert_indices, topk_cache = selected_topk_softmax_forward(
-                logits, self.k, output_dtype=x.dtype
+            weights, indices, topk_cache = expert_topk_forward(
+                logits, self.k, output_dtype=x.dtype,
             )
-        # Backward only needs the input and the reusable selected-softmax
-        # cache.  Do not retain duplicate logits/indices/weights that are
-        # already represented inside topk_cache.
-        cache = {
-            "x": x,
-            "topk_cache": topk_cache,
-        }
-        
-        return output_weights, expert_indices, cache
+        collector = self.usage_collector
+        if collector is not None:
+            collector.observe(self.usage_layer, indices, topk_cache[0])
+        return weights, indices, {"x": x, "topk_cache": topk_cache}
 
     def backward(self, dweights, cache):
-        """
-        Backward pass through the router.
-        
-        Uses selected-top-k softmax with proper Jacobian computation.
-        Top-k selection is treated with straight-through estimator (fixed).
-        
-        The output weights are: w = softmax(z_selected)
-        where z_selected are the logits for the top-k experts.
-        
-        Gradient for selected logits:
-            dL/dz_i = w_i * (dL/dw_i - sum_j(w_j * dL/dw_j))
-        
-        Args:
-            dweights: Gradient w.r.t. output weights, shape (B, T, k)
-            cache: Dictionary from forward pass
-            
-        Returns:
-            dx: Gradient w.r.t. input x, shape (B, T, d_model)
-        """
         x = cache["x"]
-        batch_size, seq_len, _ = x.shape
-        N = batch_size * seq_len
-        
-        # Reuse the same selected-softmax Jacobian/scatter primitive used by
-        # the context router.  Top-K identities remain fixed locally.
         with moe_detail_scope("moe.router.topk_bwd"):
-            dlogits = selected_topk_softmax_backward(dweights, cache["topk_cache"])
+            dlogits = expert_topk_backward(dweights, cache["topk_cache"])
         dlogits_compute = (
             dlogits.astype(x.dtype, copy=False)
             if is_low_precision_dtype(x.dtype) else dlogits
         )
-
-        # Gradient through logits = x @ W + b. Keep the GEMM strictly 2-D for
-        # CuPy BF16 compatibility, then restore the original token layout.
         dlogits_2d = dlogits_compute.reshape(-1, self.n_experts)
         with moe_detail_scope("moe.router.dx_gemm"):
             dx = (dlogits_2d @ self.W_router_param.data.T).reshape(x.shape)
-
-        # Accumulate parameter gradients. GEMM stays in branch compute dtype;
-        # Parameter.grad itself is FP32 for low-precision parameters.
         x_2d = x.reshape(-1, self.d_model)
         with moe_detail_scope("moe.router.wgrad_gemm"):
             self.W_router_param.grad += x_2d.T @ dlogits_2d
         with moe_detail_scope("moe.router.bgrad"):
             self.b_router_param.grad += xp.sum(dlogits, axis=(0, 1))
-        
         return dx

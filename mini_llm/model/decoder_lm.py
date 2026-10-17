@@ -104,6 +104,7 @@ class DecoderLanguageModel:
                 dtype=self.dtype,
                 attention_config=attention_config,
                 residual_gates=self.progressive_depth_enabled,
+                ffn_mode=getattr(config, "ffn_mode", "moe"),
                 residual_gate_init=(
                     1.0 if layer_idx < self.active_layers else 0.0
                 ),
@@ -1249,6 +1250,14 @@ class DecoderLanguageModel:
         block_caches = [] if (return_cache and not checkpoint_blocks) else None
         block_checkpoints = [] if checkpoint_blocks else None
         active_layers = int(self.active_layers)
+        # 0080AY: optional observational memory probe, disabled by default.
+        # It deliberately exits before backward when the chosen layer limit
+        # is reached, so this can diagnose an otherwise OOM-ing full-cache run.
+        layer_memory_audit = None
+        if (return_cache and not checkpoint_blocks and
+                os.environ.get('MINI_LLM_MEMORY_AUDIT', '0') == '1'):
+            from mini_llm.activation_memory_audit import LayerMemoryAudit
+            layer_memory_audit = LayerMemoryAudit(active_layers, x)
         for i, block in enumerate(self.blocks[:active_layers]):
             retain_block = bool(return_cache and i >= cache_start_layer)
             if checkpoint_blocks and retain_block:
@@ -1268,20 +1277,34 @@ class DecoderLanguageModel:
                         block_valid_mask=block_valid_mask,
                     )
             elif retain_block and not checkpoint_blocks:
-                with performance_scope(f"model.layer{i}.forward"):
-                    x, block_cache = block.forward(
-                        x,
-                        finite_trace=finite_trace,
-                        layer_idx=i,
-                        position_ids=effective_position_ids,
-                        terminal_memory=(
-                            terminal_memory if i == self.memory_attention_layer else None
-                        ),
-                        attention_allow_mask=attention_allow_mask,
-                        block_context_length=block_context_length,
-                        block_valid_mask=block_valid_mask,
-                    )
+                if layer_memory_audit is not None:
+                    layer_memory_audit.before_layer(i)
+                try:
+                    with performance_scope(f"model.layer{i}.forward"):
+                        x, block_cache = block.forward(
+                            x,
+                            finite_trace=finite_trace,
+                            layer_idx=i,
+                            position_ids=effective_position_ids,
+                            terminal_memory=(
+                                terminal_memory if i == self.memory_attention_layer else None
+                            ),
+                            attention_allow_mask=attention_allow_mask,
+                            block_context_length=block_context_length,
+                            block_valid_mask=block_valid_mask,
+                        )
+                except Exception as exc:
+                    if layer_memory_audit is not None and (
+                        isinstance(exc, MemoryError) or
+                        ('out of memory' in str(exc).lower() and
+                         type(exc).__module__.startswith('cupy'))
+                    ):
+                        layer_memory_audit.forward_failure(i, exc)
+                        raise SystemExit(42) from exc
+                    raise
                 block_caches.append(block_cache)
+                if layer_memory_audit is not None:
+                    layer_memory_audit.after_layer(i, block_cache)
             else:
                 with performance_scope(f"model.layer{i}.forward"):
                     x = block.forward(
@@ -1672,17 +1695,29 @@ class DecoderLanguageModel:
                 )
             for original_idx in range(active_layers - 1, cache_start_layer - 1, -1):
                 block_input = block_checkpoints.pop()
-                with performance_scope(f"model.layer{original_idx}.recompute"):
-                    recomputed_output, block_cache = self.blocks[original_idx].forward(
-                        block_input, finite_trace=None, layer_idx=original_idx,
-                        return_cache=True, position_ids=position_ids,
+                # 0080AQ: backward checkpoint replay is not a new observed
+                # training token; exclude it from expert-utilization counts.
+                replay_router = getattr(self.blocks[original_idx].moe, "router", None)
+                original_collector = (
+                    None if replay_router is None else replay_router.usage_collector
+                )
+                if replay_router is not None:
+                    replay_router.usage_collector = None
+                try:
+                    with performance_scope(f"model.layer{original_idx}.recompute"):
+                        recomputed_output, block_cache = self.blocks[original_idx].forward(
+                            block_input, finite_trace=None, layer_idx=original_idx,
+                            return_cache=True, position_ids=position_ids,
                         terminal_memory=(
                             terminal_memory if original_idx == self.memory_attention_layer else None
                         ),
                         attention_allow_mask=attention_allow_mask,
                         block_context_length=block_context_length,
-                        block_valid_mask=block_valid_mask,
-                    )
+                            block_valid_mask=block_valid_mask,
+                        )
+                finally:
+                    if replay_router is not None:
+                        replay_router.usage_collector = original_collector
                 # The backward only needs the reconstructed cache; dropping the
                 # replay output before launching backward minimizes transient VRAM.
                 del recomputed_output, block_input

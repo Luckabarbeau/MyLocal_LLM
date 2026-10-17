@@ -8,19 +8,30 @@ accepted as 0080 models.
 
 from pathlib import Path
 import json
+from dataclasses import asdict
 
 from mini_llm.backend import xp
 from mini_llm.checkpoint import load_checkpoint,save_checkpoint
 from mini_llm.optim.hybrid_muon import HybridMuonAdamW
 
 ARCHITECTURE='probabilistic_block_proposal_prefix_decoder_v1'
+ARCHITECTURE_V2='probabilistic_block_proposal_prefix_decoder_full_soft_v2'
+ARCHITECTURE_V3='probabilistic_block_proposal_prefix_decoder_learned_probability_v3'
+ARCHITECTURE_V4='probabilistic_block_proposal_prefix_decoder_direct_width_v4'
+ARCHITECTURE_V5='probabilistic_block_proposal_prefix_decoder_direct_latents_v5'
 
 
 def architecture_metadata(net):
     head,dec=net.proposal_head,net.decoder
+    # Legacy v1 metadata is byte-for-byte compatible and has no new keys.
+    interface=getattr(dec,'soft_interface_config',None)
+    is_v2=interface is not None and not interface.is_v1_baseline
+    is_v3=is_v2 and interface.mode == 'probability_embedding'
+    is_v4=is_v2 and interface.mode == 'probability_embedding_direct'
+    is_v5=is_v2 and interface.mode == 'proposal_latents_direct'
     mc=head.model.config.memory_context
     c=head.model.config
-    return dict(type=ARCHITECTURE,
+    architecture=dict(type=(ARCHITECTURE_V5 if is_v5 else ARCHITECTURE_V4 if is_v4 else ARCHITECTURE_V3 if is_v3 else ARCHITECTURE_V2) if is_v2 else ARCHITECTURE,
         block_size=int(head.block_size),lambda_proposal=float(net.lambda_proposal),
         proposal_hidden_width=int(head.W_back.shape[0]),
         proposal_residual_scale=float(head.residual_scale),
@@ -37,6 +48,102 @@ def architecture_metadata(net):
             memory_enabled=bool(mc.enabled),memory_integration=mc.integration_mode,
             memory_length=int(mc.memory_length),recent_length=int(mc.recent_length),
             target_length=int(mc.target_length),retrieved_length=int(mc.retrieved_length)))
+    if is_v2:
+        config=asdict(interface)
+        if not (is_v3 or is_v4 or is_v5):
+            # The new config field must NOT alter historical v2 metadata.
+            config.pop('probability_embedding_dim')
+        architecture['soft_interface'] = config
+        if is_v3 or is_v4:
+            architecture['probability_embedding'] = dict(
+                dimension=int(interface.probability_embedding_dim),
+                table='independent_trainable',
+                adapter='none' if is_v4 else 'probability_to_model_width',
+                full_vocabulary=True)
+        if is_v5:
+            architecture['direct_latent_decoder'] = dict(
+                hidden_width=int(dec.width),input_projections=False,
+                output_projection=False,proposal_latent_dim=int(c.d_model),
+                plan_normalization='none',plan_scale=float(dec.direct_plan_scale),
+                correction_scale=float(dec.direct_correction_scale),
+                full_vocabulary_probability_embedding=False)
+        if is_v4:
+            architecture['direct_decoder'] = dict(
+                hidden_width=int(dec.width),input_projections=False,
+                output_projection=False,probability_norm=True,
+                plan_scale=float(dec.direct_plan_scale),
+                correction_scale=float(dec.direct_correction_scale))
+        if dec.vocab_read is not None:
+            architecture['vocab_read_execution'] = dict(
+                algorithm=dec.vocab_read.all_source_algorithm,
+                vocab_tile=dec.vocab_read.vocab_tile,
+                block_tile=dec.vocab_read.block_tile)
+    return architecture
+
+
+def warmstart_v2_from_v1(path,net,*,expected_tokenizer_hash):
+    """Strict weights-only transfer of *all* matching v1 tensors, including decoder.
+
+    The v2 modules retain their zero-output initialization. No old optimizer
+    state is loaded. Reject mismatched architecture, missing tensors and a
+    tokenizer fingerprint mismatch before modifying ANY target parameters.
+    """
+    from mini_llm.checkpoint import initialize_matching_parameters
+    path=Path(path)
+    with (path/'training_state.json').open(encoding='utf8') as handle:
+        state=json.load(handle)
+    source=state.get('architecture') or {}
+    expected=architecture_metadata(net)
+    if expected['type'] not in (ARCHITECTURE_V2,ARCHITECTURE_V3) or source.get('type')!=ARCHITECTURE:
+        raise ValueError('weights-only migration requires v1 source and v2/v3 destination')
+    base={k:v for k,v in expected.items() if k not in
+          ('soft_interface','vocab_read_execution','probability_embedding')}
+    base['type']=ARCHITECTURE
+    if base != source:
+        raise ValueError('v1/v2 trunk, proposal or decoder architecture mismatch')
+    if (not expected_tokenizer_hash or
+            state.get('tokenizer_hash')!=expected_tokenizer_hash):
+        raise ValueError('v1 warm start requires identical, verified tokenizer SHA256')
+    extra=set()
+    if net.decoder.vocab_read is not None:
+        extra.update(p.name for p in net.decoder.vocab_read.parameters())
+    if net.decoder.boundary_projection is not None:
+        extra.update(p.name for p in net.decoder.boundary_projection.parameters())
+    if net.decoder.probability_embedding is not None:
+        extra.add(net.decoder.probability_embedding.name)
+        if net.decoder.probability_adapter is not None:
+            extra.update(p.name for p in net.decoder.probability_adapter.parameters())
+    old_params=[p for p in net.parameters() if p.name not in extra]
+    expected_names={p.name for p in old_params}
+    saved_names={p.stem for p in (path/'model_params').glob('*.npy')}
+    if saved_names!=expected_names:
+        raise ValueError('v1 source incomplete/unexpected parameter names: '
+                         +repr(sorted(expected_names ^ saved_names)[:8]))
+    # Reject dimension mismatches before mutating parameters.
+    import numpy as np
+    for parameter in old_params:
+        filename=path/'model_params'/f'{parameter.name}.npy'
+        with filename.open('rb') as stream:
+            version=np.lib.format.read_magic(stream)
+            if version==(1,0):
+                shape,_,_=np.lib.format.read_array_header_1_0(stream)
+            elif version in ((2,0),(3,0)):
+                shape,_,_=np.lib.format.read_array_header_2_0(stream)
+            else:
+                raise ValueError('unsupported source checkpoint numpy header')
+        if tuple(shape)!=tuple(parameter.shape):
+            raise ValueError('v1 parameter shape mismatch: '+parameter.name)
+    loaded,missing,total=initialize_matching_parameters(path,old_params)
+    if missing or set(loaded)!=expected_names:
+        raise ValueError('incomplete v1 migration')
+    for block in net.proposal_head.model.blocks:
+        if hasattr(block,'refresh_compute_buffers'):
+            block.refresh_compute_buffers()
+    for layer in net.decoder.layers:
+        if hasattr(layer.attn,'refresh_compute_buffers'):
+            layer.attn.refresh_compute_buffers()
+    return dict(loaded=len(loaded),elements=total,initialized_v2=sorted(extra),
+                source=str(path),tokenizer_hash=expected_tokenizer_hash)
 
 
 def save_two_stage_checkpoint(path,net,*,optimizer=None,training_step=0,

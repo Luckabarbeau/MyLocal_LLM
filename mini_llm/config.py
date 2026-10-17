@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 
 @dataclass(frozen=True)
@@ -223,6 +223,8 @@ class ModelConfig:
     n_experts: int = 6
     top_k: int = 2
     d_ff: int = 1_024
+    # Dense SwiGLU has no expert router or dispatch; default preserves MoE.
+    ffn_mode: str = "moe"
 
     rope_base: float = 10_000.0
     rms_eps: float = 1e-6
@@ -260,6 +262,13 @@ class ModelConfig:
             raise ValueError("n_q_heads must be divisible by n_kv_heads.")
         if not (1 <= self.top_k <= self.n_experts):
             raise ValueError("top_k must satisfy 1 <= top_k <= n_experts.")
+        if self.ffn_mode not in {"moe", "dense"}:
+            raise ValueError("ffn_mode must be moe or dense")
+        if self.ffn_mode == "dense":
+            if (self.n_experts, self.top_k) != (1, 1):
+                raise ValueError("dense FFN requires n_experts=1 and top_k=1")
+            if self.progressive_depth:
+                raise ValueError("dense FFN does not support progressive residual gating")
         if not isinstance(self.progressive_depth, bool):
             raise TypeError("progressive_depth must be a bool")
         if (
@@ -351,9 +360,12 @@ class ModelConfig:
             # Q, K, V and output attention projections.  Q width equals d_model.
             total += 2 * d * d + 2 * d * kv_width
 
-            # MoE router (weight+bias) and SwiGLU expert matrices.
-            total += d * int(self.n_experts) + int(self.n_experts)
-            total += int(self.n_experts) * 3 * d * int(self.d_ff)
+            # Dense FFN has one SwiGLU and NO router; MoE retains old count.
+            if self.ffn_mode == "dense":
+                total += 3 * d * int(self.d_ff)
+            else:
+                total += d * int(self.n_experts) + int(self.n_experts)
+                total += int(self.n_experts) * 3 * d * int(self.d_ff)
 
             if self.progressive_depth:
                 # Learned attention/MLP residual gates (0064A/0064B).
@@ -830,6 +842,78 @@ class ModelConfig:
     @classmethod
     def wide_500m_memory_64k(cls):
         return cls._wide_500m_memory_context(65_536)
+
+    @classmethod
+    def deep_500m_memory_64k(cls):
+        """0080AO: 32-layer, two-expert/top-1 alternative to the 12-layer MoE.
+
+        Keep exactly the existing 64K routed-prefix data policy, 768-wide
+        representation, 12q/3kv heads and 6-local/2-dilated/2-global/2-retrieval
+        attention geometry.  Change ONLY the depth/expert allocation: 32 blocks,
+        2 experts per block, 1 selected per token, d_ff=2368.  Estimated trunk
+        size is 499,213,120 parameters (versus 501,237,576 for the original).
+
+        All MoE presets use full-expert softmax followed by sparse top-k
+        selection, without renormalizing the selected weights.
+        """
+        base = cls.wide_500m_memory_64k()
+        return replace(
+            base,
+            n_layers=32,
+            n_experts=2,
+            top_k=1,
+            d_ff=2_368,
+            attention_layers=(base.attention_layers[0],) * 32,
+        )
+
+    @classmethod
+    def wide24_500m_memory_64k(cls):
+        """0080BE: 24 x 1024 (~501.2M) 64K-history top-1 MoE trunk.
+
+        Preserve the 0080BD 64K routed-prefix policy, the 1024-token local
+        window and all existing sparse/retrieval routing parameters.  Rebalance
+        the 12-head attention pattern to 16 query heads: 8 local, 4 dilated,
+        2 global, 2 learned retrieval.  Every added local/dilated head uses
+        its family's existing window/dilation/phase; this is a configuration
+        change, not a new attention kernel or a new memory policy.
+
+        V5 direct proposal latents and the small decoder are configured
+        independently in the block-proposal CLI (both should be width 1024).
+        """
+        base = cls.deep_500m_memory_64k()
+        heads = base.attention_layers[0].heads
+        # Existing 12-head ordering: 6 local / 2 dilated / 2 global /
+        # 2 retrieval.  Reuse the same immutable attention policies and the
+        # shared 2-query learned router for the retrieval pair.
+        wide_heads = (
+            heads[:6] + heads[:2] +  # 8 local
+            heads[6:8] + heads[6:8] +  # 4 dilated, same phase/group
+            heads[8:]  # 2 global + 2 retrieval
+        )
+        attention = AttentionLayerConfig(heads=wide_heads)
+        return replace(
+            base,
+            n_layers=24,
+            d_model=1_024,
+            n_q_heads=16,
+            n_kv_heads=4,
+            d_ff=2_048,
+            attention_layers=(attention,) * 24,
+        )
+
+    @classmethod
+    def wide24_500m_dense_memory_64k(cls):
+        """0080BG: router-free ~501M dense AR comparator to wide24 MoE.
+
+        4096-wide SwiGLU matches the stored expert-matrix budget of the
+        two 2048-wide experts, but evaluates ALL 4096 channels per token.
+        Attention, source history and dimensions are unchanged. This is a
+        parameter-matched comparator, NOT an active-FLOP-matched comparator.
+        """
+        return replace(
+            cls.wide24_500m_memory_64k(),
+            ffn_mode="dense", n_experts=1, top_k=1, d_ff=4096,
+        )
 
     @classmethod
     def large(cls):

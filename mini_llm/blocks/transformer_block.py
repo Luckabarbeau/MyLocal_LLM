@@ -6,6 +6,7 @@ from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.router import Router
 from mini_llm.ops.experts import Experts
 from mini_llm.blocks.moe_block import MoE
+from mini_llm.blocks.dense_ffn_block import DenseFFN
 from mini_llm.performance_profiler import performance_scope
 from mini_llm.parameter import Parameter
 
@@ -43,6 +44,7 @@ class TransformerBlock:
         terminal_memory_config=None,
         residual_gates: bool = False,
         residual_gate_init: float = 1.0,
+        ffn_mode: str = "moe",
     ):
         """Initialize the Transformer block."""
         self.d_model = d_model
@@ -52,6 +54,7 @@ class TransformerBlock:
         self.d_ff = d_ff
         self.n_experts = n_experts
         self.top_k = top_k
+        self.ffn_mode = ffn_mode
         self.compute_dtype = resolve_dtype(dtype)
         self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
         self.residual_gates = bool(residual_gates)
@@ -99,17 +102,18 @@ class TransformerBlock:
         self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2", dtype=dtype)
         
         # Feed-forward network (MoE)
-        self.moe = MoE(
-            d_model=d_model,
-            d_ff=d_ff,
-            n_experts=n_experts,
-            k=top_k,
-            input_std=input_std,
-            output_std=output_std,
-            rng=rng,
-            name=f"{name}.moe",
-            dtype=dtype
-        )
+        if ffn_mode == "dense":
+            self.moe = DenseFFN(
+                d_model=d_model, d_ff=d_ff, input_std=input_std,
+                output_std=output_std, rng=rng, name=f"{name}.dense_ffn",
+                dtype=dtype,
+            )
+        else:
+            self.moe = MoE(
+                d_model=d_model, d_ff=d_ff, n_experts=n_experts, k=top_k,
+                input_std=input_std, output_std=output_std, rng=rng,
+                name=f"{name}.moe", dtype=dtype,
+            )
     
     def parameters(self):
         """Return all trainable parameters."""

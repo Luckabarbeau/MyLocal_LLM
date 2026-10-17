@@ -34,6 +34,7 @@ class TransformerBlockInference:
         rope_base: float = 10_000.0,
         attention_config=None,
         layer_idx: int = 0,
+        ffn_mode: str = "moe",
     ):
         """
         Initialize inference Transformer block.
@@ -81,14 +82,15 @@ class TransformerBlockInference:
         )
         
         # MoE (weights shared with training)
-        from mini_llm.blocks.moe_block_inference import MoEInference
-        self.moe = MoEInference(
-            d_model=d_model,
-            d_ff=d_ff,
-            n_experts=n_experts,
-            k=top_k,
-            dtype=dtype
-        )
+        if ffn_mode == "dense":
+            from mini_llm.blocks.dense_ffn_block_inference import DenseFFNInference
+            self.moe = DenseFFNInference(d_model, d_ff, dtype=dtype)
+        else:
+            from mini_llm.blocks.moe_block_inference import MoEInference
+            self.moe = MoEInference(
+                d_model=d_model, d_ff=d_ff, n_experts=n_experts,
+                k=top_k, dtype=dtype,
+            )
 
     def set_weights(self, training_block):
         """

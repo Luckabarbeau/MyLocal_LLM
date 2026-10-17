@@ -56,8 +56,12 @@ class DirectCachedBlockGenerator:
             return {'tokens':[], 'eos':False,'main_updates':0,'plan_prefills':0}
         if not hasattr(self.inference,'last_hidden'):
             raise RuntimeError('first call inference_model.prefill(prompt,state)')
-        lp=self.proposal.forward(self.inference.last_hidden,return_cache=False)
-        cache=self.decoder.prepare_plan_cache(lp)
+        if self.decoder.direct_latents:
+            lp,latents=self.proposal.forward(self.inference.last_hidden,return_cache=False,return_latents=True)
+        else:
+            lp=self.proposal.forward(self.inference.last_hidden,return_cache=False)
+            latents=None
+        cache=self.decoder.prepare_plan_cache(lp,boundary_h=self.inference.last_hidden,proposal_latents=latents)
         tokens=[]
         eos=False
         for j in range(k):
@@ -135,8 +139,12 @@ class SequentialCommitBlockGenerator:
             # Always compute the FULL K-token plan even for stride=1/2.
             # All K proposals are conditioned on the SAME causal boundary,
             # with no ground-truth future tokens available.
-            logits = self.proposal.forward(self.inference.last_hidden, return_cache=False)
-            plan = self.decoder.prepare_plan_cache(logits)
+            if self.decoder.direct_latents:
+                logits,latents = self.proposal.forward(self.inference.last_hidden,return_cache=False,return_latents=True)
+            else:
+                logits = self.proposal.forward(self.inference.last_hidden,return_cache=False)
+                latents = None
+            plan = self.decoder.prepare_plan_cache(logits,boundary_h=self.inference.last_hidden,proposal_latents=latents)
             proposals += 1
             committed = []
             for j in range(n_commit):
@@ -182,8 +190,12 @@ class SequentialCommitBlockGenerator:
         losses = []
         proposal_blocks = 0
         while position < len(references):
-            logits = self.proposal.forward(self.inference.last_hidden, return_cache=False)
-            cache = self.decoder.prepare_plan_cache(logits)
+            if self.decoder.direct_latents:
+                logits,latents = self.proposal.forward(self.inference.last_hidden,return_cache=False,return_latents=True)
+            else:
+                logits = self.proposal.forward(self.inference.last_hidden,return_cache=False)
+                latents = None
+            cache = self.decoder.prepare_plan_cache(logits,boundary_h=self.inference.last_hidden,proposal_latents=latents)
             proposal_blocks += 1
             previous = None
             for _ in range(min(self.commit_stride, len(references) - position)):

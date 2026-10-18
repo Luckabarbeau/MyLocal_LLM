@@ -18,12 +18,25 @@ from ..performance_profiler import local_detail_scope
 from .attention_selection import KeySelectionPlan
 from .cublas_grouped import (
     RowMajorGemmGroup,
-    RowMajorGemmProblem,
+    RowMajorGemmProblem as _StandardRowMajorGemmProblem,
+    CompactRowMajorGemmProblem,
     available as _cublas_grouped_available,
     grouped_bf16_gemm as _cublas_grouped_bf16_gemm,
     is_enabled as _cublas_grouped_local_enabled,
     local_cublas_mode as _cublas_local_mode,
     strict_enabled as _cublas_grouped_strict_enabled,
+)
+
+
+# 0080CB: Select the immutable C-level tuple descriptor at import time.
+# The flag is part of the training process environment, before this module is
+# imported.  No per-head flag checks or Python wrapper calls on the hot path.
+# Keep the original frozen dataclass as the default to allow numerical A/B.
+RowMajorGemmProblem = (
+    CompactRowMajorGemmProblem
+    if os.environ.get("MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS", "0").strip().lower()
+    not in {"", "0", "false", "off", "no"}
+    else _StandardRowMajorGemmProblem
 )
 
 

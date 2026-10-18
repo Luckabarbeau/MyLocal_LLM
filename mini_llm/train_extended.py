@@ -409,6 +409,14 @@ class ExtendedTrainer:
         self.gpu_memory_trim_after_checkpoint = os.environ.get(
             "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT", "0"
         ).strip().lower() in {"1", "true", "on", "yes"}
+        # 0080BZ: periodically release *idle* CuPy allocator blocks at a safe
+        # completed optimizer-step boundary.  Never trim within an accumulation
+        # microbatch or while forward/backward activation caches are in use.
+        self.gpu_memory_trim_train_interval = int(os.environ.get(
+            "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL", "0"
+        ))
+        if self.gpu_memory_trim_train_interval < 0:
+            raise ValueError("MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL must be >= 0")
         # 0078J: opt-in GC/allocator isolation probe, executed only after
         # validation has returned and all training microbatches have completed.
         # Do not run cyclic GC inside forward/backward or accumulation loops.
@@ -597,6 +605,11 @@ class ExtendedTrainer:
                     f"{len(self.val_source_shards[name])} val shards"
                 )
         print(f"  Batch size: {batch_size} (effective: {self.effective_batch_size})")
+        if self.gpu_memory_trim_train_interval:
+            print(
+                "  GPU idle-pool trim: every "
+                f"{self.gpu_memory_trim_train_interval} completed optimizer steps"
+            )
         if self.memory_context is None:
             print(f"  Sequence length: {self.seq_length}")
         else:
@@ -1247,6 +1260,21 @@ class ExtendedTrainer:
               f"collected={collected}, elapsed_ms={elapsed_ms:.1f}")
         self._gpu_memory_boundary("after_validation_python_gc")
         self._gpu_memory_boundary("after_validation_python_gc_trimmed", trim_idle_pool=True)
+
+    def _gpu_memory_maybe_trim_after_training_step(self):
+        """0080BZ: release idle pool blocks only between optimizer updates.
+
+        The pool is synchronized by _gpu_memory_boundary.  Live activations,
+        cached parameters and cuBLAS/CUDA allocations cannot be reclaimed by
+        this operation.  This is a fragmentation/idle-pool control, not a
+        substitute for reducing the peak memory of a single microbatch.
+        """
+        interval = getattr(self, "gpu_memory_trim_train_interval", 0)
+        if interval > 0 and self.step > 0 and self.step % interval == 0:
+            return self._gpu_memory_boundary(
+                "after_training_step_trimmed", trim_idle_pool=True,
+            )
+        return None
 
     def _gpu_memory_after_validation_stage(self, phase: str):
         """Record validation-stage usage and optionally release idle pool blocks."""
@@ -3300,6 +3328,9 @@ class ExtendedTrainer:
             if self._last_step_expert_usage is not None:
                 self._write_expert_usage(self._last_step_expert_usage)
                 self._last_step_expert_usage = None
+            # Include trimming cost in measured wall/step time.  Never trim
+            # inside train_step() or before the accumulation update completes.
+            self._gpu_memory_maybe_trim_after_training_step()
             precise_step_seconds = time.perf_counter() - precise_step_start
             recent_step_seconds.append(precise_step_seconds)
             if self.memory_context is not None:

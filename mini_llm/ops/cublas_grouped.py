@@ -14,10 +14,12 @@ Q/K/V tensors as long as elements within each row are contiguous.
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import ctypes.util
+import os
 from dataclasses import dataclass
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 import numpy as np
 
@@ -30,6 +32,28 @@ class RowMajorGemmProblem:
 
     Pointers are integer device addresses. ``lda/ldb/ldc`` are physical row
     strides in elements of the underlying, *untransposed* row-major arrays.
+    """
+
+    a_ptr: int
+    b_ptr: int
+    c_ptr: int
+    m: int
+    n: int
+    k: int
+    lda: int
+    ldb: int
+    ldc: int
+    trans_a: bool = False
+    trans_b: bool = False
+
+
+class CompactRowMajorGemmProblem(NamedTuple):
+    """Low-overhead immutable equivalent of :class:`RowMajorGemmProblem`.
+
+    Pointer fields, numerical GEMM geometry and transposition semantics are
+    intentionally identical.  The performance-sensitive indexed-attention
+    builder opts into this representation before constructing any problems;
+    cuBLAS receives exactly the same descriptor values either way.
     """
 
     a_ptr: int
@@ -230,6 +254,64 @@ def available():
 def _i32(values):
     return np.asarray(values, dtype=np.int32)
 
+_PACKED_POINTER_DISPATCHES = 0
+
+
+def packed_pointer_upload_stats():
+    """Number of BF16 GEMM dispatches using a single packed pointer table."""
+    return {"packed_dispatches": _PACKED_POINTER_DISPATCHES}
+
+
+def _report_packed_pointer_upload_stats():
+    if os.environ.get("MINI_LLM_CUBLAS_PACKED_POINTER_REPORT", "0").strip().lower() \
+            not in {"", "0", "false", "off", "no"}:
+        print("0080CA grouped cuBLAS pointer uploads: "
+              f"packed_dispatches={_PACKED_POINTER_DISPATCHES}")
+
+
+atexit.register(_report_packed_pointer_upload_stats)
+
+
+def _packed_pointer_upload_enabled():
+    """0080CA: submit a single [3, N] CuPy pointer buffer per GEMM dispatch.
+
+    The three cuBLAS input pointer tables remain independently addressable
+    through offsets of the same contiguous device allocation. This is opt-in
+    until end-to-end BF16 throughput is confirmed on a CUDA device.
+    """
+    raw = os.environ.get("MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD", "0").strip().lower()
+    return raw not in {"", "0", "false", "off", "no"}
+
+
+def _device_pointer_tables(a_ptrs, b_ptrs, c_ptrs):
+    """Return (A, B, C) device pointers plus owners kept alive for the GEMM.
+
+    cuBLAS requires three *device* tables of pointer-sized integers. Normally
+    CuPy allocates and copies each of them separately, which causes three
+    small CUDA submissions. With the optional packed mode, one H2D copy
+    carries three contiguous rows and pointer offsets select each row.
+    """
+    if _packed_pointer_upload_enabled():
+        global _PACKED_POINTER_DISPATCHES
+        n = len(a_ptrs)
+        if len(b_ptrs) != n or len(c_ptrs) != n:
+            raise ValueError("GEMM A/B/C pointer tables must have equal length")
+        host = np.empty((3, n), dtype=np.uintp)
+        host[0] = a_ptrs
+        host[1] = b_ptrs
+        host[2] = c_ptrs
+        device = xp.asarray(host)
+        _PACKED_POINTER_DISPATCHES += 1
+        base = int(device.data.ptr)
+        offset = n * np.dtype(np.uintp).itemsize
+        return (base, base + offset, base + 2 * offset), (device,)
+    a_dev = xp.asarray(np.asarray(a_ptrs, dtype=np.uintp))
+    b_dev = xp.asarray(np.asarray(b_ptrs, dtype=np.uintp))
+    c_dev = xp.asarray(np.asarray(c_ptrs, dtype=np.uintp))
+    return (int(a_dev.data.ptr), int(b_dev.data.ptr), int(c_dev.data.ptr)), (a_dev, b_dev, c_dev)
+
+
+
 
 def batched_bf16_gemm(
     groups: Sequence[RowMajorGemmGroup], alpha=1.0, beta=0.0, *, output_dtype="bf16"
@@ -284,9 +366,9 @@ def batched_bf16_gemm(
             b_ptrs.append(int(p.a_ptr))
             c_ptrs.append(int(p.c_ptr))
 
-    a_dev = xp.asarray(np.asarray(a_ptrs, dtype=np.uintp))
-    b_dev = xp.asarray(np.asarray(b_ptrs, dtype=np.uintp))
-    c_dev = xp.asarray(np.asarray(c_ptrs, dtype=np.uintp))
+    (a_array, b_array, c_array), pointer_owners = _device_pointer_tables(
+        a_ptrs, b_ptrs, c_ptrs
+    )
 
     from cupy.cuda import device
     from cupy_backends.cuda.libs import cublas
@@ -311,18 +393,18 @@ def batched_bf16_gemm(
         transb = 1 if trans_a else 0
         cm_m, cm_n, cm_k = int(n), int(m), int(k)
         cm_lda, cm_ldb, cm_ldc = int(ldb), int(lda), int(ldc)
-        a_array = int(a_dev.data.ptr) + off * ptr_bytes
-        b_array = int(b_dev.data.ptr) + off * ptr_bytes
-        c_array = int(c_dev.data.ptr) + off * ptr_bytes
+        a_group_ptr = a_array + off * ptr_bytes
+        b_group_ptr = b_array + off * ptr_bytes
+        c_group_ptr = c_array + off * ptr_bytes
         status = fn(
             ctypes.c_void_p(handle),
             ctypes.c_int(transa), ctypes.c_int(transb),
             ctypes.c_int(cm_m), ctypes.c_int(cm_n), ctypes.c_int(cm_k),
             ctypes.c_void_p(alpha_host.ctypes.data),
-            ctypes.c_void_p(a_array), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_lda),
-            ctypes.c_void_p(b_array), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_ldb),
+            ctypes.c_void_p(a_group_ptr), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_lda),
+            ctypes.c_void_p(b_group_ptr), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_ldb),
             ctypes.c_void_p(beta_host.ctypes.data),
-            ctypes.c_void_p(c_array), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_ldc),
+            ctypes.c_void_p(c_group_ptr), ctypes.c_int(cuda_r_16bf), ctypes.c_int(cm_ldc),
             ctypes.c_int(len(group.problems)),
             ctypes.c_int(compute_32f), ctypes.c_int(algo),
         )
@@ -415,9 +497,9 @@ def grouped_bf16_gemm(
     beta_host = np.full(len(groups), np.float32(beta), dtype=np.float32)
 
     # Aarray/Barray/Carray are *device arrays of pointers* for the grouped API.
-    a_dev = xp.asarray(np.asarray(a_ptrs, dtype=np.uintp))
-    b_dev = xp.asarray(np.asarray(b_ptrs, dtype=np.uintp))
-    c_dev = xp.asarray(np.asarray(c_ptrs, dtype=np.uintp))
+    (a_array, b_array, c_array), pointer_owners = _device_pointer_tables(
+        a_ptrs, b_ptrs, c_ptrs
+    )
 
     from cupy.cuda import device
     from cupy_backends.cuda.libs import cublas
@@ -449,10 +531,10 @@ def grouped_bf16_gemm(
         ctypes.c_void_p(handle),
         transa.ctypes.data_as(c_int_p), transb.ctypes.data_as(c_int_p),
         ms.ctypes.data_as(c_int_p), ns.ctypes.data_as(c_int_p), ks.ctypes.data_as(c_int_p),
-        ctypes.c_void_p(alpha_host.ctypes.data), ctypes.c_void_p(int(a_dev.data.ptr)),
+        ctypes.c_void_p(alpha_host.ctypes.data), ctypes.c_void_p(a_array),
         cuda_r_16bf, ldas.ctypes.data_as(c_int_p),
-        ctypes.c_void_p(int(b_dev.data.ptr)), cuda_r_16bf, ldbs.ctypes.data_as(c_int_p),
-        ctypes.c_void_p(beta_host.ctypes.data), ctypes.c_void_p(int(c_dev.data.ptr)),
+        ctypes.c_void_p(b_array), cuda_r_16bf, ldbs.ctypes.data_as(c_int_p),
+        ctypes.c_void_p(beta_host.ctypes.data), ctypes.c_void_p(c_array),
         c_type, ldcs.ctypes.data_as(c_int_p),
         len(groups), group_sizes.ctypes.data_as(c_int_p), compute_32f,
     )

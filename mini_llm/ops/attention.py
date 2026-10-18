@@ -40,6 +40,30 @@ def _bf16_mixed_context_enabled(dtype):
     return raw not in {"0", "false", "off", "no"}
 
 
+def _skip_empty_retrieval_enabled():
+    """Avoid the learned router if no causal historical block is selectable."""
+    raw = os.environ.get("MINI_LLM_SKIP_EMPTY_RETRIEVAL", "0").strip().lower()
+    return raw not in {"0", "false", "off", "no", ""}
+
+
+def _has_eligible_retrieval_route(seq_len, config):
+    """Host-only equivalent of the first eligible `eligible_route_starts` row.
+
+    A routing boundary is a positive multiple of `routing_stride`, strictly
+    before seq_len. At least top_k_blocks complete historical blocks must end
+    before the exclude-recent margin. This uses static config/shape metadata,
+    without any GPU scalar reductions or allocations.
+    """
+    stride = int(config.routing_stride)
+    earliest = max(
+        stride,
+        int(config.exclude_recent_tokens)
+        + int(config.top_k_blocks) * int(config.history_block_size),
+    )
+    first_route = ((earliest + stride - 1) // stride) * stride
+    return int(seq_len) > first_route
+
+
 def _packed_qkv_enabled():
     """Use one packed QKV projection GEMM instead of three separate GEMMs."""
     raw = os.environ.get("MINI_LLM_PACKED_QKV", "0").strip().lower()
@@ -703,6 +727,27 @@ class GQAAttention:
 
         for group in self._retrieval_groups:
             head_indices = group["head_indices"]
+            module = group["module"]
+            if (
+                terminal_memory is None
+                and _skip_empty_retrieval_enabled()
+                and not _has_eligible_retrieval_route(t, module.config)
+            ):
+                # Exactly match the no-route branch of ContextRouter.forward
+                # and block_retrieval_attention_forward: retrieval output and
+                # all retrieval gradients are zero. Crucially, skip the
+                # history pool, learned query pool, Q/K/V gathering and empty
+                # backward entirely. Static attention heads still run.
+                empty_shape = (
+                    b, 0, module.router.num_queries,
+                    int(module.config.top_k_blocks),
+                )
+                routing[group["name"]] = {
+                    "weights": xp.zeros(empty_shape, dtype=x.dtype),
+                    "selected_blocks": xp.zeros(empty_shape, dtype=xp.int64),
+                    "route_starts": xp.zeros((0,), dtype=xp.int64),
+                }
+                continue
             q_subset = q[:, :, head_indices, :]
             kv_head_indices = tuple(
                 index // self.group_size for index in head_indices

@@ -225,6 +225,8 @@ class ModelConfig:
     d_ff: int = 1_024
     # Dense SwiGLU has no expert router or dispatch; default preserves MoE.
     ffn_mode: str = "moe"
+    # Output projection reuses embedding.W.T; saved/optimized only once.
+    tie_embeddings: bool = False
 
     rope_base: float = 10_000.0
     rms_eps: float = 1e-6
@@ -262,6 +264,8 @@ class ModelConfig:
             raise ValueError("n_q_heads must be divisible by n_kv_heads.")
         if not (1 <= self.top_k <= self.n_experts):
             raise ValueError("top_k must satisfy 1 <= top_k <= n_experts.")
+        if not isinstance(self.tie_embeddings, bool):
+            raise TypeError("tie_embeddings must be a bool")
         if self.ffn_mode not in {"moe", "dense"}:
             raise ValueError("ffn_mode must be moe or dense")
         if self.ffn_mode == "dense":
@@ -350,8 +354,8 @@ class ModelConfig:
             if not 1 <= layer_count <= int(self.n_layers):
                 raise ValueError("active_layers must lie in [1, n_layers]")
 
-        # Untied token embedding + output projection + final RMSNorm.
-        total = 2 * int(self.vocab_size) * d + d
+        # Tied models register only embedding.W; output reads its transpose.
+        total = (1 if self.tie_embeddings else 2) * int(self.vocab_size) * d + d
 
         for layer_index in range(layer_count):
             # Two RMSNorm scales per Transformer block.
@@ -914,6 +918,52 @@ class ModelConfig:
             cls.wide24_500m_memory_64k(),
             ffn_mode="dense", n_experts=1, top_k=1, d_ff=4096,
         )
+
+    @classmethod
+    def _ensemble_dense_memory_64k(cls, *, n_layers: int, d_model: int):
+        """0080BL: 32k-vocabulary, tied, dense AR long-context ensemble.
+
+        Preserve the production 4k working window, 16*128 routed prefix,
+        64k historical horizon and local/dilated/global/learned-retrieval
+        policies from the existing 12-head 500M model. No MoE/proposal path.
+        """
+        base = cls.wide_500m_memory_64k()
+        heads = base.attention_layers[0].heads
+        if d_model == 512:
+            # 3 local, 1 dilated, 2 sparse/global, 2 learned retrieval.
+            selected = heads[:3] + heads[6:7] + heads[8:]
+            kv_heads = 2
+            d_ff = 1_376
+        elif d_model == 768:
+            # Original 6 local, 2 dilated, 2 global, 2 retrieval.
+            selected = heads
+            kv_heads = 3
+            d_ff = 2_048
+        else:
+            raise ValueError("unsupported ensemble width")
+        attention = AttentionLayerConfig(heads=selected)
+        return replace(
+            base,
+            tokenizer_vocab_size=32_768,
+            n_layers=n_layers,
+            d_model=d_model,
+            n_q_heads=d_model // 64,
+            n_kv_heads=kv_heads,
+            n_experts=1,
+            top_k=1,
+            d_ff=d_ff,
+            ffn_mode="dense",
+            tie_embeddings=True,
+            attention_layers=(attention,) * n_layers,
+        )
+
+    @classmethod
+    def ensemble_deep_512_dense_memory_64k(cls):
+        return cls._ensemble_dense_memory_64k(n_layers=32, d_model=512)
+
+    @classmethod
+    def ensemble_wide_768_dense_memory_64k(cls):
+        return cls._ensemble_dense_memory_64k(n_layers=13, d_model=768)
 
     @classmethod
     def large(cls):

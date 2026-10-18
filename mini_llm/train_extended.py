@@ -190,6 +190,30 @@ class ExtendedTrainer:
                     or training_objective.model is not model):
                 raise ValueError("training_objective must be a BlockProposalObjective bound to model")
         self.training_objective = training_objective
+        # 0080BN: physically skip unused trailing AR target rows. This is an
+        # execution option, not a change to the document sampler or loss.
+        compact_env = os.environ.get("MINI_LLM_AR_COMPACT_TARGET", "0")
+        if compact_env not in ("0", "1"):
+            raise ValueError("MINI_LLM_AR_COMPACT_TARGET must be 0 or 1")
+        self.ar_compact_target = compact_env == "1"
+        if self.ar_compact_target and (
+            training_objective is not None
+            or not model.config.memory_context.enabled
+            or model.config.memory_context.integration_mode != "routed_prefix"
+        ):
+            raise ValueError(
+                "MINI_LLM_AR_COMPACT_TARGET requires AR with routed_prefix memory"
+            )
+        # 0080BR: pre-sample one optimizer step, then group same-source / same-
+        # routing-mode AR rows by valid length. No rejected/re-drawn documents.
+        length_bucket_env = os.environ.get("MINI_LLM_AR_ACCUM_LENGTH_BUCKETS", "0")
+        if length_bucket_env not in ("0", "1"):
+            raise ValueError("MINI_LLM_AR_ACCUM_LENGTH_BUCKETS must be 0 or 1")
+        self.ar_accum_length_buckets = length_bucket_env == "1"
+        if self.ar_accum_length_buckets and not self.ar_compact_target:
+            raise ValueError("length bucketing requires MINI_LLM_AR_COMPACT_TARGET=1")
+        self._last_step_ar_bucket = None
+        self._last_step_ar_compact = None
         self._last_step_block_proposal_metrics = None
         self._last_block_validation_metrics = None
         self._block_proposal_supervised_tokens = 0
@@ -303,6 +327,10 @@ class ExtendedTrainer:
                 "0080 requires gradient_accumulation_weighting='supervised_tokens' "
                 "so every unique valid target has equal accumulated gradient weight"
             )
+        if self.ar_accum_length_buckets and gradient_accumulation_weighting != "supervised_tokens":
+            raise ValueError("length bucketing requires supervised_tokens accumulation weighting")
+        if self.ar_accum_length_buckets and int(grad_accum_steps) < 2:
+            raise ValueError("length bucketing requires at least two accumulation microbatches")
         self.gradient_accumulation_weighting = gradient_accumulation_weighting
         self.grad_clip = grad_clip  # Store grad_clip parameter
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
@@ -1824,9 +1852,10 @@ class ExtendedTrainer:
                     self.train_rng.random() < probability
                 )
             metadata["router_stochastic"] = True
-            metadata["router_gumbel_seed"] = int(
-                self.train_rng.integers(0, 2**31 - 1)
-            )
+            if "router_gumbel_seed" not in metadata:
+                metadata["router_gumbel_seed"] = int(
+                    self.train_rng.integers(0, 2**31 - 1)
+                )
             anneal_steps = max(1, int(cfg.router_temperature_anneal_steps))
             progress = min(max(float(self.step) / anneal_steps, 0.0), 1.0)
             metadata["router_temperature"] = (
@@ -1842,6 +1871,12 @@ class ExtendedTrainer:
             metadata.setdefault("use_retrieval", True)
             metadata["router_stochastic"] = False
             metadata["router_temperature"] = float(cfg.router_temperature_min)
+        if getattr(self, "ar_compact_target", False):
+            from mini_llm.data.compact_target import ar_compact_metadata
+            metadata = ar_compact_metadata(
+                metadata, target_length=cfg.target_length,
+                batch_size=self.batch_size, bucket_tokens=min(128, max(1, int(cfg.target_length) // 8)),
+            )
         return metadata
 
     def _validation_batch_loss(self, inputs, targets, batch_metadata):
@@ -1854,7 +1889,9 @@ class ExtendedTrainer:
             else batch_metadata.get("target_loss_mask")
         )
         loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
-        targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+        targets, loss_mask = self._loss_targets_and_mask(
+            targets, loss_mask, batch_metadata,
+        )
         if self.training_objective is not None:
             metrics = self.training_objective.evaluate_batch(
                 inputs, targets, loss_mask, batch_metadata,
@@ -2057,11 +2094,17 @@ class ExtendedTrainer:
                     int(np.count_nonzero(loss_mask)) if loss_mask is not None
                     else int(np.size(scored_targets))
                 )
-                capacity += int(np.size(scored_targets))
+                capacity += int(np.size(targets))
                 # A fingerprint of the *actual* batches and effective masks.
                 # If two checkpoints have different fingerprints, their losses
                 # must not be treated as paired measurements.
-                for part in (inputs, scored_targets, loss_mask):
+                # Audit the ORIGINAL sampled targets/mask even if execution
+                # skipped padding. This keeps paired fixed-eval fingerprints
+                # identical with and without AR compaction.
+                audit_targets = targets if self.ar_compact_target else scored_targets
+                audit_mask = (metadata["target_loss_mask"]
+                              if self.ar_compact_target else loss_mask)
+                for part in (inputs, audit_targets, audit_mask):
                     if part is None:
                         sampled.update(b"none")
                         continue
@@ -2208,8 +2251,15 @@ class ExtendedTrainer:
                 mask[b, int(length) - 1] = 1.0
         return mask
 
-    def _loss_targets_and_mask(self, targets, loss_mask):
-        """Match labels to the terminal-only LM-head slice in router-only mode."""
+    def _loss_targets_and_mask(self, targets, loss_mask, batch_metadata=None):
+        """Restrict LM-head targets to executed rows, without changing supervision."""
+        if batch_metadata is not None and batch_metadata.get("compact_ar_target", False):
+            length = int(batch_metadata["compact_working_length"])
+            if not (1 <= length <= targets.shape[1]):
+                raise ValueError("invalid compact AR target length")
+            if loss_mask is None or loss_mask.shape != targets.shape:
+                raise ValueError("compact AR requires aligned target loss mask")
+            return targets[:, :length], loss_mask[:, :length]
         if (
             self.memory_context is None
             or self.memory_context.memory_training != "router_only"
@@ -2303,6 +2353,46 @@ class ExtendedTrainer:
         # Rescale by nominal token capacity before backward to avoid large
         # intermediate gradients.  The common scale cancels at normalization.
         nominal_microbatch_tokens = float(self.batch_size * self.target_seq_length)
+        ar_compact_executed = 0
+        ar_compact_capacity = 0
+
+        prefetched_batches = None
+        self._last_step_ar_bucket = None
+        if self.ar_accum_length_buckets:
+            from mini_llm.data.accumulation_length_buckets import (
+                regroup_ar_accumulation_batches,
+            )
+            # Sampling remains strictly document-first. Save source identity
+            # before another sample updates _last_train_batch_source.
+            with performance_scope("train.data_batch"):
+                sampled = []
+                router_seeds = []
+                for _ in range(self.grad_accum_steps):
+                    source_inputs, source_targets, source_meta = self.get_train_batch(
+                        return_metadata=True,
+                    )
+                    # Preserve the original sampler RNG sequence: the normal
+                    # loop draws one router seed immediately after each batch.
+                    router_seeds.append(int(self.train_rng.integers(0, 2**31 - 1)))
+                    sampled.append((self._last_train_batch_source,
+                                    source_inputs, source_targets, source_meta))
+                prefetched_batches, self._last_step_ar_bucket = (
+                    regroup_ar_accumulation_batches(
+                        sampled, batch_size=self.batch_size,
+                        target_length=self.target_seq_length,
+                        bucket_tokens=min(128, max(1, self.target_seq_length // 8)),
+                    )
+                )
+                del sampled
+                # One independent stochastic router seed for each new
+                # microbatch. The sampler's retrieval eligibility/mode stays
+                # attached to its own stratum during regrouping.
+                prefetched_batches = [
+                    (source, inputs, targets,
+                     {**meta, "router_gumbel_seed": router_seeds[idx]})
+                    for idx, (source, inputs, targets, meta)
+                    in enumerate(prefetched_batches)
+                ]
 
         for accum_step in range(self.grad_accum_steps):
             if expert_collector is not None:
@@ -2315,25 +2405,37 @@ class ExtendedTrainer:
             self.optimizer.lr = lr
             
             # Get batch
-            with performance_scope("train.data_batch"):
-                inputs, targets, batch_metadata = self.get_train_batch(
-                    return_metadata=True
-                )
+            if prefetched_batches is None:
+                with performance_scope("train.data_batch"):
+                    inputs, targets, batch_metadata = self.get_train_batch(
+                        return_metadata=True
+                    )
+                source = getattr(self, "_last_train_batch_source", "local")
+            else:
+                source, inputs, targets, batch_metadata = prefetched_batches[accum_step]
             batch_metadata = self._configure_routed_prefix_metadata(
                 batch_metadata, training=True
             )
+            if self.ar_compact_target:
+                ar_compact_executed += int(batch_metadata.get(
+                    "compact_working_length", self.target_seq_length,
+                )) * int(inputs.shape[0])
+                ar_compact_capacity += self.target_seq_length * int(inputs.shape[0])
             loss_mask = (
                 None if batch_metadata is None
                 else batch_metadata.get("target_loss_mask")
             )
             loss_mask = self._effective_loss_mask(batch_metadata, loss_mask)
-            targets, loss_mask = self._loss_targets_and_mask(targets, loss_mask)
+            targets, loss_mask = self._loss_targets_and_mask(
+                targets, loss_mask, batch_metadata,
+            )
             valid_tokens = self._supervised_token_weight(targets, loss_mask)
             supervised_tokens_in_step += valid_tokens
-            source = getattr(self, "_last_train_batch_source", "local")
             coverage = batch_coverage(
                 batch_size=self.batch_size, source_length=self.seq_length,
-                target_shape=targets.shape, loss_mask=loss_mask,
+                target_shape=(self.batch_size, self.target_seq_length)
+                if self.ar_compact_target else targets.shape,
+                loss_mask=loss_mask,
                 memory_length=(self.memory_context.distant_memory_length
                                if self.memory_context is not None else 0),
                 target_length=self.target_seq_length, metadata=batch_metadata,
@@ -2616,6 +2718,7 @@ class ExtendedTrainer:
                     "released", snap,
                 )
 
+        del prefetched_batches
         if expert_collector is not None:
             for router in active_routers:
                 router.usage_collector = None
@@ -2634,6 +2737,10 @@ class ExtendedTrainer:
         if accumulation_weight_sum <= 0.0:
             raise ValueError("no supervised tokens in accumulated optimizer step")
         avg_loss = float(_array_to_float(loss_sum_backend / accumulation_weight_sum))
+        self._last_step_ar_compact = (
+            {"executed": ar_compact_executed, "capacity": ar_compact_capacity}
+            if self.ar_compact_target else None
+        )
         self._last_step_supervised_tokens = supervised_tokens_in_step
         if live_block_audit is not None:
             print(live_block_audit.format_report(self.step, block_step_metrics), flush=True)
@@ -3013,6 +3120,8 @@ class ExtendedTrainer:
             "step": self.step,
             "tokens_processed": self.tokens_processed,  # New: track cumulative tokens
             "gradient_accumulation_weighting": self.gradient_accumulation_weighting,
+            "ar_accum_length_buckets": bool(self.ar_accum_length_buckets),
+            "ar_compact_target": bool(self.ar_compact_target),
             "gradient_weighting_history": getattr(self, "gradient_weighting_history", []),
             "total_steps": self.total_steps,
             "current_train_shard_idx": self.current_train_shard_idx,
@@ -3315,6 +3424,18 @@ class ExtendedTrainer:
                         f"tok/s_10={rolling_source_tokens_per_sec:,.0f}"
                     )
 
+                if self._last_step_ar_compact is not None:
+                    compact = self._last_step_ar_compact
+                    throughput_text += (
+                        f", ar_working_rows={compact['executed']}/{compact['capacity']}"
+                        f", ar_padding_skipped={100.0*(1.0-compact['executed']/max(1,compact['capacity'])):.1f}%"
+                    )
+                if self._last_step_ar_bucket is not None:
+                    packed = self._last_step_ar_bucket
+                    throughput_text += (
+                        f", ar_bucket_rows={packed['original_rows']}->{packed['bucketed_rows']}"
+                        f", ar_bucket_saved={100.0*(1.0-packed['bucketed_rows']/max(1,packed['original_rows'])):.1f}%"
+                    )
                 depth_text = ""
                 if getattr(self.model, "progressive_depth_enabled", False):
                     depth_text = (

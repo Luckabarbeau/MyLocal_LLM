@@ -1,4 +1,6 @@
-from ..backend import xp
+from dataclasses import dataclass
+
+from ..backend import xp, dtype_name
 
 
 # Shared cache across all attention layers.  A fixed-length training run uses
@@ -43,6 +45,60 @@ def _rope_cos_sin(seq_len, d_head, base, dtype):
     return get_rope_cos_sin(seq_len, d_head, base, dtype)
 
 
+@dataclass(frozen=True)
+class PreparedRoPEPositions:
+    """Per-forward RoPE lookup, shared by Q/K and every Transformer layer.
+
+    The table is *not* a global cache of position indices: it belongs to the
+    current forward and is retained only as long as its block/backward caches.
+    """
+    shape: tuple
+    d_head: int
+    base: float
+    dtype: str
+    cos: object
+    sin: object
+
+
+def prepare_rope_positions(position_ids, *, d_head, base=10_000.0, dtype="float32"):
+    """Validate explicit positions and compute their RoPE factors once.
+
+    A deep decoder sends the SAME source positions through many layers.  Keep
+    those absolute positions (including noncontiguous routed blocks) rather
+    than renumbering the compact context. One GPU-to-CPU validity check per
+    forward replaces both checks on every Q/K call in every layer. Position
+    indices must remain unchanged for the lifetime of this prepared object.
+    """
+    positions = xp.asarray(position_ids)
+    if positions.ndim not in (1, 2):
+        raise ValueError("position_ids must have shape [T] or [B,T]")
+    if positions.dtype.kind not in {"i", "u"}:
+        raise TypeError("position_ids must use an integer dtype")
+    if positions.size and bool(xp.any(positions < 0)):
+        raise ValueError("position_ids must be non-negative")
+    if int(d_head) % 2:
+        raise ValueError("RoPE requires an even d_head")
+    # The reference table computes these same float32 angles from positions.
+    # Evaluating only the active indices avoids both the GPU->CPU max() sync
+    # and materializing/growing a [0, max_position] table on every compact
+    # target length.  The factors are then shared by all Q/K/layers.
+    i = xp.arange(0, int(d_head), 2, dtype=xp.float32)
+    inv_freq = 1.0 / (float(base) ** (i / float(d_head)))
+    theta = positions.astype(xp.float32)[..., None] * inv_freq
+    cos_values = xp.cos(theta).astype(dtype, copy=False)
+    sin_values = xp.sin(theta).astype(dtype, copy=False)
+    if positions.ndim == 1:
+        cos = cos_values[None, :, None, :]
+        sin = sin_values[None, :, None, :]
+    else:
+        cos = cos_values[:, :, None, :]
+        sin = sin_values[:, :, None, :]
+    return PreparedRoPEPositions(
+        shape=tuple(positions.shape), d_head=int(d_head),
+        base=float(base), dtype=dtype_name(dtype), cos=cos, sin=sin,
+    )
+
+
 def rope_forward(x, base=10_000.0, position_ids=None):
     """Apply RoPE using implicit or explicit sample-local source positions.
 
@@ -55,7 +111,16 @@ def rope_forward(x, base=10_000.0, position_ids=None):
         raise ValueError("rope_forward expects [B,T,H,D].")
     b, t, _, d = x.shape
 
-    if position_ids is None:
+    if isinstance(position_ids, PreparedRoPEPositions):
+        # All checks are host-only metadata checks; no GPU reduction/copy.
+        valid_shape = (int(t),) if len(position_ids.shape) == 1 else (int(b), int(t))
+        if position_ids.shape != valid_shape:
+            raise ValueError("prepared position_ids shape does not match RoPE input")
+        if (position_ids.d_head != int(d) or position_ids.base != float(base)
+                or position_ids.dtype != dtype_name(x.dtype)):
+            raise ValueError("prepared RoPE table does not match head/base/dtype")
+        cos, sin = position_ids.cos, position_ids.sin
+    elif position_ids is None:
         cos, sin = get_rope_cos_sin(t, d, base, x.dtype)
     else:
         positions = xp.asarray(position_ids)

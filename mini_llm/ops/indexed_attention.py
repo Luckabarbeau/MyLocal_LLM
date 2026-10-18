@@ -6,8 +6,10 @@ by that plan.  It therefore serves local/dilated/global/manual/learned sparse
 patterns equally; only the key-visibility provider changes.
 """
 
+import atexit
 import math
 import os
+from collections import OrderedDict
 
 import numpy as np
 
@@ -23,6 +25,226 @@ from .cublas_grouped import (
     local_cublas_mode as _cublas_local_mode,
     strict_enabled as _cublas_grouped_strict_enabled,
 )
+
+
+def _global_sparse_batched_bf16_enabled():
+    """0080BS: opt-in batched BF16 GEMMs for global-sparse anchors.
+
+    The existing path launches one GEMM per batch/head.  This experimental
+    path packs the [B,H] views once and uses batched matmul, leaving the
+    exact-current slot, mask, RoPE, reduction/scatter and optimizer unchanged.
+    This is disabled until validated on the target GPU.
+    """
+    return os.environ.get(
+        "MINI_LLM_GLOBAL_SPARSE_BATCHED_BF16", "0"
+    ).strip().lower() not in {"0", "false", "off", "no", ""}
+
+
+def _global_sparse_batched_gemm(a, b, *, out=None):
+    """0080BT: BF16-safe batch GEMMs using the existing grouped-cuBLAS bridge.
+
+    CuPy's generic ``matmul`` strided-batch dispatcher fails with dtype 'E'
+    for BF16 on some CUDA/CuPy builds. The local-attention grouped cuBLAS
+    bridge already supports BF16 inputs, BF16 outputs, and FP32 accumulation.
+    Reuse that proven interface instead of relying on ``cupy.matmul``.
+
+    Inputs are [batch, heads, m, k] and [batch, heads, k, n]. ``out`` may
+    be a noncontiguous 4D view with contiguous *matrix rows*, for instance
+    scores[..., :n_anchors] (there is an extra exact-current score slot).
+    This avoids an additional large temporary output allocation on the
+    memory-constrained RTX 5080.
+
+    If the grouped-cuBLAS entry point is unavailable/disabled, use the
+    original per-(batch,head) BF16 GEMM rather than CuPy batched matmul.
+    """
+    if a.ndim != 4 or b.ndim != 4 or a.shape[:2] != b.shape[:2] or a.shape[-1] != b.shape[-2]:
+        raise ValueError("global-sparse batched GEMM requires matching [B,H,m,k] @ [B,H,k,n] shapes")
+    if a.dtype != b.dtype:
+        raise TypeError("global-sparse batched GEMM inputs must have matching dtypes")
+
+    shape = (*a.shape[:2], a.shape[-2], b.shape[-1])
+    if out is None:
+        out = xp.empty(shape, dtype=a.dtype)
+    elif out.shape != shape or out.dtype != a.dtype:
+        raise ValueError("global-sparse batched GEMM output shape/dtype mismatch")
+
+    if BACKEND_NAME != "cupy" or not is_bfloat16_dtype(a.dtype):
+        out[...] = xp.matmul(a, b)
+        return out
+
+    a_pack = xp.ascontiguousarray(a)
+    b_pack = xp.ascontiguousarray(b)
+    elem_bytes = int(out.dtype.itemsize)
+    if out.strides[-1] != elem_bytes:
+        raise ValueError("global-sparse batched GEMM output columns must be contiguous")
+
+    batch, heads = a_pack.shape[:2]
+    m, k, n = int(a_pack.shape[-2]), int(a_pack.shape[-1]), int(b_pack.shape[-1])
+    problems = []
+    for bi in range(batch):
+        for hi in range(heads):
+            problems.append(RowMajorGemmProblem(
+                a_ptr=int(a_pack.data.ptr) + bi * a_pack.strides[0] + hi * a_pack.strides[1],
+                b_ptr=int(b_pack.data.ptr) + bi * b_pack.strides[0] + hi * b_pack.strides[1],
+                c_ptr=int(out.data.ptr) + bi * out.strides[0] + hi * out.strides[1],
+                m=m, n=n, k=k,
+                lda=int(a_pack.strides[-2] // elem_bytes),
+                ldb=int(b_pack.strides[-2] // elem_bytes),
+                ldc=int(out.strides[-2] // elem_bytes),
+            ))
+
+    if _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
+        return out
+
+    # Explicit safe fallback: high-level CuPy @ supports individual 2D BF16
+    # GEMMs even on builds where its *batched* BF16 dispatcher does not.
+    for bi in range(batch):
+        for hi in range(heads):
+            out[bi, hi] = a_pack[bi, hi] @ b_pack[bi, hi]
+    return out
+
+
+# 0080BW: global-sparse anchor positions and causal masks depend only on the
+# active sequence length and static attention configuration, not layer weights.
+# Preserve the existing BF16/GEMM paths; share their immutable geometry between
+# the 32 layers. Bound device-resident cached masks to 16 MiB / 32 entries.
+_GLOBAL_SPARSE_GEOMETRY = OrderedDict()
+_GLOBAL_SPARSE_GEOMETRY_BYTES = 0
+_GLOBAL_SPARSE_GEOMETRY_HITS = 0
+_GLOBAL_SPARSE_GEOMETRY_MISSES = 0
+_GLOBAL_SPARSE_GEOMETRY_EVICTIONS = 0
+_GLOBAL_SPARSE_GEOMETRY_MAX_BYTES = 16 * 1024 * 1024
+_GLOBAL_SPARSE_GEOMETRY_MAX_ENTRIES = 32
+_GLOBAL_SPARSE_KV_MAPS = OrderedDict()
+_GLOBAL_SPARSE_KV_HITS = 0
+_GLOBAL_SPARSE_KV_MISSES = 0
+
+
+def _global_sparse_geometry_cache_enabled():
+    return os.environ.get(
+        "MINI_LLM_GLOBAL_SPARSE_GEOMETRY_CACHE", "0"
+    ).strip().lower() not in {"0", "false", "off", "no", ""}
+
+
+def clear_global_sparse_geometry_cache():
+    """Release cached masks (e.g., before a different GPU/VRAM workload)."""
+    global _GLOBAL_SPARSE_GEOMETRY_BYTES
+    _GLOBAL_SPARSE_GEOMETRY.clear()
+    _GLOBAL_SPARSE_GEOMETRY_BYTES = 0
+    _GLOBAL_SPARSE_KV_MAPS.clear()
+
+
+def global_sparse_geometry_cache_stats():
+    """Non-synchronizing diagnostic counters for the optional geometry cache."""
+    return {
+        "hits": _GLOBAL_SPARSE_GEOMETRY_HITS,
+        "misses": _GLOBAL_SPARSE_GEOMETRY_MISSES,
+        "evictions": _GLOBAL_SPARSE_GEOMETRY_EVICTIONS,
+        "entries": len(_GLOBAL_SPARSE_GEOMETRY),
+        "bytes": _GLOBAL_SPARSE_GEOMETRY_BYTES,
+        "kv_map_hits": _GLOBAL_SPARSE_KV_HITS,
+        "kv_map_misses": _GLOBAL_SPARSE_KV_MISSES,
+        "kv_map_entries": len(_GLOBAL_SPARSE_KV_MAPS),
+    }
+
+
+def _global_sparse_kv_mapping(kv_head_indices, n_q_heads, n_kv_heads):
+    """Cache only the immutable device Q-to-KV mapping (not Q/K/V data)."""
+    global _GLOBAL_SPARSE_KV_HITS, _GLOBAL_SPARSE_KV_MISSES
+    if not _global_sparse_geometry_cache_enabled():
+        return _normalize_kv_head_mapping(kv_head_indices, n_q_heads, n_kv_heads)
+    # All mixed-attention callers pass a Python tuple; preserve the ordinary
+    # normalization fallback for public callers supplying a device array.
+    if not (kv_head_indices is None or isinstance(kv_head_indices, (tuple, list))):
+        return _normalize_kv_head_mapping(kv_head_indices, n_q_heads, n_kv_heads)
+    if kv_head_indices is None:
+        if n_q_heads % n_kv_heads:
+            raise ValueError("n_q_heads must be divisible by n_kv_heads")
+        host = tuple(i // (n_q_heads // n_kv_heads) for i in range(n_q_heads))
+    else:
+        host = tuple(int(i) for i in kv_head_indices)
+    if len(host) != n_q_heads:
+        raise ValueError("kv_head_indices must have shape (n_q_heads,)")
+    if any(i < 0 or i >= n_kv_heads for i in host):
+        raise ValueError("kv_head_indices contains an invalid KV head")
+    device = int(xp.cuda.runtime.getDevice()) if BACKEND_NAME == "cupy" else -1
+    key = (device, n_kv_heads, host)
+    mapping = _GLOBAL_SPARSE_KV_MAPS.get(key)
+    if mapping is not None:
+        _GLOBAL_SPARSE_KV_MAPS.move_to_end(key)
+        _GLOBAL_SPARSE_KV_HITS += 1
+        return mapping, host
+    _GLOBAL_SPARSE_KV_MISSES += 1
+    mapping = xp.asarray(host, dtype=xp.int64)
+    if len(_GLOBAL_SPARSE_KV_MAPS) >= 32:
+        _GLOBAL_SPARSE_KV_MAPS.popitem(last=False)
+    _GLOBAL_SPARSE_KV_MAPS[key] = mapping
+    return mapping, host
+
+
+def _global_sparse_report_cache():
+    if os.environ.get("MINI_LLM_GLOBAL_SPARSE_CACHE_REPORT", "0").strip().lower() in {
+        "1", "true", "on", "yes"
+    }:
+        report = global_sparse_geometry_cache_stats()
+        print("0080BW global-sparse cache: " + ", ".join(
+            f"{key}={value}" for key, value in report.items()
+        ))
+
+
+atexit.register(_global_sparse_report_cache)
+
+
+def _global_sparse_causal_geometry(seq_len, stride, offset, add_current):
+    """Return shared [anchor indices, read-only-in-practice causal mask].
+
+    Keyed by CUDA device as well as all shape/topology values. The caller and
+    the BF16 softmax only READ the arrays. No value is taken from Q/K/V, so
+    sharing between layers and microbatches is mathematically exact.
+    """
+    global _GLOBAL_SPARSE_GEOMETRY_BYTES
+    global _GLOBAL_SPARSE_GEOMETRY_HITS, _GLOBAL_SPARSE_GEOMETRY_MISSES
+    global _GLOBAL_SPARSE_GEOMETRY_EVICTIONS
+    enabled = _global_sparse_geometry_cache_enabled()
+    key = None
+    if enabled:
+        device = int(xp.cuda.runtime.getDevice()) if BACKEND_NAME == "cupy" else -1
+        key = (device, int(seq_len), int(stride), int(offset), bool(add_current))
+        result = _GLOBAL_SPARSE_GEOMETRY.get(key)
+        if result is not None:
+            _GLOBAL_SPARSE_GEOMETRY.move_to_end(key)
+            _GLOBAL_SPARSE_GEOMETRY_HITS += 1
+            return result
+        _GLOBAL_SPARSE_GEOMETRY_MISSES += 1
+
+    anchors = xp.arange(offset, seq_len, stride, dtype=xp.int64)
+    queries = xp.arange(seq_len, dtype=xp.int64)[:, None]
+    valid_parts = []
+    if anchors.size:
+        valid_parts.append(anchors[None, :] <= queries)
+    if add_current:
+        positions = xp.arange(seq_len, dtype=xp.int64)
+        on_phase = (positions >= offset) & (((positions - offset) % stride) == 0)
+        valid_parts.append((~on_phase)[:, None])
+    if valid_parts:
+        valid_2d = valid_parts[0] if len(valid_parts) == 1 else xp.concatenate(valid_parts, axis=1)
+    else:
+        valid_2d = xp.empty((seq_len, 0), dtype=xp.bool_)
+    result = (anchors, valid_2d[None, None, :, :])
+
+    if enabled:
+        size = int(anchors.nbytes + result[1].nbytes)
+        if size <= _GLOBAL_SPARSE_GEOMETRY_MAX_BYTES:
+            while (_GLOBAL_SPARSE_GEOMETRY and (
+                len(_GLOBAL_SPARSE_GEOMETRY) >= _GLOBAL_SPARSE_GEOMETRY_MAX_ENTRIES
+                or _GLOBAL_SPARSE_GEOMETRY_BYTES + size > _GLOBAL_SPARSE_GEOMETRY_MAX_BYTES
+            )):
+                _, old = _GLOBAL_SPARSE_GEOMETRY.popitem(last=False)
+                _GLOBAL_SPARSE_GEOMETRY_BYTES -= int(old[0].nbytes + old[1].nbytes)
+                _GLOBAL_SPARSE_GEOMETRY_EVICTIONS += 1
+            _GLOBAL_SPARSE_GEOMETRY[key] = result
+            _GLOBAL_SPARSE_GEOMETRY_BYTES += size
+    return result
 
 
 def _local_prob_recompute_enabled():
@@ -4904,7 +5126,7 @@ def global_sparse_attention_forward(
     if scale is None:
         scale = 1.0 / math.sqrt(d_head)
     scale = float(scale)
-    kv_map, kv_map_host = _normalize_kv_head_mapping(
+    kv_map, kv_map_host = _global_sparse_kv_mapping(
         kv_head_indices, n_q_heads, n_kv_heads
     )
 
@@ -4931,9 +5153,11 @@ def global_sparse_attention_forward(
     context_dtype = xp.float32 if bf16_attention else q.dtype
     score_prescale = 1.0 / 32.0 if q.dtype == xp.float16 else 1.0
 
-    anchors = xp.arange(offset, key_length, stride, dtype=xp.int64)
-    n_anchors = int(anchors.shape[0])
     add_current = bool(include_current)
+    anchors, valid = _global_sparse_causal_geometry(
+        key_length, stride, offset, add_current
+    )
+    n_anchors = int(anchors.shape[0])
     n_slots = n_anchors + int(add_current)
 
     if n_slots == 0:
@@ -4958,11 +5182,17 @@ def global_sparse_attention_forward(
         if n_anchors:
             k_anchor = xp.take(k[:, offset:key_length:stride, :, :], kv_map, axis=2)
             k_anchor_heads = k_anchor.transpose(0, 2, 1, 3)
-            for bidx in range(batch):
-                for hidx in range(n_q_heads):
-                    q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
-                    k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
-                    scores[bidx, hidx, :, :n_anchors] = q2d @ k2d.T
+            if _global_sparse_batched_bf16_enabled():
+                _global_sparse_batched_gemm(
+                    q_heads, k_anchor_heads.swapaxes(-1, -2),
+                    out=scores[..., :n_anchors],
+                )
+            else:
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
+                        k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
+                        scores[bidx, hidx, :, :n_anchors] = q2d @ k2d.T
             slot = n_anchors
         if add_current:
             current_k = xp.take(k, kv_map, axis=2)
@@ -4992,17 +5222,6 @@ def global_sparse_attention_forward(
             score_parts.append(xp.sum(q_score * current_k_score, axis=-1, keepdims=True))
         scores = score_parts[0] if len(score_parts) == 1 else xp.concatenate(score_parts, axis=-1)
 
-    queries = xp.arange(query_length, dtype=xp.int64)[:, None]
-    valid_parts = []
-    if n_anchors:
-        valid_parts.append(anchors[None, :] <= queries)
-    if add_current:
-        positions = xp.arange(query_length, dtype=xp.int64)
-        on_phase = (positions >= offset) & (((positions - offset) % stride) == 0)
-        valid_parts.append((~on_phase)[:, None])
-    valid_2d = valid_parts[0] if len(valid_parts) == 1 else xp.concatenate(valid_parts, axis=1)
-    valid = valid_2d[None, None, :, :]
-
     if bf16_pipeline:
         probs = _masked_softmax_forward_bf16_cuda(scores, valid, scale)
         if probs is None:
@@ -5025,13 +5244,18 @@ def global_sparse_attention_forward(
         v_anchor = xp.take(v[:, offset:key_length:stride, :, :], kv_map, axis=2)
         v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
         if bf16_pipeline:
-            for bidx in range(batch):
-                for hidx in range(n_q_heads):
-                    p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
-                    v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
-                    context_heads[bidx, hidx] += (
-                        p2d @ v2d
-                    ).astype(context_dtype)
+            if _global_sparse_batched_bf16_enabled():
+                context_heads += _global_sparse_batched_gemm(
+                    probs_anchor, v_anchor_heads
+                ).astype(context_dtype)
+            else:
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
+                        v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
+                        context_heads[bidx, hidx] += (
+                            p2d @ v2d
+                        ).astype(context_dtype)
         else:
             v_compute = v_anchor_heads.astype("float32") if bf16_attention else v_anchor_heads
             probs_compute = probs_anchor if bf16_attention else (
@@ -5115,11 +5339,17 @@ def global_sparse_attention_backward(dcontext, cache):
         if n_anchors:
             v_anchor = xp.take(v[:, offset:v.shape[1]:stride, :, :], kv_map, axis=2)
             v_anchor_heads = v_anchor.transpose(0, 2, 1, 3)
-            for bidx in range(batch):
-                for hidx in range(n_q_heads):
-                    dc2d = xp.ascontiguousarray(dc_bf16[bidx, hidx])
-                    v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
-                    dprobs[bidx, hidx, :, :n_anchors] = dc2d @ v2d.T
+            if _global_sparse_batched_bf16_enabled():
+                _global_sparse_batched_gemm(
+                    dc_bf16, v_anchor_heads.swapaxes(-1, -2),
+                    out=dprobs[..., :n_anchors],
+                )
+            else:
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        dc2d = xp.ascontiguousarray(dc_bf16[bidx, hidx])
+                        v2d = xp.ascontiguousarray(v_anchor_heads[bidx, hidx])
+                        dprobs[bidx, hidx, :, :n_anchors] = dc2d @ v2d.T
             slot = n_anchors
         if add_current:
             current_v = xp.take(v, kv_map, axis=2)
@@ -5169,18 +5399,32 @@ def global_sparse_attention_backward(dcontext, cache):
                 (batch, n_q_heads, n_anchors, d_head), dtype=grad_dtype
             )
             dv_anchor_heads = xp.empty_like(dk_anchor_heads)
-            for bidx in range(batch):
-                for hidx in range(n_q_heads):
-                    ds2d = xp.ascontiguousarray(ds_anchor[bidx, hidx])
-                    p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
-                    q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
-                    k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
-                    dc2d = xp.ascontiguousarray(
-                        dcontext_heads[bidx, hidx].astype(q.dtype, copy=False)
-                    )
-                    dq_heads[bidx, hidx] += (ds2d @ k2d).astype(grad_dtype) * scale
-                    dk_anchor_heads[bidx, hidx] = (ds2d.T @ q2d).astype(grad_dtype) * scale
-                    dv_anchor_heads[bidx, hidx] = (p2d.T @ dc2d).astype(grad_dtype)
+            if _global_sparse_batched_bf16_enabled():
+                # Accumulate into FP32 exactly as in the per-(batch,head)
+                # implementation; transpose only the two matrix axes.
+                dq_heads += _global_sparse_batched_gemm(
+                    ds_anchor, k_anchor_heads
+                ).astype(grad_dtype) * scale
+                dk_anchor_heads[...] = _global_sparse_batched_gemm(
+                    ds_anchor.swapaxes(-1, -2), q_heads
+                ).astype(grad_dtype) * scale
+                dv_anchor_heads[...] = _global_sparse_batched_gemm(
+                    probs_anchor.swapaxes(-1, -2),
+                    dcontext_heads.astype(q.dtype, copy=False),
+                ).astype(grad_dtype)
+            else:
+                for bidx in range(batch):
+                    for hidx in range(n_q_heads):
+                        ds2d = xp.ascontiguousarray(ds_anchor[bidx, hidx])
+                        p2d = xp.ascontiguousarray(probs_anchor[bidx, hidx])
+                        q2d = xp.ascontiguousarray(q_heads[bidx, hidx])
+                        k2d = xp.ascontiguousarray(k_anchor_heads[bidx, hidx])
+                        dc2d = xp.ascontiguousarray(
+                            dcontext_heads[bidx, hidx].astype(q.dtype, copy=False)
+                        )
+                        dq_heads[bidx, hidx] += (ds2d @ k2d).astype(grad_dtype) * scale
+                        dk_anchor_heads[bidx, hidx] = (ds2d.T @ q2d).astype(grad_dtype) * scale
+                        dv_anchor_heads[bidx, hidx] = (p2d.T @ dc2d).astype(grad_dtype)
         else:
             probs_f32 = _restore_cached_probs(probs, bf16_attention)
             dscores_compute = dscores.astype("float32", copy=False) if bf16_attention else (

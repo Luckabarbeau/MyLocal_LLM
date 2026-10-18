@@ -17,6 +17,7 @@ PyArrow to be installed.
 
 from __future__ import annotations
 
+import gzip
 import json
 import random
 from dataclasses import dataclass
@@ -134,8 +135,10 @@ class TextCorpusSource:
     @staticmethod
     def _is_supported_file(path: Path) -> bool:
         suffix = path.suffix.lower()
+        if suffix == ".gz":
+            suffix = path.with_suffix("").suffix.lower()
         return (
-            suffix == ".parquet"
+            suffix == ".parquet" and path.suffix.lower() != ".gz"
             or suffix in _JSON_SUFFIXES
             or suffix in _JSONL_SUFFIXES
             or suffix in {s.lower() for s in _TEXT_SUFFIXES}
@@ -214,7 +217,8 @@ class TextCorpusSource:
             raise ValueError("chunk_size must be positive")
 
         decoder = json.JSONDecoder()
-        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        opener = gzip.open if path.suffix.lower() == ".gz" else open
+        with opener(path, "rt", encoding="utf-8-sig", errors="replace") as handle:
             buffer = ""
             pos = 0
             eof = False
@@ -309,7 +313,8 @@ class TextCorpusSource:
 
     def _iter_jsonl(self, path: Path) -> Iterator[str]:
         selected_column: Optional[str] = self.text_column
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        opener = gzip.open if path.suffix.lower() == ".gz" else open
+        with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
             for line_number, line in enumerate(handle, start=1):
                 line = line.strip()
                 if not line:
@@ -340,9 +345,28 @@ class TextCorpusSource:
 
     @staticmethod
     def _iter_text_file(path: Path) -> Iterator[str]:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix.lower() == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        else:
+            text = path.read_text(encoding="utf-8", errors="replace")
         if text:
             yield text
+
+    def iter_file_texts(self, path: Path) -> Iterator[str]:
+        """Read exactly one discovered input file (no implicit source mixing)."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix == ".gz":
+            suffix = path.with_suffix("").suffix.lower()
+        if suffix == ".parquet":
+            yield from self._iter_parquet(path)
+        elif suffix in _JSON_SUFFIXES:
+            yield from self._iter_json(path)
+        elif suffix in _JSONL_SUFFIXES:
+            yield from self._iter_jsonl(path)
+        else:
+            yield from self._iter_text_file(path)
 
     def iter_texts(
         self,
@@ -355,15 +379,7 @@ class TextCorpusSource:
             rng = random.Random(f"{int(seed)}:{self.name}")
             rng.shuffle(files)
         for path in files:
-            suffix = path.suffix.lower()
-            if suffix == ".parquet":
-                yield from self._iter_parquet(path)
-            elif suffix in _JSON_SUFFIXES:
-                yield from self._iter_json(path)
-            elif suffix in _JSONL_SUFFIXES:
-                yield from self._iter_jsonl(path)
-            else:
-                yield from self._iter_text_file(path)
+            yield from self.iter_file_texts(path)
 
     def inspect(self) -> Dict[str, object]:
         files = self.discover_files()

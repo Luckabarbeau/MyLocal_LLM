@@ -94,8 +94,8 @@ def load_weighted_shard_sources(root: Path | str) -> Tuple[List[WeightedShardSou
     for name, entry in raw_sources.items():
         relative_dir = entry.get("relative_shard_dir", name)
         source_dir = root / relative_dir
-        train_paths = tuple(sorted(source_dir.glob("train_shard_*.bin")))
-        val_paths = tuple(sorted(source_dir.glob("val_shard_*.bin")))
+        train_paths = tuple(sorted(source_dir.rglob("train_shard_*.bin")))
+        val_paths = tuple(sorted(source_dir.rglob("val_shard_*.bin")))
         if not train_paths:
             raise ValueError(f"source {name!r} has no train_shard_*.bin files")
         if not val_paths:

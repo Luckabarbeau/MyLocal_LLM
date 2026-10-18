@@ -41,3 +41,49 @@ class Linear:
         dy2 = dy.reshape(-1, dy.shape[-1])
         dx2 = dy2 @ self.W.data.T
         return dx2.reshape(x.shape)
+
+
+class _TransposedParameterView:
+    """Non-owning output-head view of a registered embedding Parameter.
+
+    Keep ``data`` and ``grad`` as fresh transpose views so optimizer/master
+    weight updates to the underlying embedding cannot leave a stale copy.
+    """
+
+    def __init__(self, embedding_weight):
+        self.embedding_weight = embedding_weight
+        self.name = "output_proj.W(tied)"
+
+    @property
+    def data(self):
+        return self.embedding_weight.data.T
+
+    @property
+    def grad(self):
+        return self.embedding_weight.grad.T
+
+
+class TiedOutputProjection(Linear):
+    """Bias-free output head whose weights are exactly embedding.W.T.
+
+    Inherited Linear forward/backward (and the chunked head in DecoderLM)
+    add their output-head gradients into the SAME registered embedding grad.
+    The model parameter list excludes this view: there is one optimizer state,
+    one checkpoint tensor, and one weight decay update.
+    """
+
+    def __init__(self, embedding_weight):
+        self.W = _TransposedParameterView(embedding_weight)
+
+    def parameters(self):
+        return []
+
+    def backward(self, dy, cache):
+        # Accumulate through the underlying *registered* embedding Parameter.
+        # Avoid ``self.W.grad +=``: this is a read-only non-owning property.
+        x = cache["x"]
+        x2 = x.reshape(-1, x.shape[-1])
+        dy2 = dy.reshape(-1, dy.shape[-1])
+        weight = self.W.embedding_weight
+        weight.grad += (x2.T @ dy2).T
+        return (dy2 @ weight.data).reshape(x.shape)

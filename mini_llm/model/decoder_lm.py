@@ -6,7 +6,7 @@ from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloa
 from mini_llm.config import ModelConfig
 from mini_llm.blocks.transformer_block import TransformerBlock
 from mini_llm.ops.embedding import Embedding
-from mini_llm.ops.linear import Linear
+from mini_llm.ops.linear import Linear, TiedOutputProjection
 from mini_llm.ops.loss import (
     cross_entropy_forward,
     cross_entropy_backward,
@@ -14,6 +14,7 @@ from mini_llm.ops.loss import (
     chunked_bf16_cross_entropy_grad_inplace,
 )
 from mini_llm.ops.rmsnorm import RMSNorm
+from mini_llm.ops.rope import prepare_rope_positions
 from mini_llm.ops.hierarchical_memory import (
     ActiveContext,
     TerminalMemoryContext,
@@ -120,14 +121,17 @@ class DecoderLanguageModel:
         )
         
         # Output projection layer (maps d_model -> vocab_size)
-        self.output_proj = Linear(
-            config.d_model,
-            config.vocab_size,
-            config.init_std,
-            rng,
-            name="output_proj",
-            dtype=self.dtype
-        )
+        if config.tie_embeddings:
+            self.output_proj = TiedOutputProjection(self.embedding.W)
+        else:
+            self.output_proj = Linear(
+                config.d_model,
+                config.vocab_size,
+                config.init_std,
+                rng,
+                name="output_proj",
+                dtype=self.dtype
+            )
 
         # 0058: instantiate the top-level memory selector *after* all existing
         # model parameters so the RNG initialization sequence of the 0057A base
@@ -536,12 +540,15 @@ class DecoderLanguageModel:
         history_length = int(cfg.distant_memory_length)
         working_length = int(cfg.target_length)
         if memory_metadata is not None and 'compact_working_length' in memory_metadata:
-            # Only the block-proposal objective supplies this override. The
-            # raw source remains [B, D+4096], preserving router coordinates,
-            # dataset provenance, and the exact pre-window causal query.
-            if not (memory_metadata.get('causal_prefix_query') is True and
-                    memory_metadata.get('causal_masked_target_refinement') is True):
-                raise ValueError('compact working window requires causal block refinement')
+            # Both block refinement and 0080BN AR compaction retain the full
+            # source buffer, router coordinates, and original document sample.
+            block_compact = (memory_metadata.get('causal_prefix_query') is True and
+                             memory_metadata.get('causal_masked_target_refinement') is True)
+            ar_compact = memory_metadata.get('compact_ar_target') is True
+            if not (block_compact or ar_compact):
+                raise ValueError('compact working window requires causal block refinement or compact AR')
+            if ar_compact and (block_compact or memory_metadata.get('causal_prefix_query', False)):
+                raise ValueError('compact AR cannot enable block proposal refinement')
             working_length = int(memory_metadata['compact_working_length'])
             if working_length <= 0 or working_length > int(cfg.target_length):
                 raise ValueError('compact working length outside configured target window')
@@ -870,12 +877,15 @@ class DecoderLanguageModel:
         history_length = int(cfg.distant_memory_length)
         working_length = int(cfg.target_length)
         if memory_metadata is not None and 'compact_working_length' in memory_metadata:
-            # Only the block-proposal objective supplies this override. The
-            # raw source remains [B, D+4096], preserving router coordinates,
-            # dataset provenance, and the exact pre-window causal query.
-            if not (memory_metadata.get('causal_prefix_query') is True and
-                    memory_metadata.get('causal_masked_target_refinement') is True):
-                raise ValueError('compact working window requires causal block refinement')
+            # Both block refinement and 0080BN AR compaction retain the full
+            # source buffer, router coordinates, and original document sample.
+            block_compact = (memory_metadata.get('causal_prefix_query') is True and
+                             memory_metadata.get('causal_masked_target_refinement') is True)
+            ar_compact = memory_metadata.get('compact_ar_target') is True
+            if not (block_compact or ar_compact):
+                raise ValueError('compact working window requires causal block refinement or compact AR')
+            if ar_compact and (block_compact or memory_metadata.get('causal_prefix_query', False)):
+                raise ValueError('compact AR cannot enable block proposal refinement')
             working_length = int(memory_metadata['compact_working_length'])
             if working_length <= 0 or working_length > int(cfg.target_length):
                 raise ValueError('compact working length outside configured target window')
@@ -1228,6 +1238,19 @@ class DecoderLanguageModel:
             effective_position_ids = position_ids
             if finite_trace is not None:
                 finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
+
+        # 0080BU: validate/index explicit source positions ONCE per active
+        # context, then reuse the same Q/K RoPE factors across all deep layers.
+        # This leaves compact routed-history coordinates exactly unchanged.
+        # Checkpoint replay retains the prepared table via position_ids below.
+        if (effective_position_ids is not None and
+                os.environ.get("MINI_LLM_ROPE_PREPARED_POSITIONS", "0").strip().lower()
+                not in {"0", "false", "off", "no", ""}):
+            with performance_scope("model.rope_positions.prepare"):
+                effective_position_ids = prepare_rope_positions(
+                    effective_position_ids, d_head=self.config.d_head,
+                    base=self.config.rope_base, dtype=self.dtype,
+                )
 
         # 0057 block checkpointing now retains only bounded active-sequence
         # residual inputs in hierarchical mode.  Top-level routing is performed

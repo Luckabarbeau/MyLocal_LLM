@@ -45,7 +45,9 @@ from mini_llm.optim.adamw import (
 )
 from mini_llm.train_extended import ExtendedTrainer
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
-from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile
+from mini_llm.runtime_defaults import (
+    apply_runtime_defaults, format_runtime_profile, format_runtime_fast_paths,
+)
 
 
 def parse_args():
@@ -64,7 +66,9 @@ def parse_args():
             "wide-500m-context-64k",
             "wide-500m-memory-16k", "wide-500m-memory-32k",
             "wide-500m-memory-64k", "deep-500m-memory-64k",
-            "wide24-500m-memory-64k", "wide24-500m-dense-memory-64k", "large",
+            "wide24-500m-memory-64k", "wide24-500m-dense-memory-64k",
+            "ensemble-deep-512-dense-memory-64k",
+            "ensemble-wide-768-dense-memory-64k", "large",
         ],
         default="mini",
         help="Model size configuration",
@@ -555,6 +559,10 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.wide24_500m_memory_64k()
     if name == "wide24-500m-dense-memory-64k":
         return ModelConfig.wide24_500m_dense_memory_64k()
+    if name == "ensemble-deep-512-dense-memory-64k":
+        return ModelConfig.ensemble_deep_512_dense_memory_64k()
+    if name == "ensemble-wide-768-dense-memory-64k":
+        return ModelConfig.ensemble_wide_768_dense_memory_64k()
     if name == "large":
         return ModelConfig.large()
     raise ValueError(f"unknown model preset: {name}")
@@ -1192,6 +1200,8 @@ def main():
         precision=args.precision,
     )
     print(format_runtime_profile(runtime_profile))
+    if runtime_profile.resolved != "reference" and BACKEND_NAME == "cupy":
+        print(format_runtime_fast_paths(config))
 
     # Prefer context-independent packed shards.  Mixed pretraining keeps each
     # source physically separate and samples source names according to explicit
@@ -1231,6 +1241,8 @@ def main():
                 "deep-500m-memory-64k",
                 "wide24-500m-memory-64k",
                 "wide24-500m-dense-memory-64k",
+                "ensemble-deep-512-dense-memory-64k",
+                "ensemble-wide-768-dense-memory-64k",
             }:
                 raise RuntimeError(
                     f"{args.model} requires pre-generated packed shards. "
@@ -1271,6 +1283,15 @@ def main():
     elif tokenizer_vocab_size is None:
         raise FileNotFoundError(
             f"tokenizer not found at {tokenizer_path}; pass --tokenizer-path explicitly"
+        )
+
+    if args.model in {
+        "ensemble-deep-512-dense-memory-64k",
+        "ensemble-wide-768-dense-memory-64k",
+    } and int(tokenizer_vocab_size) != 32_768:
+        raise ValueError(
+            "0080BL ensemble presets require their shared 32,768-token vocabulary; "
+            f"loaded {tokenizer_vocab_size} tokens from {tokenizer_path}"
         )
 
     replace_kwargs = {

@@ -36,6 +36,8 @@ _FALSE = {"0", "false", "off", "no", ""}
 # excluded: unsupported layouts should fall back instead of making the default
 # profile brittle on another GPU.
 _GPU_FAST_DEFAULTS: dict[str, str] = {
+    # The packed ExpertFFN GEMM was slower on the 32x512 dense model.
+    # Retain the established default, including for dense FFNs.
     "MINI_LLM_FUSED_EXPERT_GEMM": "0",
     "MINI_LLM_FUSED_LOCAL_SOFTMAX": "1",
     "MINI_LLM_BF16_LOCAL_GEMM": "1",
@@ -116,13 +118,52 @@ def _is_memory_model(config) -> bool:
     return bool(memory is not None and getattr(memory, "enabled", False))
 
 
-def _is_wide_long_context(config) -> bool:
+def _local_query_chunk_default(config) -> str | None:
+    """VRAM-conscious query tiles; explicit user overrides take priority.
+
+    0080BO increased 512d models from 512 to 1024 and triggered a batch-3
+    backward OOM with retained local probabilities on a 16 GiB RTX 5080.
+    Restore the previously working 512-row default for 512d models.  Keep
+    the previously tuned 1536-row setting for 768d+ models unchanged.
+    """
     if config is None:
-        return False
+        return None
     try:
-        return int(config.d_model) >= 768 and int(config.context_length) >= 4096
-    except Exception:
-        return False
+        width = int(config.d_model)
+        active = int(config.context_length)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if active < 4096:
+        return None
+    if width >= 768:
+        return "1536"
+    if width >= 512:
+        return "512"
+    return None
+
+
+def format_runtime_fast_paths(config=None) -> str:
+    """Report effective settings, not just the count applied by a profile."""
+    names = (
+        ("ffn_packed_gate_up", "MINI_LLM_FUSED_EXPERT_GEMM", "0"),
+        ("packed_qkv", "MINI_LLM_PACKED_QKV", "0"),
+        ("grouped_local_gemm", "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM", "0"),
+        ("bf16_local_pipeline", "MINI_LLM_FUSED_BF16_LOCAL_PIPELINE", "0"),
+        ("bf16_indexed_pipeline", "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE", "0"),
+        ("fused_swiglu", "MINI_LLM_FUSED_SWIGLU", "0"),
+        ("bf16_ce", "MINI_LLM_FUSED_BF16_CE", "0"),
+        ("local_chunk", "MINI_LLM_LOCAL_ATTN_QUERY_CHUNK", "512"),
+        ("local_prob_recompute", "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS", "0"),
+        ("lm_head_chunk", "MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"),
+        ("optimizer_offload", "MINI_LLM_OPTIMIZER_OFFLOAD", "none"),
+    )
+    return (
+        "GPU effective fast paths (" + str(getattr(config, "ffn_mode", "unknown"))
+        + " FFN): " + ", ".join(
+            f"{label}={os.environ.get(env, default)}"
+            for label, env, default in names
+        )
+    )
 
 
 def _setdefaults(values: Mapping[str, str], applied: list[tuple[str, str]]) -> None:
@@ -162,12 +203,13 @@ def apply_runtime_defaults(
     if resolved == "reference" or str(backend_name).lower() != "cupy":
         return RuntimeProfileResult(requested_profile, resolved, tuple(applied))
 
+    # Keep packed gate/up GEMM opt-in: the 32x512 dense A/B benchmark
+    # measured a regression with this path enabled.
     _setdefaults(_GPU_FAST_DEFAULTS, applied)
 
-    # 1536 was the best measured local-attention query tile for the current
-    # 768d / 4k+ active family.  Keep smaller models on their module defaults.
-    if _is_wide_long_context(config):
-        _setdefaults({"MINI_LLM_LOCAL_ATTN_QUERY_CHUNK": "1536"}, applied)
+    chunk = _local_query_chunk_default(config)
+    if chunk is not None:
+        _setdefaults({"MINI_LLM_LOCAL_ATTN_QUERY_CHUNK": chunk}, applied)
 
     if _is_memory_model(config):
         _setdefaults(_MEMORY_MODEL_DEFAULTS, applied)

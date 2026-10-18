@@ -1,7 +1,9 @@
 import os
 
 from mini_llm.config import ModelConfig
-from mini_llm.runtime_defaults import apply_runtime_defaults
+from mini_llm.runtime_defaults import (
+    apply_runtime_defaults, format_runtime_fast_paths,
+)
 
 
 PROFILE_VARS = {
@@ -102,3 +104,54 @@ def test_reference_profile_applies_nothing(monkeypatch):
     assert result.resolved == "reference"
     assert result.applied == ()
     assert "MINI_LLM_PACKED_QKV" not in os.environ
+
+
+def test_dense_gpu_fast_uses_safe_gemm_and_512d_tile(monkeypatch):
+    _clear(monkeypatch)
+    config = ModelConfig.ensemble_deep_512_dense_memory_64k()
+    # train_model replaces context_length with the compact active length
+    # before applying the runtime profile; mirror that handoff here.
+    import dataclasses
+    config = dataclasses.replace(
+        config, context_length=config.memory_context.active_length
+    )
+    result = apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config,
+        training=True, precision="bf16-mixed",
+    )
+    assert result.resolved == "gpu-fast"
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "512"
+    assert "MINI_LLM_OPTIMIZER_OFFLOAD" not in os.environ
+    summary = format_runtime_fast_paths(config)
+    assert "ffn_packed_gate_up=0" in summary
+    assert "local_chunk=512" in summary
+
+
+def test_dense_gpu_fast_preserves_explicit_gemm_and_chunk_overrides(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_FUSED_EXPERT_GEMM", "1")
+    monkeypatch.setenv("MINI_LLM_LOCAL_ATTN_QUERY_CHUNK", "1024")
+    import dataclasses
+    config = ModelConfig.ensemble_deep_512_dense_memory_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "1"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1024"
+
+
+def test_moe_gpu_fast_retains_legacy_expert_setting(monkeypatch):
+    _clear(monkeypatch)
+    config = ModelConfig.wide_500m_memory_64k()
+    apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+
+
+def test_768_dense_gets_prior_measured_query_chunk(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = ModelConfig.ensemble_wide_768_dense_memory_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"

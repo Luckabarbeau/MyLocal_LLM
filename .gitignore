@@ -137,3 +137,7 @@ benchmarks/*.txt
 # - prepare_external_benchmarks.py
 
 benchmarks/results/
+
+token_shards_ensemble_32k_mixed/
+
+token_shards_ensemble_32k_fineweb_edu_smoke/

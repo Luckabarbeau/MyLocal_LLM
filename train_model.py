@@ -68,7 +68,9 @@ def parse_args():
             "wide-500m-memory-64k", "deep-500m-memory-64k",
             "wide24-500m-memory-64k", "wide24-500m-dense-memory-64k",
             "ensemble-deep-512-dense-memory-64k",
-            "ensemble-wide-768-dense-memory-64k", "large",
+            "ensemble-wide-768-dense-memory-64k",
+            "ensemble-medium-wide-768-dense-memory-64k",
+            "large",
         ],
         default="mini",
         help="Model size configuration",
@@ -563,6 +565,8 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.ensemble_deep_512_dense_memory_64k()
     if name == "ensemble-wide-768-dense-memory-64k":
         return ModelConfig.ensemble_wide_768_dense_memory_64k()
+    if name == "ensemble-medium-wide-768-dense-memory-64k":
+        return ModelConfig.ensemble_medium_wide_768_dense_memory_64k()
     if name == "large":
         return ModelConfig.large()
     raise ValueError(f"unknown model preset: {name}")
@@ -1243,6 +1247,8 @@ def main():
                 "wide24-500m-dense-memory-64k",
                 "ensemble-deep-512-dense-memory-64k",
                 "ensemble-wide-768-dense-memory-64k",
+                "ensemble-medium-wide-768-dense-memory-64k",
+                
             }:
                 raise RuntimeError(
                     f"{args.model} requires pre-generated packed shards. "
@@ -1288,6 +1294,7 @@ def main():
     if args.model in {
         "ensemble-deep-512-dense-memory-64k",
         "ensemble-wide-768-dense-memory-64k",
+        "ensemble-medium-wide-768-dense-memory-64k",
     } and int(tokenizer_vocab_size) != 32_768:
         raise ValueError(
             "0080BL ensemble presets require their shared 32,768-token vocabulary; "

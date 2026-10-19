@@ -141,3 +141,5 @@ benchmarks/results/
 token_shards_ensemble_32k_mixed/
 
 token_shards_ensemble_32k_fineweb_edu_smoke/
+
+features/

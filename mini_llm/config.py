@@ -964,6 +964,10 @@ class ModelConfig:
     @classmethod
     def ensemble_wide_768_dense_memory_64k(cls):
         return cls._ensemble_dense_memory_64k(n_layers=13, d_model=768)
+    
+    @classmethod
+    def ensemble_medium_wide_768_dense_memory_64k(cls):
+        return cls._ensemble_dense_memory_64k(n_layers=24, d_model=768)
 
     @classmethod
     def large(cls):

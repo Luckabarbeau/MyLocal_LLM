@@ -7,9 +7,11 @@ remove the temporary logits.  This is a staged online pipeline, NOT joint
 backpropagation through the teachers; routed 64K-history evaluation remains
 out of scope (plain causal contexts only).
 
-Requires a pre-exported validation split from 0082D, held out from the
-streaming *train* split.  The 0082B window metadata is mandatory so training
-cannot accidentally sample from a differently partitioned validation split.
+Both training and validation teacher predictions are generated from the
+frozen models. Validation uses the deterministic held-out windows identified
+by the mandatory 0082B partition manifest; the bounded logits cache is
+regenerated only if a teacher snapshot or validation window changes.
+Old explicit --val-member/--val-targets inputs remain supported for compatibility.
 """
 
 from __future__ import annotations
@@ -466,6 +468,225 @@ def _read_last_state(path, model, optimizer, *, expected):
     return info
 
 
+
+def _manifest_validation_windows(manifest_path, context_length):
+    """Resolve the *fixed* val windows from the verified 0082B shard manifest."""
+    manifest_path = Path(manifest_path).expanduser().resolve()
+    meta = json.loads(manifest_path.read_text(encoding='utf-8'))
+    if int(meta.get('context_length', -1)) != context_length:
+        raise ValueError('validation window context length differs from --context-length; '
+                         'regenerate the 0082B windows manifest for this context')
+    record = meta['splits']['val']
+    recorded = Path(record['windows']).expanduser()
+    candidates = ([recorded] if recorded.is_absolute() else
+                  [recorded, manifest_path.parent / recorded.name,
+                   manifest_path.parent / recorded])
+    windows_file = next((p.resolve() for p in candidates if p.is_file()), None)
+    if windows_file is None:
+        raise FileNotFoundError('cannot find fixed validation windows from '
+                                f'{manifest_path}: {recorded}')
+    windows = np.load(windows_file, mmap_mode='r', allow_pickle=False)
+    if (windows.ndim != 2 or windows.shape != (int(record['count']), context_length + 1)
+            or not np.issubdtype(windows.dtype, np.integer)):
+        raise ValueError('manifest validation windows shape/type mismatch')
+    return windows_file, int(windows.shape[0])
+
+
+
+def _context_matched_validation_windows(args):
+    """Generate fixed held-out windows when the 0082B pilot used another context.
+
+    The 0082B manifest is a *shard-partition authority*, not an immutable
+    context-length requirement for streamed teacher inference. Use the same
+    val shards and 0082B EOS-bounded sampler at the requested teacher context.
+    The results live in the work directory, never overwrite original windows.
+    """
+    manifest_path = Path(args.windows_metadata).expanduser().resolve()
+    metadata = json.loads(manifest_path.read_text(encoding='utf-8'))
+    if int(metadata.get('context_length', -1)) == args.context_length:
+        return _manifest_validation_windows(manifest_path, args.context_length)
+
+    root = Path(args.mixed_shard_root).expanduser().resolve()
+    sources, shard_manifest = load_weighted_shard_sources(root)
+    partitions = _partition_by_shard(sources, args.partition_seed)
+    if metadata.get('format') != 'fusion_eos_windows_v1':
+        raise ValueError('expected 0082B shard-partition metadata')
+    if int(metadata['seed']) != args.partition_seed:
+        raise ValueError('fusion validation partition seed differs from 0082B manifest')
+    if metadata.get('tokenizer_sha256') != shard_manifest.get('tokenizer_sha256'):
+        raise ValueError('fusion validation tokenizer differs from 0082B manifest')
+
+    shard_keys = []
+    for split in ('train', 'val', 'test'):
+        for source in sources:
+            paths = partitions[split][source.name]
+            expected = {str(p.relative_to(root)) for p in paths}
+            recorded = set(metadata['splits'][split]['validation_shards'][source.name])
+            if recorded != expected:
+                raise ValueError(f'{split}/{source.name} shard partition differs from 0082B manifest')
+            if split == 'val':
+                shard_keys.extend([str(p.relative_to(root)), p.stat().st_size,
+                                   p.stat().st_mtime_ns] for p in paths)
+
+    count = int(metadata['splits']['val']['count'])
+    if count < 1:
+        raise ValueError('0082B validation count must be positive')
+    window_dir = Path(args.work_dir).expanduser().resolve() / 'validation_windows'
+    path = window_dir / f'fusion_val_context_{args.context_length}.npy'
+    sidecar = window_dir / f'fusion_val_context_{args.context_length}.json'
+    identity = {
+        'generator': '0082U_fixed_heldout_eos_v1',
+        'manifest_sha256': _file_sha256(manifest_path),
+        'source_root': str(root),
+        'source_tokenizer_sha256': shard_manifest['tokenizer_sha256'],
+        'partition_seed': args.partition_seed,
+        'context_length': args.context_length,
+        'window_count': count,
+        'validation_shard_stats': shard_keys,
+    }
+    if path.is_file() and sidecar.is_file():
+        try:
+            cached = json.loads(sidecar.read_text(encoding='utf-8'))
+            windows = np.load(path, mmap_mode='r', allow_pickle=False)
+            matched = (cached.get('identity') == identity and
+                       windows.shape == (count, args.context_length + 1) and
+                       windows.dtype == np.int32 and
+                       cached.get('window_sha256') == _file_sha256(path))
+            del windows
+            if matched:
+                return path, count
+        except (OSError, ValueError, KeyError, EOFError):
+            pass
+
+    window_dir.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(args.partition_seed + 10000)
+    eos = int(shard_manifest['eos_token_id'])
+    dtype = np.dtype(shard_manifest.get('token_dtype', 'uint16'))
+    samplers = {
+        s.name: _ShardSampler(partitions['val'][s.name], dtype, eos,
+                              args.context_length + 1, rng)
+        for s in sources
+    }
+    weights = np.asarray([s.weight for s in sources], dtype=np.float64)
+    weights /= weights.sum()
+    staged = path.with_name(path.stem + '.building.npy')
+    try:
+        counts, trace = _make_segment_windows(staged, samplers, sources,
+                                              weights, count, args.context_length, rng)
+        checksum = _file_sha256(staged)
+        os.replace(staged, path)
+        tmp_sidecar = sidecar.with_suffix('.json.tmp')
+        tmp_sidecar.write_text(json.dumps({'identity': identity,
+                                           'window_sha256': checksum,
+                                           'source_counts': counts,
+                                           'sample_locations': trace}), encoding='utf-8')
+        os.replace(tmp_sidecar, sidecar)
+    finally:
+        if staged.exists():
+            staged.unlink()
+    print(f'fusion validation: 0082B manifest context={metadata["context_length"]}; '
+          f'created {count} fixed held-out windows at context={args.context_length} '
+          f'from the SAME val shards', flush=True)
+    return path, count
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _automatic_validation(args, members, tokenizer_hash, teacher_fingerprints, vocab):
+    """Export once from the frozen parents; reuse only an exact matching cache.
+
+    The training stream and this validation cache use different shard partitions.
+    The cache is small: for the default 128 val windows and --val-max-rows=2048
+    it exports 16 distributed positions/window, or ~256 MiB for two 32K parents.
+    """
+    windows_file, nwin = _context_matched_validation_windows(args)
+    # Select up to 128 late-context positions/window. Spread them across the
+    # prefix rather than concentrating all 2048 validation rows at the EOS end.
+    last_k = min(128, args.context_length)
+    rows_per_window = (max(1, math.ceil(args.val_max_rows / nwin))
+                       if args.val_max_rows else last_k)
+    stride = max(1, math.ceil(last_k / rows_per_window))
+    positions = _scored_positions(args.context_length, score_last_k=last_k,
+                                  score_stride=stride)
+    expected_window_hash = _file_sha256(windows_file)
+    cache_dir = Path(args.work_dir).expanduser().resolve() / 'validation_cache'
+    metadata_file = cache_dir / 'metadata.json'
+    expected_ids = [mid for mid, _ in members]
+
+    valid = False
+    if metadata_file.is_file():
+        try:
+            meta = json.loads(metadata_file.read_text(encoding='utf-8'))
+            provenance = meta['models']
+            valid = (meta.get('tokenizer_sha256') == tokenizer_hash and
+                     meta.get('token_windows_sha256') == expected_window_hash and
+                     meta.get('prediction_positions') == positions.tolist() and
+                     int(meta.get('vocab_size', -1)) == vocab and
+                     int(meta.get('rows', -1)) == nwin * len(positions) and
+                     [int(model['id']) for model in provenance] == expected_ids and
+                     all(model.get('checkpoint_fingerprint') == teacher_fingerprints[str(mid)]
+                         and Path(model.get('checkpoint', '')).resolve() == checkpoint
+                         for (mid, checkpoint), model in zip(members, provenance)) and
+                     all((cache_dir / f'model_{mid}_logits.npy').is_file()
+                         for mid in expected_ids) and
+                     (cache_dir / 'targets.npy').is_file())
+            if valid:
+                trial_specs = [f'{mid}:{cache_dir / f"model_{mid}_logits.npy"}'
+                               for mid in expected_ids]
+                trial = _open_members(trial_specs, cache_dir / 'targets.npy')
+                valid = trial[1][0].shape == (nwin * len(positions), vocab)
+                AlignedContextWindows(windows_file, metadata_file, trial[2],
+                                      tokenizer_sha256=tokenizer_hash)
+                del trial
+        except (ValueError, KeyError, OSError, IndexError, TypeError, EOFError):
+            valid = False
+    if not valid:
+        staged = cache_dir.with_name(cache_dir.name + '_building')
+        if staged.exists():
+            shutil.rmtree(staged)
+        staged.mkdir(parents=True)
+        try:
+            cmd = []
+            for mid, checkpoint in members:
+                cmd.extend(['--member', f'{mid}:{checkpoint}'])
+            cmd.extend(['--windows', str(windows_file), '--output-dir', str(staged),
+                        '--context-length', str(args.context_length),
+                        '--score-last-k', str(last_k), '--score-stride', str(stride),
+                        '--lm-head-rows', str(args.lm_head_rows),
+                        '--batch-windows', str(args.batch_windows)])
+            print(f'fusion validation: automatically exporting {nwin * len(positions):,} '
+                  f'aligned rows from {nwin} held-out windows', flush=True)
+            export_main(cmd)
+            for mid, checkpoint in members:
+                if _checkpoint_fingerprint(checkpoint) != teacher_fingerprints[str(mid)]:
+                    raise RuntimeError(f'frozen validation teacher changed during export: model {mid}')
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            os.replace(staged, cache_dir)
+        finally:
+            if staged.exists():
+                shutil.rmtree(staged)
+    else:
+        print(f'fusion validation: reusing frozen-teacher cache ({nwin * len(positions):,} '
+              f'rows, matching checkpoint fingerprints)', flush=True)
+
+    specs = [f'{mid}:{cache_dir / f"model_{mid}_logits.npy"}' for mid in expected_ids]
+    val = _open_members(specs, cache_dir / 'targets.npy')
+    verified_context = AlignedContextWindows(windows_file, metadata_file, val[2],
+                                             tokenizer_sha256=tokenizer_hash)
+    context = verified_context if args.context_heads else None
+    identity = {'validation_mode': 'automatic_frozen_teachers',
+                'validation_windows': str(windows_file),
+                'validation_windows_sha256': expected_window_hash,
+                'validation_prediction_positions': positions.tolist()}
+    return val, context, identity
+
+
 def _run(args):
     members = _member_specs(args.member)
     if len(members) > args.max_models or max(m[0] for m in members) >= args.max_models:
@@ -478,9 +699,6 @@ def _run(args):
         root, args.windows_metadata, args.partition_seed, args.context_length, rng)
     vocab = int(manifest['vocab_size'])
     ids = [member[0] for member in members]
-    val = _open_members(args.val_member, args.val_targets)
-    if val[0].tolist() != ids or val[1][0].shape[1] != vocab:
-        raise ValueError('validation member IDs/order/vocabulary differ from checkpoint members')
     tokenizer_hash = manifest.get('tokenizer_sha256')
     teacher_fingerprints = {}
     for mid, checkpoint in members:
@@ -488,6 +706,34 @@ def _run(args):
         if digest != tokenizer_hash:
             raise ValueError(f'model {mid} tokenizer does not match mixed shard tokenizer')
         teacher_fingerprints[str(mid)] = _checkpoint_fingerprint(checkpoint)
+    if args.val_member:
+        val = _open_members(args.val_member, args.val_targets)
+        val_identity = {
+            'validation_paths': [str(Path(item.split(':', 1)[1]).resolve())
+                                 for item in args.val_member] +
+                                [str(Path(args.val_targets).resolve())]}
+        val_context = None
+        if args.context_heads:
+            val_context = AlignedContextWindows(args.val_context_windows,
+                                                args.val_context_metadata, val[2],
+                                                tokenizer_sha256=tokenizer_hash)
+            metadata = json.loads(Path(args.val_context_metadata).read_text(encoding='utf-8'))
+            provenance = {int(entry['id']): entry for entry in metadata.get('models', [])}
+            for mid, checkpoint in members:
+                recorded = provenance.get(mid, {})
+                if (not recorded.get('checkpoint_fingerprint') or
+                        recorded['checkpoint_fingerprint'] != teacher_fingerprints[str(mid)] or
+                        Path(recorded.get('checkpoint', '')).resolve() != checkpoint):
+                    raise ValueError(f'validation model {mid} was not exported from the same '
+                                     'frozen checkpoint; regenerate validation logits')
+            val_identity.update({
+                'val_context_windows': str(Path(args.val_context_windows).resolve()),
+                'val_context_metadata': str(Path(args.val_context_metadata).resolve())})
+    else:
+        val, val_context, val_identity = _automatic_validation(
+            args, members, tokenizer_hash, teacher_fingerprints, vocab)
+    if val[0].tolist() != ids or val[1][0].shape[1] != vocab:
+        raise ValueError('validation member IDs/order/vocabulary differ from checkpoint members')
     positions = _scored_positions(args.context_length, score_last_k=args.score_last_k,
                                   score_stride=args.score_stride)
     scored = len(positions)
@@ -515,21 +761,6 @@ def _run(args):
             raise ValueError('initialize-from-fusion expects a previous context-disabled combiner')
         model.load_state_dict(previous.state_dict())
         print(f'fusion context attention initialized from {args.initialize_from_fusion}', flush=True)
-    val_context = None
-    if args.context_heads:
-        # These windows must be exactly those used to export --val-member.
-        val_context = AlignedContextWindows(args.val_context_windows,
-                                            args.val_context_metadata, val[2],
-                                            tokenizer_sha256=tokenizer_hash)
-        metadata = json.loads(Path(args.val_context_metadata).read_text(encoding='utf-8'))
-        provenance = {int(entry['id']): entry for entry in metadata.get('models', [])}
-        for mid, checkpoint in members:
-            recorded = provenance.get(mid, {})
-            if (not recorded.get('checkpoint_fingerprint') or
-                    recorded['checkpoint_fingerprint'] != teacher_fingerprints[str(mid)] or
-                    Path(recorded.get('checkpoint', '')).resolve() != checkpoint):
-                raise ValueError(f'validation model {mid} was not exported from the same '
-                                 'frozen checkpoint; regenerate validation logits')
     print(f'fusion architecture: weighted_reference=trainable_by_model_id (equal_initially) '
           f'embed_dim={args.embed_dim} member_width={args.member_width} '
           f'decoder_width={args.decoder_width} decoder_layers={args.decoder_layers} '
@@ -545,16 +776,13 @@ def _run(args):
     run_dir.mkdir(parents=True, exist_ok=True)
     meta_expected = {'root': str(root), 'members': [[int(mid), str(ckpt)] for mid, ckpt in members],
                      'teacher_fingerprints': teacher_fingerprints,
-                     'validation_paths': [str(Path(s.split(':', 1)[1]).resolve()) for s in args.val_member] +
-                                         [str(Path(args.val_targets).resolve())],
+                     **val_identity,
                      'partition_seed': args.partition_seed, 'context_length': args.context_length,
                      'score_last_k': args.score_last_k, 'score_stride': args.score_stride,
                      'batch_rows': args.batch_rows, 'seed': args.seed}
     if args.context_heads:
         meta_expected.update({'context_heads': args.context_heads, 'context_head_dim': args.context_head_dim,
-                              'context_hidden': args.context_hidden,
-                              'val_context_windows': str(Path(args.val_context_windows).resolve()),
-                              'val_context_metadata': str(Path(args.val_context_metadata).resolve())})
+                              'context_hidden': args.context_hidden})
     best = float('inf')
     stale = 0
     step = 0
@@ -902,8 +1130,9 @@ def main(argv=None):
     parser.add_argument('--windows-metadata', required=True,
                         help='0082B windows_metadata.json proving fusion train/val/test shard partitions')
     parser.add_argument('--partition-seed', type=int, default=82)
-    parser.add_argument('--val-member', action='append', required=True, help='MODEL_ID:validation logits.npy')
-    parser.add_argument('--val-targets', required=True)
+    parser.add_argument('--val-member', action='append',
+                        help='legacy optional MODEL_ID:pre-exported validation logits.npy')
+    parser.add_argument('--val-targets', help='legacy optional pre-exported validation targets')
     parser.add_argument('--output', required=True, help='best fusion checkpoint')
     parser.add_argument('--last-state', help='resumable state (default OUTPUT_STEM_last.npz)')
     parser.add_argument('--work-dir', default='./features/fusion_0082f_stream_cache')
@@ -929,7 +1158,7 @@ def main(argv=None):
     parser.add_argument('--fusion-member-width', '--member-width', dest='member_width', type=int, default=8)
     parser.add_argument('--fusion-decoder-width', '--decoder-width', dest='decoder_width', type=int, default=24)
     parser.add_argument('--fusion-decoder-layers', '--decoder-layers', dest='decoder_layers', type=int, default=1)
-    parser.add_argument('--context-heads', type=int, choices=(0, 2), default=0,
+    parser.add_argument('--context-heads', type=int, choices=(0, 2), default=2,
                         help='0: existing 0082I; 2: model-query context attention')
     parser.add_argument('--context-head-dim', type=int, default=16)
     parser.add_argument('--context-hidden', type=int, default=32)
@@ -963,8 +1192,13 @@ def main(argv=None):
         parser.error('lr and max-cache-gib must be finite and >0')
     if any(not math.isfinite(float(v)) or float(v) < 0 for v in (args.weight_decay, args.grad_clip)):
         parser.error('weight-decay and grad-clip must be finite and >=0')
-    if args.context_heads and (not args.val_context_windows or not args.val_context_metadata):
-        parser.error('context attention requires --val-context-windows and --val-context-metadata')
+    if bool(args.val_member) != bool(args.val_targets):
+        parser.error('--val-member and --val-targets must be supplied together, or both omitted')
+    if args.val_member and args.context_heads and (not args.val_context_windows or not args.val_context_metadata):
+        parser.error('legacy validation inputs with context attention require both context files')
+    if not args.val_member and (args.val_context_windows or args.val_context_metadata):
+        parser.error('manual validation context files require --val-member and --val-targets; '
+                     'omit all validation flags for automatic frozen-teacher validation')
     if args.resume and args.initialize_from_fusion:
         parser.error('--resume cannot be combined with --initialize-from-fusion')
     _run(args)

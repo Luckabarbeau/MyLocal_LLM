@@ -278,19 +278,19 @@ mini_llm/
 train_model.py        main pretraining entry point
 inference.py          autoregressive inference
 benchmarks/           focused performance benchmarks
-tests/                reference and regression tests
+tests/                reference and regression tests (see tests/README.md)
 ```
 
-Important design/history documents include:
+Important documentation includes:
 
-- `EXTENDED_TRAINING.md`
-- `HIERARCHICAL_MEMORY_0058.md`
-- `PATCH_0060A_ROUTED_PREFIX.md`
-- `PATCH_0060B_ROUTED_PREFIX_INFERENCE.md`
-- `FUTURE_DEVELOPMENT.md`
-- `USER_GUIDE.md` — launch, resume, inference, runtime profiles, and complete tuning/override reference
+- `docs/USER_GUIDE.md` — launch, resume, inference, runtime profiles, and tuning reference
+- `docs/EXTENDED_TRAINING.md` — extended training workflow
+- `docs/research/HIERARCHICAL_MEMORY_0058.md` — routed-memory design background
+- `docs/FUTURE_DEVELOPMENT.md` — planned research directions
+- `docs/README.md` — documentation and operational-entry-point index
+- `docs/research/` — active predictive and probability-combination research reports
 
-The patch/history documents describe how specific mechanisms evolved; this README describes the current project direction.
+Research reports describe active experimental directions; this README describes the current project direction.
 
 ---
 
@@ -335,8 +335,12 @@ CPU/reference development:
 ```bash
 pip install -e ".[dev]"
 export MINI_LLM_BACKEND=numpy
-pytest -q
+pytest -q -m "unit and not gpu and not slow"
 ```
+
+The test suite is categorized with `unit`, `integration`, `gpu`, and `slow`
+markers. See `tests/README.md` for focused commands and the safe testing workflow
+when a training process is already using the GPU.
 
 GPU development:
 
@@ -372,7 +376,7 @@ The repository contains utilities for:
 - mixed-corpus weighted sampling;
 - validation splits.
 
-See `TOKENIZER_README.md`, `PREPARING_FOR_COSMOPEDIA.md`, and `EXTENDED_TRAINING.md` for pipeline details.
+See `docs/TOKENIZER_README.md` and `docs/EXTENDED_TRAINING.md` for pipeline details.
 
 ---
 
@@ -409,7 +413,7 @@ python train_model.py \
     --log-file ./logs/wide-500m-memory-64k_smoke.csv
 ```
 
-This is a correctness/installation check, not a recommended full-training schedule. On CuPy, the default `auto` runtime profile enables the validated fast paths; large local training models additionally receive the memory-saving `consumer-gpu` defaults. Explicit `MINI_LLM_*` overrides still take precedence. See `USER_GUIDE.md` for the full behavior and tuning reference.
+This is a correctness/installation check, not a recommended full-training schedule. On CuPy, the default `auto` runtime profile enables the validated fast paths; large local training models additionally receive the memory-saving `consumer-gpu` defaults. Explicit `MINI_LLM_*` overrides still take precedence. See `docs/USER_GUIDE.md` for the full behavior and tuning reference.
 
 After the checkpoint is written, a first inference run is:
 
@@ -455,7 +459,7 @@ The trainer supports:
 - router diagnostics;
 - optional profiling and memory diagnostics.
 
-Normal launches are intentionally concise. Hardware/runtime policy is supplied by `--runtime-profile auto`, while every low-level experimental switch remains available as an explicit override. See `USER_GUIDE.md` for runtime profiles, the full `MINI_LLM_*` reference, memory-tuning recipes, and resume/inference examples.
+Normal launches are intentionally concise. Hardware/runtime policy is supplied by `--runtime-profile auto`, while every low-level experimental switch remains available as an explicit override. See `docs/USER_GUIDE.md` for runtime profiles, the full `MINI_LLM_*` reference, memory-tuning recipes, and resume/inference examples.
 
 For a quick architecture smoke test, reduce total steps and gradient accumulation rather than changing the model preset.
 
@@ -542,7 +546,7 @@ The current routed-prefix experiment is only one point in a larger design space.
 
 These ideas are tracked separately in:
 
-**[`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md)**
+**[`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)**
 
 That document deliberately separates implemented behavior from hypotheses and future experiments.
 

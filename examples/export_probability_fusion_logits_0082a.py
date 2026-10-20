@@ -17,8 +17,8 @@ Example (from repository root):
   MINI_LLM_BACKEND=cupy python -m examples.export_probability_fusion_logits_0082a \\
       --member 0:./checkpoints/deep \\
       --member 1:./checkpoints/wide \\
-      --windows ./features/train_windows.npy \\
-      --output-dir ./features/fusion_train --last-only
+      --windows ./runtime/fusion_snapshots/train_windows.npy \\
+      --output-dir ./runtime/fusion_snapshots/train --last-only
 """
 
 import argparse

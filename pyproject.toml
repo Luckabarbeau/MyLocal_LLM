@@ -29,3 +29,13 @@ streaming = [
 
 [tool.setuptools.packages.find]
 include = ["mini_llm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config"]
+markers = [
+    "unit: focused numerical, API, and component tests",
+    "integration: multi-component training, data, checkpoint, or evaluation tests",
+    "gpu: tests that explicitly target CuPy, CUDA, or GPU behavior",
+    "slow: audits, benchmarks, production checks, and extended workflows",
+]

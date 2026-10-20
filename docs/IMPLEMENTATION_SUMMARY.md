@@ -36,8 +36,8 @@ This document summarizes the extended training infrastructure built for Cosmoped
 
 | File | Purpose |
 |------|---------|
-| `EXTENDED_TRAINING.md` | Comprehensive training guide |
-| `IMPLEMENTATION_SUMMARY.md` | This summary |
+| `docs/EXTENDED_TRAINING.md` | Comprehensive training guide |
+| `docs/IMPLEMENTATION_SUMMARY.md` | This summary |
 
 ## Key Fixes Implemented
 
@@ -447,4 +447,4 @@ python train_model.py --model mini
 - `mini_llm/blocks/transformer_block.py` - Fixed parameter naming
 - `generate_token_shards.py` - Full multiprocessing rewrite
 - `README.md` - Updated workflow documentation
-- `IMPLEMENTATION_SUMMARY.md` - This file
+- `docs/IMPLEMENTATION_SUMMARY.md` - This file

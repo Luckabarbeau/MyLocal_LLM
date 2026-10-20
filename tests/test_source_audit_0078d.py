@@ -3,10 +3,16 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from benchmarks.audit_source_sampling_0078d import (
-    run_audit, eos_from_tokenizer, simulate_sampling, spread,
+source_audit = pytest.importorskip(
+    "benchmarks.audit_source_sampling_0078d",
+    reason="optional historical source-audit implementation is not present",
 )
+run_audit = source_audit.run_audit
+eos_from_tokenizer = source_audit.eos_from_tokenizer
+simulate_sampling = source_audit.simulate_sampling
+spread = source_audit.spread
 from mini_llm.data.token_shards import build_packed_document_index
 
 

@@ -15,6 +15,16 @@ These scripts enable evaluation of trained models on standard language modeling 
 
 ## Usage
 
+Run all commands from the repository root. Generated output is consolidated in
+`benchmarks/results/`.
+
+Checkpoint evaluation launchers:
+
+```bash
+DRY_RUN=1 bash benchmarks/run_checkpoint_evaluations.sh
+DRY_RUN=1 bash benchmarks/run_fusion_evaluations.sh
+```
+
 ### Preparing Benchmarks
 
 First, prepare the benchmark datasets:

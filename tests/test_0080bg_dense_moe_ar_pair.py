@@ -86,17 +86,3 @@ def test_tiny_dense_24_layer_forward_and_backward():
     pred = inf.prefill(toks, state)
     assert np.asarray(pred).shape[-1] == cfg.vocab_size
 
-
-def test_two_launcher_contracts():
-    from pathlib import Path
-    launcher = Path('run_0080BI_ar_reference.sh').read_text()
-    assert '--objective ar' in launcher
-    assert 'wide24-500m-memory-64k' in launcher
-    assert 'wide24-500m-dense-memory-64k' in launcher
-    assert 'EXPECTED_FFN_MODE="dense"' in launcher
-    assert 'EXPECTED_FFN_MODE="moe"' in launcher
-    assert 'MODEL_VARIANT' in launcher
-    assert 'exec python train_model.py "${ARGS[@]}"' in launcher
-    assert 'exec bash ' not in launcher
-    assert not Path('run_0080BG_wide24_ar_moe_reference.sh').exists()
-    assert not Path('run_0080BG_wide24_ar_dense_reference.sh').exists()

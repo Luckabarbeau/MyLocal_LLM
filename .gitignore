@@ -7,12 +7,13 @@ env/
 
 # Python cache and compiled files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.pyright/
 .coverage
+.coverage.*
 htmlcov/
 
 # Distribution / packaging
@@ -36,6 +37,7 @@ wheels/
 # IDE and editor files
 .vscode/
 .idea/
+.zed/
 *.swp
 *.swo
 *~
@@ -78,11 +80,12 @@ tests/htmlcov/
 /output/
 /results/
 
-# Checkpoints and model weights
+# Checkpoints and model weights (runtime state; never clean automatically)
 checkpoints/
 *.ckpt
 *.pt
 *.pth
+*.safetensors
 
 # Token shards (generated data)
 token_shards/
@@ -107,12 +110,12 @@ tokenizer_*.meta.json
 
 # Benchmark data and results (generated during runs)
 benchmarks/data/
-benchmark_results/
+benchmarks/results/
 benchmarks/*.csv
 benchmarks/*.txt
 
-# Note: benchmark/*.py scripts are kept as they enable important evaluation workflows.
-# Generated outputs (.csv, .txt, benchmark_results/) should be ignored.
+# Benchmark scripts are kept as they enable important evaluation workflows.
+# Generated outputs are consolidated under benchmarks/results/.
 
 # Experimental scripts archive
 # Keep these archived files in archive/ for reference:
@@ -136,10 +139,11 @@ benchmarks/*.txt
 # - evaluate_wikitext.py
 # - prepare_external_benchmarks.py
 
-benchmarks/results/
-
 token_shards_ensemble_32k_mixed/
 
 token_shards_ensemble_32k_fineweb_edu_smoke/
 
-features/
+runtime/
+
+# Local rollback/scratch artifacts
+rollback_backups/

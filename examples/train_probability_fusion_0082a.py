@@ -6,12 +6,12 @@ positions in the same order and use the exact same tokenizer mapping.
 
 Example:
   MINI_LLM_BACKEND=cupy python -m examples.train_probability_fusion_0082a \\
-      --member 0:./features/deep_train.npy \\
-      --member 1:./features/wide_train.npy \\
-      --targets ./features/targets_train.npy \\
-      --val-member 0:./features/deep_val.npy \\
-      --val-member 1:./features/wide_val.npy \\
-      --val-targets ./features/targets_val.npy \\
+      --member 0:./runtime/fusion_snapshots/deep_train.npy \\
+      --member 1:./runtime/fusion_snapshots/wide_train.npy \\
+      --targets ./runtime/fusion_snapshots/targets_train.npy \\
+      --val-member 0:./runtime/fusion_snapshots/deep_val.npy \\
+      --val-member 1:./runtime/fusion_snapshots/wide_val.npy \\
+      --val-targets ./runtime/fusion_snapshots/targets_val.npy \\
       --steps 1000 --batch-rows 2 --output ./checkpoints/fusion_0082a.npz
 
 Use data held out from BOTH base LLMs.  Do not use their memorized train

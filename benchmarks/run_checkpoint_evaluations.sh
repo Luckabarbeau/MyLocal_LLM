@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Compare ordinary CE and adaptive 30% at 28,700, with 28,500/22,500 references.
+# Evaluate selected checkpoints on the standard benchmark suite.
 # Run from the MyLocal_LLM repository root:
-#   bash /path/to/run_0073G_checkpoint_benchmarks.sh
+#   bash benchmarks/run_checkpoint_evaluations.sh
 # Optional:
-#   MODELS='control_28700 adaptive30_28700' BENCHMARKS='ptb c4 wikitext_plain' bash ...
-#   DRY_RUN=1 bash ...              # preview all commands, no paths required
-#   FORCE=1 bash ...                # rerun successful evaluations
-#   DATA_ROOT=../benchmarks bash ...
+#   MODELS='control_35500 muon_baseline' BENCHMARKS='ptb c4 wikitext_plain' bash benchmarks/run_checkpoint_evaluations.sh
+#   DRY_RUN=1 bash benchmarks/run_checkpoint_evaluations.sh
+#   FORCE=1 bash benchmarks/run_checkpoint_evaluations.sh
 set -Eeuo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 DATA_ROOT="${DATA_ROOT:-../benchmarks}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-./checkpoints}"
-RESULT_ROOT="${RESULT_ROOT:-./benchmark_results/muon_checkpoint_comparison}"
+RESULT_ROOT="${RESULT_ROOT:-./benchmarks/results/muon_checkpoint_comparison}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
 

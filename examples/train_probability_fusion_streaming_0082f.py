@@ -1135,7 +1135,7 @@ def main(argv=None):
     parser.add_argument('--val-targets', help='legacy optional pre-exported validation targets')
     parser.add_argument('--output', required=True, help='best fusion checkpoint')
     parser.add_argument('--last-state', help='resumable state (default OUTPUT_STEM_last.npz)')
-    parser.add_argument('--work-dir', default='./features/fusion_0082f_stream_cache')
+    parser.add_argument('--work-dir', default='./runtime/fusion_cache')
     parser.add_argument('--keep-segments', action='store_true', help='retain last generated segment for debugging')
     parser.add_argument('--resume', action='store_true', help='resume at last finished segment')
     parser.add_argument('--teacher-context-length', '--context-length', dest='context_length',

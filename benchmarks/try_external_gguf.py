@@ -6,7 +6,7 @@ computations are the repository's native NumPy/CuPy inference operations.
 Examples:
   python -m benchmarks.try_external_gguf --model ./model.gguf --inspect
   MINI_LLM_BACKEND=cupy python -m benchmarks.try_external_gguf \\
-      --model ./model.gguf --tokenizer-repo HuggingFaceTB/SmolLM2-360M-Instruct \\
+      --model ./model.gguf \\
       --prompt 'Explain numerical diffusion.' --chat --max-new-tokens 64
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 import time
 
 
-def _tokenizer(args, model_dir):
+def _external_tokenizer(args, model_dir):
     try:
         from tokenizers import Tokenizer
     except ImportError as exc:
@@ -28,11 +28,44 @@ def _tokenizer(args, model_dir):
     else:
         path = model_dir / "tokenizer.json"
     if not path.exists():
-        raise FileNotFoundError(
-            f"Missing tokenizer.json at {path}; either supply --tokenizer PATH "
-            "or --tokenizer-repo HF_MODEL_ID to download only tokenizer.json"
-        )
+        raise FileNotFoundError(f"No external tokenizer.json at {path}")
     return Tokenizer.from_file(str(path)), path
+
+
+def _tokenizer(args, reader, model_dir, vocab_size):
+    """Prefer metadata-only reconstruction; external tokenizer is opt-in."""
+    from mini_llm.external.gguf_tokenizer import load_gguf_tokenizer
+    if (args.tokenizer or args.tokenizer_repo) and not args.validate_tokenizer:
+        return _external_tokenizer(args, model_dir)
+    try:
+        return load_gguf_tokenizer(reader, vocab_size=vocab_size), "GGUF embedded metadata (offline)"
+    except ValueError:
+        # Fallback to a colocated JSON, never silently download from the web.
+        if not args.validate_tokenizer and (model_dir / "tokenizer.json").is_file():
+            return _external_tokenizer(args, model_dir)
+        raise
+
+
+def _validate_embedded_tokenizer(tokenizer, reference):
+    """Require exact token ID equivalence for a deliberately varied sample."""
+    examples = [
+        "Explain why mesh convergence is important in CFD simulations.",
+        "We'LL use 123456789 and 3.14159 in the test!", "é café 🚀",
+        "def f(x):\n    return x**2 + 123\n", "  \n\n \t  ",
+        "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n",
+    ]
+    for line in examples:
+        native_ids = tokenizer.encode(line, add_special_tokens=False).ids
+        reference_ids = reference.encode(line, add_special_tokens=False).ids
+        if native_ids != reference_ids:
+            offset = next((i for i, (x, y) in enumerate(zip(native_ids, reference_ids))
+                           if x != y), min(len(native_ids), len(reference_ids)))
+            raise RuntimeError(
+                f"Embedded GGUF tokenizer parity mismatch on {line!r}, "
+                f"first differing index={offset}; native={native_ids}, "
+                f"reference={reference_ids}"
+            )
+    print(f"Tokenizer parity passed: {len(examples)} varied inputs")
 
 
 def _sync_gpu():
@@ -47,7 +80,11 @@ def main():
     parser.add_argument("--model", required=True, help="Local GGUF checkpoint file")
     parser.add_argument("--inspect", action="store_true", help="Check config/tensor directory only")
     parser.add_argument("--tokenizer", help="Original model tokenizer.json")
-    parser.add_argument("--tokenizer-repo", help="HF repository to fetch tokenizer.json if absent")
+    parser.add_argument("--tokenizer-repo", help="Optional HF tokenizer reference/override; requests a download")
+    parser.add_argument("--validate-tokenizer", action="store_true",
+                        help="Compare GGUF tokenizer against --tokenizer or --tokenizer-repo")
+    parser.add_argument("--tokenizer-only", action="store_true",
+                        help="Validate GGUF tokenizer without loading model weights")
     parser.add_argument("--prompt", default="Explain the finite element method in one paragraph.")
     parser.add_argument("--chat", action="store_true", help="Wrap prompt as SmolLM2-Instruct chat")
     parser.add_argument("--max-new-tokens", type=int, default=32)
@@ -75,11 +112,25 @@ def main():
     if args.max_new_tokens < 1:
         parser.error("--max-new-tokens must be positive")
 
-    tokenizer, tokenizer_file = _tokenizer(args, path.parent)
+    if args.validate_tokenizer and not (args.tokenizer or args.tokenizer_repo):
+        parser.error("--validate-tokenizer requires --tokenizer or --tokenizer-repo")
+    tokenizer, tokenizer_file = _tokenizer(
+        args, inspected.reader, path.parent, inspected.config.vocab_size
+    )
     print("Tokenizer:", tokenizer_file)
+    if args.validate_tokenizer:
+        reference, reference_file = _external_tokenizer(args, path.parent)
+        print("Tokenizer parity reference:", reference_file)
+        _validate_embedded_tokenizer(tokenizer, reference)
+    if args.tokenizer_only:
+        print("Tokenizer metadata validated; no model weights loaded")
+        return
     text = args.prompt
     if args.chat:
-        text = "<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n"
+        if hasattr(tokenizer, "chat_prompt"):
+            text = tokenizer.chat_prompt(text)
+        else:
+            text = "<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n"
     encoded = tokenizer.encode(text, add_special_tokens=False)
     ids = encoded.ids
     if not ids:

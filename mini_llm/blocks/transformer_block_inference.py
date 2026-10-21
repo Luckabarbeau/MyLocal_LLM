@@ -35,6 +35,8 @@ class TransformerBlockInference:
         attention_config=None,
         layer_idx: int = 0,
         ffn_mode: str = "moe",
+        rms_eps: float = 1e-6,
+        rope_layout: str = "interleaved",
     ):
         """
         Initialize inference Transformer block.
@@ -66,8 +68,8 @@ class TransformerBlockInference:
         self.alpha_mlp = 1.0
         
         # RMSNorms (weights shared with training)
-        self.norm1 = RMSNormInference(d_model, dtype=dtype)
-        self.norm2 = RMSNormInference(d_model, dtype=dtype)
+        self.norm1 = RMSNormInference(d_model, eps=rms_eps, dtype=dtype)
+        self.norm2 = RMSNormInference(d_model, eps=rms_eps, dtype=dtype)
         
         # Attention (weights shared with training)
         self.attention = GQAAttentionInference(
@@ -79,6 +81,7 @@ class TransformerBlockInference:
             dtype=dtype,
             max_context=max_context,
             attention_config=attention_config,
+            rope_layout=rope_layout,
         )
         
         # MoE (weights shared with training)

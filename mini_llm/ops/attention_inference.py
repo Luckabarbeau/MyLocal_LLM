@@ -51,8 +51,10 @@ class GQAAttentionInference:
     def __init__(
         self, d_model, n_q_heads, n_kv_heads, d_head,
         rope_base=10_000.0, dtype="float32", max_context=None,
-        attention_config=None,
+        attention_config=None, rope_layout="interleaved",
     ):
+        if rope_layout not in {"interleaved", "half"}:
+            raise ValueError("rope_layout must be interleaved or half")
         if n_q_heads * d_head != d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if n_q_heads % n_kv_heads != 0:
@@ -65,6 +67,7 @@ class GQAAttentionInference:
         self.group_size = n_q_heads // n_kv_heads
         self.scale = 1.0 / (d_head ** 0.5)
         self.rope_base = float(rope_base)
+        self.rope_layout = rope_layout
         self.dtype = dtype
         self.attention_config = attention_config
         self.sparse_attention = attention_config is not None
@@ -253,10 +256,17 @@ class GQAAttentionInference:
         # q_pre/k_pre are inference temporaries and are never reused after
         # RoPE. Rotate them in place to avoid allocating a second full tensor.
         # Preserve the even lanes because they are needed when writing odds.
-        x0 = x[..., 0::2].copy()
-        x1 = x[..., 1::2]
-        x[..., 0::2] = x0 * cos - x1 * sin
-        x[..., 1::2] = x0 * sin + x1 * cos
+        if self.rope_layout == "half":
+            half = self.d_head // 2
+            x0 = x[..., :half].copy()
+            x1 = x[..., half:]
+            x[..., :half] = x0 * cos - x1 * sin
+            x[..., half:] = x0 * sin + x1 * cos
+        else:
+            x0 = x[..., 0::2].copy()
+            x1 = x[..., 1::2]
+            x[..., 0::2] = x0 * cos - x1 * sin
+            x[..., 1::2] = x0 * sin + x1 * cos
         return x
 
     def _apply_rope_positions(self, x, position_ids):
@@ -287,10 +297,17 @@ class GQAAttentionInference:
             cos = base_cos[positions][:, :, None, :]
             sin = base_sin[positions][:, :, None, :]
 
-        x0 = x[..., 0::2].copy()
-        x1 = x[..., 1::2]
-        x[..., 0::2] = x0 * cos - x1 * sin
-        x[..., 1::2] = x0 * sin + x1 * cos
+        if self.rope_layout == "half":
+            half = self.d_head // 2
+            x0 = x[..., :half].copy()
+            x1 = x[..., half:]
+            x[..., :half] = x0 * cos - x1 * sin
+            x[..., half:] = x0 * sin + x1 * cos
+        else:
+            x0 = x[..., 0::2].copy()
+            x1 = x[..., 1::2]
+            x[..., 0::2] = x0 * cos - x1 * sin
+            x[..., 1::2] = x0 * sin + x1 * cos
         return x
 
     def _attention(self, q, k_native, v_native, causal_mask=None):
@@ -404,6 +421,7 @@ class GQAAttentionInference:
             single_token_decode
             and int(t_new) == 1
             and self.d_head == 64
+            and self.rope_layout == "interleaved"
             and fused_decode_qkv_enabled()
             and is_bfloat16_dtype(qkv.dtype)
         ):

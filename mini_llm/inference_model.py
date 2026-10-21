@@ -132,6 +132,7 @@ class InferenceModel:
                 rope_base=config.rope_base,
                 attention_config=attention_config,
                 layer_idx=layer_idx,
+                rms_eps=config.rms_eps,
             )
             self.blocks.append(block)
         

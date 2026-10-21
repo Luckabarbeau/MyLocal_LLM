@@ -27,6 +27,12 @@ streaming = [
     "datasets>=3.0",
 ]
 
+external = [
+    "safetensors>=0.4",
+    "huggingface_hub>=0.27",
+    "gguf>=0.16",
+]
+
 [tool.setuptools.packages.find]
 include = ["mini_llm*"]
 

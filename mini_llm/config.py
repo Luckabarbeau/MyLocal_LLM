@@ -45,6 +45,9 @@ class MemoryContextConfig:
     # [retrieved prefix | current window] deep cache is rebuilt.  A value of 1
     # gives strict per-token rerouting; block_size is a practical default.
     inference_route_refresh_tokens: int = 128
+    # Reproduce old checkpoints exactly unless the causal pre-window policy
+    # is explicitly selected. historical_read never uses legacy routing.
+    routed_prefix_causal_policy: str = "legacy_full_window"
 
     # 0058C/0060A memory integration.  ``pretransformer_read`` preserves the 0058A/B
     # comparison path. ``terminal_landmark`` keeps the 4k working sequence
@@ -91,7 +94,7 @@ class MemoryContextConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if self.recent_length > self.memory_length:
             raise ValueError("recent_length must not exceed memory_length")
-        if self.integration_mode in {"terminal_landmark", "routed_prefix"} and self.target_length >= self.memory_length:
+        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"} and self.target_length >= self.memory_length:
             raise ValueError(
                 f"{self.integration_mode} requires target_length < memory_length"
             )
@@ -104,12 +107,14 @@ class MemoryContextConfig:
         if self.read_heads % self.read_kv_heads != 0:
             raise ValueError("read_heads must be divisible by read_kv_heads")
         if self.integration_mode not in {
-            "pretransformer_read", "terminal_landmark", "routed_prefix"
+            "pretransformer_read", "terminal_landmark", "routed_prefix", "historical_read"
         }:
             raise ValueError(
                 "integration_mode must be 'pretransformer_read', "
-                "'terminal_landmark', or 'routed_prefix'"
+                "'terminal_landmark', 'routed_prefix', or 'historical_read'"
             )
+        if self.routed_prefix_causal_policy not in {"legacy_full_window", "prewindow"}:
+            raise ValueError("routed_prefix_causal_policy must be legacy_full_window or prewindow")
         if self.memory_training not in {"joint", "router_only", "disabled"}:
             raise ValueError("memory_training must be 'joint', 'router_only', or 'disabled'")
         if self.integration_mode == "routed_prefix" and self.memory_training == "router_only":
@@ -157,7 +162,7 @@ class MemoryContextConfig:
     @property
     def distant_memory_length(self) -> int:
         """Number of tokens physically stored outside the 4k working window."""
-        if self.integration_mode in {"terminal_landmark", "routed_prefix"}:
+        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"}:
             return int(self.memory_length) - int(self.target_length)
         return int(self.memory_length)
 
@@ -185,7 +190,7 @@ class MemoryContextConfig:
         horizon*, including the current working window.  The sampler still reads
         one additional corpus token to provide the terminal next-token label.
         """
-        if self.integration_mode in {"terminal_landmark", "routed_prefix"}:
+        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"}:
             return int(self.memory_length)
         return int(self.memory_length) + int(self.target_length)
 
@@ -204,10 +209,10 @@ def _coerce_memory_context(value):
 class ModelConfig:
     # Tokenizer vocabulary size (separate from model vocab for flexibility)
     tokenizer_vocab_size: int = 16_384
-    
+
     # Model configuration
     context_length: int = 1_024
-    
+
     # Backward compatibility: vocab_size is an alias for tokenizer_vocab_size
     @property
     def vocab_size(self) -> int:
@@ -391,10 +396,11 @@ class ModelConfig:
 
         memory = self.memory_context
         if memory.enabled:
-            total += 2 * d * int(memory.router_dim)
-            if memory.query_pooling == "learned":
+            if memory.integration_mode != "historical_read":
+                total += 2 * d * int(memory.router_dim)
+            if memory.integration_mode != "historical_read" and memory.query_pooling == "learned":
                 total += d
-            if memory.history_pooling == "learned":
+            if memory.integration_mode != "historical_read" and memory.history_pooling == "learned":
                 total += d
             read_q = int(memory.read_heads) * int(self.d_head)
             read_kv = int(memory.read_kv_heads) * int(self.d_head)
@@ -404,6 +410,13 @@ class ModelConfig:
                 total += d + 2 * d * read_kv
             elif memory.integration_mode == "pretransformer_read":
                 total += d * read_q + 2 * d * read_kv + read_q * d
+            elif memory.integration_mode == "historical_read":
+                # Shared 128-wide block transformer, FFN, three 64-wide
+                # historical projections, and scalar gates per scheduled head.
+                from mini_llm.ops.historical_schedule import historical_slots
+                total += d * 128 + 2 * 128 + 128 * 384 + 128 * 128
+                total += 3 * 128 * 512 + 7 * 128 * int(self.d_head)
+                total += sum(len(layer) for layer in historical_slots(self.n_layers, self.n_q_heads))
             # routed_prefix needs no reader/adapter parameters: exact selected
             # token embeddings enter the ordinary Transformer residual stream.
 
@@ -964,7 +977,161 @@ class ModelConfig:
     @classmethod
     def ensemble_wide_768_dense_memory_64k(cls):
         return cls._ensemble_dense_memory_64k(n_layers=13, d_model=768)
-    
+
+    @classmethod
+    def ensemble_deep_512_dense_historical_64k(cls):
+        old = cls.ensemble_deep_512_dense_memory_64k()
+        return replace(old, memory_context=replace(
+            old.memory_context, integration_mode="historical_read",
+            block_size=32, top_k_blocks=8, read_heads=2, read_kv_heads=1,
+        ))
+
+    @classmethod
+    def ensemble_wide_768_dense_historical_64k(cls):
+        old = cls.ensemble_wide_768_dense_memory_64k()
+        return replace(old, memory_context=replace(
+            old.memory_context, integration_mode="historical_read",
+            block_size=32, top_k_blocks=8, read_heads=2, read_kv_heads=1,
+        ))
+
+    @classmethod
+    def _ensemble_dense_historical_hybrid_64k(cls, *, deep: bool):
+        """0083C: one full-current causal head plus local-512 fallback heads.
+
+        Preserve the 0083B exact historical read schedule and 4,096 supervised
+        positions. The first query head is reserved for causal full-current
+        attention in *every* layer; all other non-historical slots use sliding
+        local-512 attention. Historical slots replace their current local
+        fallback only when valid preceding history exists. This mode creates
+        no legacy current-window D/G/R router parameters.
+        """
+        previous = (cls.ensemble_deep_512_dense_historical_64k() if deep
+                    else cls.ensemble_wide_768_dense_historical_64k())
+        # Historical schedules currently occupy only heads 3..7 (Deep) or
+        # 6..11 (Wide), so head zero is guaranteed to remain current-only.
+        from mini_llm.ops.historical_schedule import historical_slots
+        slots = historical_slots(previous.n_layers, previous.n_q_heads)
+        if any(slot.head == 0 for layer in slots for slot in layer):
+            raise AssertionError("historical schedule must reserve full causal head 0")
+        hybrid_layer = AttentionLayerConfig(heads=(
+            LocalAttentionConfig(window=4_096),
+            *(LocalAttentionConfig(window=512)
+              for _ in range(previous.n_q_heads - 1)),
+        ))
+        return replace(previous, attention_layers=(hybrid_layer,) * previous.n_layers)
+
+    @classmethod
+    def ensemble_deep_512_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_dense_historical_hybrid_64k(deep=True)
+
+    @classmethod
+    def ensemble_wide_768_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_dense_historical_hybrid_64k(deep=False)
+
+    @classmethod
+    def ensemble_intermediate_768_20l_dense_historical_hybrid_64k(cls):
+        """0083E: 20-layer ~161M dense ensemble, optimized for batch-2 training.
+
+        Retain the shared 32,768-token vocabulary, 4,096 causal supervised
+        rows, and read-only 61,440-token historical memory from 0083C.  Keep
+        head 0 as full-current causal attention in every layer; all other
+        nonhistorical heads use causal sliding-local-512 attention.  The
+        20x12 historical schedule is defined in historical_schedule.py.
+
+        This preset does not force any recomputation, device placement, or
+        optimizer mode; those are run-time controls, not architecture changes.
+        """
+        from mini_llm.ops.historical_schedule import historical_slots
+        base = cls.ensemble_wide_768_dense_historical_hybrid_64k()
+        n_layers = 20
+        slots = historical_slots(n_layers, base.n_q_heads)
+        if any(slot.head == 0 for group in slots for slot in group):
+            raise AssertionError("0083E historical schedule must preserve full-current head 0")
+        return replace(
+            base,
+            n_layers=n_layers,
+            d_ff=2_304,
+            attention_layers=(base.attention_layers[0],) * n_layers,
+        )
+
+    @classmethod
+    def _ensemble_1024_historical_hybrid_64k(cls, *, n_layers: int, n_ffn: int):
+        """0083F: depth-scaled 1024-wide dense AR ensemble family.
+
+        Keep the same 32,768 vocabulary, 4K causal current window, 61,440
+        exact-token historical memory, and head geometry across all depths:
+        one full-current head and 15 causal local-512 head slots before
+        historical assignments. Historical reads replace designated local
+        heads without changing any projection widths or tokenizer semantics.
+
+        Memory/runtime policies deliberately remain opt-in CLI/env settings.
+        """
+        if n_layers not in (16, 20, 22, 24):
+            raise ValueError("1024-wide historical ensemble supports 16/20/22/24 layers")
+        return cls._ensemble_large_historical_hybrid_64k(
+            n_layers=n_layers, d_model=1_024, d_ff=n_ffn, n_kv_heads=4,
+        )
+
+    @classmethod
+    def ensemble_1024_16l_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_1024_historical_hybrid_64k(n_layers=16,n_ffn=4096)
+
+    @classmethod
+    def ensemble_1024_20l_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_1024_historical_hybrid_64k(n_layers=20,n_ffn=4096)
+
+    @classmethod
+    def ensemble_1024_22l_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_1024_historical_hybrid_64k(n_layers=22,n_ffn=3072)
+
+    @classmethod
+    def ensemble_1024_24l_dense_historical_hybrid_64k(cls):
+        return cls._ensemble_1024_historical_hybrid_64k(n_layers=24,n_ffn=3072)
+
+    @classmethod
+    def _ensemble_large_historical_hybrid_64k(
+        cls, *, n_layers: int, d_model: int, d_ff: int, n_kv_heads: int
+    ):
+        """0083D: dense high-capacity AR models for single-example training.
+
+        Share the existing 32,768-token vocabulary and 4K current / 61K
+        read-only historical split with 0083C. One full causal head per layer;
+        every other *current* head uses an exact sliding 512-token window.
+        Unlike the ~100M variants, intended runtime is batch=1, block
+        checkpointing, historical/probability recomputation and full optimizer
+        offload. Runtime memory policies are intentionally NOT hard-coded in
+        the checkpointed architecture; see the 0083D run commands.
+        """
+        from mini_llm.ops.historical_schedule import historical_slots
+        n_heads = d_model // 64
+        slots = historical_slots(n_layers, n_heads)
+        if any(slot.head == 0 for group in slots for slot in group):
+            raise AssertionError("0083D historical schedule must preserve head zero")
+        base = cls.ensemble_wide_768_dense_historical_hybrid_64k()
+        layer = AttentionLayerConfig(heads=(
+            LocalAttentionConfig(window=4_096),
+            *(LocalAttentionConfig(window=512) for _ in range(n_heads - 1)),
+        ))
+        return replace(
+            base, n_layers=n_layers, d_model=d_model, d_ff=d_ff,
+            n_q_heads=n_heads, n_kv_heads=n_kv_heads,
+            attention_layers=(layer,) * n_layers,
+        )
+
+    @classmethod
+    def ensemble_large_1536_36l_dense_historical_hybrid_64k(cls):
+        """~1.2B parameter capacity candidate with extra VRAM headroom."""
+        return cls._ensemble_large_historical_hybrid_64k(
+            n_layers=36, d_model=1_536, d_ff=5_632, n_kv_heads=6,
+        )
+
+    @classmethod
+    def ensemble_max_1792_32l_dense_historical_hybrid_64k(cls):
+        """Aggressive ~1.37B candidate; requires GPU peak-memory validation."""
+        return cls._ensemble_large_historical_hybrid_64k(
+            n_layers=32, d_model=1_792, d_ff=6_144, n_kv_heads=7,
+        )
+
     @classmethod
     def ensemble_medium_wide_768_dense_memory_64k(cls):
         return cls._ensemble_dense_memory_64k(n_layers=24, d_model=768)

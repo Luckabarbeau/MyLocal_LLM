@@ -550,6 +550,46 @@ These ideas are tracked separately in:
 
 That document deliberately separates implemented behavior from hypotheses and future experiments.
 
+## Performance TODO: startup attention autotuning
+
+Replace the calibrated local-attention chunk work budget with an optional startup
+benchmark that measures forward and backward candidates on the active GPU. Cache
+the winning chunk by device architecture, precision, batch size, sequence length,
+window, active query-head count, head dimension, and relevant kernel flags. The
+autotuner must enforce the configured VRAM limit, avoid mutating model or optimizer
+state, and fall back to the current geometry-based policy when tuning is disabled or
+no cached result is available.
+
+---
+
+# Operational TODO: runtime directory migration
+
+After the current training run has completed, consolidate generated runtime
+artifacts under a single `runtime/` hierarchy:
+
+```text
+runtime/
+├── checkpoints/
+├── logs/
+├── caches/
+├── tokenizers/
+└── shards/
+```
+
+Do **not** move runtime paths while training or inference is active. Before this
+migration:
+
+1. confirm that no model process is using the repository;
+2. verify the final checkpoint and its `training_state.json`;
+3. checksum or back up the final checkpoint;
+4. inventory active versus obsolete runs;
+5. update path defaults and documentation before moving data;
+6. migrate one category at a time and validate checkpoint loading/resume; and
+7. delete old copies only after the new locations are verified.
+
+Until then, `checkpoints/`, `logs/`, and active token-shard directories must
+remain at their current paths.
+
 ---
 
 # Guiding question

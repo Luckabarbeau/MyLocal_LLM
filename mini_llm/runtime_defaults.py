@@ -72,6 +72,9 @@ _CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
 _MEMORY_MODEL_DEFAULTS: dict[str, str] = {
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS": "1",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL": "100",
+    # Skip unsupervised trailing target rows without changing sampled tokens,
+    # loss weighting, or gradients. This exact AR path has dedicated parity tests.
+    "MINI_LLM_AR_COMPACT_TARGET": "1",
 }
 
 
@@ -123,8 +126,10 @@ def _local_query_chunk_default(config) -> str | None:
 
     0080BO increased 512d models from 512 to 1024 and triggered a batch-3
     backward OOM with retained local probabilities on a 16 GiB RTX 5080.
-    Restore the previously working 512-row default for 512d models.  Keep
-    the previously tuned 1536-row setting for 768d+ models unchanged.
+    Restore the previously working 512-row default for 512d models. The
+    1024d historical-hybrid models use geometry-aware automatic chunking so
+    full-current and sliding-window head groups receive different tiles.
+    Keep the previously tuned 1536-row setting for other 768d+ models.
     """
     if config is None:
         return None
@@ -135,10 +140,40 @@ def _local_query_chunk_default(config) -> str | None:
         return None
     if active < 4096:
         return None
+    integration = getattr(
+        getattr(config, "memory_context", None), "integration_mode", None
+    )
+    if width == 1024 and integration == "historical_read":
+        return "auto"
     if width >= 768:
         return "1536"
     if width >= 512:
         return "512"
+    return None
+
+
+def _lm_head_chunk_default(
+    config, *, training: bool, precision: str | None,
+) -> str | None:
+    """Return only LM-head tiles measured safe and faster for this model family."""
+    if config is None or not training or str(precision).lower() != "bf16-mixed":
+        return None
+    try:
+        width = int(config.d_model)
+        active = int(config.context_length)
+        vocab = int(config.vocab_size)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    integration = getattr(
+        getattr(config, "memory_context", None), "integration_mode", None
+    )
+    if (
+        width == 1024
+        and active == 4096
+        and vocab == 32768
+        and integration == "historical_read"
+    ):
+        return "8192"
     return None
 
 
@@ -213,6 +248,12 @@ def apply_runtime_defaults(
 
     if _is_memory_model(config):
         _setdefaults(_MEMORY_MODEL_DEFAULTS, applied)
+
+    lm_head_chunk = _lm_head_chunk_default(
+        config, training=training, precision=precision,
+    )
+    if lm_head_chunk is not None:
+        _setdefaults({"MINI_LLM_LM_HEAD_CHUNK_TOKENS": lm_head_chunk}, applied)
 
     if resolved == "consumer-gpu" and training:
         _setdefaults(_CONSUMER_TRAINING_DEFAULTS, applied)

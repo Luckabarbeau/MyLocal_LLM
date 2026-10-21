@@ -53,6 +53,14 @@ class InferenceModel:
         self.dtype = dtype if dtype is not None else config.dtype
         self.sparse_attention = config.attention_layers is not None
         memory_cfg = getattr(config, "memory_context", None)
+        if (memory_cfg is not None and memory_cfg.enabled
+                and memory_cfg.integration_mode == "historical_read"):
+            raise NotImplementedError(
+                "0083B historical_read uses the training/reference forward path. "
+                "Incremental inference KV caches and completed-block historical "
+                "index updates are not implemented; refusing to silently ignore "
+                "the learned historical heads during generation."
+            )
         self.terminal_landmark_memory = bool(
             memory_cfg is not None
             and memory_cfg.enabled

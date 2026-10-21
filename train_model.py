@@ -69,6 +69,17 @@ def parse_args():
             "wide24-500m-memory-64k", "wide24-500m-dense-memory-64k",
             "ensemble-deep-512-dense-memory-64k",
             "ensemble-wide-768-dense-memory-64k",
+            "ensemble-deep-512-dense-historical-64k",
+            "ensemble-wide-768-dense-historical-64k",
+            "ensemble-deep-512-dense-historical-hybrid-64k",
+            "ensemble-wide-768-dense-historical-hybrid-64k",
+            "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
+            "ensemble-1024-16l-dense-historical-hybrid-64k",
+            "ensemble-1024-20l-dense-historical-hybrid-64k",
+            "ensemble-1024-22l-dense-historical-hybrid-64k",
+            "ensemble-1024-24l-dense-historical-hybrid-64k",
+            "ensemble-large-1536-36l-dense-historical-hybrid-64k",
+            "ensemble-max-1792-32l-dense-historical-hybrid-64k",
             "ensemble-medium-wide-768-dense-memory-64k",
             "large",
         ],
@@ -565,6 +576,28 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.ensemble_deep_512_dense_memory_64k()
     if name == "ensemble-wide-768-dense-memory-64k":
         return ModelConfig.ensemble_wide_768_dense_memory_64k()
+    if name == "ensemble-deep-512-dense-historical-64k":
+        return ModelConfig.ensemble_deep_512_dense_historical_64k()
+    if name == "ensemble-wide-768-dense-historical-64k":
+        return ModelConfig.ensemble_wide_768_dense_historical_64k()
+    if name == "ensemble-deep-512-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_deep_512_dense_historical_hybrid_64k()
+    if name == "ensemble-wide-768-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_wide_768_dense_historical_hybrid_64k()
+    if name == "ensemble-intermediate-768-20l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_intermediate_768_20l_dense_historical_hybrid_64k()
+    if name == "ensemble-1024-16l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_1024_16l_dense_historical_hybrid_64k()
+    if name == "ensemble-1024-20l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    if name == "ensemble-1024-22l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_1024_22l_dense_historical_hybrid_64k()
+    if name == "ensemble-1024-24l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_1024_24l_dense_historical_hybrid_64k()
+    if name == "ensemble-large-1536-36l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_large_1536_36l_dense_historical_hybrid_64k()
+    if name == "ensemble-max-1792-32l-dense-historical-hybrid-64k":
+        return ModelConfig.ensemble_max_1792_32l_dense_historical_hybrid_64k()
     if name == "ensemble-medium-wide-768-dense-memory-64k":
         return ModelConfig.ensemble_medium_wide_768_dense_memory_64k()
     if name == "large":
@@ -1248,6 +1281,17 @@ def main():
                 "ensemble-deep-512-dense-memory-64k",
                 "ensemble-wide-768-dense-memory-64k",
                 "ensemble-medium-wide-768-dense-memory-64k",
+                "ensemble-deep-512-dense-historical-64k",
+                "ensemble-wide-768-dense-historical-64k",
+                "ensemble-deep-512-dense-historical-hybrid-64k",
+                "ensemble-wide-768-dense-historical-hybrid-64k",
+                "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-16l-dense-historical-hybrid-64k",
+                "ensemble-1024-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-22l-dense-historical-hybrid-64k",
+                "ensemble-1024-24l-dense-historical-hybrid-64k",
+                "ensemble-large-1536-36l-dense-historical-hybrid-64k",
+                "ensemble-max-1792-32l-dense-historical-hybrid-64k",
                 
             }:
                 raise RuntimeError(
@@ -1295,6 +1339,17 @@ def main():
         "ensemble-deep-512-dense-memory-64k",
         "ensemble-wide-768-dense-memory-64k",
         "ensemble-medium-wide-768-dense-memory-64k",
+                "ensemble-deep-512-dense-historical-64k",
+                "ensemble-wide-768-dense-historical-64k",
+                "ensemble-deep-512-dense-historical-hybrid-64k",
+                "ensemble-wide-768-dense-historical-hybrid-64k",
+                "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-16l-dense-historical-hybrid-64k",
+                "ensemble-1024-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-22l-dense-historical-hybrid-64k",
+                "ensemble-1024-24l-dense-historical-hybrid-64k",
+                "ensemble-large-1536-36l-dense-historical-hybrid-64k",
+                "ensemble-max-1792-32l-dense-historical-hybrid-64k",
     } and int(tokenizer_vocab_size) != 32_768:
         raise ValueError(
             "0080BL ensemble presets require their shared 32,768-token vocabulary; "
@@ -2004,6 +2059,12 @@ def main():
             stored_optimizer_state.clear()
             stored_optimizer_state = None
             optimizer_state = None
+            # Match the AdamW resume path below: checkpoint tensors were
+            # materialized on the GPU and can leave optimizer-sized cached or
+            # fragmented pool blocks after their contents have been restored.
+            get_pool = getattr(xp, "get_default_memory_pool", None)
+            if get_pool is not None:
+                get_pool().free_all_blocks()
 
         if optimizer_kind == "adamw":
             # 0055C: restore exact FP32 master weights as well as moments.  When
@@ -2123,4 +2184,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 0084B: first-class online probability fusion, using frozen teacher
+    # forwards directly from mixed shards. Keep AR/BlockProposal parsing intact.
+    import sys
+    if len(sys.argv) > 2 and any(
+        sys.argv[i] == "--objective" and sys.argv[i + 1] == "fusion"
+        for i in range(1, len(sys.argv) - 1)
+    ):
+        from mini_llm.collective.online_training import main as fusion_main
+        argv = list(sys.argv[1:])
+        pos = argv.index("--objective")
+        del argv[pos:pos + 2]
+        fusion_main(argv)
+    else:
+        main()

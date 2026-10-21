@@ -78,12 +78,27 @@ def test_empty_cache_has_no_probabilities_even_across_many_chunks(monkeypatch):
     assert all(np.isfinite(np.asarray(g)).all() for g in grads)
 
 
+def test_auto_local_chunk_uses_actual_attention_geometry(monkeypatch):
+    from mini_llm.ops.indexed_attention import _resolve_local_query_chunk_size
+    monkeypatch.setenv('MINI_LLM_LOCAL_ATTN_QUERY_CHUNK', 'auto')
+    monkeypatch.delenv('MINI_LLM_LOCAL_ATTN_AUTO_WORK_BUDGET', raising=False)
+
+    resolve = _resolve_local_query_chunk_size
+    assert resolve(4096, window=4096, batch=3, n_q_heads=1, d_head=64) == 768
+    assert resolve(4096, window=512, batch=3, n_q_heads=15, d_head=64) == 256
+    assert resolve(4096, window=512, batch=3, n_q_heads=9, d_head=64) == 384
+
+    monkeypatch.setenv('MINI_LLM_LOCAL_ATTN_QUERY_CHUNK', '1024')
+    assert resolve(4096, window=512, batch=3, n_q_heads=15, d_head=64) == 1024
+
+
 @pytest.mark.skipif(BACKEND_NAME != 'cupy', reason='requires CUDA/CuPy')
 def test_grouped_bf16_cuda_forward_backward_and_cache(monkeypatch):
     from mini_llm.ops import indexed_attention as local
     from mini_llm.ops.cublas_grouped import available, is_enabled
     monkeypatch.setenv('MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM', '1')
     monkeypatch.setenv('MINI_LLM_LOCAL_CUBLAS_MODE', 'grouped')
+    monkeypatch.setenv('MINI_LLM_BF16_LOCAL_GEMM', '1')
     monkeypatch.setenv('MINI_LLM_FUSED_BF16_LOCAL_PIPELINE', '1')
     if not available() or not is_enabled():
         pytest.skip('grouped BF16 cuBLAS unavailable on this GPU')
@@ -92,10 +107,12 @@ def test_grouped_bf16_cuda_forward_backward_and_cache(monkeypatch):
     if not local._local_grouped_fastpath_ready(q, k, v, True):
         pytest.skip('GPU layout does not support grouped fastpath')
     monkeypatch.setenv('MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS', '0')
+    monkeypatch.setenv('MINI_LLM_LOCAL_GROUPED_ROW_STORE', '0')
     out_ref, ref = local_window_attention_forward(q, k, v, 12, kv_head_indices=mapping, query_chunk_size=8)
     assert ref.get('grouped_cublas_local')
     grads_ref = local_window_attention_backward(dout, ref)
     monkeypatch.setenv('MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS', '1')
+    monkeypatch.setenv('MINI_LLM_LOCAL_GROUPED_ROW_STORE', '1')
     out, cache = local_window_attention_forward(q, k, v, 12, kv_head_indices=mapping, query_chunk_size=8)
     assert cache.get('grouped_cublas_local')
     assert cache['recompute_local_probs']

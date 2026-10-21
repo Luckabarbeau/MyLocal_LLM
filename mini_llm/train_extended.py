@@ -199,10 +199,10 @@ class ExtendedTrainer:
         if self.ar_compact_target and (
             training_objective is not None
             or not model.config.memory_context.enabled
-            or model.config.memory_context.integration_mode != "routed_prefix"
+            or model.config.memory_context.integration_mode not in {"routed_prefix", "historical_read"}
         ):
             raise ValueError(
-                "MINI_LLM_AR_COMPACT_TARGET requires AR with routed_prefix memory"
+                "MINI_LLM_AR_COMPACT_TARGET requires AR with routed_prefix or historical_read memory"
             )
         # 0080BR: pre-sample one optimizer step, then group same-source / same-
         # routing-mode AR rows by valid length. No rejected/re-drawn documents.
@@ -616,7 +616,16 @@ class ExtendedTrainer:
             cfg = self.memory_context
             print("  Causal external memory routing: enabled")
             print("  Document-aware sampling:       enabled (EOS-bounded)")
-            if cfg.integration_mode == "routed_prefix":
+            if cfg.integration_mode == "historical_read":
+                print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
+                print(f"  Searchable history:            {cfg.distant_memory_length:,} tokens")
+                print(f"  Supervised current window:     {cfg.target_length:,} tokens")
+                print(f"  Active Transformer length:     {cfg.active_length:,}")
+                print(f"  Read-only history blocks:      {cfg.searchable_blocks:,} of {cfg.block_size} tokens")
+                print("  Causal learned route period:   128 tokens")
+                print(f"  Learned top-k blocks:          {cfg.top_k_blocks:,}")
+                print(f"  Encoder-only recomputation:    {os.environ.get('MINI_LLM_HISTORY_RECOMPUTE', '0')}")
+            elif cfg.integration_mode == "routed_prefix":
                 print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
                 print(f"  Searchable history:            {cfg.distant_memory_length:,} tokens")
                 print(f"  Dense working window:          {cfg.target_length:,} tokens")
@@ -1407,20 +1416,21 @@ class ExtendedTrainer:
             routed_prefix_retrieval = None
             min_history_tokens = 0
             sampling_policy = "legacy"
-            if self.memory_context.integration_mode == "routed_prefix":
+            if self.memory_context.integration_mode in {"routed_prefix", "historical_read"}:
                 # 0078E: document length is an *outcome* of sampling, never
                 # a prerequisite. Keep router stochastic training probability
                 # independent of which document is selected.
                 sampling_policy = "document_first"
-                routed_prefix_retrieval = bool(
-                    self.train_rng.random()
-                    < float(self.memory_context.retrieval_batch_probability)
-                )
-                min_history_tokens = (
-                    self.memory_context.top_k_blocks
-                    * self.memory_context.block_size
-                    + self.memory_context.block_size - 1
-                )
+                if self.memory_context.integration_mode == "routed_prefix":
+                    routed_prefix_retrieval = bool(
+                        self.train_rng.random()
+                        < float(self.memory_context.retrieval_batch_probability)
+                    )
+                    min_history_tokens = (
+                        self.memory_context.top_k_blocks
+                        * self.memory_context.block_size
+                        + self.memory_context.block_size - 1
+                    )
             elif (
                 self.memory_context.integration_mode == "terminal_landmark"
                 and self.memory_context.memory_training == "router_only"
@@ -1712,7 +1722,7 @@ class ExtendedTrainer:
                     sampling_policy_override
                     if sampling_policy_override is not None else
                     "document_first"
-                    if self.memory_context.integration_mode == "routed_prefix"
+                    if self.memory_context.integration_mode in {"routed_prefix", "historical_read"}
                     and (source_override is None or min_history_override is not None)
                     else "legacy"
                 ),
@@ -1868,8 +1878,17 @@ class ExtendedTrainer:
         if (
             metadata is None
             or self.memory_context is None
-            or self.memory_context.integration_mode != "routed_prefix"
+            or self.memory_context.integration_mode not in {"routed_prefix", "historical_read"}
         ):
+            return metadata
+        if self.memory_context.integration_mode == "historical_read":
+            if self.ar_compact_target:
+                from mini_llm.data.compact_target import ar_compact_metadata
+                return ar_compact_metadata(
+                    dict(metadata), target_length=self.memory_context.target_length,
+                    batch_size=self.batch_size,
+                    bucket_tokens=min(128, max(1, self.memory_context.target_length // 8)),
+                )
             return metadata
         cfg = self.memory_context
         metadata = dict(metadata)

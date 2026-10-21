@@ -74,6 +74,26 @@ def _get_fused_swiglu_module():
     }
 
     extern "C" __global__
+    void bf16_swiglu_fwd_strided(
+        const unsigned short* g,
+        const unsigned short* u,
+        unsigned short* h,
+        long long rows, int cols,
+        long long g_row_stride, long long u_row_stride) {
+        long long n = rows * cols;
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            long long row = idx / cols;
+            int col = (int)(idx - row * cols);
+            float gf = bf16_to_float(g[row * g_row_stride + col]);
+            float uf = bf16_to_float(u[row * u_row_stride + col]);
+            float s = sigmoidf_stable(gf);
+            h[idx] = float_to_bf16((gf * s) * uf);
+        }
+    }
+
+    extern "C" __global__
     void bf16_swiglu_bwd(
         const unsigned short* dh,
         const unsigned short* g,
@@ -94,15 +114,46 @@ def _get_fused_swiglu_module():
             du[idx] = float_to_bf16(dhf * a);
         }
     }
+
+    extern "C" __global__
+    void bf16_swiglu_bwd_strided(
+        const unsigned short* dh,
+        const unsigned short* g,
+        const unsigned short* u,
+        unsigned short* dg,
+        unsigned short* du,
+        long long rows, int cols,
+        long long g_row_stride, long long u_row_stride) {
+        long long n = rows * cols;
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            long long row = idx / cols;
+            int col = (int)(idx - row * cols);
+            float dhf = bf16_to_float(dh[idx]);
+            float gf = bf16_to_float(g[row * g_row_stride + col]);
+            float uf = bf16_to_float(u[row * u_row_stride + col]);
+            float s = sigmoidf_stable(gf);
+            float a = gf * s;
+            float silu_prime = s + gf * s * (1.0f - s);
+            dg[idx] = float_to_bf16((dhf * uf) * silu_prime);
+            du[idx] = float_to_bf16(dhf * a);
+        }
+    }
     """
     try:
         module = xp.RawModule(
             code=code,
             options=("--std=c++11",),
-            name_expressions=("bf16_swiglu_fwd", "bf16_swiglu_bwd"),
+            name_expressions=(
+                "bf16_swiglu_fwd", "bf16_swiglu_fwd_strided",
+                "bf16_swiglu_bwd", "bf16_swiglu_bwd_strided",
+            ),
         )
         module.get_function("bf16_swiglu_fwd")
+        module.get_function("bf16_swiglu_fwd_strided")
         module.get_function("bf16_swiglu_bwd")
+        module.get_function("bf16_swiglu_bwd_strided")
         _FUSED_SWIGLU_MODULE = module
     except Exception:
         strict = os.environ.get("MINI_LLM_FUSED_SWIGLU_STRICT", "0").strip().lower()
@@ -113,23 +164,45 @@ def _get_fused_swiglu_module():
     return _FUSED_SWIGLU_MODULE
 
 
-def _fused_swiglu_forward(g, u):
-    if not _fused_swiglu_enabled(g.dtype):
+def _swiglu_row_layout(x):
+    """Return flattened row geometry for contiguous or 2-D packed views."""
+    if x.ndim < 1 or int(x.strides[-1]) != int(x.dtype.itemsize):
         return None
-    if g.shape != u.shape or not g.flags.c_contiguous or not u.flags.c_contiguous:
+    cols = int(x.shape[-1])
+    if x.flags.c_contiguous:
+        return int(x.size // cols), cols, cols
+    if x.ndim == 2:
+        return int(x.shape[0]), cols, int(x.strides[0] // x.dtype.itemsize)
+    return None
+
+
+def _fused_swiglu_forward(g, u):
+    if not _fused_swiglu_enabled(g.dtype) or g.shape != u.shape:
+        return None
+    g_layout = _swiglu_row_layout(g)
+    u_layout = _swiglu_row_layout(u)
+    if g_layout is None or u_layout is None or g_layout[:2] != u_layout[:2]:
         return None
     module = _get_fused_swiglu_module()
     if module is None:
         return None
-    h = xp.empty_like(g)
+    rows, cols, g_row_stride = g_layout
+    u_row_stride = u_layout[2]
+    h = xp.empty(g.shape, dtype=g.dtype, order="C")
     n = int(g.size)
     if n == 0:
         return h
     threads = 256
     blocks = min(65535, max(1, (n + threads - 1) // threads))
-    module.get_function("bf16_swiglu_fwd")((blocks,), (threads,), (
-        g, u, h, np.int64(n)
-    ))
+    if g_row_stride == cols and u_row_stride == cols:
+        module.get_function("bf16_swiglu_fwd")((blocks,), (threads,), (
+            g, u, h, np.int64(n),
+        ))
+    else:
+        module.get_function("bf16_swiglu_fwd_strided")((blocks,), (threads,), (
+            g, u, h, np.int64(rows), np.int32(cols),
+            np.int64(g_row_stride), np.int64(u_row_stride),
+        ))
     return h
 
 
@@ -138,23 +211,34 @@ def _fused_swiglu_backward(dh, g, u):
         return None
     if dh.dtype != g.dtype or u.dtype != g.dtype:
         return None
-    if dh.shape != g.shape or u.shape != g.shape:
+    if dh.shape != g.shape or u.shape != g.shape or not dh.flags.c_contiguous:
         return None
-    if not dh.flags.c_contiguous or not g.flags.c_contiguous or not u.flags.c_contiguous:
+    g_layout = _swiglu_row_layout(g)
+    u_layout = _swiglu_row_layout(u)
+    if g_layout is None or u_layout is None or g_layout[:2] != u_layout[:2]:
         return None
     module = _get_fused_swiglu_module()
     if module is None:
         return None
-    dg = xp.empty_like(g)
-    du = xp.empty_like(u)
+    rows, cols, g_row_stride = g_layout
+    u_row_stride = u_layout[2]
+    dg = xp.empty(g.shape, dtype=g.dtype, order="C")
+    du = xp.empty(u.shape, dtype=u.dtype, order="C")
     n = int(g.size)
     if n == 0:
         return dg, du
     threads = 256
     blocks = min(65535, max(1, (n + threads - 1) // threads))
-    module.get_function("bf16_swiglu_bwd")((blocks,), (threads,), (
-        dh, g, u, dg, du, np.int64(n)
-    ))
+    if g_row_stride == cols and u_row_stride == cols:
+        module.get_function("bf16_swiglu_bwd")((blocks,), (threads,), (
+            dh, g, u, dg, du, np.int64(n),
+        ))
+    else:
+        module.get_function("bf16_swiglu_bwd_strided")((blocks,), (threads,), (
+            dh, g, u, dg, du,
+            np.int64(rows), np.int32(cols),
+            np.int64(g_row_stride), np.int64(u_row_stride),
+        ))
     return dg, du
 
 

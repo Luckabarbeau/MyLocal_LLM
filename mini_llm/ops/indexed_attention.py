@@ -283,6 +283,8 @@ def _bf16_mixed_context_enabled(dtype):
 _DEFAULT_QUERY_CHUNK_SIZE = 128
 _DEFAULT_LOCAL_QUERY_CHUNK_SIZE = 512
 _DEFAULT_DILATED_QUERY_CHUNK_SIZE = 1024
+_AUTO_LOCAL_QUERY_WORK_BUDGET = 640_000_000
+_AUTO_LOCAL_QUERY_CHUNK_CANDIDATES = (128, 192, 256, 384, 512, 768, 1024, 1536, 2048)
 
 
 _LOCAL_SOFTMAX_MODULE = None
@@ -1325,6 +1327,84 @@ def _get_local_bf16_pipeline_module():
     }
 
     extern "C" __global__
+    void local_causal_softmax_recompute_bwd_bf16(
+        const unsigned short* scores,
+        const unsigned short* dprobs,
+        unsigned short* probs,
+        unsigned short* dscores,
+        int rows, int q_len, int k_len,
+        int q_start, int key_start, int window, float scale) {
+        int row = blockIdx.x;
+        if (row >= rows) return;
+        int q_local = row % q_len;
+        int q_pos = q_start + q_local;
+        const unsigned short* s = scores + ((long long)row) * k_len;
+        const unsigned short* dp = dprobs + ((long long)row) * k_len;
+        unsigned short* p = probs + ((long long)row) * k_len;
+        unsigned short* ds = dscores + ((long long)row) * k_len;
+        extern __shared__ float sh[];
+
+        float local_max = -3.402823466e+38F;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1)
+                local_max = fmaxf(local_max, bf16_to_float(s[j]) * scale);
+        }
+        sh[threadIdx.x] = local_max;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride)
+                sh[threadIdx.x] = fmaxf(sh[threadIdx.x], sh[threadIdx.x + stride]);
+            __syncthreads();
+        }
+        float row_max = sh[0];
+
+        float local_sum = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1)
+                local_sum += expf(bf16_to_float(s[j]) * scale - row_max);
+        }
+        sh[threadIdx.x] = local_sum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float inv = sh[0] > 0.0f ? 1.0f / sh[0] : 0.0f;
+
+        // Preserve the established numerical contract: round P to BF16 before
+        // using it in dot(dP, P), while avoiding a separate kernel and reread.
+        float local_correction = 0.0f;
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            unsigned short pb = float_to_bf16(0.0f);
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float pf = expf(bf16_to_float(s[j]) * scale - row_max) * inv;
+                pb = float_to_bf16(pf);
+                local_correction += bf16_to_float(dp[j]) * bf16_to_float(pb);
+            }
+            p[j] = pb;
+        }
+        sh[threadIdx.x] = local_correction;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) sh[threadIdx.x] += sh[threadIdx.x + stride];
+            __syncthreads();
+        }
+        float correction = sh[0];
+        for (int j = threadIdx.x; j < k_len; j += blockDim.x) {
+            int k_pos = key_start + j;
+            float out = 0.0f;
+            if (k_pos <= q_pos && k_pos >= q_pos - window + 1) {
+                float pf = bf16_to_float(p[j]);
+                out = pf * (bf16_to_float(dp[j]) - correction);
+            }
+            ds[j] = float_to_bf16(out);
+        }
+    }
+
+    extern "C" __global__
     void local_causal_softmax_bwd_bf16(
         const unsigned short* dprobs,
         const unsigned short* probs,
@@ -1509,12 +1589,14 @@ def _get_local_bf16_pipeline_module():
             options=("--std=c++11",),
             name_expressions=(
                 "local_causal_softmax_fwd_bf16",
+                "local_causal_softmax_recompute_bwd_bf16",
                 "local_causal_softmax_bwd_bf16",
                 "local_causal_softmax_fwd3_bf16",
                 "local_causal_softmax_bwd3_bf16",
             ),
         )
         module.get_function("local_causal_softmax_fwd_bf16")
+        module.get_function("local_causal_softmax_recompute_bwd_bf16")
         module.get_function("local_causal_softmax_bwd_bf16")
         module.get_function("local_causal_softmax_fwd3_bf16")
         module.get_function("local_causal_softmax_bwd3_bf16")
@@ -1567,6 +1649,42 @@ def _local_causal_softmax_forward_bf16_cuda(
         shared_mem=threads * 4,
     )
     return probs_bf16
+
+
+def _local_causal_softmax_recompute_backward_bf16_cuda(
+    scores_bf16, dprobs_bf16, probs_bf16,
+    q_start, key_start, window, scale,
+):
+    if not _fused_bf16_local_pipeline_enabled(scores_bf16.dtype):
+        return None
+    module = _get_local_bf16_pipeline_module()
+    if module is None:
+        return None
+    arrays = (scores_bf16, dprobs_bf16, probs_bf16)
+    if any(a.dtype != scores_bf16.dtype for a in arrays):
+        return None
+    if not is_bfloat16_dtype(scores_bf16.dtype):
+        return None
+    if any(a.shape != scores_bf16.shape for a in arrays):
+        return None
+    if any(not a.flags.c_contiguous for a in arrays):
+        return None
+    q_len = int(scores_bf16.shape[-2])
+    k_len = int(scores_bf16.shape[-1])
+    rows = int(scores_bf16.size // k_len)
+    dscores_bf16 = xp.empty_like(scores_bf16)
+    threads = 256
+    module.get_function("local_causal_softmax_recompute_bwd_bf16")(
+        (rows,), (threads,),
+        (
+            scores_bf16, dprobs_bf16, probs_bf16, dscores_bf16,
+            np.int32(rows), np.int32(q_len), np.int32(k_len),
+            np.int32(q_start), np.int32(key_start), np.int32(window),
+            np.float32(scale),
+        ),
+        shared_mem=threads * 4,
+    )
+    return dscores_bf16
 
 
 def _local_causal_softmax_backward_bf16_cuda(
@@ -1732,19 +1850,65 @@ def _resolve_query_chunk_size(query_length, query_chunk_size=None):
 
 
 
-def _resolve_local_query_chunk_size(query_length, query_chunk_size=None):
-    """Resolve the query chunk size for specialized local attention.
+def _auto_local_query_chunk_size(
+    query_length, window, batch, n_q_heads, d_head,
+):
+    """Choose a regular local-attention tile from its actual GEMM geometry.
 
-    The contiguous local kernel does not materialize per-query ``[Q,K,D]``
-    gathers, so it can safely use a substantially larger chunk than generic
-    indexed attention.  Larger chunks reduce Python/CUDA launch overhead and
-    expose larger regular GEMMs.  Keep a separate runtime override because
-    the best value depends on context/window size and available VRAM.
+    The worst score matrix for a query tile has approximately
+    ``B * Hq * Q * min(T, W + Q - 1)`` elements. Multiplying by ``d_head``
+    produces a hardware-relevant work proxy shared by score, dP and gradient
+    GEMMs. The default budget is calibrated on the RTX 5080 production run;
+    an environment override permits retuning without changing checkpoints.
+    """
+    query_length = int(query_length)
+    window = min(query_length, int(window))
+    batch = int(batch)
+    n_q_heads = int(n_q_heads)
+    d_head = int(d_head)
+    if min(query_length, window, batch, n_q_heads, d_head) <= 0:
+        raise ValueError("automatic local chunk parameters must be positive")
+    raw_budget = os.environ.get(
+        "MINI_LLM_LOCAL_ATTN_AUTO_WORK_BUDGET",
+        str(_AUTO_LOCAL_QUERY_WORK_BUDGET),
+    )
+    work_budget = int(raw_budget)
+    if work_budget <= 0:
+        raise ValueError("MINI_LLM_LOCAL_ATTN_AUTO_WORK_BUDGET must be positive")
+
+    candidates = sorted({
+        *(c for c in _AUTO_LOCAL_QUERY_CHUNK_CANDIDATES if c < query_length),
+        query_length,
+    })
+    chosen = min(query_length, _AUTO_LOCAL_QUERY_CHUNK_CANDIDATES[0])
+    for chunk in candidates:
+        key_span = min(query_length, window + chunk - 1)
+        work = batch * n_q_heads * chunk * key_span * d_head
+        if work > work_budget:
+            break
+        chosen = chunk
+    return chosen
+
+
+def _resolve_local_query_chunk_size(
+    query_length, query_chunk_size=None, *, window=None,
+    batch=1, n_q_heads=1, d_head=64,
+):
+    """Resolve numeric or geometry-aware chunking for local attention.
+
+    ``MINI_LLM_LOCAL_ATTN_QUERY_CHUNK=auto`` selects a Tensor-Core-friendly
+    tile independently for each attention group from its sequence length,
+    window, batch size, active query-head count and head dimension. Numeric
+    values remain exact user overrides.
     """
     if query_chunk_size is None:
         raw = os.environ.get("MINI_LLM_LOCAL_ATTN_QUERY_CHUNK")
-        query_chunk_size = (
-            _DEFAULT_LOCAL_QUERY_CHUNK_SIZE if raw is None else int(raw)
+        query_chunk_size = _DEFAULT_LOCAL_QUERY_CHUNK_SIZE if raw is None else raw
+    if isinstance(query_chunk_size, str) and query_chunk_size.strip().lower() == "auto":
+        if window is None:
+            raise ValueError("window is required for automatic local query chunking")
+        return _auto_local_query_chunk_size(
+            query_length, window, batch, n_q_heads, d_head,
         )
     query_chunk_size = int(query_chunk_size)
     if query_chunk_size <= 0:
@@ -3172,6 +3336,77 @@ def _get_local_grouped_store_module():
     }
 
     extern "C" __global__
+    void local_grouped_store_grads_d64_rows(
+        const unsigned short* dq_tmp,
+        const unsigned short* dk_tmp,
+        const unsigned short* dv_tmp,
+        float* dq, float* dk, float* dv,
+        const long long* kv_map,
+        int batch, int q_heads, int kv_heads,
+        int q_count, int k_count, int d_head, int seq_len,
+        int q_start, int key_start, float scale) {
+        // Four independent D=64 rows per block. Only four threads perform
+        // integer index decomposition; the remaining threads move/reduce one
+        // contiguous head dimension each.
+        __shared__ long long dq_dst_base[4];
+        __shared__ long long kv_dst_base[4];
+        __shared__ int kv_batch[4];
+        __shared__ int kv_key[4];
+        __shared__ int kv_head[4];
+        int lane = threadIdx.x & 63;
+        int slot = threadIdx.x >> 6;
+        int row = ((int)blockIdx.x << 2) + slot;
+        int dq_rows = batch * q_heads * q_count;
+        int kv_rows = batch * k_count * kv_heads;
+
+        if (threadIdx.x < 4) {
+            int meta_row = ((int)blockIdx.x << 2) + (int)threadIdx.x;
+            if (meta_row < dq_rows) {
+                int t = meta_row;
+                int q_local = t % q_count; t /= q_count;
+                int h = t % q_heads; t /= q_heads;
+                int b = t;
+                dq_dst_base[threadIdx.x] =
+                    (((long long)b * seq_len + (q_start + q_local))
+                     * q_heads + h) * 64;
+            } else {
+                dq_dst_base[threadIdx.x] = -1;
+            }
+            if (meta_row < kv_rows) {
+                int t = meta_row;
+                kv_head[threadIdx.x] = t % kv_heads; t /= kv_heads;
+                kv_key[threadIdx.x] = t % k_count; t /= k_count;
+                kv_batch[threadIdx.x] = t;
+                kv_dst_base[threadIdx.x] =
+                    (((long long)t * seq_len + (key_start + kv_key[threadIdx.x]))
+                     * kv_heads + kv_head[threadIdx.x]) * 64;
+            } else {
+                kv_dst_base[threadIdx.x] = -1;
+            }
+        }
+        __syncthreads();
+
+        if (row < dq_rows) {
+            dq[dq_dst_base[slot] + lane] =
+                local_bf16_to_float(dq_tmp[(long long)row * 64 + lane]) * scale;
+        }
+        if (row < kv_rows) {
+            float sk = 0.0f;
+            float sv = 0.0f;
+            for (int h = 0; h < q_heads; ++h) {
+                if ((int)kv_map[h] != kv_head[slot]) continue;
+                long long src =
+                    (((long long)kv_batch[slot] * q_heads + h) * k_count
+                     + kv_key[slot]) * 64 + lane;
+                sk += local_bf16_to_float(dk_tmp[src]);
+                sv += local_bf16_to_float(dv_tmp[src]);
+            }
+            dk[kv_dst_base[slot] + lane] += sk * scale;
+            dv[kv_dst_base[slot] + lane] += sv;
+        }
+    }
+
+    extern "C" __global__
     void local_grouped_store_grads(
         const unsigned short* dq_tmp,
         const unsigned short* dk_tmp,
@@ -3223,8 +3458,12 @@ def _get_local_grouped_store_module():
         module = xp.RawModule(
             code=code,
             options=("--std=c++11",),
-            name_expressions=("local_grouped_store_grads",),
+            name_expressions=(
+                "local_grouped_store_grads_d64_rows",
+                "local_grouped_store_grads",
+            ),
         )
+        module.get_function("local_grouped_store_grads_d64_rows")
         module.get_function("local_grouped_store_grads")
         _LOCAL_GROUPED_STORE_MODULE = module
     except Exception:
@@ -3253,10 +3492,20 @@ def _local_grouped_store_grads(
     if not all(a.flags.c_contiguous for a in (dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map)):
         return False
     n_kv_heads = int(dk.shape[2])
-    n = max(int(dq_tmp.size), batch * k_count * n_kv_heads * d_head)
+    raw_row_store = os.environ.get(
+        "MINI_LLM_LOCAL_GROUPED_ROW_STORE", "1"
+    ).strip().lower()
+    row_store = d_head == 64 and raw_row_store not in {"0", "false", "off", "no", ""}
     threads = 256
-    blocks = min((n + threads - 1) // threads, 65535)
-    module.get_function("local_grouped_store_grads")(
+    if row_store:
+        rows = max(batch * q_heads * q_count, batch * k_count * n_kv_heads)
+        blocks = (rows + 3) // 4
+        kernel_name = "local_grouped_store_grads_d64_rows"
+    else:
+        n = max(int(dq_tmp.size), batch * k_count * n_kv_heads * d_head)
+        blocks = min((n + threads - 1) // threads, 65535)
+        kernel_name = "local_grouped_store_grads"
+    module.get_function(kernel_name)(
         (blocks,), (threads,),
         (
             dq_tmp, dk_tmp, dv_tmp, dq, dk, dv, kv_map,
@@ -3571,7 +3820,17 @@ def _local_grouped_backward(dcontext, cache):
     return dq, dk, dv
 
 
-def _local_grouped_reconstruct_chunk(q, k, chunk, kv_map_host, scale, window):
+def _fused_local_recompute_softmax_enabled():
+    raw = os.environ.get(
+        "MINI_LLM_FUSED_LOCAL_RECOMPUTE_SOFTMAX", "1"
+    ).strip().lower()
+    return raw not in {"0", "false", "off", "no", ""}
+
+
+def _local_grouped_reconstruct_chunk(
+    q, k, chunk, kv_map_host, scale, window, *, defer_softmax=False,
+    dcontext=None, v=None, dprobs=None,
+):
     """Recreate forward-identical BF16 probabilities for one local chunk.
 
     Uses the same grouped cuBLAS score GEMM and BF16 fused softmax as forward.
@@ -3583,7 +3842,29 @@ def _local_grouped_reconstruct_chunk(q, k, chunk, kv_map_host, scale, window):
     q_count, k_count = chunk["q_count"], chunk["k_count"]
     q_row, k_row = _row_stride_elems(q, 1), _row_stride_elems(k, 1)
     scores = xp.empty((batch, n_q_heads, q_count, k_count), dtype=q.dtype)
-    probs = xp.empty_like(scores)
+    if dcontext is None and v is None and dprobs is None:
+        paired_dprobs = False
+        dc_ptr = v_ptr = dp_ptr = 0
+        dc_batch_stride = dc_token_stride = dc_head_stride = 0
+        v_batch_stride = v_token_stride = v_head_stride = 0
+        dp_batch_stride = dp_head_stride = 0
+        dc_row = v_row = 0
+    elif dcontext is None or v is None or dprobs is None:
+        raise ValueError("dcontext, v, and dprobs must be supplied together")
+    else:
+        paired_dprobs = True
+        dc_ptr, v_ptr, dp_ptr = (
+            int(a.data.ptr) for a in (dcontext, v, dprobs)
+        )
+        dc_batch_stride, dc_token_stride, dc_head_stride = map(
+            int, dcontext.strides[:3]
+        )
+        v_batch_stride, v_token_stride, v_head_stride = map(int, v.strides[:3])
+        dp_batch_stride, dp_head_stride = map(
+            int, (dprobs.strides[0], dprobs.strides[1])
+        )
+        dc_row = _row_stride_elems(dcontext, 1)
+        v_row = _row_stride_elems(v, 1)
     problems = []
     for b in range(batch):
         for h in range(n_q_heads):
@@ -3598,9 +3879,26 @@ def _local_grouped_reconstruct_chunk(q, k, chunk, kv_map_host, scale, window):
                 q_count, k_count, d_head, q_row, k_row, k_count,
                 False, True,
             ))
-    with local_detail_scope("local.grouped.recompute_score_gemm"):
+            if paired_dprobs:
+                problems.append(RowMajorGemmProblem(
+                    dc_ptr + b * dc_batch_stride
+                    + q_start * dc_token_stride + h * dc_head_stride,
+                    v_ptr + b * v_batch_stride
+                    + key_start * v_token_stride + kvh * v_head_stride,
+                    dp_ptr + b * dp_batch_stride + h * dp_head_stride,
+                    q_count, k_count, d_head, dc_row, v_row, k_count,
+                    False, True,
+                ))
+    profile_name = (
+        "local.grouped.recompute_score_dprobs_gemm"
+        if paired_dprobs else "local.grouped.recompute_score_gemm"
+    )
+    with local_detail_scope(profile_name):
         if not _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
-            raise RuntimeError("0080BA grouped BF16 recompute score GEMM failed")
+            raise RuntimeError("0080BA grouped BF16 recompute input GEMMs failed")
+    if defer_softmax:
+        return scores
+    probs = xp.empty_like(scores)
     with local_detail_scope("local.grouped.recompute_softmax"):
         if _local_causal_softmax_forward_bf16_cuda(
             scores, probs, q_start, key_start, window, scale
@@ -3634,34 +3932,32 @@ def _local_grouped_backward_recomputed(dcontext, cache):
         q_start, key_start = chunk["q_start"], chunk["key_start"]
         q_count, k_count = chunk["q_count"], chunk["k_count"]
         with local_detail_scope("local.grouped.recompute_chunk"):
-            probs = _local_grouped_reconstruct_chunk(
-                q, k, chunk, kv_map_host, scale, cache["window"]
+            work_shape = (batch, n_q_heads, q_count, k_count)
+            probs = xp.empty(work_shape, dtype=q.dtype)
+            dprobs = xp.empty(work_shape, dtype=q.dtype)
+            scores = _local_grouped_reconstruct_chunk(
+                q, k, chunk, kv_map_host, scale, cache["window"],
+                defer_softmax=True, dcontext=dc, v=v, dprobs=dprobs,
             )
-            dprobs = xp.empty_like(probs)
-            problems = []
-            for b in range(batch):
-                for h in range(n_q_heads):
-                    kvh = int(kv_map_host[h])
-                    problems.append(RowMajorGemmProblem(
-                        int(dc.data.ptr) + b * int(dc.strides[0])
-                        + q_start * int(dc.strides[1]) + h * int(dc.strides[2]),
-                        int(v.data.ptr) + b * int(v.strides[0])
-                        + key_start * int(v.strides[1]) + kvh * int(v.strides[2]),
-                        int(dprobs.data.ptr) + b * int(dprobs.strides[0])
-                        + h * int(dprobs.strides[1]),
-                        q_count, k_count, d_head, dc_row, v_row, k_count,
-                        False, True,
-                    ))
-            with local_detail_scope("local.grouped.recompute_dprobs_gemm"):
-                if not _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
-                    raise RuntimeError("0080BA grouped dP GEMM failed")
             with local_detail_scope("local.grouped.recompute_softmax_backward"):
-                ds = _local_causal_softmax_backward_bf16_cuda(
-                    dprobs, probs, q_start, key_start, cache["window"]
-                )
+                ds = None
+                if _fused_local_recompute_softmax_enabled():
+                    ds = _local_causal_softmax_recompute_backward_bf16_cuda(
+                        scores, dprobs, probs, q_start, key_start,
+                        cache["window"], scale,
+                    )
+                if ds is None:
+                    if _local_causal_softmax_forward_bf16_cuda(
+                        scores, probs, q_start, key_start,
+                        cache["window"], scale,
+                    ) is None:
+                        raise RuntimeError("0080BA grouped BF16 recompute softmax failed")
+                    ds = _local_causal_softmax_backward_bf16_cuda(
+                        dprobs, probs, q_start, key_start, cache["window"]
+                    )
                 if ds is None:
                     raise RuntimeError("0080BA grouped BF16 softmax backward failed")
-            del dprobs
+            del scores, dprobs
 
             dq_tmp = xp.empty((batch, n_q_heads, q_count, d_head), dtype=q.dtype)
             dk_tmp = xp.empty((batch, n_q_heads, k_count, d_head), dtype=q.dtype)
@@ -3780,7 +4076,8 @@ def local_window_attention_forward(
         scale = 1.0 / math.sqrt(d_head)
     scale = float(scale)
     query_chunk_size = _resolve_local_query_chunk_size(
-        query_length, query_chunk_size
+        query_length, query_chunk_size, window=window,
+        batch=batch, n_q_heads=n_q_heads, d_head=d_head,
     )
 
     _kv_map, kv_map_host = _normalize_kv_head_mapping(

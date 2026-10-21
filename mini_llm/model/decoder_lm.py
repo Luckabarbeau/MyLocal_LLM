@@ -140,7 +140,9 @@ class DecoderLanguageModel:
         self.memory_router = None
         self.memory_reader = None
         self.memory_attention_layer = None
-        if config.memory_context.enabled:
+        self.historical_memory = None
+        if (config.memory_context.enabled and
+                config.memory_context.integration_mode != "historical_read"):
             self.memory_router = HierarchicalMemoryRouter(
                 d_model=config.d_model,
                 config=config.memory_context,
@@ -173,6 +175,15 @@ class DecoderLanguageModel:
                 self.blocks[layer].attention.configure_terminal_memory(
                     config.memory_context, rng
                 )
+        if (config.memory_context.enabled and
+                config.memory_context.integration_mode == "historical_read"):
+            from mini_llm.ops.historical_read import HistoricalReadMemory
+            self.historical_memory = HistoricalReadMemory(
+                config, self.embedding.W, rng, self.dtype,
+            )
+            for i, block in enumerate(self.blocks):
+                block.attention.historical_reader = self.historical_memory
+                block.attention.historical_layer = i
     
     def parameters(self):
         """Return all trainable parameters."""
@@ -186,6 +197,8 @@ class DecoderLanguageModel:
             params.extend(self.memory_router.parameters())
         if self.memory_reader is not None:
             params.extend(self.memory_reader.parameters())
+        if self.historical_memory is not None:
+            params.extend(self.historical_memory.parameters())
         return params
     
     @property
@@ -242,6 +255,8 @@ class DecoderLanguageModel:
         """Return only the 0058C trainable retrieval subsystem parameters."""
         if not self.hierarchical_memory_enabled:
             return []
+        if self.historical_memory is not None:
+            return list(self.historical_memory.parameters())
         params = list(self.memory_router.parameters())
         if self.config.memory_context.integration_mode == "terminal_landmark":
             layer = self.blocks[self.memory_attention_layer].attention
@@ -270,6 +285,8 @@ class DecoderLanguageModel:
             params.extend(self.memory_router.parameters())
         if self.memory_reader is not None:
             params.extend(self.memory_reader.parameters())
+        if self.historical_memory is not None:
+            params.extend(self.historical_memory.parameters())
         return params
 
     def zero_grad(self):
@@ -290,7 +307,7 @@ class DecoderLanguageModel:
     
     @property
     def hierarchical_memory_enabled(self):
-        return self.memory_router is not None
+        return self.memory_router is not None or self.historical_memory is not None
 
     def _pretransformer_context_forward(self, token_ids, memory_metadata=None):
         """Build the dense window after one causal per-position memory read.
@@ -561,8 +578,9 @@ class DecoderLanguageModel:
         # router_query_length tokens of the PRE-WINDOW history. The normal
         # autoregressive training/inference behavior stays unchanged.
         causal_prefix_query = bool(
-            memory_metadata is not None
-            and memory_metadata.get("causal_prefix_query", False)
+            cfg.routed_prefix_causal_policy == "prewindow"
+            or (memory_metadata is not None and
+                memory_metadata.get("causal_prefix_query", False))
         )
         query_ids = None
         if causal_prefix_query:
@@ -621,8 +639,13 @@ class DecoderLanguageModel:
             history_valid_starts > history_length - int(cfg.router_query_length)
         ))
         if causal_prefix_query and use_retrieval and insufficient_pre_window_query and not masked_refinement:
-            # Strict Q1 behavior remains unchanged unless Q4 explicitly opts in.
-            raise ValueError(
+            if cfg.routed_prefix_causal_policy == "prewindow":
+                # Document-first sampling often yields <4K genuine preceding
+                # tokens. Never route those samples using target-window text.
+                use_retrieval = False
+            else:
+                # Preserve strict Q1 opt-in validation on legacy checkpoints.
+                raise ValueError(
                 "causal_prefix_query requires a fully valid pre-window router query"
             )
 
@@ -1027,8 +1050,48 @@ class DecoderLanguageModel:
             with performance_scope("memory_context.embedding.backward"):
                 self.embedding.backward(dworking_total, {"token_ids": working_ids})
 
+    def _historical_context_forward(self, token_ids, memory_metadata=None):
+        """Keep all 4096 current rows; block-encode preceding same-document history."""
+        cfg = self.config.memory_context
+        source = xp.asarray(token_ids)
+        if source.ndim != 2 or source.shape[1] != cfg.source_input_length:
+            raise ValueError("historical_read requires the complete source horizon")
+        batch, _ = source.shape
+        h = int(cfg.distant_memory_length)
+        w = int(cfg.target_length)
+        if memory_metadata is not None and memory_metadata.get("compact_ar_target"):
+            w = int(memory_metadata["compact_working_length"])
+            if not 0 < w <= int(cfg.target_length):
+                raise ValueError("invalid compact AR length")
+        starts = (xp.zeros((batch,), dtype=xp.int64) if memory_metadata is None
+                  else xp.asarray(memory_metadata.get("history_valid_starts",
+                       xp.zeros((batch,), dtype=xp.int64)), dtype=xp.int64))
+        working_ids = source[:, h:h+w]
+        valid_mask = (None if memory_metadata is None else
+                      memory_metadata.get("history_valid_mask"))
+        state = self.historical_memory.open(source[:, :h], starts, valid_mask)
+        pos = xp.broadcast_to(xp.arange(h, h+w, dtype=xp.int64)[None, :],
+                              (batch, w))
+        active = ActiveContext(
+            embeddings=self.embedding.W.data[working_ids], token_ids=working_ids,
+            position_ids=pos, source_indices=pos, target_start=0,
+            target_end=w, selected_blocks=None, route_weights=None,
+            selected_valid=None, route_valid=None, terminal_memory=None,
+        )
+        return active, {"mode": "historical_read", "working_ids": working_ids,
+                        "state": state, "target_slice": (0, w),
+                        "history_valid_starts": starts}
+
+    def _historical_context_backward(self, dactive, cache):
+        self.embedding.backward(dactive, {"token_ids": cache["working_ids"]})
+        self.historical_memory.close(cache["state"])
+
     def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
         mode = self.config.memory_context.integration_mode
+        if mode == "historical_read":
+            return self._historical_context_forward(
+                token_ids, memory_metadata=memory_metadata
+            )
         if mode == "terminal_landmark":
             return self._terminal_landmark_context_forward(
                 token_ids, memory_metadata=memory_metadata
@@ -1043,6 +1106,8 @@ class DecoderLanguageModel:
 
     def _hierarchical_context_backward(self, dactive, cache):
         mode = cache.pop("mode", None)
+        if mode == "historical_read":
+            return self._historical_context_backward(dactive, cache)
         if mode == "terminal_landmark":
             return self._terminal_landmark_context_backward(dactive, cache)
         if mode == "routed_prefix":
@@ -1196,6 +1261,7 @@ class DecoderLanguageModel:
         memory_context_cache = None
         target_slice = None
         terminal_memory = None
+        historical_state = None
         if self.hierarchical_memory_enabled:
             if position_ids is not None:
                 raise ValueError(
@@ -1217,6 +1283,8 @@ class DecoderLanguageModel:
                 # terminal vocabulary row whose loss is allowed to train memory.
                 target_slice = (active.target_end - 1, active.target_end)
             terminal_memory = active.terminal_memory
+            if self.historical_memory is not None:
+                historical_state = memory_context_cache["state"]
             embed_cache = None
             if finite_trace is not None:
                 finite_trace.append(
@@ -1298,6 +1366,7 @@ class DecoderLanguageModel:
                         attention_allow_mask=attention_allow_mask,
                         block_context_length=block_context_length,
                         block_valid_mask=block_valid_mask,
+                        historical_state=historical_state,
                     )
             elif retain_block and not checkpoint_blocks:
                 if layer_memory_audit is not None:
@@ -1315,6 +1384,7 @@ class DecoderLanguageModel:
                             attention_allow_mask=attention_allow_mask,
                             block_context_length=block_context_length,
                             block_valid_mask=block_valid_mask,
+                            historical_state=historical_state,
                         )
                 except Exception as exc:
                     if layer_memory_audit is not None and (
@@ -1342,6 +1412,7 @@ class DecoderLanguageModel:
                         attention_allow_mask=attention_allow_mask,
                         block_context_length=block_context_length,
                         block_valid_mask=block_valid_mask,
+                        historical_state=historical_state,
                     )
 
         with performance_scope("model.final_norm.forward"):
@@ -1372,6 +1443,7 @@ class DecoderLanguageModel:
             # Replay must use exactly the same explicit source positions.
             cache["position_ids"] = effective_position_ids
             cache["terminal_memory"] = terminal_memory
+            cache["historical_state"] = historical_state
             cache["attention_allow_mask"] = attention_allow_mask
             cache["block_context_length"] = block_context_length
             cache["block_valid_mask"] = block_valid_mask
@@ -1707,6 +1779,7 @@ class DecoderLanguageModel:
             block_checkpoints = cache.pop("block_checkpoints")
             position_ids = cache.pop("position_ids", None)
             terminal_memory = cache.pop("terminal_memory", None)
+            historical_state = cache.pop("historical_state", None)
             attention_allow_mask = cache.pop("attention_allow_mask", None)
             block_context_length = cache.pop("block_context_length", None)
             block_valid_mask = cache.pop("block_valid_mask", None)
@@ -1737,6 +1810,7 @@ class DecoderLanguageModel:
                         attention_allow_mask=attention_allow_mask,
                         block_context_length=block_context_length,
                             block_valid_mask=block_valid_mask,
+                            historical_state=historical_state,
                         )
                 finally:
                     if replay_router is not None:

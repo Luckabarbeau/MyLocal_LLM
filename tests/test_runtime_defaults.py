@@ -36,6 +36,7 @@ PROFILE_VARS = {
     "MINI_LLM_LM_HEAD_CHUNK_TOKENS",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL",
+    "MINI_LLM_AR_COMPACT_TARGET",
 }
 
 
@@ -69,6 +70,7 @@ def test_auto_large_cupy_training_uses_consumer_profile(monkeypatch):
     assert os.environ["MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB"] == "16"
     assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "1024"
     assert os.environ["MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS"] == "1"
+    assert os.environ["MINI_LLM_AR_COMPACT_TARGET"] == "1"
 
 
 def test_explicit_override_wins_over_profile(monkeypatch):
@@ -122,6 +124,7 @@ def test_dense_gpu_fast_uses_safe_gemm_and_512d_tile(monkeypatch):
     assert result.resolved == "gpu-fast"
     assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "512"
+    assert os.environ["MINI_LLM_AR_COMPACT_TARGET"] == "1"
     assert "MINI_LLM_OPTIMIZER_OFFLOAD" not in os.environ
     summary = format_runtime_fast_paths(config)
     assert "ffn_packed_gate_up=0" in summary
@@ -155,3 +158,52 @@ def test_768_dense_gets_prior_measured_query_chunk(monkeypatch):
     apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
     assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"
+
+
+def test_1024_dense_gets_measured_query_chunk(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config,
+        training=True, precision="bf16-mixed",
+    )
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "auto"
+    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "8192"
+
+
+def test_1024_dense_preserves_explicit_lm_head_chunk(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "2048")
+    import dataclasses
+    config = ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config,
+        training=True, precision="bf16-mixed",
+    )
+    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "2048"
+
+
+def test_1024_dense_unmeasured_precision_has_no_lm_head_default(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config,
+        training=True, precision="float32",
+    )
+    assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ
+
+
+def test_unmeasured_1024_memory_model_keeps_prior_query_chunk(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = ModelConfig.wide24_500m_memory_64k()
+    config = dataclasses.replace(config, context_length=config.memory_context.active_length)
+    apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
+    assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"
+    assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ

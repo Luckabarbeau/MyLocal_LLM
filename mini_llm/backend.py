@@ -26,7 +26,14 @@ else:
 
 
 def asnumpy(x):
-    if BACKEND_NAME == "cupy":
+    """Return a host NumPy array from a NumPy *or* CuPy value.
+
+    The GPU runtime also passes host-side token indices, causal context
+    lengths, targets and metadata into shared utilities.  Only actual CuPy
+    arrays support ``.get()``; assuming every value is device-resident makes
+    context-conditioned fusion fail as soon as it receives host token arrays.
+    """
+    if BACKEND_NAME == "cupy" and isinstance(x, xp.ndarray):
         return x.get()
     return _np.asarray(x)
 

@@ -281,6 +281,8 @@ class GQAAttention:
         self._static_head_groups = []
         self._retrieval_groups = []
         self.terminal_memory = None
+        self.historical_reader = None
+        self.historical_layer = None
         self._terminal_memory_head_indices = ()
         self._terminal_memory_group_name = None
 
@@ -550,7 +552,8 @@ class GQAAttention:
             )
         return self._causal_mask_cache[t]
 
-    def _mixed_context_forward(self, x, q, k, v, return_cache, terminal_memory=None):
+    def _mixed_context_forward(self, x, q, k, v, return_cache, terminal_memory=None,
+                               historical_skip_heads=()):
         b, t, _, _ = q.shape
         keep_bf16_context = _bf16_mixed_context_enabled(q.dtype)
         context_dtype = (
@@ -562,8 +565,11 @@ class GQAAttention:
         group_caches = []
         routing = {}
 
+        skipped = set(historical_skip_heads)
         for group in self._static_head_groups:
-            head_indices = group["head_indices"]
+            head_indices = tuple(h for h in group["head_indices"] if h not in skipped)
+            if not head_indices:
+                continue
             q_subset = q[:, :, head_indices, :]
             topology_kind = group["kind"]
             with performance_scope(f"attention.{topology_kind}.forward"):
@@ -727,6 +733,10 @@ class GQAAttention:
 
         for group in self._retrieval_groups:
             head_indices = group["head_indices"]
+            if all(h in skipped for h in head_indices):
+                continue
+            if any(h in skipped for h in head_indices):
+                raise ValueError("historical_read must replace whole current retrieval groups")
             module = group["module"]
             if (
                 terminal_memory is None
@@ -1076,7 +1086,7 @@ class GQAAttention:
     def forward(
         self, x, return_cache=True, position_ids=None, terminal_memory=None,
         attention_allow_mask=None, block_context_length=None,
-        block_valid_mask=None,
+        block_valid_mask=None, historical_state=None,
     ):
         if x.ndim != 3:
             raise ValueError("attention input must have shape [B,T,D].")
@@ -1197,9 +1207,26 @@ class GQAAttention:
                 "sparse/routed kernels must be audited separately"
             )
         if self.attention_config is not None:
+            historical_skip_heads = ()
+            if historical_state is not None and self.historical_reader is not None:
+                # A batch containing any memoryless example retains its
+                # corresponding current-window head fallback.
+                if historical_state.all_rows_have_valid:
+                    historical_skip_heads = tuple(
+                        slot.head for slot in
+                        self.historical_reader.slots[self.historical_layer]
+                    )
             context, pattern_caches, routing = self._mixed_context_forward(
-                x, q, k, v, return_cache, terminal_memory=terminal_memory
+                x, q, k, v, return_cache, terminal_memory=terminal_memory,
+                historical_skip_heads=historical_skip_heads,
             )
+            historical_cache = None
+            if historical_state is not None and self.historical_reader is not None:
+                with performance_scope("attention.historical.forward"):
+                    context, historical_cache = self.historical_reader.apply(
+                        context, q, self.historical_layer, historical_state,
+                        return_cache=return_cache,
+                    )
             merged = context.reshape(b, t, self.n_q_heads * self.d_head)
             merged_compute = (
                 merged.astype(x.dtype, copy=False)
@@ -1222,6 +1249,8 @@ class GQAAttention:
                 "pattern_caches": pattern_caches,
                 "routing": routing,
                 "mixed": True,
+                "historical_state": historical_state,
+                "historical_read_cache": historical_cache,
             }
 
         # Native GQA representation -- no xp.repeat(K/V).
@@ -1429,9 +1458,18 @@ class GQAAttention:
             return dx
 
         if self.attention_config is not None:
+            historical_dq = None
+            if cache.get("historical_read_cache") is not None:
+                with performance_scope("attention.historical.backward"):
+                    dcontext, historical_dq = self.historical_reader.backward_reads(
+                        dcontext, q, self.historical_layer,
+                        cache["historical_state"], cache["historical_read_cache"],
+                    )
             dq, dk, dv, drouter_input = self._mixed_context_backward(
                 dcontext, cache
             )
+            if historical_dq is not None:
+                dq += historical_dq.astype(dq.dtype, copy=False)
             if shared_context_kv_grad is not None:
                 dk += shared_context_kv_grad[0]
                 dv += shared_context_kv_grad[1]

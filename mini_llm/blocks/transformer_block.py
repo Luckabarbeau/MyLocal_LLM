@@ -142,7 +142,7 @@ class TransformerBlock:
         block_context_length=None, block_valid_mask=None,
         shared_context_kv=None, shared_context_length=None,
         shared_context_block_starts=None, shared_context_plans=None,
-        shared_context_retrieval_tasks=None,
+        shared_context_retrieval_tasks=None, historical_state=None,
     ):
         """
         Forward pass through the Transformer block.
@@ -186,6 +186,8 @@ class TransformerBlock:
                     kwargs["position_ids"] = position_ids
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
+                if historical_state is not None:
+                    kwargs["historical_state"] = historical_state
                 if attention_allow_mask is not None:
                     kwargs["attention_allow_mask"] = attention_allow_mask
                 if block_context_length is not None:
@@ -209,6 +211,8 @@ class TransformerBlock:
                     kwargs["position_ids"] = position_ids
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
+                if historical_state is not None:
+                    kwargs["historical_state"] = historical_state
                 if attention_allow_mask is not None:
                     kwargs["attention_allow_mask"] = attention_allow_mask
                 if block_context_length is not None:

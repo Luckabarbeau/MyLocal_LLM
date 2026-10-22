@@ -47,6 +47,22 @@ def test_rmsnorm_inference_float16_matches_fp32_reference():
     np.testing.assert_allclose(y_np, expected, rtol=2e-3, atol=2e-3)
 
 
+def test_rmsnorm_fp32_residual_emits_low_precision_branch():
+    rng = np.random.default_rng(457)
+    x_np = rng.normal(size=(3, 5, 512)).astype(np.float32)
+    gamma_np = rng.normal(loc=1.0, scale=0.1, size=(512,)).astype(np.float16)
+
+    layer = RMSNormInference(512, eps=1e-6, dtype="float16")
+    layer.set_weights(xp.asarray(gamma_np))
+    y = layer.forward_residual(xp.asarray(x_np))
+    synchronize()
+
+    y_np = asnumpy(y)
+    expected = _reference_rmsnorm(x_np, gamma_np, 1e-6).astype(np.float16)
+    assert y_np.dtype == np.float16
+    np.testing.assert_allclose(y_np, expected, rtol=2e-3, atol=2e-3)
+
+
 def test_inference_rmsnorm_matches_training_forward_float16():
     rng = np.random.default_rng(654)
     x = xp.asarray(rng.normal(size=(2, 5, 512)).astype(np.float16))

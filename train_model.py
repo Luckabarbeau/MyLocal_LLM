@@ -468,6 +468,19 @@ def parse_args():
                         default="attention,moe,moe_router,memory,head",
                         help="Selected parameter categories, comma separated")
 
+    # 0084E: norm plateau against a random-direction null during accumulation.
+    parser.add_argument("--gradient-convergence-monitor", action="store_true",
+                        help="Read-only partial-gradient convergence vs random-sign reference")
+    parser.add_argument("--gradient-convergence-interval", type=int, default=100,
+                        help="Measure every N completed optimizer updates")
+    parser.add_argument("--gradient-convergence-points", default="auto",
+                        help="Microbatch counts; final accumulation point added automatically")
+    parser.add_argument("--gradient-convergence-groups", default="attention,ffn",
+                        help="Selected matrix groups: attention,ffn,moe,memory,head")
+    parser.add_argument("--gradient-convergence-output",
+                        default="./logs/gradient_convergence.csv",
+                        help="Separate observational convergence CSV")
+
     # 0074B: read-only counterfactual AdamW direction diagnostics.
     parser.add_argument("--adamw-update-monitor", action="store_true",
                         help="Compare hypothetical AdamW updates at gradient-noise accumulation points")
@@ -1939,6 +1952,11 @@ def main():
         source_weights=source_weights,
         eos_token_id=eos_token_id,
         progressive_growth_steps=progressive_growth_steps,
+        gradient_convergence_monitor=args.gradient_convergence_monitor,
+        gradient_convergence_interval=args.gradient_convergence_interval,
+        gradient_convergence_points=args.gradient_convergence_points,
+        gradient_convergence_groups=args.gradient_convergence_groups,
+        gradient_convergence_output=args.gradient_convergence_output,
         gradient_noise_monitor=args.gradient_noise_monitor,
         gradient_noise_interval=args.gradient_noise_interval,
         gradient_noise_output=args.gradient_noise_output,

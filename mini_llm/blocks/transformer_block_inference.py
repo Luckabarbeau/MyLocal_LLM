@@ -142,9 +142,10 @@ class TransformerBlockInference:
         if self.use_fp32_residual:
             x = x.astype(xp.float32, copy=False)
         residual1 = x
-        h = self.norm1.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
+        h = (
+            self.norm1.forward_residual(x)
+            if self.use_fp32_residual else self.norm1.forward(x)
+        )
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
 
@@ -165,9 +166,10 @@ class TransformerBlockInference:
         x = residual1 + a_residual
 
         residual2 = x
-        h = self.norm2.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
+        h = (
+            self.norm2.forward_residual(x)
+            if self.use_fp32_residual else self.norm2.forward(x)
+        )
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
 
@@ -187,9 +189,10 @@ class TransformerBlockInference:
         if self.use_fp32_residual:
             x = x.astype(xp.float32, copy=False)
         residual1 = x
-        h = self.norm1.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
+        h = (
+            self.norm1.forward_residual(x)
+            if self.use_fp32_residual else self.norm1.forward(x)
+        )
         a = self.attention.forward_provisional_block(
             h, k_cache, v_cache, context_length
         )
@@ -198,9 +201,10 @@ class TransformerBlockInference:
             a_residual = a_residual * self.alpha_attn
         x = residual1 + a_residual
         residual2 = x
-        h = self.norm2.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
+        h = (
+            self.norm2.forward_residual(x)
+            if self.use_fp32_residual else self.norm2.forward(x)
+        )
         m = self.moe.prefill(h)
         m_residual = m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
         if self.alpha_mlp is not None:
@@ -213,6 +217,7 @@ class TransformerBlockInference:
         cache_start=0, working_count=None, route_clock=None, working_start_abs=0,
         fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        normalized_input=None, next_norm=None,
     ):
         """
         Decode one token through this block.
@@ -224,14 +229,19 @@ class TransformerBlockInference:
             start_pos: Current position
             
         Returns:
-            y: Output [B, 1, D]
+            y: Output [B, 1, D]. When ``next_norm`` is supplied, returns
+                ``(y, next_normalized)`` for chained low-precision decode.
         """
         if self.use_fp32_residual:
             x = x.astype(xp.float32, copy=False)
         residual1 = x
-        h = self.norm1.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
+        if normalized_input is None:
+            h = (
+                self.norm1.forward_residual(x)
+                if self.use_fp32_residual else self.norm1.forward(x)
+            )
+        else:
+            h = normalized_input
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
 
@@ -248,20 +258,25 @@ class TransformerBlockInference:
             terminal_memory_store=terminal_memory_store,
             terminal_memory_route=terminal_memory_route,
         )
-        a_residual = (
-            a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
-        )
-        if self.alpha_attn is not None:
-            a_residual = a_residual * self.alpha_attn
-        x = residual1 + a_residual
+        if self.use_fp32_residual:
+            x, h = self.norm2.forward_residual_add(
+                residual1, a, self.alpha_attn
+            )
+        else:
+            a_residual = a
+            if self.alpha_attn is not None:
+                a_residual = a_residual * self.alpha_attn
+            x = residual1 + a_residual
+            h = self.norm2.forward(x)
 
         residual2 = x
-        h = self.norm2.forward(x)
-        if self.use_fp32_residual:
-            h = h.astype(self.compute_dtype, copy=False)
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
         m = self.moe.decode_one(h)
+        if self.use_fp32_residual and next_norm is not None:
+            return next_norm.forward_residual_add(
+                residual2, m, self.alpha_mlp
+            )
         m_residual = (
             m.astype(xp.float32, copy=False) if self.use_fp32_residual else m
         )

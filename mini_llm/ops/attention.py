@@ -552,6 +552,16 @@ class GQAAttention:
             )
         return self._causal_mask_cache[t]
 
+    @staticmethod
+    def _head_selection(indices):
+        """Use a view for contiguous attention-head groups; index others normally."""
+        if not indices:
+            return indices
+        start = indices[0]
+        if all(index == start + offset for offset, index in enumerate(indices)):
+            return slice(start, start + len(indices))
+        return indices
+
     def _mixed_context_forward(self, x, q, k, v, return_cache, terminal_memory=None,
                                historical_skip_heads=()):
         b, t, _, _ = q.shape
@@ -570,7 +580,7 @@ class GQAAttention:
             head_indices = tuple(h for h in group["head_indices"] if h not in skipped)
             if not head_indices:
                 continue
-            q_subset = q[:, :, head_indices, :]
+            q_subset = q[:, :, self._head_selection(head_indices), :]
             topology_kind = group["kind"]
             with performance_scope(f"attention.{topology_kind}.forward"):
                 with performance_scope(f"attention.{topology_kind}.plan.forward"):
@@ -729,7 +739,7 @@ class GQAAttention:
                             scale=self.scale,
                             return_cache=False,
                         )
-                    context[:, :, head_indices, :] = subset
+                    context[:, :, self._head_selection(head_indices), :] = subset
 
         for group in self._retrieval_groups:
             head_indices = group["head_indices"]
@@ -758,7 +768,7 @@ class GQAAttention:
                     "route_starts": xp.zeros((0,), dtype=xp.int64),
                 }
                 continue
-            q_subset = q[:, :, head_indices, :]
+            q_subset = q[:, :, self._head_selection(head_indices), :]
             kv_head_indices = tuple(
                 index // self.group_size for index in head_indices
             )
@@ -790,12 +800,12 @@ class GQAAttention:
                         kv_head_indices=kv_head_indices,
                         return_cache=False,
                     )
-                context[:, :, head_indices, :] = subset
+                context[:, :, self._head_selection(head_indices), :] = subset
                 routing[group["name"]] = group_routing
 
         if terminal_memory is not None and self.terminal_memory is not None:
             head_indices = self._terminal_memory_head_indices
-            q_subset = q[:, :, head_indices, :]
+            q_subset = q[:, :, self._head_selection(head_indices), :]
             kv_head_indices = tuple(index // self.group_size for index in head_indices)
             with performance_scope("attention.terminal_memory.forward"):
                 if return_cache:
@@ -834,11 +844,13 @@ class GQAAttention:
         dq = xp.zeros(q.shape, dtype=grad_dtype)
         dk = xp.zeros(k.shape, dtype=grad_dtype)
         dv = xp.zeros(v.shape, dtype=grad_dtype)
-        drouter_input = xp.zeros(cache["x"].shape, dtype=grad_dtype)
+        # Most current/historical-read layers have no current-window router.
+        # Allocate a router-input gradient only when a retrieval group needs it.
+        drouter_input = None
 
         for group_cache in cache["pattern_caches"]:
             head_indices = group_cache["head_indices"]
-            dsubset = dcontext[:, :, head_indices, :]
+            dsubset = dcontext[:, :, self._head_selection(head_indices), :]
             if group_cache["kind"] == "retrieval":
                 terminal_entry = next(
                     (entry for entry in cache["pattern_caches"]
@@ -892,9 +904,11 @@ class GQAAttention:
                     drouter, dq_sub, dk_sub, dv_sub = group_cache["module"].backward(
                         dsubset, group_cache["cache"]
                     )
+                    if drouter_input is None:
+                        drouter_input = xp.zeros(cache["x"].shape, dtype=grad_dtype)
                     drouter_input += drouter.astype(grad_dtype, copy=False)
 
-            dq[:, :, head_indices, :] += dq_sub.astype(grad_dtype, copy=False)
+            dq[:, :, self._head_selection(head_indices), :] += dq_sub.astype(grad_dtype, copy=False)
             dk += dk_sub.astype(grad_dtype, copy=False)
             dv += dv_sub.astype(grad_dtype, copy=False)
 
@@ -1475,7 +1489,8 @@ class GQAAttention:
                 dv += shared_context_kv_grad[1]
             with performance_scope("attention.qkv_projection.backward"):
                 dx = self._projection_backward(x, dq, dk, dv, cache)
-            dx = dx + drouter_input.astype(dx.dtype, copy=False)
+            if drouter_input is not None:
+                dx = dx + drouter_input.astype(dx.dtype, copy=False)
             if return_output_scale_grad:
                 return dx, output_scale_grad
             return dx

@@ -121,6 +121,21 @@ def _is_memory_model(config) -> bool:
     return bool(memory is not None and getattr(memory, "enabled", False))
 
 
+def _use_fused_historical_decode(config, *, training: bool) -> bool:
+    """Enable the measured BF16 one-token kernel only for its validated family."""
+    if training or config is None:
+        return False
+    memory = getattr(config, "memory_context", None)
+    return bool(
+        memory is not None
+        and getattr(memory, "enabled", False)
+        and getattr(memory, "integration_mode", None) == "historical_read"
+        and int(getattr(config, "d_head", 0)) == 64
+        and str(getattr(config, "dtype", "")).lower() in {"bfloat16", "bf16"}
+        and getattr(config, "attention_layers", None) is not None
+    )
+
+
 def _local_query_chunk_default(config) -> str | None:
     """VRAM-conscious query tiles; explicit user overrides take priority.
 
@@ -182,6 +197,7 @@ def format_runtime_fast_paths(config=None) -> str:
     names = (
         ("ffn_packed_gate_up", "MINI_LLM_FUSED_EXPERT_GEMM", "0"),
         ("packed_qkv", "MINI_LLM_PACKED_QKV", "0"),
+        ("fused_sparse_decode", "MINI_LLM_FUSED_SPARSE_DECODE", "0"),
         ("grouped_local_gemm", "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM", "0"),
         ("bf16_local_pipeline", "MINI_LLM_FUSED_BF16_LOCAL_PIPELINE", "0"),
         ("bf16_indexed_pipeline", "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE", "0"),
@@ -241,6 +257,8 @@ def apply_runtime_defaults(
     # Keep packed gate/up GEMM opt-in: the 32x512 dense A/B benchmark
     # measured a regression with this path enabled.
     _setdefaults(_GPU_FAST_DEFAULTS, applied)
+    if _use_fused_historical_decode(config, training=training):
+        _setdefaults({"MINI_LLM_FUSED_SPARSE_DECODE": "1"}, applied)
 
     chunk = _local_query_chunk_default(config)
     if chunk is not None:

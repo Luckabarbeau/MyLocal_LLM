@@ -232,6 +232,23 @@ def test_history_valid_mask_blocks_cross_document_read():
     assert np.array_equal(a, b)
 
 
+def test_short_horizon_uses_current_window_kv_inference_only():
+    from mini_llm.inference_model import InferenceModel
+
+    c = small_config()
+    inference = InferenceModel(c, dtype="float32")
+    state = inference.create_generation_state(
+        batch_size=1, max_length=c.memory_context.target_length
+    )
+    assert state.max_length == c.memory_context.target_length
+    assert not state.long_memory_enabled
+
+    with pytest.raises(NotImplementedError, match="completed-block historical index"):
+        inference.create_generation_state(
+            batch_size=1, max_length=c.memory_context.target_length + 1
+        )
+
+
 def test_new_memory_parameters_are_optimizer_registered():
     c = small_config()
     m = DecoderLanguageModel(c, rng_seed=24)

@@ -64,7 +64,7 @@ def _sample_slices(shape, limit=65536):
 def select_parameters(parameters, categories="attention,moe,moe_router,memory,head"):
     """Choose one bounded slice per representative group from actual names."""
     requested = {item.strip() for item in categories.split(",") if item.strip()}
-    allowed = {"attention", "moe", "moe_router", "memory", "head"}
+    allowed = {"attention", "ffn", "moe", "moe_router", "memory", "head"}
     unknown = requested - allowed
     if unknown:
         raise ValueError(f"unknown gradient-noise groups: {sorted(unknown)}")
@@ -92,6 +92,19 @@ def select_parameters(parameters, categories="attention,moe,moe_router,memory,he
                                ("attention_middle", len(indexed) // 2),
                                ("attention_final", len(indexed) - 1)):
                 pick(label, [indexed[pos][1]])
+    if "ffn" in requested:
+        # Router-free dense SwiGLU in the 0083B+ ensemble presets. Like
+        # attention, sample early/middle/final layers, not just layer zero.
+        dense = sorted(
+            (int(m.group(1)), name) for name in named
+            if (m := re.fullmatch(
+                r"blocks\.(\d+)\.dense_ffn\.expert\.W_gate", name))
+        )
+        if dense:
+            for label, pos in (("ffn_early", 0),
+                               ("ffn_middle", len(dense) // 2),
+                               ("ffn_final", len(dense) - 1)):
+                pick(label, [dense[pos][1]])
     if "moe" in requested:
         pick("moe_expert", sorted(
             name for name in named if re.fullmatch(

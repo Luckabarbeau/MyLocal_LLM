@@ -21,10 +21,11 @@ _FUSED_SWIGLU_DISABLED = False
 
 
 def _fused_swiglu_enabled(dtype):
-    raw = os.environ.get("MINI_LLM_FUSED_SWIGLU", "0").strip().lower()
+    default = "0" if is_bfloat16_dtype(dtype) else "1"
+    raw = os.environ.get("MINI_LLM_FUSED_SWIGLU", default).strip().lower()
     return (
         BACKEND_NAME == "cupy"
-        and is_bfloat16_dtype(dtype)
+        and (is_bfloat16_dtype(dtype) or dtype == xp.float16)
         and raw not in {"0", "false", "off", "no"}
     )
 
@@ -38,6 +39,8 @@ def _get_fused_swiglu_module():
         return _FUSED_SWIGLU_MODULE
 
     code = r"""
+    #include <cuda_fp16.h>
+
     __device__ __forceinline__ float bf16_to_float(unsigned short x) {
         union { unsigned int u; float f; } v;
         v.u = ((unsigned int)x) << 16;
@@ -55,6 +58,42 @@ def _get_fused_swiglu_module():
 
     __device__ __forceinline__ float sigmoidf_stable(float x) {
         return 1.0f / (1.0f + expf(-x));
+    }
+
+    extern "C" __global__
+    void fp16_swiglu_fwd(
+        const half* g,
+        const half* u,
+        half* h,
+        long long n) {
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            float gf = __half2float(g[idx]);
+            float uf = __half2float(u[idx]);
+            float s = sigmoidf_stable(gf);
+            h[idx] = __float2half_rn((gf * s) * uf);
+        }
+    }
+
+    extern "C" __global__
+    void fp16_swiglu_fwd_strided(
+        const half* g,
+        const half* u,
+        half* h,
+        long long rows, int cols,
+        long long g_row_stride, long long u_row_stride) {
+        long long n = rows * cols;
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n; idx += stride) {
+            long long row = idx / cols;
+            int col = (int)(idx - row * cols);
+            float gf = __half2float(g[row * g_row_stride + col]);
+            float uf = __half2float(u[row * u_row_stride + col]);
+            float s = sigmoidf_stable(gf);
+            h[idx] = __float2half_rn((gf * s) * uf);
+        }
     }
 
     extern "C" __global__
@@ -146,10 +185,13 @@ def _get_fused_swiglu_module():
             code=code,
             options=("--std=c++11",),
             name_expressions=(
+                "fp16_swiglu_fwd", "fp16_swiglu_fwd_strided",
                 "bf16_swiglu_fwd", "bf16_swiglu_fwd_strided",
                 "bf16_swiglu_bwd", "bf16_swiglu_bwd_strided",
             ),
         )
+        module.get_function("fp16_swiglu_fwd")
+        module.get_function("fp16_swiglu_fwd_strided")
         module.get_function("bf16_swiglu_fwd")
         module.get_function("bf16_swiglu_fwd_strided")
         module.get_function("bf16_swiglu_bwd")
@@ -194,12 +236,13 @@ def _fused_swiglu_forward(g, u):
         return h
     threads = 256
     blocks = min(65535, max(1, (n + threads - 1) // threads))
+    prefix = "bf16" if is_bfloat16_dtype(g.dtype) else "fp16"
     if g_row_stride == cols and u_row_stride == cols:
-        module.get_function("bf16_swiglu_fwd")((blocks,), (threads,), (
+        module.get_function(f"{prefix}_swiglu_fwd")((blocks,), (threads,), (
             g, u, h, np.int64(n),
         ))
     else:
-        module.get_function("bf16_swiglu_fwd_strided")((blocks,), (threads,), (
+        module.get_function(f"{prefix}_swiglu_fwd_strided")((blocks,), (threads,), (
             g, u, h, np.int64(rows), np.int32(cols),
             np.int64(g_row_stride), np.int64(u_row_stride),
         ))

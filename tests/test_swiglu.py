@@ -1,6 +1,25 @@
 import numpy as np
-from mini_llm.backend import xp, RandomStream
+from mini_llm.backend import xp, RandomStream, BACKEND_NAME, asnumpy, synchronize
 from mini_llm.ops.swiglu import SwiGLU
+from mini_llm.ops.experts import _fused_swiglu_forward
+
+
+def test_fused_fp16_swiglu_matches_reference(monkeypatch):
+    if BACKEND_NAME != "cupy":
+        return
+    monkeypatch.setenv("MINI_LLM_FUSED_SWIGLU", "1")
+    rng = np.random.default_rng(4)
+    g_np = rng.normal(size=(3, 257)).astype(np.float16)
+    u_np = rng.normal(size=(3, 257)).astype(np.float16)
+    actual = _fused_swiglu_forward(xp.asarray(g_np), xp.asarray(u_np))
+    synchronize()
+    assert actual is not None
+    expected = (
+        g_np.astype(np.float32)
+        / (1.0 + np.exp(-g_np.astype(np.float32)))
+        * u_np.astype(np.float32)
+    ).astype(np.float16)
+    np.testing.assert_allclose(asnumpy(actual), expected, rtol=2e-3, atol=2e-3)
 
 
 def test_swiglu_backward_direction():

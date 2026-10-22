@@ -3827,6 +3827,31 @@ def _fused_local_recompute_softmax_enabled():
     return raw not in {"0", "false", "off", "no", ""}
 
 
+def _local_grouped_recompute_input_groups(
+    score_problems, dprobs_problems, *, q_row, k_row, dc_row, v_row,
+):
+    """Pack recompute score and dProbs GEMMs into *uniform* cuBLAS groups.
+
+    Zero-copy head slices preserve the full Q tensor's token stride whereas
+    backward dcontext is packed.  Distinct leading dimensions must not share
+    one GroupedBatchedEx descriptor; cuBLAS supports multiple uniform groups
+    in a single API call.  Keep the original one-group path if possible.
+    """
+    if not dprobs_problems:
+        return (RowMajorGemmGroup(tuple(score_problems)),)
+    if q_row == dc_row and k_row == v_row:
+        interleaved = (
+            problem
+            for pair in zip(score_problems, dprobs_problems)
+            for problem in pair
+        )
+        return (RowMajorGemmGroup(tuple(interleaved)),)
+    return (
+        RowMajorGemmGroup(tuple(score_problems)),
+        RowMajorGemmGroup(tuple(dprobs_problems)),
+    )
+
+
 def _local_grouped_reconstruct_chunk(
     q, k, chunk, kv_map_host, scale, window, *, defer_softmax=False,
     dcontext=None, v=None, dprobs=None,
@@ -3865,11 +3890,17 @@ def _local_grouped_reconstruct_chunk(
         )
         dc_row = _row_stride_elems(dcontext, 1)
         v_row = _row_stride_elems(v, 1)
-    problems = []
+    # Scores and dProbs have identical mathematical GEMM shapes, but their
+    # physical row strides can differ.  In particular, a sliced Q-head view
+    # retains the original full-head token stride while backward dcontext is
+    # compacted to the number of selected heads.  Grouped cuBLAS requires
+    # uniform lda/ldb/ldc inside each RowMajorGemmGroup.
+    score_problems = []
+    dprobs_problems = []
     for b in range(batch):
         for h in range(n_q_heads):
             kvh = int(kv_map_host[h])
-            problems.append(RowMajorGemmProblem(
+            score_problems.append(RowMajorGemmProblem(
                 int(q.data.ptr) + b * int(q.strides[0])
                 + q_start * int(q.strides[1]) + h * int(q.strides[2]),
                 int(k.data.ptr) + b * int(k.strides[0])
@@ -3880,7 +3911,7 @@ def _local_grouped_reconstruct_chunk(
                 False, True,
             ))
             if paired_dprobs:
-                problems.append(RowMajorGemmProblem(
+                dprobs_problems.append(RowMajorGemmProblem(
                     dc_ptr + b * dc_batch_stride
                     + q_start * dc_token_stride + h * dc_head_stride,
                     v_ptr + b * v_batch_stride
@@ -3889,12 +3920,16 @@ def _local_grouped_reconstruct_chunk(
                     q_count, k_count, d_head, dc_row, v_row, k_count,
                     False, True,
                 ))
+    groups = _local_grouped_recompute_input_groups(
+        score_problems, dprobs_problems,
+        q_row=q_row, k_row=k_row, dc_row=dc_row, v_row=v_row,
+    )
     profile_name = (
         "local.grouped.recompute_score_dprobs_gemm"
         if paired_dprobs else "local.grouped.recompute_score_gemm"
     )
     with local_detail_scope(profile_name):
-        if not _cublas_grouped_bf16_gemm((RowMajorGemmGroup(tuple(problems)),)):
+        if not _cublas_grouped_bf16_gemm(groups):
             raise RuntimeError("0080BA grouped BF16 recompute input GEMMs failed")
     if defer_softmax:
         return scores
@@ -4099,6 +4134,74 @@ def local_window_attention_forward(
         if keep_bf16_context
         else (xp.float32 if bf16_attention else q.dtype)
     )
+
+    # 0086B: experimental tiled online-softmax forward. Keep the grouped-cuBLAS
+    # implementation as the default and as the fallback for every unsupported
+    # geometry. Cached training calls reuse the validated grouped recompute
+    # backward, so they require its BF16 pipeline and probability-recompute mode.
+    from .fused_local_attention import (
+        fused_local_forward,
+        fused_local_requested,
+        fused_local_strict,
+    )
+    if fused_local_requested():
+        fused_decline = None
+        grouped_backward_ready = _local_grouped_fastpath_ready(
+            q, k, v, bf16_pipeline
+        )
+        if keep_bf16_context:
+            fused_decline = "0086B fused local forward currently requires FP32 context"
+        elif return_cache and not _local_prob_recompute_enabled():
+            fused_decline = "0086B cached training requires local probability recomputation"
+        elif return_cache and not grouped_backward_ready:
+            fused_decline = "0086B cached training requires grouped BF16 recompute backward"
+
+        fused = None
+        if fused_decline is None:
+            with local_detail_scope("local.fused.forward"):
+                fused = fused_local_forward(
+                    q, k, v, window, scale, _kv_map,
+                    output_dtype=context_dtype,
+                )
+        elif fused_local_strict():
+            raise RuntimeError(fused_decline)
+
+        if fused is not None:
+            context, lse = fused
+            if not return_cache:
+                return context
+            chunks = []
+            for q_start, q_end in _query_chunks(query_length, query_chunk_size):
+                key_start = max(0, q_start - window + 1)
+                chunks.append({
+                    "q_start": q_start,
+                    "q_end": q_end,
+                    "key_start": key_start,
+                    "key_end": q_end,
+                    "q_count": q_end - q_start,
+                    "k_count": q_end - key_start,
+                })
+            return context, {
+                "attention_backend": "fused_local_forward_0086b",
+                "fused_local_forward": True,
+                "recompute_local_probs": True,
+                "q": q,
+                "k": k,
+                "v": v,
+                "output": context,
+                "lse": lse,
+                "window": window,
+                "scale": scale,
+                "bf16_attention": True,
+                "bf16_tensorcore": True,
+                "bf16_pipeline": True,
+                "kv_head_indices_host": tuple(kv_map_host),
+                "kv_head_indices": _kv_map,
+                "chunks": tuple(chunks),
+                "query_chunk_size": query_chunk_size,
+                "grouped_cublas_local": False,
+                "cublas_local_mode": _cublas_local_mode(),
+            }
 
     # 0053: keep cuBLAS GEMM quality but dispatch all heterogeneous local
     # chunks/heads through cublasGemmGroupedBatchedEx.  The helper reads
@@ -4373,6 +4476,10 @@ def local_window_attention_backward(dcontext, cache):
     q, k, v = cache["q"], cache["k"], cache["v"]
     if dcontext.shape != q.shape:
         raise ValueError("dcontext must have the same shape as q/context")
+
+    if cache.get("fused_local_forward", False):
+        with local_detail_scope("local.fused.backward_grouped_recompute"):
+            return _local_grouped_backward_recomputed(dcontext, cache)
 
     if cache.get("grouped_cublas_local", False):
         with local_detail_scope("local.grouped.backward"):

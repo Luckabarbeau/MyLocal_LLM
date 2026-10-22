@@ -1,7 +1,9 @@
 """Experts for inference - no backward caches needed."""
 
 
-from mini_llm.backend import xp
+import os
+
+from mini_llm.backend import xp, BACKEND_NAME
 from mini_llm.ops.experts import _fused_swiglu_forward
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
@@ -31,12 +33,33 @@ class ExpertFFNInference:
         self.W_gate = None
         self.W_up = None
         self.W_down = None
+        self.W_gate_up = None
+
+    def set_weight_arrays(self, gate, up, down):
+        """Attach inference weights and persistently pack FP16 gate/up once."""
+        enabled = os.environ.get(
+            "MINI_LLM_PACKED_INFERENCE_FFN", "1"
+        ).strip().lower() not in {"0", "false", "off", "no", ""}
+        if (
+            enabled
+            and BACKEND_NAME == "cupy"
+            and gate.dtype == xp.float16
+            and up.dtype == xp.float16
+        ):
+            self.W_gate_up = xp.concatenate((gate, up), axis=1)
+            self.W_gate = self.W_gate_up[:, :self.d_ff]
+            self.W_up = self.W_gate_up[:, self.d_ff:]
+        else:
+            self.W_gate_up = None
+            self.W_gate = gate
+            self.W_up = up
+        self.W_down = down
 
     def set_weights(self, expert):
         """Set weights from training ExpertFFN."""
-        self.W_gate = expert.W_gate.data
-        self.W_up = expert.W_up.data
-        self.W_down = expert.W_down.data
+        self.set_weight_arrays(
+            expert.W_gate.data, expert.W_up.data, expert.W_down.data
+        )
 
     def forward(self, x):
         """
@@ -48,8 +71,13 @@ class ExpertFFNInference:
         Returns:
             y: Output [B, T, D] or [N, D]
         """
-        g = x @ self.W_gate  # [..., d_ff]
-        u = x @ self.W_up    # [..., d_ff]
+        if self.W_gate_up is None:
+            g = x @ self.W_gate  # [..., d_ff]
+            u = x @ self.W_up    # [..., d_ff]
+        else:
+            gate_up = x @ self.W_gate_up
+            g = gate_up[..., :self.d_ff]
+            u = gate_up[..., self.d_ff:]
         h = _fused_swiglu_forward(g, u)
         if h is None:
             a = silu(g)

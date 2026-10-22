@@ -23,6 +23,10 @@ from mini_llm.ops.decode_qkv_fusion import (
     fused_decode_qkv_enabled,
     fused_unpack_rope_store_bf16_d64,
 )
+from mini_llm.ops.dense_decode_fusion import (
+    fused_qkv_half_rope_store_fp16,
+    fused_dense_attention_fp16,
+)
 from mini_llm.ops.terminal_landmark_decode import terminal_landmark_decode
 
 
@@ -433,6 +437,24 @@ class GQAAttentionInference:
                 cache_position=cache_start,
                 n_q_heads=self.n_q_heads,
                 n_kv_heads=self.n_kv_heads,
+            )
+            if ran:
+                self._fused_qkv_decode_active = True
+                return q, None, None, logical_end
+            self._fused_qkv_decode_active = False
+
+        if (
+            single_token_decode
+            and int(t_new) == 1
+            and self.d_head == 64
+            and self.rope_layout == "half"
+            and qkv.dtype == xp.float16
+        ):
+            self.ensure_rope_capacity(rope_start + 1)
+            q = xp.empty((b, 1, self.n_q_heads, self.d_head), dtype=qkv.dtype)
+            ran = fused_qkv_half_rope_store_fp16(
+                qkv, q, k_cache, v_cache, self._rope_cos, self._rope_sin,
+                position=rope_start, cache_position=cache_start,
             )
             if ran:
                 self._fused_qkv_decode_active = True
@@ -1164,46 +1186,40 @@ class GQAAttentionInference:
             )
 
         _, _, _, Wo = self._weight_data()
-        qkv = (x.reshape(-1, self.d_model) @ self.Wqkv).reshape(
-            b, 1, -1
-        )
-        q_end = self._q_width
-        k_end = q_end + self._kv_width
-        q_pre = qkv[..., :q_end].reshape(
-            b, 1, self.n_q_heads, self.d_head
-        )
-        k_pre = qkv[..., q_end:k_end].reshape(
-            b, 1, self.n_kv_heads, self.d_head
-        )
-        v = qkv[..., k_end:].reshape(
-            b, 1, self.n_kv_heads, self.d_head
-        )
-
         rope_pos = int(start_pos) if rope_position is None else int(rope_position)
-        q = self._apply_rope_absolute(q_pre, rope_pos)
-        k = self._apply_rope_absolute(k_pre, rope_pos)
-
-        end_pos = int(start_pos) + 1
         cache_slot = int(start_pos) if cache_position is None else int(cache_position)
-        k_cache[:, :, cache_slot:cache_slot + 1, :] = k.transpose(0, 2, 1, 3)
-        v_cache[:, :, cache_slot:cache_slot + 1, :] = v.transpose(0, 2, 1, 3)
+        q, _, _, end_pos = self._project_and_store(
+            x, k_cache, v_cache, start_pos, single_token_decode=True,
+            rope_start_pos=rope_pos, cache_position=cache_slot,
+        )
 
-        if working_capacity is None and int(fixed_prefix_length) == 0:
-            k_all = k_cache[:, :, :end_pos, :]
-            v_all = v_cache[:, :, :end_pos, :]
-        else:
-            active_count = int(working_count if working_count is not None else end_pos)
-            logical = xp.arange(active_count, dtype=xp.int64)
-            physical = self._map_logical_indices(
-                logical,
-                cache_start=cache_start,
-                fixed_prefix_length=fixed_prefix_length,
-                working_capacity=working_capacity,
-                cache_capacity=int(k_cache.shape[2]),
+        context = None
+        if (
+            working_capacity is None
+            and int(fixed_prefix_length) == 0
+            and int(cache_start) == 0
+            and cache_slot == int(start_pos)
+        ):
+            context = fused_dense_attention_fp16(
+                q, k_cache, v_cache, position=end_pos - 1, scale=self.scale,
             )
-            k_all = k_cache[:, :, physical, :]
-            v_all = v_cache[:, :, physical, :]
-        context = self._attention(q, k_all, v_all, causal_mask=None)
+        if context is None:
+            if working_capacity is None and int(fixed_prefix_length) == 0:
+                k_all = k_cache[:, :, :end_pos, :]
+                v_all = v_cache[:, :, :end_pos, :]
+            else:
+                active_count = int(working_count if working_count is not None else end_pos)
+                logical = xp.arange(active_count, dtype=xp.int64)
+                physical = self._map_logical_indices(
+                    logical,
+                    cache_start=cache_start,
+                    fixed_prefix_length=fixed_prefix_length,
+                    working_capacity=working_capacity,
+                    cache_capacity=int(k_cache.shape[2]),
+                )
+                k_all = k_cache[:, :, physical, :]
+                v_all = v_cache[:, :, physical, :]
+            context = self._attention(q, k_all, v_all, causal_mask=None)
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
         y = (merged.reshape(-1, self.d_model) @ Wo).reshape(
             b, 1, self.d_model

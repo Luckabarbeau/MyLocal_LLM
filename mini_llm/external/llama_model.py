@@ -123,9 +123,11 @@ class ExternalLlamaModel:
                 convert(prefix + "self_attn.o_proj.weight").T,
             )
             expert = block.moe.expert
-            expert.W_gate = convert(prefix + "mlp.gate_proj.weight").T
-            expert.W_up = convert(prefix + "mlp.up_proj.weight").T
-            expert.W_down = convert(prefix + "mlp.down_proj.weight").T
+            expert.set_weight_arrays(
+                convert(prefix + "mlp.gate_proj.weight").T,
+                convert(prefix + "mlp.up_proj.weight").T,
+                convert(prefix + "mlp.down_proj.weight").T,
+            )
         self._loaded = True
 
     def _require_weights(self):
@@ -142,10 +144,35 @@ class ExternalLlamaModel:
 
     def prefill(self, token_ids, state):
         self._require_weights()
-        return self.engine.prefill(token_ids, state)
+        logits = self.engine.prefill(token_ids, state)
+        from .cuda_graph_decode import (
+            ExternalFP16CudaGraphDecoder,
+            enabled as cuda_graph_enabled,
+            strict as cuda_graph_strict,
+        )
+        state._external_cuda_graph = None
+        state._external_cuda_graph_failure = None
+        if cuda_graph_enabled():
+            try:
+                # Graph preparation uses a dedicated capture stream. Complete
+                # prompt cache writes before its warmup reads the same state.
+                xp.cuda.get_current_stream().synchronize()
+                state._external_cuda_graph = ExternalFP16CudaGraphDecoder(
+                    self.engine, state
+                )
+            except Exception as exc:
+                state._external_cuda_graph_failure = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if cuda_graph_strict():
+                    raise
+        return logits
 
     def decode_one(self, token_ids, state):
         self._require_weights()
+        graph = getattr(state, "_external_cuda_graph", None)
+        if graph is not None:
+            return graph.decode_one(token_ids, state)
         return self.engine.decode_one(token_ids, state)
 
     def forward(self, token_ids):

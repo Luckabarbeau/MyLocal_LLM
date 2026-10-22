@@ -45,6 +45,7 @@ from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
 from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
+from mini_llm.diagnostics.gradient_convergence import GradientConvergenceMonitor
 from mini_llm.diagnostics.moe_usage import (
     ExpertUsageCollector, EXPERT_USAGE_COLUMNS, summarize_usage,
 )
@@ -108,6 +109,11 @@ class ExtendedTrainer:
         profile_steps: int = 0,
         eos_token_id: Optional[int] = None,
         progressive_growth_steps: Optional[List[int]] = None,
+        gradient_convergence_monitor: bool = False,
+        gradient_convergence_interval: int = 100,
+        gradient_convergence_points: str = "auto",
+        gradient_convergence_groups: str = "attention,ffn",
+        gradient_convergence_output: str = "./logs/gradient_convergence.csv",
         gradient_noise_monitor: bool = False,
         gradient_noise_interval: int = 100,
         gradient_noise_output: str = "./logs/gradient_noise.csv",
@@ -520,6 +526,18 @@ class ExtendedTrainer:
             ) if (gradient_noise_monitor or adamw_update_monitor) else None
         )
 
+        self.gradient_convergence = (
+            GradientConvergenceMonitor(
+                self.optimization_parameters,
+                accum_steps=self.grad_accum_steps,
+                accum_points=gradient_convergence_points,
+                categories=gradient_convergence_groups,
+                interval=gradient_convergence_interval,
+                output=gradient_convergence_output,
+                loss_scale=self.loss_scale,
+            ) if gradient_convergence_monitor else None
+        )
+
         # Learning rate schedule
         self.scheduler = WarmupCosineSchedule(
             peak_lr=peak_lr,
@@ -762,6 +780,8 @@ class ExtendedTrainer:
         self._refresh_parameter_partitions()
         if self.gradient_noise is not None:
             self.gradient_noise.refresh(self.optimization_parameters)
+        if self.gradient_convergence is not None:
+            self.gradient_convergence.refresh(self.optimization_parameters)
         block = self.model.blocks[layer_idx]
         print(
             "Progressive depth: activated layer "
@@ -2364,6 +2384,8 @@ class ExtendedTrainer:
         step_memory_token_stats = self._empty_memory_token_stats()
         noise = self.gradient_noise
         noise_active = noise is not None and noise.begin(self.step)
+        convergence = self.gradient_convergence
+        convergence_active = convergence is not None and convergence.begin(self.step)
         if memory_active:
             self._record_memory_snapshot(memory_records, "step_start")
 
@@ -2566,6 +2588,11 @@ class ExtendedTrainer:
                                  ("final_nll_sum", "final_ce"),
                                  ("joint_loss_sum", "total_loss")):
                     block_step_metrics[dst] += xp.asarray(metrics[key], dtype=xp.float64) * valid_tokens
+                if convergence_active:
+                    convergence.capture(
+                        accum_step + 1, microbatch_weight=microbatch_weight,
+                        valid_tokens=valid_tokens,
+                    )
                 del inputs, targets, batch_metadata, loss_mask
                 continue
 
@@ -2745,6 +2772,11 @@ class ExtendedTrainer:
             source_observations.append((source, coverage, loss_backend))
             if noise_active:
                 noise.capture(accum_step + 1)
+            if convergence_active:
+                convergence.capture(
+                    accum_step + 1, microbatch_weight=microbatch_weight,
+                    valid_tokens=valid_tokens,
+                )
             if memory_active:
                 snap = self._record_memory_snapshot(memory_records, "after_model_backward")
                 self._update_mode_memory_peak(
@@ -2804,6 +2836,7 @@ class ExtendedTrainer:
         # Read original cumulative gradients before normalization or clipping.
         # Do not write the CSV until the optimizer update has succeeded.
         noise_rows = noise.finish() if noise_active else []
+        convergence_rows = convergence.finish() if convergence_active else []
 
         # Scale down gradients by loss_scale to cancel out the scaling
         if self.loss_scale != 1.0:
@@ -2901,6 +2934,23 @@ class ExtendedTrainer:
         self.step += 1
         if noise_active:
             noise.commit(noise_rows)
+        if convergence_active:
+            convergence.commit(convergence_rows)
+            summary = [r for r in convergence_rows
+                       if r["accumulation_length"] == self.grad_accum_steps]
+            if summary:
+                # Report only the endpoint in stdout; detailed convergence
+                # curves are retained in the separate CSV.
+                valid = [r["noise_to_signal_squared"] for r in summary
+                         if r["noise_to_signal_squared"] is not None]
+                med = float(np.median(valid)) if valid else float("nan")
+                print(
+                    f"Gradient convergence (step {self.step}, "
+                    f"{self.grad_accum_steps} microbatches, "
+                    f"{len(summary)} matrix slices): "
+                    f"median noise/signal²={med:.3f}, "
+                    f"CSV={convergence.output}", flush=True,
+                )
 
         if memory_active:
             self._print_memory_report(memory_records, mode_memory_peaks)

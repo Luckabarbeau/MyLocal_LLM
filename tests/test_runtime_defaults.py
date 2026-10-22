@@ -22,6 +22,7 @@ PROFILE_VARS = {
     "MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE",
     "MINI_LLM_FUSED_BF16_RMSNORM",
     "MINI_LLM_PACKED_QKV",
+    "MINI_LLM_FUSED_SPARSE_DECODE",
     "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM",
     "MINI_LLM_LOCAL_CUBLAS_MODE",
     "MINI_LLM_CUBLAS_AUTOTUNE",
@@ -95,6 +96,32 @@ def test_auto_cupy_inference_uses_fast_not_training_memory_policy(monkeypatch):
     assert os.environ["MINI_LLM_PACKED_QKV"] == "1"
     assert "MINI_LLM_OPTIMIZER_OFFLOAD" not in os.environ
     assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ
+
+
+def test_historical_bf16_inference_enables_measured_fused_decode(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = dataclasses.replace(
+        ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k(),
+        dtype="bfloat16",
+    )
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config, training=False
+    )
+    assert os.environ["MINI_LLM_FUSED_SPARSE_DECODE"] == "1"
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_FUSED_SPARSE_DECODE", "0")
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config, training=False
+    )
+    assert os.environ["MINI_LLM_FUSED_SPARSE_DECODE"] == "0"
+
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config, training=True
+    )
+    assert "MINI_LLM_FUSED_SPARSE_DECODE" not in os.environ
 
 
 def test_reference_profile_applies_nothing(monkeypatch):

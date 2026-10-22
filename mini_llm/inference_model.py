@@ -53,14 +53,11 @@ class InferenceModel:
         self.dtype = dtype if dtype is not None else config.dtype
         self.sparse_attention = config.attention_layers is not None
         memory_cfg = getattr(config, "memory_context", None)
-        if (memory_cfg is not None and memory_cfg.enabled
-                and memory_cfg.integration_mode == "historical_read"):
-            raise NotImplementedError(
-                "0083B historical_read uses the training/reference forward path. "
-                "Incremental inference KV caches and completed-block historical "
-                "index updates are not implemented; refusing to silently ignore "
-                "the learned historical heads during generation."
-            )
+        self.historical_read_memory = bool(
+            memory_cfg is not None
+            and memory_cfg.enabled
+            and memory_cfg.integration_mode == "historical_read"
+        )
         self.terminal_landmark_memory = bool(
             memory_cfg is not None
             and memory_cfg.enabled
@@ -154,6 +151,18 @@ class InferenceModel:
             GenerationState with preallocated caches
         """
         max_length = int(max_length)
+        if (
+            self.historical_read_memory
+            and max_length > int(self.config.memory_context.target_length)
+        ):
+            raise NotImplementedError(
+                "0083B historical_read KV inference currently supports horizons "
+                f"up to its {int(self.config.memory_context.target_length):,}-token "
+                "current working window. Longer horizons require incremental "
+                "completed-block historical index updates, which are not yet "
+                "implemented; refusing to silently ignore the learned historical "
+                "heads."
+            )
         long_memory = bool(
             (self.terminal_landmark_memory or self.routed_prefix_memory)
             and max_length > int(self.memory_working_length)
@@ -617,7 +626,7 @@ class InferenceModel:
             input_ids = xp.asarray(input_ids, dtype=xp.int32)
         else:
             # Convert to the correct dtype if needed
-            input_ids = input_ids.astype(xp.int32)
+            input_ids = input_ids.astype(xp.int32, copy=False)
         
         B, T_prompt = input_ids.shape
 
@@ -735,7 +744,7 @@ class InferenceModel:
             next_ids = xp.asarray(next_ids, dtype=xp.int32)
         else:
             # Convert to the correct dtype if needed
-            next_ids = next_ids.astype(xp.int32)
+            next_ids = next_ids.astype(xp.int32, copy=False)
         
         # Ensure shape [B, 1]
         if next_ids.ndim == 1:
@@ -755,22 +764,40 @@ class InferenceModel:
         # Embed token.
         x = self._embedding_lookup(next_ids)  # [B, 1, D]
         
-        # Process through transformer blocks
+        # Process through transformer blocks. Low-precision models chain each
+        # FFN residual add into the next block's RMSNorm (and the last one into
+        # final_norm), avoiding separate cast/multiply/add/norm launches.
         start_pos = state.length
+        chain_norms = bool(self.blocks) and self.blocks[0].use_fp32_residual
+        normalized_input = None
         for i, block in enumerate(self.blocks):
             router_cache = (
                 None if state.router_input_cache is None
                 else state.router_input_cache[i]
             )
-            x = block.decode_one(
+            next_norm = None
+            if chain_norms:
+                next_norm = (
+                    self.blocks[i + 1].norm1
+                    if i + 1 < len(self.blocks)
+                    else self.final_norm
+                )
+            block_output = block.decode_one(
                 x, state.k_cache[i], state.v_cache[i], start_pos,
                 router_input_cache=router_cache,
                 retrieval_route_cache=state.retrieval_routes,
+                normalized_input=normalized_input,
+                next_norm=next_norm,
             )
-        
+            if chain_norms:
+                x, normalized_input = block_output
+            else:
+                x = block_output
+
         # Final normalization follows the training model's FP32-residual /
-        # low-precision-head policy.
-        x = self.final_norm.forward(x)
+        # low-precision-head policy. The chained path computed it with the last
+        # residual addition.
+        x = normalized_input if chain_norms else self.final_norm.forward(x)
         last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
         
         # LM head - return only last position logits.

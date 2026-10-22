@@ -669,7 +669,25 @@ class InferenceModel:
         
         # Update state length
         state.length += T_prompt
-        
+
+        # Native BF16 graph decode is deliberately opt-in and narrowly gated.
+        # Unsupported checkpoints retain this established allocating path.
+        from mini_llm.native_cuda_graph_decode import (
+            NativeBF16CudaGraphDecoder,
+            enabled as native_graph_enabled,
+            strict as native_graph_strict,
+        )
+        state._native_cuda_graph = None
+        state._native_cuda_graph_failure = None
+        if native_graph_enabled():
+            try:
+                xp.cuda.get_current_stream().synchronize()
+                state._native_cuda_graph = NativeBF16CudaGraphDecoder(self, state)
+            except Exception as exc:
+                state._native_cuda_graph_failure = f"{type(exc).__name__}: {exc}"
+                if native_graph_strict():
+                    raise
+
         return logits
 
     def forward_provisional_block(self, active_embeddings, state):
@@ -760,7 +778,11 @@ class InferenceModel:
         
         if not state.has_capacity(1):
             raise ValueError("No capacity remaining in generation cache.")
-        
+
+        native_graph = getattr(state, "_native_cuda_graph", None)
+        if native_graph is not None:
+            return native_graph.decode_one(next_ids, state)
+
         # Embed token.
         x = self._embedding_lookup(next_ids)  # [B, 1, D]
         

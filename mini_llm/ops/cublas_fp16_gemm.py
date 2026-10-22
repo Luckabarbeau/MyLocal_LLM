@@ -12,7 +12,7 @@ import ctypes
 import ctypes.util
 from dataclasses import dataclass
 
-from mini_llm.backend import BACKEND_NAME, xp
+from mini_llm.backend import BACKEND_NAME, xp, is_bfloat16_dtype
 
 
 _CUBLAS_STATUS_NAMES = {
@@ -30,6 +30,7 @@ _CUBLAS_STATUS_NAMES = {
 
 _CUBLAS_OP_N = 0
 _CUDA_R_16F = 2
+_CUDA_R_16BF = 14
 _CUBLAS_COMPUTE_32F = 68
 _CUBLAS_GEMM_DEFAULT = -1
 _CUBLAS_POINTER_MODE_HOST = 0
@@ -172,6 +173,71 @@ def fp16_matmul_into(a, b, out, *, context: FP16GemmContext) -> None:
         raise RuntimeError(
             f"cublasGemmEx failed: {name} ({int(status)}); "
             f"row-major a={a.shape}, b={b.shape}, out={out.shape}; "
+            f"column-major m={n}, n={m}, k={k}, "
+            f"transa={trans_b_storage}, lda={b_leading_dimension}, "
+            f"ldb={k}, ldc={n}"
+        )
+
+
+def _validate_bf16_array(name, array, context, *, allow_fortran=False):
+    if not isinstance(array, xp.ndarray):
+        raise TypeError(f"bf16_matmul_into: {name} must be a CuPy array")
+    layout_ok = array.flags.c_contiguous or (
+        allow_fortran and array.flags.f_contiguous
+    )
+    if array.ndim != 2 or not is_bfloat16_dtype(array.dtype) or not layout_ok:
+        expected = "C- or F-contiguous" if allow_fortran else "C-contiguous"
+        raise ValueError(
+            f"bf16_matmul_into: {name} must be {expected} BF16 rank-2; "
+            f"got shape={array.shape}, dtype={array.dtype}, "
+            f"c_contiguous={array.flags.c_contiguous}, "
+            f"f_contiguous={array.flags.f_contiguous}"
+        )
+    if int(array.device.id) != context.device_id:
+        raise ValueError(f"bf16_matmul_into: {name} is on the wrong CUDA device")
+
+
+def bf16_matmul_into(a, b, out, *, context: FP16GemmContext) -> None:
+    """Submit row-major BF16 ``out = a @ b`` with FP32 accumulation."""
+    _validate_bf16_array("a", a, context)
+    _validate_bf16_array("b", b, context, allow_fortran=True)
+    _validate_bf16_array("out", out, context)
+    m, k = (int(value) for value in a.shape)
+    bk, n = (int(value) for value in b.shape)
+    if min(m, n, k) <= 0 or bk != k or tuple(out.shape) != (m, n):
+        raise ValueError(
+            "bf16_matmul_into: incompatible geometry: "
+            f"a={a.shape}, b={b.shape}, out={out.shape}"
+        )
+    if max(m, n, k) > 2**31 - 1:
+        raise ValueError("bf16_matmul_into: dimensions exceed cuBLAS int32 limits")
+    if _ranges_overlap(out, a) or _ranges_overlap(out, b):
+        raise ValueError("bf16_matmul_into: output must not overlap either input")
+    if int(xp.cuda.get_current_stream().ptr) != context.stream_ptr:
+        raise RuntimeError(
+            "bf16_matmul_into: current stream differs from prepared cuBLAS stream"
+        )
+
+    b_is_fortran = bool(b.flags.f_contiguous and not b.flags.c_contiguous)
+    trans_b_storage = 1 if b_is_fortran else _CUBLAS_OP_N
+    b_leading_dimension = k if b_is_fortran else n
+    status = context.function(
+        ctypes.c_void_p(context.handle),
+        ctypes.c_int(trans_b_storage), ctypes.c_int(_CUBLAS_OP_N),
+        ctypes.c_int(n), ctypes.c_int(m), ctypes.c_int(k),
+        ctypes.byref(_ALPHA_ONE),
+        ctypes.c_void_p(int(b.data.ptr)), ctypes.c_int(_CUDA_R_16BF),
+        ctypes.c_int(b_leading_dimension),
+        ctypes.c_void_p(int(a.data.ptr)), ctypes.c_int(_CUDA_R_16BF), ctypes.c_int(k),
+        ctypes.byref(_BETA_ZERO),
+        ctypes.c_void_p(int(out.data.ptr)), ctypes.c_int(_CUDA_R_16BF), ctypes.c_int(n),
+        ctypes.c_int(_CUBLAS_COMPUTE_32F), ctypes.c_int(_CUBLAS_GEMM_DEFAULT),
+    )
+    if status != 0:
+        name = _CUBLAS_STATUS_NAMES.get(int(status), "CUBLAS_STATUS_UNKNOWN")
+        raise RuntimeError(
+            f"cublasGemmEx failed: {name} ({int(status)}); "
+            f"BF16 row-major a={a.shape}, b={b.shape}, out={out.shape}; "
             f"column-major m={n}, n={m}, k={k}, "
             f"transa={trans_b_storage}, lda={b_leading_dimension}, "
             f"ldb={k}, ldc={n}"

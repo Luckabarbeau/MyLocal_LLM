@@ -40,6 +40,20 @@ def _bf16_mixed_context_enabled(dtype):
     return raw not in {"0", "false", "off", "no"}
 
 
+def _triton_mixed_attention_requested():
+    return (
+        os.environ.get("MINI_LLM_TRAIN_ATTN_BACKEND", "grouped")
+        .strip()
+        .lower()
+        == "triton"
+    )
+
+
+def _triton_mixed_attention_strict():
+    raw = os.environ.get("MINI_LLM_TRAIN_ATTN_STRICT", "0").strip().lower()
+    return raw not in {"", "0", "false", "off", "no"}
+
+
 def _skip_empty_retrieval_enabled():
     """Avoid the learned router if no causal historical block is selectable."""
     raw = os.environ.get("MINI_LLM_SKIP_EMPTY_RETRIEVAL", "0").strip().lower()
@@ -571,11 +585,83 @@ class GQAAttention:
             if keep_bf16_context
             else (xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype)
         )
-        context = xp.zeros(q.shape, dtype=context_dtype)
         group_caches = []
         routing = {}
-
         skipped = set(historical_skip_heads)
+
+        if _triton_mixed_attention_requested():
+            full_groups = [
+                group for group in self._static_head_groups
+                if tuple(group["head_indices"]) == (0,)
+                and (
+                    group["kind"] == "dense"
+                    or (
+                        group["kind"] == "local"
+                        and int(group["window"]) >= int(t)
+                    )
+                )
+            ]
+            local_groups = [
+                group for group in self._static_head_groups
+                if group["kind"] == "local"
+                and int(group["window"]) == 512
+                and tuple(group["head_indices"]) == tuple(range(1, 16))
+            ]
+            decline = None
+            if BACKEND_NAME != "cupy":
+                decline = "Triton mixed attention requires the CuPy backend"
+            elif self.n_q_heads != 16 or self.n_kv_heads != 4 or self.d_head != 64:
+                decline = "Triton mixed attention requires Hq=16, Hkv=4, D=64"
+            elif not all(is_bfloat16_dtype(array.dtype) for array in (q, k, v)):
+                decline = "Triton mixed attention requires BF16 Q/K/V"
+            elif context_dtype != xp.float32:
+                decline = "Triton mixed attention requires FP32 mixed-attention context"
+            elif int(t) > 4096:
+                decline = "Triton mixed attention is validated for sequence lengths up to 4096"
+            elif len(self._static_head_groups) != 2 or len(full_groups) != 1 or len(local_groups) != 1:
+                decline = "Triton mixed attention requires head 0 full and heads 1..15 local-512"
+            elif self._retrieval_groups or terminal_memory is not None:
+                decline = "Triton mixed attention does not replace routed or terminal-memory groups"
+
+            active_local_heads = ()
+            if decline is None:
+                active_local_heads = tuple(
+                    head for head in local_groups[0]["head_indices"]
+                    if head not in skipped
+                )
+                if not active_local_heads:
+                    decline = "Triton mixed attention requires at least one active local head"
+
+            if decline is not None:
+                if _triton_mixed_attention_strict():
+                    raise RuntimeError(decline)
+            else:
+                try:
+                    from .triton_mixed_attention import mixed_attention_forward
+                except (ImportError, RuntimeError) as exc:
+                    if _triton_mixed_attention_strict():
+                        raise RuntimeError(
+                            "Triton mixed attention dependency is unavailable"
+                        ) from exc
+                else:
+                    with performance_scope("attention.triton_mixed.forward"):
+                        context, triton_cache = mixed_attention_forward(
+                            q,
+                            k,
+                            v,
+                            active_local_heads,
+                            window=512,
+                            scale=self.scale,
+                        )
+                    if return_cache:
+                        group_caches.append({
+                            "kind": "triton_mixed_0088a",
+                            "head_indices": (0,) + active_local_heads,
+                            "cache": triton_cache,
+                        })
+                    return context, group_caches, routing
+
+        context = xp.zeros(q.shape, dtype=context_dtype)
         for group in self._static_head_groups:
             head_indices = tuple(h for h in group["head_indices"] if h not in skipped)
             if not head_indices:
@@ -840,6 +926,21 @@ class GQAAttention:
 
     def _mixed_context_backward(self, dcontext, cache):
         q, k, v = cache["q"], cache["k"], cache["v"]
+        triton_entries = [
+            entry for entry in cache["pattern_caches"]
+            if entry.get("kind") == "triton_mixed_0088a"
+        ]
+        if triton_entries:
+            if len(cache["pattern_caches"]) != 1 or len(triton_entries) != 1:
+                raise RuntimeError("Triton mixed attention cache cannot be combined with other groups")
+            from .triton_mixed_attention import mixed_attention_backward
+            dcontext_f32 = dcontext.astype(xp.float32, copy=False)
+            with performance_scope("attention.triton_mixed.backward"):
+                dq, dk, dv = mixed_attention_backward(
+                    dcontext_f32, triton_entries[0]["cache"]
+                )
+            return dq, dk, dv, None
+
         grad_dtype = xp.float32 if is_bfloat16_dtype(q.dtype) else q.dtype
         dq = xp.zeros(q.shape, dtype=grad_dtype)
         dk = xp.zeros(k.shape, dtype=grad_dtype)

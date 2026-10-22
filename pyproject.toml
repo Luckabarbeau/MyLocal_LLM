@@ -19,6 +19,10 @@ gpu = [
     "cupy-cuda13x>=14.0",
 ]
 
+triton-attention = [
+    "triton==3.8.0",
+]
+
 dev = [
     "pytest>=8.0",
 ]

@@ -147,3 +147,5 @@ runtime/
 
 # Local rollback/scratch artifacts
 rollback_backups/
+
+.venv-0088a-triton/

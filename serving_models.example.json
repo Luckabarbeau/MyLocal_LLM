@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "id": "smollm2-360m",
+      "format": "gguf",
+      "path": "../pretrained_models/SmolLM2-360M-Instruct-F16.gguf",
+      "dtype": "float16",
+      "chat_template": "chatml",
+      "tool_format": "json_envelope",
+      "context_length": 8196
+    },
+    {
+      "id": "native-338m",
+      "format": "native",
+      "path": "./checkpoints/0083_intermediate_20L_1024_fullmix_100k",
+      "chat_template": "plain",
+      "tool_format": "none",
+      "context_length": 64000
+    }
+  ]
+}

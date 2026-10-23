@@ -90,6 +90,8 @@ class GQAAttentionInference:
         # successful device launch, allowing the benchmarker to distinguish an
         # enabled flag from an actually active kernel.
         self._fused_qkv_decode_active = False
+        self.historical_reader = None
+        self._historical_layer = None
         self._terminal_memory_head_indices = ()
         self._terminal_memory_config = None
 
@@ -520,6 +522,7 @@ class GQAAttentionInference:
         self, x, k_cache, v_cache, start_pos, return_all=False,
         router_input_cache=None, rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None,
     ):
         """Exact sparse prefill using the same kernels as training forward."""
         if int(start_pos) != 0:
@@ -592,6 +595,11 @@ class GQAAttentionInference:
             terminal_row=t_prompt - 1,
         )
 
+        if historical_state is not None and self.historical_reader is not None:
+            context, _ = self.historical_reader.apply(
+                context, q, self._historical_layer, historical_state,
+                return_cache=False,
+            )
         merged = context.astype(q.dtype, copy=False).reshape(
             b, t_prompt, self.n_q_heads * self.d_head
         )
@@ -976,6 +984,8 @@ class GQAAttentionInference:
         working_count=None, route_clock=None, working_start_abs=0,
         fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None, historical_routes=None, historical_clock=0,
+        historical_refresh_id=None,
     ):
         if router_input_cache is None or retrieval_route_cache is None:
             raise ValueError("sparse decode requires router and route inference state")
@@ -1035,6 +1045,12 @@ class GQAAttentionInference:
             cache_start=cache_start,
             terminal_row=0,
         )
+        if historical_state is not None and self.historical_reader is not None:
+            context = self.historical_reader.apply_decode(
+                context, q, self._historical_layer, historical_state,
+                historical_routes, clock=historical_clock,
+                refresh_id=historical_refresh_id,
+            )
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
         y = (merged.reshape(-1, self.d_model) @ self.Wo).reshape(
             b, 1, self.d_model
@@ -1085,6 +1101,7 @@ class GQAAttentionInference:
         router_input_cache=None, retrieval_route_cache=None, layer_idx=0, *,
         rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None,
     ):
         """Prefill the cache for a prompt and run causal attention."""
         b, t_prompt, _ = x.shape
@@ -1107,6 +1124,7 @@ class GQAAttentionInference:
                 position_ids=position_ids,
                 terminal_memory_store=terminal_memory_store,
                 terminal_memory_route=terminal_memory_route,
+                historical_state=historical_state,
             )
 
         _, _, _, Wo = self._weight_data()
@@ -1147,6 +1165,10 @@ class GQAAttentionInference:
         causal_mask = causal_full[int(start_pos):end_pos, :end_pos]
 
         context = self._attention(q, k_all, v_all, causal_mask=causal_mask)
+        if historical_state is not None and self.historical_reader is not None:
+            context, _ = self.historical_reader.apply(
+                context, q, self._historical_layer, historical_state, return_cache=False
+            )
         merged = context.reshape(
             b, t_prompt, self.n_q_heads * self.d_head
         )
@@ -1161,6 +1183,8 @@ class GQAAttentionInference:
         rope_position=None, cache_start=0, working_count=None, route_clock=None,
         working_start_abs=0, fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None, historical_routes=None, historical_clock=0,
+        historical_refresh_id=None,
     ):
         """Decode exactly one token using cached native-Hkv K/V tensors."""
         b, t_new, _ = x.shape
@@ -1183,6 +1207,8 @@ class GQAAttentionInference:
                 working_capacity=working_capacity,
                 terminal_memory_store=terminal_memory_store,
                 terminal_memory_route=terminal_memory_route,
+                historical_state=historical_state, historical_routes=historical_routes,
+                historical_clock=historical_clock, historical_refresh_id=historical_refresh_id,
             )
 
         _, _, _, Wo = self._weight_data()
@@ -1220,6 +1246,11 @@ class GQAAttentionInference:
                 k_all = k_cache[:, :, physical, :]
                 v_all = v_cache[:, :, physical, :]
             context = self._attention(q, k_all, v_all, causal_mask=None)
+        if historical_state is not None and self.historical_reader is not None:
+            context = self.historical_reader.apply_decode(
+                context, q, self._historical_layer, historical_state, historical_routes,
+                clock=historical_clock, refresh_id=historical_refresh_id,
+            )
         merged = context.reshape(b, 1, self.n_q_heads * self.d_head)
         y = (merged.reshape(-1, self.d_model) @ Wo).reshape(
             b, 1, self.d_model

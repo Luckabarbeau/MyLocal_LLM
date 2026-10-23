@@ -123,6 +123,7 @@ class TransformerBlockInference:
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
         retrieval_route_cache=None, *, rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None,
     ):
         """
         Prefill through this block.
@@ -157,6 +158,7 @@ class TransformerBlockInference:
             position_ids=position_ids,
             terminal_memory_store=terminal_memory_store,
             terminal_memory_route=terminal_memory_route,
+            historical_state=historical_state,
         )
         a_residual = (
             a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
@@ -217,6 +219,8 @@ class TransformerBlockInference:
         cache_start=0, working_count=None, route_clock=None, working_start_abs=0,
         fixed_prefix_length=0, working_capacity=None,
         terminal_memory_store=None, terminal_memory_route=None,
+        historical_state=None, historical_routes=None, historical_clock=0,
+        historical_refresh_id=None,
         normalized_input=None, next_norm=None,
     ):
         """
@@ -257,6 +261,9 @@ class TransformerBlockInference:
             working_capacity=working_capacity,
             terminal_memory_store=terminal_memory_store,
             terminal_memory_route=terminal_memory_route,
+            historical_state=historical_state, historical_routes=historical_routes,
+            historical_clock=historical_clock,
+            historical_refresh_id=historical_refresh_id,
         )
         if self.use_fp32_residual:
             x, h = self.norm2.forward_residual_add(

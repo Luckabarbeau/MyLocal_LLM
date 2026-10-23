@@ -7,15 +7,15 @@ never reimplements attention, projections, checkpoint loading or tokenization.
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections import Counter, deque
 import hmac
 import json
-import math
 import os
 import threading
 import time
 import uuid
 
-from mini_llm.serving_models import load_model
+from mini_llm.serving_models import SamplingConfig, load_model
 
 
 class APIError(Exception):
@@ -104,10 +104,29 @@ def parse_tool_envelope(text, tools):
     return result
 
 
-def sample_token(logits, temperature=0.0, top_p=1.0, top_k=None):
-    """GPU-side filtering, one scalar transfer per generated token."""
+def sample_token(logits, temperature=0.0, top_p=1.0, top_k=None, *,
+                 repetition_penalty=1.0, frequency_penalty=0.0,
+                 presence_penalty=0.0, recent_counts=None):
+    """Sample on the active backend, applying bounded recent-token penalties."""
     from mini_llm.backend import xp
-    row = logits[0].reshape(-1).astype(xp.float32, copy=False)
+    penalize = bool(recent_counts) and (repetition_penalty != 1.0 or
+                                         frequency_penalty != 0.0 or presence_penalty != 0.0)
+    # Never modify the logits buffer returned by the inference backend.
+    row = logits[0].reshape(-1).astype(xp.float32, copy=penalize)
+    if penalize:
+        # Keep the history/counts on CPU and send only the distinct token IDs
+        # in the bounded window; do not transfer a full vocabulary to CPU.
+        ids = xp.asarray(list(recent_counts), dtype=xp.int32)
+        counts = xp.asarray(list(recent_counts.values()), dtype=xp.float32)
+        values = row[ids]
+        if repetition_penalty != 1.0:
+            values = xp.where(values > 0, values / xp.float32(repetition_penalty),
+                              values * xp.float32(repetition_penalty))
+        if frequency_penalty != 0:
+            values = values - xp.float32(frequency_penalty) * counts
+        if presence_penalty != 0:
+            values = values - xp.float32(presence_penalty)
+        row[ids] = values
     if temperature == 0:
         return int(xp.argmax(row).item())
     if not 0 < top_p <= 1:
@@ -163,7 +182,9 @@ class ModelManager:
         return self.current
 
 
-def token_events(model, prompt, *, max_tokens, temperature, top_p, top_k, stop):
+def token_events(model, prompt, *, max_tokens, temperature, top_p, top_k, stop,
+                 repetition_penalty=1.0, repetition_window=256,
+                 frequency_penalty=0.0, presence_penalty=0.0):
     """Yield decoded deltas while preserving partial UTF-8 and stop prefixes."""
     ids = model.encode(prompt)
     if not ids:
@@ -178,17 +199,31 @@ def token_events(model, prompt, *, max_tokens, temperature, top_p, top_k, stop):
     state = model.create_state(len(ids) + max_tokens)
     logits = model.prefill(ids, state)
     generated = []
+    # A bounded prompt+generation window: no O(64K) scan or large GPU mask.
+    recent = deque(ids[-repetition_window:] if repetition_window else [])
+    counts = Counter(recent)
     emitted = ""
     decoded = ""
     stops = [s for s in stop if s]
     stop_buffer = max((len(s) - 1 for s in stops), default=0)
     reason = "length"
     for iteration in range(max_tokens):
-        token_id = sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k)
+        token_id = sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k,
+                                repetition_penalty=repetition_penalty,
+                                frequency_penalty=frequency_penalty,
+                                presence_penalty=presence_penalty, recent_counts=counts)
         if token_id in model.stop_ids:
             reason = "stop"
             break
         generated.append(token_id)
+        if repetition_window:
+            if len(recent) >= repetition_window:
+                old = recent.popleft()
+                counts[old] -= 1
+                if not counts[old]:
+                    del counts[old]
+            recent.append(token_id)
+            counts[token_id] += 1
         decoded = model.decode(generated)
         pos = min((decoded.index(s) for s in stops if s in decoded), default=-1)
         if pos >= 0:
@@ -232,18 +267,11 @@ def _normalize_request(request, *, chat):
     value = request.get("max_completion_tokens", request.get("max_tokens", 256))
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise APIError("max_tokens / max_completion_tokens must be a positive integer")
-    temperature = request.get("temperature", 0.0)
-    if temperature is None:
-        temperature = 0.0
-    top_p = request.get("top_p", 1.0)
-    if top_p is None:
-        top_p = 1.0
-    top_k = request.get("top_k")
-    if (not isinstance(temperature, (int, float)) or not math.isfinite(temperature)
-            or temperature < 0 or not isinstance(top_p, (int, float))
-            or not math.isfinite(top_p) or not (0 < top_p <= 1)
-            or (top_k is not None and (type(top_k) is not int or top_k < 1))):
-        raise APIError("Invalid sampling parameters")
+    # Model-specific defaults are resolved after looking up the model ID.
+    # Explicit per-request sampling keys override only the named parameters.
+    sampling_overrides = {key: request[key]
+                          for key in SamplingConfig.__dataclass_fields__
+                          if key in request and request[key] is not None}
     stop = request.get("stop", [])
     if isinstance(stop, str):
         stop = [stop]
@@ -263,8 +291,7 @@ def _normalize_request(request, *, chat):
             or not isinstance(tool["function"].get("name"), str)):
             raise APIError("Only named function tools are supported")
     return {"model": model, "messages": messages, "prompt": prompt,
-            "max_tokens": value, "temperature": float(temperature),
-            "top_p": float(top_p), "top_k": top_k, "stop": stop,
+            "max_tokens": value, "sampling_overrides": sampling_overrides, "stop": stop,
             "tools": tools, "stream": request.get("stream", False) is True,
             "tool_choice": request.get("tool_choice", "auto")}
 
@@ -331,11 +358,14 @@ def create_server(manager, *, host="127.0.0.1", port=8000, api_key=None):
                     raise APIError("Forced named tool_choice is not implemented")
                 prompt = (render_messages(args["messages"], template=spec.chat_template, tools=tools)
                           if chat else args["prompt"])
+                try:
+                    sampling = spec.sampling.with_overrides(args["sampling_overrides"])
+                except ValueError as exc:
+                    raise APIError(f"Invalid sampling parameters: {exc}") from exc
                 with manager.lock:
                     model = manager.acquire(args["model"])
                     events = token_events(model, prompt, max_tokens=args["max_tokens"],
-                                          temperature=args["temperature"], top_p=args["top_p"],
-                                          top_k=args["top_k"], stop=args["stop"])
+                                          **sampling.__dict__, stop=args["stop"])
                     first = next(events)  # Prefill-token count, before sending headers
                     completion_id = "chatcmpl-" + uuid.uuid4().hex
                     created = int(time.time())

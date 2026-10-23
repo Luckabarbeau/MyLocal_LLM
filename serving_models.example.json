@@ -7,7 +7,16 @@
       "dtype": "float16",
       "chat_template": "chatml",
       "tool_format": "json_envelope",
-      "context_length": 8196
+      "context_length": 8192,
+      "sampling": {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+        "repetition_penalty": 1.05,
+        "repetition_window": 128,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
+      }
     },
     {
       "id": "native-338m",
@@ -15,7 +24,16 @@
       "path": "./checkpoints/0083_intermediate_20L_1024_fullmix_100k",
       "chat_template": "plain",
       "tool_format": "none",
-      "context_length": 64000
+      "context_length": 64000,
+      "sampling": {
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "top_k": 40,
+        "repetition_penalty": 1.1,
+        "repetition_window": 256,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
+      }
     }
   ]
 }

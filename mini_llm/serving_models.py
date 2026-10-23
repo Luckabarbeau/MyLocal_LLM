@@ -4,10 +4,57 @@ No inference mathematics are implemented here: GGUF, HF Safetensors, and
 native checkpoints all reuse the repository's existing KV-cache engine.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 import gc
 import json
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class SamplingConfig:
+    """Per-model decoding defaults; API requests override individual values."""
+
+    temperature: float = 0.0
+    top_p: float = 1.0
+    top_k: int | None = None
+    repetition_penalty: float = 1.0
+    repetition_window: int = 256
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+
+    @classmethod
+    def from_dict(cls, values):
+        if not isinstance(values, dict):
+            raise ValueError("sampling must be a JSON object")
+        unknown = set(values) - set(cls.__dataclass_fields__)
+        if unknown:
+            raise ValueError(f"Unrecognized sampling fields: {sorted(unknown)}")
+        obj = cls(**values)
+        for key in ("temperature", "top_p", "repetition_penalty",
+                    "frequency_penalty", "presence_penalty"):
+            value = getattr(obj, key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"sampling.{key} must be a finite number")
+        if obj.temperature < 0:
+            raise ValueError("sampling.temperature must be >= 0")
+        if not 0 < obj.top_p <= 1:
+            raise ValueError("sampling.top_p must be within (0, 1]")
+        if obj.repetition_penalty <= 0:
+            raise ValueError("sampling.repetition_penalty must be > 0")
+        for key in ("top_k", "repetition_window"):
+            value = getattr(obj, key)
+            if key == "top_k" and value is None:
+                continue
+            if type(value) is not int or (value < 1 if key == "top_k" else not 0 <= value <= 65536):
+                raise ValueError(f"sampling.{key} is not a valid integer")
+        for key in ("frequency_penalty", "presence_penalty"):
+            if not -2 <= getattr(obj, key) <= 2:
+                raise ValueError(f"sampling.{key} must be between -2 and 2")
+        return obj
+
+    def with_overrides(self, overrides):
+        return type(self).from_dict({**self.__dict__, **overrides})
 
 
 @dataclass(frozen=True)
@@ -19,6 +66,7 @@ class ModelSpec:
     chat_template: str = "chatml"
     tool_format: str = "none"
     context_length: int | None = None
+    sampling: SamplingConfig = field(default_factory=SamplingConfig)
 
     @classmethod
     def from_dict(cls, obj, root):
@@ -31,7 +79,8 @@ class ModelSpec:
         p = Path(obj["path"]).expanduser()
         if not p.is_absolute():
             p = Path(root) / p
-        kw = dict(obj, path=p.resolve())
+        kw = dict(obj, path=p.resolve(),
+                  sampling=SamplingConfig.from_dict(obj.get("sampling", {})))
         spec = cls(**kw)
         if spec.format not in {"auto", "gguf", "safetensors", "native"}:
             raise ValueError(f"Unsupported model format: {spec.format}")
@@ -151,12 +200,7 @@ def load_model(spec):
         engine.set_weights(generator.model)
         tokenizer = generator.tokenizer
         cap = int(generator.max_context)
-        memory = getattr(generator.model.config, "memory_context", None)
-        if memory is not None and getattr(memory, "enabled", False) and (
-            getattr(memory, "integration_mode", None) == "historical_read"
-        ):
-            # Existing 0083B inference explicitly forbids longer horizons.
-            cap = min(cap, int(memory.target_length))
+        # 0088B serves historical_read with a bounded working KV cache.
         native = True
         del generator
         gc.collect()

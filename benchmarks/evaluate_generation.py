@@ -195,7 +195,7 @@ def load_generator(checkpoint: Path, requested_context: int | None,
     if requested_context is not None:
         max_context = requested_context
     elif memory_cfg is not None and memory_cfg.enabled and memory_cfg.integration_mode in {
-        "terminal_landmark", "routed_prefix"
+        "terminal_landmark", "routed_prefix", "historical_read"
     }:
         max_context = int(memory_cfg.memory_length)
     else:
@@ -203,7 +203,7 @@ def load_generator(checkpoint: Path, requested_context: int | None,
     if max_context <= 0:
         raise ValueError("--max-context must be positive")
     if (memory_cfg is not None and memory_cfg.enabled and
-        memory_cfg.integration_mode in {"terminal_landmark", "routed_prefix"} and
+        memory_cfg.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"} and
         max_context > int(memory_cfg.memory_length)):
         raise ValueError("Requested context exceeds checkpoint memory horizon")
 

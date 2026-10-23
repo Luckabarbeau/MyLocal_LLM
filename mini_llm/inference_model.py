@@ -78,6 +78,12 @@ class InferenceModel:
             if (self.terminal_landmark_memory or self.routed_prefix_memory)
             else None
         )
+        self.historical_reader = None
+        self.historical_refresh_tokens = int(
+            os.environ.get("MINI_LLM_HISTORICAL_REFRESH_TOKENS", "32")
+        )
+        if self.historical_read_memory and self.historical_refresh_tokens < 1:
+            raise ValueError("MINI_LLM_HISTORICAL_REFRESH_TOKENS must be positive")
         self.memory_router = None
         self.memory_attention_layer = None
         self.terminal_memory_adapter = None
@@ -151,31 +157,19 @@ class InferenceModel:
             GenerationState with preallocated caches
         """
         max_length = int(max_length)
-        if (
-            self.historical_read_memory
-            and max_length > int(self.config.memory_context.target_length)
-        ):
-            raise NotImplementedError(
-                "0083B historical_read KV inference currently supports horizons "
-                f"up to its {int(self.config.memory_context.target_length):,}-token "
-                "current working window. Longer horizons require incremental "
-                "completed-block historical index updates, which are not yet "
-                "implemented; refusing to silently ignore the learned historical "
-                "heads."
-            )
         long_memory = bool(
-            (self.terminal_landmark_memory or self.routed_prefix_memory)
-            and max_length > int(self.memory_working_length)
+            (self.historical_read_memory or self.terminal_landmark_memory or self.routed_prefix_memory)
+            and max_length > int(self.config.memory_context.target_length)
         )
-        if long_memory and max_length > int(self.memory_config.memory_length):
+        if long_memory and max_length > int(self.config.memory_context.memory_length):
             raise ValueError(
                 f"requested horizon {max_length:,} exceeds the checkpoint's "
-                f"trained memory horizon {self.memory_config.memory_length:,}"
+                f"trained memory horizon {self.config.memory_context.memory_length:,}"
             )
         if long_memory and self.routed_prefix_memory:
             cache_length = int(self.memory_config.active_length)
         elif long_memory:
-            cache_length = int(self.memory_working_length)
+            cache_length = int(self.config.memory_context.target_length)
         else:
             cache_length = max_length
         k_cache = xp.empty(
@@ -255,6 +249,13 @@ class InferenceModel:
         # Set LM head (output projection)
         # output_proj.W is [d_model, vocab], so we use it directly
         self.lm_head = training_model.output_proj.W.data  # [d_model, vocab]
+        if self.historical_read_memory:
+            self.historical_reader = training_model.historical_memory
+            if self.historical_reader is None:
+                raise ValueError("historical_read checkpoint has no trained reader")
+            for layer_idx, block in enumerate(self.blocks):
+                block.attention.historical_reader = self.historical_reader
+                block.attention._historical_layer = layer_idx
         if self.terminal_landmark_memory or self.routed_prefix_memory:
             self.memory_router = training_model.memory_router
         if self.terminal_landmark_memory:
@@ -275,6 +276,178 @@ class InferenceModel:
             return state.working_token_ids[:, :count]
         logical = (xp.arange(count, dtype=xp.int64) + start) % cap
         return state.working_token_ids[:, logical]
+
+    def _refresh_historical_read(self, state):
+        """Build read-only encoded history, keeping all 64K tokens OUT of deep KV.
+
+        The block encoder uses independent 32-token groups. Historical source
+        slots retain the fixed training horizon and are right-aligned when the
+        available history is shorter. Learned routing is sensitive to absolute
+        RoPE coordinates; each refresh restores the training coordinates.
+        """
+        history = state.historical_token_ids
+        count = int(history.shape[1])
+        if count == 0:
+            state.historical_memory_state = None
+        else:
+            cfg = self.config.memory_context
+            limit = int(cfg.distant_memory_length)
+            if count > limit:
+                history = history[:, -limit:]
+                count = limit
+                state.historical_token_ids = history
+            # Historical sweep phases are defined over the FIXED 61,440-token
+            # source horizon, not over the number of available old tokens.
+            # Right-align partial history just like training's document-first
+            # masks; HistoricalReadMemory.open crops the common invalid prefix
+            # before expensive block encoding, so padding remains inexpensive.
+            padding = limit - count
+            if padding:
+                padded = xp.concatenate((
+                    xp.zeros((history.shape[0], padding), dtype=xp.int32), history
+                ), axis=1)
+            else:
+                padded = history
+            # IMPORTANT: historical learned routing compares RoPE-rotated Q
+            # against *unrotated* block_keys. Global RoPE translation is NOT
+            # invariant for this route. Keep the training source coordinates
+            # [0, H) and the current-window coordinates [H, H+W).
+            offset = 0
+            starts = xp.full((history.shape[0],), padding, dtype=xp.int64)
+            state.historical_memory_state = self.historical_reader.open(
+                padded, starts, position_offset=offset, inference=True
+            )
+        state.historical_reader_routes.clear()
+        state.historical_refresh_count += 1
+        state.historical_tokens_since_refresh = 0
+
+    def _prefill_historical_long(self, input_ids, state):
+        """Prefill only 4K current tokens; block-encode older prompt once."""
+        batch, total = input_ids.shape
+        cap = int(self.config.memory_context.target_length)
+        past = max(0, total - cap)
+        working = input_ids[:, past:]
+        state.historical_token_ids = input_ids[:, :past].copy()
+        state.working_token_ids = xp.empty((batch, cap), dtype=xp.int32)
+        state.working_token_ids[:, :working.shape[1]] = working
+        state.working_count = int(working.shape[1])
+        state.working_capacity = cap
+        state.cache_start = 0
+        state.working_start_abs = past
+        state.next_abs_pos = total
+        state.historical_origin = past
+        self._refresh_historical_read(state)
+        x = self._embedding_lookup(working)
+        for i, block in enumerate(self.blocks):
+            router = (None if state.router_input_cache is None
+                      else state.router_input_cache[i])
+            x = block.prefill(
+                x, state.k_cache[i], state.v_cache[i], 0,
+                router_input_cache=router,
+                retrieval_route_cache=state.retrieval_routes,
+                rope_start_pos=int(self.config.memory_context.distant_memory_length),
+                historical_state=state.historical_memory_state,
+            )
+        state.length = total
+        x = self.final_norm.forward(x)
+        return self._lm_head_forward(x[:, -1, :].astype(self.dtype, copy=False))
+
+    def _rebuild_historical_working_cache(self, state):
+        """Rebase the 4K Transformer cache to the training window coordinates.
+
+        At the refresh boundary we recompute each layer's *current* 4K rows
+        against the refreshed history. This is required for parity: simply
+        replacing old history K/V while retaining their downstream working
+        hidden states would mix incompatible historical selections. There is
+        no 64K-token deep attention or 64K KV allocation here.
+        """
+        count = int(state.working_count)
+        working_ids = self._logical_working_ids(state).copy()
+        state.working_token_ids[:, :count] = working_ids
+        state.cache_start = 0
+        state.historical_origin = int(state.working_start_abs)
+        state.retrieval_routes.clear()
+        state.historical_reader_routes.clear()
+        x = self._embedding_lookup(working_ids)
+        for i, block in enumerate(self.blocks):
+            router = (None if state.router_input_cache is None
+                      else state.router_input_cache[i])
+            x = block.prefill(
+                x, state.k_cache[i], state.v_cache[i], 0,
+                router_input_cache=router,
+                retrieval_route_cache=state.retrieval_routes,
+                rope_start_pos=int(self.config.memory_context.distant_memory_length),
+                historical_state=state.historical_memory_state,
+            )
+        x = self.final_norm.forward(x)
+        return self._lm_head_forward(x[:, -1, :].astype(self.dtype, copy=False))
+
+    def _decode_historical_long(self, next_ids, state):
+        """Ring-cache decode; refresh external history on a bounded cadence.
+
+        Strict sliding-window parity requires rebuilding both the block
+        encoder and all current-layer K/V at each new token. By default this
+        work is amortized over a 32-token refresh interval. BETWEEN refreshes
+        the changing historical source is not yet visible to read heads, and
+        deep hidden states are not recomputed. At refresh, both are rebuilt.
+        Use MINI_LLM_HISTORICAL_REFRESH_TOKENS=1 for reference parity.
+        """
+        cap = int(state.working_capacity)
+        abs_pos = int(state.next_abs_pos)
+        rope_pos = (int(self.config.memory_context.distant_memory_length)
+                    + abs_pos - int(state.historical_origin))
+        slid = int(state.working_count) == cap
+        refreshed = False
+        if slid:
+            slot = int(state.cache_start)
+            evicted = state.working_token_ids[:, slot:slot+1].copy()
+            state.historical_token_ids = xp.concatenate(
+                (state.historical_token_ids, evicted), axis=1
+            )
+            state.cache_start = (slot + 1) % cap
+            state.working_start_abs += 1
+            state.historical_tokens_since_refresh += 1
+            physical = (state.cache_start + cap - 1) % cap
+            logical_pos = cap - 1
+            # Sliding invalidates the per-window local retrieval indices.
+            state.retrieval_routes.clear()
+            # When a previously memoryless prompt first crosses 4K, build
+            # the historical index immediately (not after 32 missing reads).
+            if (state.historical_memory_state is None or
+                    state.historical_tokens_since_refresh >= self.historical_refresh_tokens):
+                self._refresh_historical_read(state)
+                refreshed = True
+        else:
+            logical_pos = int(state.working_count)
+            physical = (int(state.cache_start) + logical_pos) % cap
+            state.working_count += 1
+        state.working_token_ids[:, physical] = next_ids[:, 0]
+        if refreshed:
+            state.next_abs_pos += 1
+            state.length += 1
+            return self._rebuild_historical_working_cache(state)
+        new_x = self._embedding_lookup(next_ids)
+        # Distinguish historical route-cache epoch and 128-token query boundary.
+        epoch = (state.historical_refresh_count, abs_pos // 128)
+        for i, block in enumerate(self.blocks):
+            router = (None if state.router_input_cache is None
+                      else state.router_input_cache[i])
+            new_x = block.decode_one(
+                new_x, state.k_cache[i], state.v_cache[i], logical_pos,
+                router_input_cache=router,
+                retrieval_route_cache=state.retrieval_routes,
+                cache_position=physical, rope_position=rope_pos,
+                cache_start=state.cache_start, working_count=state.working_count,
+                route_clock=abs_pos, working_start_abs=state.working_start_abs,
+                working_capacity=cap,
+                historical_state=state.historical_memory_state,
+                historical_routes=state.historical_reader_routes,
+                historical_clock=abs_pos, historical_refresh_id=epoch,
+            )
+        state.next_abs_pos += 1
+        state.length += 1
+        new_x = self.final_norm.forward(new_x)
+        return self._lm_head_forward(new_x[:, -1, :].astype(self.dtype, copy=False))
 
     def _refresh_routed_prefix_cache(self, state):
         """Reroute history and rebuild the bounded deep active sequence.
@@ -633,6 +806,8 @@ class InferenceModel:
         if state.long_memory_enabled:
             if T_prompt > int(state.max_length):
                 input_ids = input_ids[:, -int(state.max_length):]
+            if self.historical_read_memory:
+                return self._prefill_historical_long(input_ids, state)
             if self.routed_prefix_memory:
                 return self._prefill_routed_prefix_long(input_ids, state)
             return self._prefill_terminal_long(input_ids, state)
@@ -772,6 +947,8 @@ class InferenceModel:
         assert T_new == 1, "decode_one processes exactly one token"
 
         if state.long_memory_enabled:
+            if self.historical_read_memory:
+                return self._decode_historical_long(next_ids, state)
             if self.routed_prefix_memory:
                 return self._decode_routed_prefix_long(next_ids, state)
             return self._decode_terminal_long(next_ids, state)

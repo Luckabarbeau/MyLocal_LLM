@@ -49,6 +49,12 @@ class GenerationState:
     next_abs_pos: int = 0
     working_token_ids: Optional[xp.ndarray] = None
     working_embedding_sum: Optional[xp.ndarray] = None
+    historical_memory_state: object = None
+    historical_token_ids: object = None
+    historical_reader_routes: dict = field(default_factory=dict)
+    historical_refresh_count: int = 0
+    historical_tokens_since_refresh: int = 0
+    historical_origin: int = 0
     terminal_memory_store: object = None
     terminal_memory_route: object = None
 
@@ -67,6 +73,11 @@ class GenerationState:
         """Reset generation state without deallocating cache."""
         self.length = 0
         self.retrieval_routes.clear()
+        self.historical_reader_routes.clear()
+        self.historical_memory_state = None
+        self.historical_token_ids = None
+        self.historical_refresh_count = 0
+        self.historical_tokens_since_refresh = 0
         self.terminal_memory_route = None
         self.routed_prefix_route = None
         self.routed_prefix_tokens_since_refresh = 0

@@ -243,10 +243,123 @@ def test_short_horizon_uses_current_window_kv_inference_only():
     assert state.max_length == c.memory_context.target_length
     assert not state.long_memory_enabled
 
-    with pytest.raises(NotImplementedError, match="completed-block historical index"):
-        inference.create_generation_state(
-            batch_size=1, max_length=c.memory_context.target_length + 1
-        )
+    long_state = inference.create_generation_state(
+        batch_size=1, max_length=c.memory_context.target_length + 1
+    )
+    assert long_state.long_memory_enabled
+    assert long_state.working_capacity == c.memory_context.target_length
+    assert long_state.k_cache.shape[3] == c.memory_context.target_length
+    with pytest.raises(ValueError, match="trained memory horizon"):
+        inference.create_generation_state(batch_size=1, max_length=265)
+
+
+def test_0088b_historical_prefill_matches_training_window():
+    """The actual historical reader must modify logit outputs, not just metadata."""
+    from mini_llm.inference_model import InferenceModel
+    c = small_config()
+    train = DecoderLanguageModel(c, rng_seed=33)
+    inference = InferenceModel(c, dtype="float32")
+    inference.set_weights(train)
+    ids = np.random.default_rng(35).integers(0, 128, (1, 264), dtype=np.int32)
+    state = inference.create_generation_state(1, max_length=264)
+    actual = inference.prefill(ids, state)
+    expected = train.forward_body(
+        ids, memory_metadata={"history_valid_starts": np.array([0])},
+        return_cache=False,
+    )
+    # forward_body returns hidden (pre-final-norm), not logits
+    hidden, _ = train.final_norm.forward(expected)
+    expected_logits = hidden[:, -1, :].astype("float32") @ train.output_proj.W.data
+    np.testing.assert_allclose(actual, expected_logits, rtol=2e-3, atol=2e-3)
+    assert state.historical_memory_state is not None
+    assert state.historical_memory_state.has_valid
+    assert state.k_cache.shape[3] == 8
+
+
+
+def test_0088b_right_aligned_partial_history_matches_training():
+    """Sparse/deterministic head phases must stay tied to 61K source slots."""
+    from mini_llm.inference_model import InferenceModel
+    c = small_config()
+    train = DecoderLanguageModel(c, rng_seed=123)
+    inference = InferenceModel(c, dtype='float32')
+    inference.set_weights(train)
+    ids = np.random.default_rng(124).integers(0, 128, (1, 264), dtype=np.int32)
+    start = 192
+    source = ids.copy()
+    source[:, :start] = 0
+    state = inference.create_generation_state(1, 72)
+    actual = inference.prefill(source[:, start:], state)
+    hidden = train.forward_body(
+        source, memory_metadata={'history_valid_starts': np.array([start])},
+        return_cache=False,
+    )
+    normalized, _ = train.final_norm.forward(hidden)
+    expected = normalized[:, -1, :] @ train.output_proj.W.data
+    np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+    assert state.historical_memory_state.source_length == 256
+    assert state.historical_memory_state.source_offset == 192
+
+def test_0088b_ring_decode_preserves_working_bounded_cache(monkeypatch):
+    from mini_llm.inference_model import InferenceModel
+    # One refresh per eviction exercises the correctness-first refresh path.
+    monkeypatch.setenv("MINI_LLM_HISTORICAL_REFRESH_TOKENS", "1")
+    c = small_config()
+    train = DecoderLanguageModel(c, rng_seed=38)
+    inference = InferenceModel(c, dtype="float32")
+    inference.set_weights(train)
+    ids = np.random.default_rng(39).integers(0, 128, (1, 264), dtype=np.int32)
+    state = inference.create_generation_state(1, 264)
+    inference.prefill(ids[:, :262], state)
+    for token in [12, 13]:
+        out = inference.decode_one(np.array([token], dtype=np.int32), state)
+        assert out.shape == (1, 128)
+        assert np.isfinite(out).all()
+    assert state.length == 264
+    assert state.working_count == 8
+    assert state.k_cache.shape[3] == 8
+    assert state.historical_refresh_count >= 2
+
+
+
+def test_0088b_refresh_one_matches_shifted_training_forward(monkeypatch):
+    """At every-refresh mode the rolling window must match full reference."""
+    from mini_llm.inference_model import InferenceModel
+    monkeypatch.setenv('MINI_LLM_HISTORICAL_REFRESH_TOKENS', '1')
+    c = small_config()
+    train = DecoderLanguageModel(c, rng_seed=130)
+    inference = InferenceModel(c, dtype='float32')
+    inference.set_weights(train)
+    seq = np.random.default_rng(131).integers(0,128,(1,265),dtype=np.int32)
+    state = inference.create_generation_state(1, 264)
+    inference.prefill(seq[:, :264], state)
+    actual = inference.decode_one(seq[:, 264], state)
+    reference = train.forward_body(
+        seq[:, 1:], memory_metadata={'history_valid_starts': np.array([0])},
+        return_cache=False,
+    )
+    normalized, _ = train.final_norm.forward(reference)
+    expected = normalized[:, -1] @ train.output_proj.W.data
+    np.testing.assert_allclose(actual, expected, atol=2e-3, rtol=2e-3)
+    assert state.cache_start == 0
+    assert state.historical_origin == 257
+
+def test_0088b_learned_decode_route_stable_within_boundary():
+    c = small_config()
+    train = DecoderLanguageModel(c, rng_seed=41)
+    reader = train.historical_memory
+    state = reader.open(np.arange(256, dtype=np.int32)[None, :] % 128,
+                        np.array([0]), inference=True)
+    q = np.random.default_rng(42).normal(size=(1, 1, 12, 64)).astype('float32')
+    ctx = np.zeros_like(q)
+    routes = {}
+    reader.apply_decode(ctx, q, 5, state, routes, clock=256, refresh_id=(1,2))
+    saved = routes[5][1][0].copy()
+    altered = q * 7.0
+    reader.apply_decode(ctx, altered, 5, state, routes, clock=257, refresh_id=(1,2))
+    np.testing.assert_array_equal(routes[5][1][0], saved)
+    reader.apply_decode(ctx, altered, 5, state, routes, clock=384, refresh_id=(1,3))
+    assert routes[5][0] == (1,3)
 
 
 def test_new_memory_parameters_are_optimizer_registered():

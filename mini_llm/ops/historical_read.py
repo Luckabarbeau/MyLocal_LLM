@@ -198,7 +198,7 @@ class HistoricalReadMemory:
                                       context, post_attn, ynorm, inv2, g, u,
                                       a, sigmoid, hidden, allowed)
 
-    def open(self, history_ids, valid_starts, valid_mask=None):
+    def open(self, history_ids, valid_starts, valid_mask=None, *, position_offset=0, inference=False):
         ids = xp.asarray(history_ids)
         self._audit('history_start')
         b, h = ids.shape
@@ -211,14 +211,20 @@ class HistoricalReadMemory:
         # absolute, with ragged earlier boundaries masked per sample.
         offset = min(max(0, h - 32), (int(xp.min(starts).item()) // 32) * 32)
         ids = ids[:, offset:]
-        positions = xp.arange(offset, h, dtype=xp.int64)
+        positions = xp.arange(offset, h, dtype=xp.int64) + int(position_offset)
         valid = positions[None, :] >= starts[:, None]
         if valid_mask is not None:
             supplied = xp.asarray(valid_mask, dtype=bool)
             if supplied.shape != (b, h):
                 raise ValueError('history_valid_mask must be [B,H]')
             valid = valid & supplied[:, offset:]
-        z, cache = self.encode(ids, valid)
+        previous_recompute = self.recompute
+        if inference:
+            self.recompute = True  # Avoid retaining backward intermediates during serving.
+        try:
+            z, cache = self.encode(ids, valid)
+        finally:
+            self.recompute = previous_recompute
         self._audit('after_history_encoder')
         k = _rope(_mat(z, self.key.data), positions[None, :], self.config.rope_base)
         v = _mat(z, self.value.data)
@@ -439,6 +445,62 @@ class HistoricalReadMemory:
                 entries.append((slot, selection, active))
         self._audit(f'layer{layer_idx}_history_forward', state)
         return context, (entries, routes) if return_cache else None
+
+    def apply_decode(self, context, q, layer_idx, state, route_cache, *,
+                     clock, refresh_id):
+        """Historical replacement for one query without rerouting each token.
+
+        The query at each 128-row local boundary selects the learned blocks;
+        that selection persists for the remaining 127 rows. In sliding mode
+        history rebuilds invalidate the selection explicitly.
+        """
+        slots = self.slots[layer_idx]
+        if not slots or not state.has_valid:
+            return context
+        context = xp.array(context, copy=True)
+        routes = None
+        if any(slot.kind == 'learned' for slot in slots):
+            key = int(layer_idx)
+            cached = route_cache.get(key)
+            if cached is None or cached[0] != refresh_id:
+                routes = self._route(q, slots, state)
+                route_cache[key] = (refresh_id, routes)
+            else:
+                routes = cached[1]
+        active = xp.any(state.valid, axis=1)[:, None, None]
+        for slot_idx, slot in enumerate(slots):
+            query = q[:, :, slot.head, :]
+            if slot.kind == 'learned':
+                ranks, valid_blocks, route_scores = routes
+                # apply_decode has one route boundary, hence shape [B,1,K].
+                rank = ranks[:, 0]
+                b = query.shape[0]
+                idx = (rank[..., None] * 32 +
+                       xp.arange(32, dtype=xp.int64)[None, None, :]).reshape(b, -1)
+                k = xp.take_along_axis(state.learned_k[slot.head], idx[..., None], axis=1)
+                v = xp.take_along_axis(state.learned_v[slot.head], idx[..., None], axis=1)
+                valid = (xp.take_along_axis(state.valid, idx, axis=1) &
+                         xp.repeat(valid_blocks[:, 0], 32, axis=1))
+                bias = 0.25 * xp.repeat(
+                    xp.take_along_axis(route_scores[:, 0], rank, axis=1),
+                    32, axis=1,
+                )
+            else:
+                idx = self._indices(slot, state)
+                if idx.size == 0:
+                    read = xp.zeros(query.shape, dtype=xp.float32)
+                    context[:, :, slot.head, :] = xp.where(
+                        active, self.head_gates[layer_idx].data[slot_idx] * read,
+                        context[:, :, slot.head, :])
+                    continue
+                k, v = state.k[:, idx], state.v[:, idx]
+                valid, bias = state.valid[:, idx], None
+            read, _ = self._read(query, k, v, valid, bias=bias)
+            previous = context[:, :, slot.head, :]
+            context[:, :, slot.head, :] = xp.where(
+                active, self.head_gates[layer_idx].data[slot_idx] * read, previous
+            )
+        return context
 
     def backward_reads(self, dcontext, q, layer_idx, state, read_cache):
         """VJP of historical token attention; probabilities replay by tile."""

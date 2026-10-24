@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""0087A bounded production-CuPy forward/backward timeline probe.
+"""Bounded production-CuPy forward/backward timeline probe.
 
 This process never constructs an optimizer, updates parameters, or writes a
 checkpoint. Data setup, checkpoint loading, gradient clearing, and warmup are
-outside each measured microbatch window.
+outside each measured microbatch window. Grouped attention remains the default;
+0089A permits an explicit strict Triton comparison on the same workload.
 """
 
 from __future__ import annotations
@@ -69,13 +70,25 @@ _PRODUCTION_BENCH_DEFAULTS = {
     "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
     "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
 }
+_REPORT_ENV_NAMES = tuple(sorted({
+    *_PRODUCTION_BENCH_DEFAULTS,
+    "MINI_LLM_TRAIN_ATTN_STRICT",
+    "MINI_LLM_BF16_MIXED_CONTEXT",
+}))
+
+
+def _env_enabled(name: str, default: str = "0") -> bool:
+    raw = os.environ.get(name, default).strip().lower()
+    return raw not in {"", "0", "false", "off", "no"}
 
 
 def _scope_label(name: str) -> str | None:
     """Translate existing synchronized profiler scopes to coarse NVTX labels."""
     if name.startswith("attention.dense."):
         return "attention_full"
-    if name.startswith("attention.local."):
+    if name.startswith("attention.local.") or name.startswith(
+        "attention.triton_mixed."
+    ):
         return "attention_local"
     if (
         name.startswith("attention.historical.")
@@ -282,6 +295,15 @@ def summarize_ms(values: Iterable[float]) -> dict[str, float | int]:
     }
 
 
+def _array_sha256(value) -> str:
+    array = np.ascontiguousarray(np.asarray(value))
+    digest = hashlib.sha256()
+    digest.update(array.dtype.str.encode("ascii"))
+    digest.update(json.dumps(array.shape).encode("ascii"))
+    digest.update(array.view(np.uint8))
+    return digest.hexdigest()
+
+
 def _install_scope_translation(controller: RangeController) -> None:
     # These modules import performance_scope directly, so patch only this
     # standalone process after all production modules have loaded.
@@ -299,13 +321,18 @@ def _active_head_patterns(config, metadata: dict) -> dict:
     schedule = historical_slots(config.n_layers, config.n_q_heads)
     memory_length = int(config.memory_context.distant_memory_length)
     valid_starts = np.asarray(metadata["history_valid_starts"], dtype=np.int64)
+    row_has_history = valid_starts < memory_length
+    all_rows_have_valid_history = bool(
+        row_has_history.size and np.all(row_has_history)
+    )
     per_layer = []
     pattern_counts: dict[str, int] = {}
     for layer, slots in enumerate(schedule):
-        valid_heads = []
+        scheduled_heads = [int(slot.head) for slot in slots]
+        any_valid_heads = []
         for slot in slots:
             if slot.kind == "learned":
-                valid = np.any(valid_starts < memory_length)
+                valid = np.any(row_has_history)
             else:
                 valid = any(
                     bool(source_indices(
@@ -315,18 +342,37 @@ def _active_head_patterns(config, metadata: dict) -> dict:
                     for start in valid_starts
                 )
             if valid:
-                valid_heads.append(int(slot.head))
-        local_heads = 15 - len(valid_heads)
-        pattern_counts[str(local_heads)] = pattern_counts.get(str(local_heads), 0) + 1
+                any_valid_heads.append(int(slot.head))
+        executed_skip_heads = (
+            scheduled_heads if all_rows_have_valid_history else []
+        )
+        executed_local_heads = [
+            head for head in range(1, int(config.n_q_heads))
+            if head not in executed_skip_heads
+        ]
+        local_count = len(executed_local_heads)
+        pattern_counts[str(local_count)] = pattern_counts.get(str(local_count), 0) + 1
         per_layer.append(
             {
                 "layer": layer,
                 "full_heads": [0],
-                "historical_heads_with_any_valid_source": valid_heads,
-                "active_local_head_count": local_heads,
+                "scheduled_historical_heads": scheduled_heads,
+                "historical_heads_with_any_valid_source": any_valid_heads,
+                "all_batch_rows_have_valid_history": all_rows_have_valid_history,
+                "executed_historical_skip_heads": executed_skip_heads,
+                "executed_active_local_heads": executed_local_heads,
+                "active_local_head_count": local_count,
+                "any_source_active_local_head_count": (
+                    int(config.n_q_heads) - 1 - len(any_valid_heads)
+                ),
             }
         )
-    return {"counts_by_active_local_heads": pattern_counts, "layers": per_layer}
+    return {
+        "batch_all_rows_have_valid_history": all_rows_have_valid_history,
+        "counts_by_active_local_heads": pattern_counts,
+        "counts_by_executed_active_local_heads": pattern_counts,
+        "layers": per_layer,
+    }
 
 
 def _sample_batch(
@@ -405,6 +451,13 @@ def _sample_batch(
                 "observed_compact_lengths_before_match": {
                     str(key): value for key, value in sorted(observed_lengths.items())
                 },
+                "router_gumbel_seed": int(metadata["router_gumbel_seed"]),
+                "fixture_hashes": {
+                    "inputs": _array_sha256(inputs),
+                    "targets": _array_sha256(targets),
+                    "loss_mask": _array_sha256(loss_mask),
+                    "history_valid_starts": _array_sha256(history_starts),
+                },
                 "head_patterns": _active_head_patterns(config, metadata),
             }
             return inputs, targets, loss_mask, metadata, sample_report
@@ -476,6 +529,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-sampling-attempts", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--runtime-profile", default="gpu-fast")
+    parser.add_argument(
+        "--attention-backend",
+        choices=("grouped", "triton"),
+        default=None,
+        help=(
+            "explicit current-attention backend; default preserves the environment "
+            "or the grouped production baseline"
+        ),
+    )
     parser.add_argument("--annotations", action="store_true")
     parser.add_argument("--capture", action="store_true")
     parser.add_argument("--no-optimizer", action="store_true", help="accepted safety assertion; optimizer is never created")
@@ -498,8 +560,22 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def main() -> int:
     args = _parse_args()
+    if args.attention_backend is not None:
+        os.environ["MINI_LLM_TRAIN_ATTN_BACKEND"] = args.attention_backend
     for name, value in _PRODUCTION_BENCH_DEFAULTS.items():
         os.environ.setdefault(name, value)
+    attention_backend = os.environ["MINI_LLM_TRAIN_ATTN_BACKEND"].strip().lower()
+    if attention_backend not in {"grouped", "triton"}:
+        raise RuntimeError(
+            "0089A supports only grouped or triton current attention, got "
+            f"{attention_backend!r}"
+        )
+    if attention_backend == "triton" and not _env_enabled(
+        "MINI_LLM_TRAIN_ATTN_STRICT"
+    ):
+        raise RuntimeError(
+            "0089A Triton measurement requires MINI_LLM_TRAIN_ATTN_STRICT=1"
+        )
 
     # Backend selection and runtime defaults must precede model/kernel imports.
     import cupy as cp
@@ -511,9 +587,7 @@ def main() -> int:
     from mini_llm.runtime_defaults import apply_runtime_defaults
 
     if BACKEND_NAME != "cupy":
-        raise RuntimeError(f"0087A requires CuPy backend, got {BACKEND_NAME!r}")
-    if os.environ.get("MINI_LLM_TRAIN_ATTN_BACKEND", "grouped") != "grouped":
-        raise RuntimeError("0087A production baseline requires MINI_LLM_TRAIN_ATTN_BACKEND=grouped")
+        raise RuntimeError(f"0089A requires CuPy backend, got {BACKEND_NAME!r}")
 
     checkpoint = args.checkpoint.expanduser().resolve()
     mixed_root = args.mixed_shard_root.expanduser().resolve()
@@ -610,7 +684,7 @@ def main() -> int:
         wall_ms.append((wall_end - wall_start) / 1_000_000.0)
 
         result = {
-            "schema_version": "0087A-v1",
+            "schema_version": "0089A-v1",
             "status": "captured" if args.capture else "measured",
             "safety": {
                 "optimizer_constructed": False,
@@ -626,6 +700,10 @@ def main() -> int:
                 "driver_version": int(cp.cuda.runtime.driverGetVersion()),
                 "device": cp.cuda.runtime.getDeviceProperties(0)["name"].decode(),
                 "compute_capability": list(cp.cuda.Device(0).compute_capability),
+                "triton": (
+                    __import__("triton").__version__
+                    if attention_backend == "triton" else None
+                ),
             },
             "model": {
                 "checkpoint": str(checkpoint),
@@ -647,8 +725,10 @@ def main() -> int:
                 "capture": args.capture,
                 "capture_name": CAPTURE_NAME,
                 "capture_domain": CAPTURE_DOMAIN,
+                "attention_backend": attention_backend,
+                "attention_strict": _env_enabled("MINI_LLM_TRAIN_ATTN_STRICT"),
                 "effective_flags": {
-                    name: os.environ.get(name) for name in sorted(_PRODUCTION_BENCH_DEFAULTS)
+                    name: os.environ.get(name) for name in _REPORT_ENV_NAMES
                 },
             },
             "workload": {

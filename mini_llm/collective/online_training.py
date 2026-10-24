@@ -354,15 +354,45 @@ def save_last_state(path, model, optimizer, rng, metadata):
     _atomic_save_npz(path, payload)
 
 
+# Only model/teacher identity is immutable across optimizer-step resumes.
+# Window geometry, data sampling, batch size, accumulation and scheduling are
+# training/evaluation choices and may evolve without changing the combiner.
+_IMMUTABLE_RESUME_KEYS = frozenset({
+    'teachers', 'teacher_fingerprints', 'tokenizer_sha256',
+})
+_VALIDATION_COMPARABILITY_KEYS = frozenset({
+    'context_length', 'prediction_positions', 'partition_seed',
+    'val_windows_sha256', 'seed', 'mixed_shard_root',
+})
+
+
+def _resume_setting_changes(meta, expected, saved_config, current_config):
+    """Find non-architectural changes; do not reject them on resume.
+
+    A changed random seed only changes initialization, not the restored model
+    parameters. Its validation-sampler effect is still recorded and reported.
+    """
+    if dataclasses.replace(saved_config, seed=current_config.seed) != current_config:
+        raise ValueError('fusion model architecture changed since saved optimizer checkpoint')
+    for key in _IMMUTABLE_RESUME_KEYS:
+        if key in expected and meta.get(key) != expected[key]:
+            raise ValueError(f'cannot resume: {key} changed')
+    changes = {
+        key: {'previous': meta[key], 'current': value}
+        for key, value in expected.items()
+        if key not in _IMMUTABLE_RESUME_KEYS
+        and key in meta and meta[key] != value
+    }
+    if saved_config.seed != current_config.seed:
+        changes['seed'] = {'previous': saved_config.seed, 'current': current_config.seed}
+    return changes
+
+
 def restore_last_state(path, model, optimizer, expected):
     with np.load(path, allow_pickle=False) as data:
         meta = json.loads(str(data['__meta_json__']))
         saved_config = FusionConfig(**json.loads(str(data['__config_json__'])))
-        if saved_config != model.config:
-            raise ValueError('fusion configuration changed since saved optimizer checkpoint')
-        for key, val in expected.items():
-            if meta.get(key) != val:
-                raise ValueError(f'cannot resume: {key} changed')
+        changes = _resume_setting_changes(meta, expected, saved_config, model.config)
         model.load_state_dict({name: data[f'weight/{name}'] for name in model.parameters_by_name})
         for i, name in enumerate(model.parameters_by_name):
             if not optimizer.restore_moments(i, data[f'moment1/{name}'], data[f'moment2/{name}']):
@@ -370,6 +400,8 @@ def restore_last_state(path, model, optimizer, expected):
             if not optimizer.restore_master_weight(i, data[f'master/{name}']):
                 raise ValueError(f'invalid master weights: {name}')
         optimizer.step_index = int(meta['step'])
+    # Internal return-only field; recorded as a normal resume event by main().
+    meta['_resume_changes'] = changes
     return meta
 
 
@@ -452,16 +484,52 @@ def main(argv=None):
     expected = {'teachers': [[i, str(p)] for i, p in members],
                 'teacher_fingerprints': teacher_fingerprints,
                 'tokenizer_sha256': tokenizer_sha, 'partition_seed': args.partition_seed,
+                'mixed_shard_root': str(Path(args.mixed_shard_root).resolve()),
                 'context_length': args.context_length, 'prediction_positions': positions.tolist(),
                 'batch_rows': args.batch_rows, 'grad_accum_steps': args.grad_accum_steps,
                 'batch_windows': args.batch_windows,
                 'val_windows_sha256': hashlib.sha256(val_windows.tobytes()).hexdigest()}
+    # These settings are recorded for provenance, not for compatibility checks.
+    training_settings = {'lm_head_rows': args.lm_head_rows,
+                         'val_windows': args.val_windows, 'min_members': args.min_members,
+                         'lr': args.lr, 'weight_decay': args.weight_decay,
+                         'grad_clip': args.grad_clip, 'runtime_profile': args.runtime_profile,
+                         'eval_interval': args.eval_interval, 'save_interval': args.save_interval,
+                         'log_interval': args.log_interval,
+                         'early_stop_patience': args.early_stop_patience}
     best = float('inf'); stale = 0; start_step = 0
+    resume_events = []
     if args.resume:
         data = restore_last_state(last, model, optimizer, expected)
         start_step = int(data['step']); best = float(data['best_ce']); stale = int(data['stale'])
         rng.bit_generator.state = data['rng_state']
-        print(f'fusion_online_resume step={start_step} best_ce={best:.6f}', flush=True)
+        changes = data.pop('_resume_changes')
+        # Prior versions did not save extra training settings. Missing values
+        # should neither block resume nor be reported as changes.
+        changes.update({
+            key: {'previous': data['training_settings'][key], 'current': value}
+            for key, value in training_settings.items()
+            if key in data.get('training_settings', {})
+            and data['training_settings'][key] != value
+        })
+        resume_events = list(data.get('resume_events', []))
+        if changes:
+            print(f'fusion_online_resume_changes step={start_step} '
+                  f'{json.dumps(changes, sort_keys=True)}', flush=True)
+            resume_events.append({'step': start_step, 'changes': changes})
+        if changes.keys() & _VALIDATION_COMPARABILITY_KEYS:
+            best = float('inf')
+            stale = 0
+            print('fusion_online_resume_validation_reset '
+                  'validation data/scoring changed; old best CE is not comparable. '
+                  'The next validation will establish a new best checkpoint.', flush=True)
+            if {'partition_seed', 'mixed_shard_root'} & changes.keys():
+                print('fusion_online_resume_data_warning: changed shard partitions '
+                      'or dataset location can overlap with previously consumed data; '
+                      'do not treat this resumed run as an independently held-out evaluation.',
+                      flush=True)
+        print(f'fusion_online_resume step={start_step} best_ce={best:.6f} '
+              'train_rng=restored_from_checkpoint', flush=True)
     elif output.exists() or last.exists():
         raise FileExistsError('online fusion output exists: use --resume or a new --output')
     print(f'fusion_online members={member_ids} params={sum(p.size for p in model.parameters())} '
@@ -611,6 +679,8 @@ def main(argv=None):
         if step % args.save_interval == 0 or step == args.steps or (args.early_stop_patience and stale >= args.early_stop_patience):
             save_last_state(last, model, optimizer, rng,
                             {**expected, 'step': step, 'best_ce': best, 'stale': stale,
+                             'training_settings': training_settings,
+                             'resume_events': resume_events,
                              'telemetry': meter.state()})
         if args.early_stop_patience and stale >= args.early_stop_patience:
             print(f'fusion_online_early_stop step={step} best_ce={best:.6f}', flush=True)

@@ -63,6 +63,12 @@ _GPU_FAST_DEFAULTS: dict[str, str] = {
     "MINI_LLM_COMPACT_PACKED_V": "1",
 }
 
+_GPU_FAST_TRAINING_DEFAULTS: dict[str, str] = {
+    # 0089C: fusing the attention branch promotion/residual add into RMSNorm2
+    # reduced complete B3/T2304 block F+B latency in two interleaved A/B runs.
+    "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM": "1",
+}
+
 _CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
     "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
     "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
@@ -203,6 +209,11 @@ def format_runtime_fast_paths(config=None) -> str:
         ("bf16_indexed_pipeline", "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE", "0"),
         ("fused_swiglu", "MINI_LLM_FUSED_SWIGLU", "0"),
         ("bf16_ce", "MINI_LLM_FUSED_BF16_CE", "0"),
+        (
+            "train_residual_rmsnorm",
+            "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM",
+            "0",
+        ),
         ("local_chunk", "MINI_LLM_LOCAL_ATTN_QUERY_CHUNK", "512"),
         ("local_prob_recompute", "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS", "0"),
         ("lm_head_chunk", "MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"),
@@ -257,6 +268,8 @@ def apply_runtime_defaults(
     # Keep packed gate/up GEMM opt-in: the 32x512 dense A/B benchmark
     # measured a regression with this path enabled.
     _setdefaults(_GPU_FAST_DEFAULTS, applied)
+    if training:
+        _setdefaults(_GPU_FAST_TRAINING_DEFAULTS, applied)
     if _use_fused_historical_decode(config, training=training):
         _setdefaults({"MINI_LLM_FUSED_SPARSE_DECODE": "1"}, applied)
 

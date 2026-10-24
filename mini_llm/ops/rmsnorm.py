@@ -81,6 +81,58 @@ def _get_fused_bf16_rmsnorm_module():
         }
     }
 
+    // Fuse the BF16 branch promotion and FP32 residual addition into the
+    // training RMSNorm pass.  The FP32 residual output and inv_rms are retained
+    // because the existing backward kernels consume that exact cache contract.
+    extern "C" __global__
+    void residual_add_rmsnorm_f32_bf16_forward(
+        const float* __restrict__ residual,
+        const __nv_bfloat16* __restrict__ branch,
+        const __nv_bfloat16* __restrict__ gamma,
+        float* __restrict__ residual_out,
+        __nv_bfloat16* __restrict__ y,
+        float* __restrict__ inv_rms,
+        int n_rows,
+        int d_model,
+        float eps)
+    {
+        const int row = (int)blockIdx.x;
+        const int tid = (int)threadIdx.x;
+        if (row >= n_rows) return;
+
+        const long long base = (long long)row * d_model;
+        float local = 0.0f;
+        for (int col = tid; col < d_model; col += (int)blockDim.x) {
+            const long long idx = base + col;
+            float value = residual[idx] + __bfloat162float(branch[idx]);
+            local += value * value;
+        }
+
+        __shared__ float partial[256];
+        partial[tid] = local;
+        __syncthreads();
+        for (int stride = 128; stride > 0; stride >>= 1) {
+            if (tid < stride) partial[tid] += partial[tid + stride];
+            __syncthreads();
+        }
+
+        if (tid == 0) {
+            float mean_sq = partial[0] / (float)d_model;
+            partial[0] = rsqrtf(mean_sq + eps);
+            inv_rms[row] = partial[0];
+        }
+        __syncthreads();
+
+        const float inv = partial[0];
+        for (int col = tid; col < d_model; col += (int)blockDim.x) {
+            const long long idx = base + col;
+            float value = residual[idx] + __bfloat162float(branch[idx]);
+            residual_out[idx] = value;
+            y[idx] = __float2bfloat16_rn(
+                value * inv * __bfloat162float(gamma[col]));
+        }
+    }
+
     // dX for FP32 incoming branch gradients.  One block owns one RMSNorm row,
     // performs the projection reduction in FP32, then writes FP32 residual grads.
     extern "C" __global__
@@ -219,6 +271,7 @@ def _get_fused_bf16_rmsnorm_module():
 
     names = (
         "rmsnorm_f32_to_bf16_forward",
+        "residual_add_rmsnorm_f32_bf16_forward",
         "rmsnorm_bwd_dx_f32dy",
         "rmsnorm_bwd_dx_bf16dy",
         "rmsnorm_bwd_wgrad_f32dy",
@@ -264,6 +317,10 @@ class RMSNorm:
             BACKEND_NAME == "cupy"
             and _env_enabled("MINI_LLM_FUSED_BF16_RMSNORM")
         )
+        self._fused_residual_bf16_enabled = (
+            self._fused_bf16_enabled
+            and _env_enabled("MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM")
+        )
 
     def parameters(self):
         return [self.gamma]
@@ -303,6 +360,74 @@ class RMSNorm:
             "fused_bf16_residual": True,
         }
         return y, cache
+
+    def _can_use_fused_residual_bf16_forward(
+        self, residual, branch, output_dtype
+    ):
+        if not self._fused_residual_bf16_enabled or BACKEND_NAME != "cupy":
+            return False
+        if output_dtype is None or not is_bfloat16_dtype(output_dtype):
+            return False
+        if residual.dtype != xp.float32 or not is_bfloat16_dtype(branch.dtype):
+            return False
+        if not is_bfloat16_dtype(self.gamma.data.dtype):
+            return False
+        if residual.shape != branch.shape or residual.shape[-1] != self.d_model:
+            return False
+        if self.gamma.data.shape != (self.d_model,):
+            return False
+        if not (
+            residual.flags.c_contiguous
+            and branch.flags.c_contiguous
+            and self.gamma.data.flags.c_contiguous
+        ):
+            return False
+        return _get_fused_bf16_rmsnorm_module() is not None
+
+    def _forward_residual_fused_bf16(self, residual, branch):
+        module = _get_fused_bf16_rmsnorm_module()
+        if module is None:
+            return None
+        n_rows = int(residual.size // self.d_model)
+        residual_out = xp.empty_like(residual)
+        y = xp.empty(residual.shape, dtype=self.gamma.data.dtype)
+        inv_rms = xp.empty(residual.shape[:-1] + (1,), dtype=xp.float32)
+        with PERFORMANCE_PROFILER.rmsnorm_detail_scope(
+            "rmsnorm.fwd.residual_kernel"
+        ):
+            module.get_function("residual_add_rmsnorm_f32_bf16_forward")(
+                (n_rows,), (self._FUSED_THREADS,),
+                (
+                    residual, branch, self.gamma.data, residual_out, y, inv_rms,
+                    np.int32(n_rows), np.int32(self.d_model), np.float32(self.eps),
+                ),
+            )
+        cache = {
+            "x": residual_out,
+            "inv_rms": inv_rms,
+            "original_dtype": residual_out.dtype,
+            "fused_bf16_residual": True,
+        }
+        return residual_out, y, cache
+
+    def can_forward_residual_compute(self, residual, branch, output_dtype):
+        """Return whether the fused training residual/RMSNorm path is available."""
+        return self._can_use_fused_residual_bf16_forward(
+            residual, branch, output_dtype
+        )
+
+    def forward_residual_compute(self, residual, branch, output_dtype):
+        """Add a branch to an FP32 residual and normalize the resulting stream."""
+        if self._can_use_fused_residual_bf16_forward(
+            residual, branch, output_dtype
+        ):
+            fused = self._forward_residual_fused_bf16(residual, branch)
+            if fused is not None:
+                return fused
+
+        residual_out = residual + branch.astype(residual.dtype, copy=False)
+        y, cache = self.forward_compute(residual_out, output_dtype)
+        return residual_out, y, cache
 
     def forward_compute(self, x, output_dtype):
         """Forward with a requested downstream compute dtype when supported."""

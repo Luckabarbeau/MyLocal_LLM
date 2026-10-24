@@ -439,6 +439,16 @@ def _concurrent_expert_stream_count(n_experts):
     return max(1, min(int(n_experts), count))
 
 
+def _expert_dx_accumulate_enabled(dtype):
+    """Accumulate the second BF16 expert input-gradient GEMM into the first."""
+    raw = os.environ.get("MINI_LLM_EXPERT_DX_ACCUMULATE", "0").strip().lower()
+    return (
+        BACKEND_NAME == "cupy"
+        and is_bfloat16_dtype(dtype)
+        and raw not in {"0", "false", "off", "no"}
+    )
+
+
 def _fused_expert_gemm_enabled():
     """Enable the checkpoint-compatible fused SwiGLU projection path.
 
@@ -733,12 +743,20 @@ class ExpertFFN:
                 self.W_gate.grad += x_2d.T @ dg
             with moe_detail_scope("moe.expert.up_wgrad"):
                 self.W_up.grad += x_2d.T @ du
-            with moe_detail_scope("moe.expert.gate_dx"):
-                dx_gate = dg @ self.W_gate.data.T
-            with moe_detail_scope("moe.expert.up_dx"):
-                dx_up = du @ self.W_up.data.T
-            with moe_detail_scope("moe.expert.dx_add"):
-                dx = dx_gate + dx_up
+            if _expert_dx_accumulate_enabled(dg.dtype):
+                with moe_detail_scope("moe.expert.gate_dx"):
+                    dx = dg @ self.W_gate.data.T
+                with moe_detail_scope("moe.expert.up_dx"):
+                    dx_up = du @ self.W_up.data.T
+                with moe_detail_scope("moe.expert.dx_add_inplace"):
+                    xp.add(dx, dx_up, out=dx)
+            else:
+                with moe_detail_scope("moe.expert.gate_dx"):
+                    dx_gate = dg @ self.W_gate.data.T
+                with moe_detail_scope("moe.expert.up_dx"):
+                    dx_up = du @ self.W_up.data.T
+                with moe_detail_scope("moe.expert.dx_add"):
+                    dx = dx_gate + dx_up
         dx = dx.reshape(dy.shape)
 
         if return_route_dweights:

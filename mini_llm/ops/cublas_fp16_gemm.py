@@ -197,8 +197,10 @@ def _validate_bf16_array(name, array, context, *, allow_fortran=False):
         raise ValueError(f"bf16_matmul_into: {name} is on the wrong CUDA device")
 
 
-def bf16_matmul_into(a, b, out, *, context: FP16GemmContext) -> None:
-    """Submit row-major BF16 ``out = a @ b`` with FP32 accumulation."""
+def bf16_matmul_into(
+    a, b, out, *, context: FP16GemmContext, beta: float = 0.0
+) -> None:
+    """Submit row-major BF16 ``out = a @ b + beta * out`` with FP32 accumulation."""
     _validate_bf16_array("a", a, context)
     _validate_bf16_array("b", b, context, allow_fortran=True)
     _validate_bf16_array("out", out, context)
@@ -221,6 +223,7 @@ def bf16_matmul_into(a, b, out, *, context: FP16GemmContext) -> None:
     b_is_fortran = bool(b.flags.f_contiguous and not b.flags.c_contiguous)
     trans_b_storage = 1 if b_is_fortran else _CUBLAS_OP_N
     b_leading_dimension = k if b_is_fortran else n
+    beta_host = ctypes.c_float(float(beta))
     status = context.function(
         ctypes.c_void_p(context.handle),
         ctypes.c_int(trans_b_storage), ctypes.c_int(_CUBLAS_OP_N),
@@ -229,7 +232,7 @@ def bf16_matmul_into(a, b, out, *, context: FP16GemmContext) -> None:
         ctypes.c_void_p(int(b.data.ptr)), ctypes.c_int(_CUDA_R_16BF),
         ctypes.c_int(b_leading_dimension),
         ctypes.c_void_p(int(a.data.ptr)), ctypes.c_int(_CUDA_R_16BF), ctypes.c_int(k),
-        ctypes.byref(_BETA_ZERO),
+        ctypes.byref(beta_host),
         ctypes.c_void_p(int(out.data.ptr)), ctypes.c_int(_CUDA_R_16BF), ctypes.c_int(n),
         ctypes.c_int(_CUBLAS_COMPUTE_32F), ctypes.c_int(_CUBLAS_GEMM_DEFAULT),
     )

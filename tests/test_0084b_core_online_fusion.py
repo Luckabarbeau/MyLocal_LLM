@@ -108,6 +108,94 @@ def test_fusion_resume_retains_optimizer_and_guard(tmp_path):
         online.restore_last_state(path, n, o2, {'teacher_fingerprints': {'0': 'changed'}})
 
 
+def test_resume_allows_training_changes_without_discarding_optimizer(tmp_path):
+    cfg = FusionConfig(vocab_size=11, context_heads=0, seed=13)
+    model = ProbabilityResidualCombiner(cfg)
+    opt = AdamW(model.parameters(), lr=1e-3)
+    model.output_bias.grad[:] = 0.5
+    opt.step()
+    expected = {'teachers': [[0, '/a'], [1, '/b']],
+                'teacher_fingerprints': {'0': 'hash_a', '1': 'hash_b'},
+                'tokenizer_sha256': 'tokenizer', 'partition_seed': 82,
+                'context_length': 256, 'prediction_positions': [0, 1],
+                'val_windows_sha256': 'original_validation',
+                'batch_rows': 32, 'batch_windows': 1, 'grad_accum_steps': 8}
+    path = tmp_path / 'online.last.npz'
+    online.save_last_state(path, model, opt, np.random.default_rng(5),
+                           {**expected, 'step': 3, 'best_ce': 2.0, 'stale': 1})
+    # All these are mutable scheduling, sampling, or evaluation choices.
+    resumed_expected = {**expected, 'grad_accum_steps': 128,
+                        'batch_rows': 128, 'batch_windows': 2,
+                        'context_length': 2048, 'prediction_positions': [0, 1, 2],
+                        'partition_seed': 89, 'val_windows_sha256': 'new_validation'}
+    new = ProbabilityResidualCombiner(FusionConfig(vocab_size=11, context_heads=0, seed=99))
+    new_opt = AdamW(new.parameters(), lr=3e-4, weight_decay=0.05)
+    result = online.restore_last_state(path, new, new_opt, resumed_expected)
+    assert new_opt.step_index == 3
+    assert result['_resume_changes']['grad_accum_steps'] == {'previous': 8, 'current': 128}
+    assert result['_resume_changes']['context_length']['current'] == 2048
+    assert result['_resume_changes']['seed'] == {'previous': 13, 'current': 99}
+    for i, (name, parameter) in enumerate(model.parameters_by_name.items()):
+        np.testing.assert_array_equal(new.parameters_by_name[name].data, parameter.data)
+        np.testing.assert_array_equal(new_opt.m[i], opt.m[i])
+        np.testing.assert_array_equal(new_opt.v[i], opt.v[i])
+    # Teacher identity and combiner architecture are not training knobs.
+    with pytest.raises(ValueError, match='teacher_fingerprints'):
+        online.restore_last_state(path, new, new_opt,
+            {**resumed_expected, 'teacher_fingerprints': {'0': 'different', '1': 'hash_b'}})
+    incompatible = ProbabilityResidualCombiner(FusionConfig(vocab_size=11,
+        context_heads=2, seed=13))
+    with pytest.raises(ValueError, match='architecture'):
+        online.restore_last_state(path, incompatible,
+            AdamW(incompatible.parameters(), lr=1e-3), expected)
+
+
+def test_online_resume_changes_accumulation_and_validation(monkeypatch, tmp_path, capsys):
+    paths = [tmp_path / 'a', tmp_path / 'b']
+    for path in paths:
+        path.mkdir()
+    data_root = tmp_path / 'mixed'
+    data_root.mkdir()
+    class Sample:
+        names = ['src']
+        def __init__(self, seed):
+            self.rng = np.random.default_rng(seed)
+        def batch(self, n):
+            return np.tile([[1, 2, 3, 4, 5]], (n, 1)), ['src'] * n
+    monkeypatch.setattr(online, 'make_online_samplers', lambda *a: (
+        {'train': Sample(6), 'val': Sample(7)}, {'sources': {'src': {}}}, {}))
+    monkeypatch.setattr(online, 'validate_teacher_tokenizers', lambda *a:
+                        ('hash', {'0': 'a', '1': 'b'}))
+    monkeypatch.setattr(online, 'load_frozen_teacher', lambda path, length:
+                        (FakeTeacher(11, 0.0 if path.name == 'a' else 0.1),
+                         SimpleNamespace(vocab_size=11)))
+    output = tmp_path / 'best.npz'
+    common = ['--member', f'0:{paths[0]}', '--member', f'1:{paths[1]}',
+              '--mixed-shard-root', str(data_root), '--output', str(output),
+              '--context-length', '4', '--context-heads', '0']
+    online.main(common + ['--score-last-k', '4', '--batch-rows', '2',
+         '--grad-accum-steps', '2', '--batch-windows', '1',
+         '--val-windows', '2', '--steps', '2', '--save-interval', '1',
+         '--eval-interval', '1', '--log-interval', '1'])
+    capsys.readouterr()
+    online.main(common + ['--score-last-k', '3', '--batch-rows', '4',
+         '--grad-accum-steps', '4', '--batch-windows', '2',
+         '--val-windows', '3', '--steps', '3', '--save-interval', '1',
+         '--eval-interval', '1', '--log-interval', '1', '--resume'])
+    report = capsys.readouterr().out
+    assert 'fusion_online_resume_changes' in report
+    assert 'fusion_online_resume_validation_reset' in report
+    assert 'fusion_online_resume step=2' in report
+    with np.load(tmp_path / 'best.last.npz', allow_pickle=False) as z:
+        meta = json.loads(str(z['__meta_json__']))
+    assert meta['step'] == 3
+    assert meta['grad_accum_steps'] == 4
+    assert meta['batch_rows'] == 4
+    assert meta['batch_windows'] == 2
+    assert meta['prediction_positions'] == [1, 2, 3]
+    assert meta['resume_events'][-1]['changes']['grad_accum_steps']['current'] == 4
+
+
 def test_tokenizer_mismatch_fails_before_loading_teachers(tmp_path):
     data = tmp_path / 'data'; data.mkdir()
     (data / 'tokenizer.json').write_text('a')

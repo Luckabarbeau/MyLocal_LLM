@@ -21,6 +21,7 @@ PROFILE_VARS = {
     "MINI_LLM_DIRECT_QUERY_POOL_BACKWARD",
     "MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE",
     "MINI_LLM_FUSED_BF16_RMSNORM",
+    "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM",
     "MINI_LLM_PACKED_QKV",
     "MINI_LLM_FUSED_SPARSE_DECODE",
     "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM",
@@ -66,6 +67,7 @@ def test_auto_large_cupy_training_uses_consumer_profile(monkeypatch):
     )
     assert result.resolved == "consumer-gpu"
     assert os.environ["MINI_LLM_PACKED_QKV"] == "1"
+    assert os.environ["MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM"] == "1"
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"
     assert os.environ["MINI_LLM_OPTIMIZER_OFFLOAD"] == "full"
     assert os.environ["MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB"] == "16"
@@ -94,6 +96,7 @@ def test_auto_cupy_inference_uses_fast_not_training_memory_policy(monkeypatch):
     )
     assert result.resolved == "gpu-fast"
     assert os.environ["MINI_LLM_PACKED_QKV"] == "1"
+    assert "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM" not in os.environ
     assert "MINI_LLM_OPTIMIZER_OFFLOAD" not in os.environ
     assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ
 
@@ -150,11 +153,13 @@ def test_dense_gpu_fast_uses_safe_gemm_and_512d_tile(monkeypatch):
     )
     assert result.resolved == "gpu-fast"
     assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+    assert os.environ["MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM"] == "1"
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "512"
     assert os.environ["MINI_LLM_AR_COMPACT_TARGET"] == "1"
     assert "MINI_LLM_OPTIMIZER_OFFLOAD" not in os.environ
     summary = format_runtime_fast_paths(config)
     assert "ffn_packed_gate_up=0" in summary
+    assert "train_residual_rmsnorm=1" in summary
     assert "local_chunk=512" in summary
 
 

@@ -233,27 +233,44 @@ class TransformerBlock:
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
 
-        attn_residual = (
-            attn_out.astype("float32", copy=False)
-            if self.use_fp32_residual else attn_out
+        fused_residual_norm2 = (
+            self.use_fp32_residual
+            and not getattr(self, "residual_gates", False)
+            and hasattr(self.norm2, "can_forward_residual_compute")
+            and self.norm2.can_forward_residual_compute(
+                residual1, attn_out, self.compute_dtype
+            )
         )
-        if getattr(self, "residual_gates", False):
-            # Reuse the branch output allocation.  This adds one scalar
-            # elementwise multiply but no extra activation tensor.
-            xp.multiply(attn_residual, self.alpha_attn.data, out=attn_residual)
-        x = residual1 + attn_residual
+        if fused_residual_norm2:
+            with performance_scope("block.norm2.forward"):
+                residual2, norm2_out, norm2_cache = (
+                    self.norm2.forward_residual_compute(
+                        residual1, attn_out, self.compute_dtype
+                    )
+                )
+            x = residual2
+        else:
+            attn_residual = (
+                attn_out.astype("float32", copy=False)
+                if self.use_fp32_residual else attn_out
+            )
+            if getattr(self, "residual_gates", False):
+                # Reuse the branch output allocation.  This adds one scalar
+                # elementwise multiply but no extra activation tensor.
+                xp.multiply(attn_residual, self.alpha_attn.data, out=attn_residual)
+            x = residual1 + attn_residual
+            residual2 = x
+
+            # Norm → MoE → residual. As above, only the branch compute is FP16.
+            with performance_scope("block.norm2.forward"):
+                if self.use_fp32_residual and hasattr(self.norm2, "forward_compute"):
+                    norm2_out, norm2_cache = self.norm2.forward_compute(
+                        x, self.compute_dtype
+                    )
+                else:
+                    norm2_out, norm2_cache = self.norm2.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.post_attention_residual", xp.all(xp.isfinite(x))))
-        
-        # Second residual branch: MoE
-        residual2 = x
-        
-        # Norm → MoE → residual. As above, only the branch compute is FP16.
-        with performance_scope("block.norm2.forward"):
-            if self.use_fp32_residual and hasattr(self.norm2, "forward_compute"):
-                norm2_out, norm2_cache = self.norm2.forward_compute(x, self.compute_dtype)
-            else:
-                norm2_out, norm2_cache = self.norm2.forward(x)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.norm2", xp.all(xp.isfinite(norm2_out))))
 

@@ -20,6 +20,32 @@ profile = _load("profile_0087a_training", "benchmarks/profile_0087a_training.py"
 analyzer = _load("analyze_0087a_nsys", "benchmarks/analyze_0087a_nsys.py")
 
 
+def test_production_benchmark_defaults_cover_required_fairness_contract():
+    required = {
+        "MINI_LLM_BACKEND": "cupy",
+        "MINI_LLM_LOCAL_DETAIL_PROFILE": "0",
+        "MINI_LLM_MOE_DETAIL_PROFILE": "0",
+        "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+        "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
+        "MINI_LLM_FUSED_EXPERT_GEMM": "0",
+        "MINI_LLM_AR_COMPACT_TARGET": "1",
+        "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "1",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "1",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT": "0",
+        "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "1",
+        "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
+        "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
+        "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "5",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "1",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "1",
+        "MINI_LLM_GPU_MEMORY_AUDIT": "0",
+    }
+    assert {
+        name: profile._PRODUCTION_BENCH_DEFAULTS.get(name) for name in required
+    } == required
+    assert set(required) <= set(profile._REPORT_ENV_NAMES)
+
+
 def test_disabled_range_controller_is_noop():
     events = []
     controller = profile.RangeController(
@@ -45,12 +71,16 @@ def test_scope_translation_is_balanced_and_coalesces_duplicate_nested_labels():
             pass
     with controller.scope("block.norm1.forward"):
         pass
+    with controller.scope("historical.encoder.block_attention"):
+        pass
     with controller.scope("unmapped.detail"):
         pass
     assert events == [
         ("push", "attention_local"),
         ("pop", None),
         ("push", "rmsnorm_residual"),
+        ("pop", None),
+        ("push", "historical.encoder.block_attention"),
         ("pop", None),
     ]
     assert set(profile.REQUIRED_RANGES).issuperset(

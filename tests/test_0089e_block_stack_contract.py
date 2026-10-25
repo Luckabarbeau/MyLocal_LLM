@@ -28,6 +28,49 @@ def _load_runner():
 runner = _load_runner()
 
 
+def test_cupy_benchmark_environment_covers_required_fairness_contract():
+    required = {
+        "MINI_LLM_BACKEND": "cupy",
+        "MINI_LLM_LOCAL_DETAIL_PROFILE": "0",
+        "MINI_LLM_MOE_DETAIL_PROFILE": "0",
+        "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+        "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
+        "MINI_LLM_FUSED_EXPERT_GEMM": "0",
+        "MINI_LLM_AR_COMPACT_TARGET": "1",
+        "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "1",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "1",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT": "0",
+        "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "1",
+        "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
+        "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
+        "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "5",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "1",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "1",
+        "MINI_LLM_GPU_MEMORY_AUDIT": "0",
+    }
+    assert {
+        name: runner.CUPY_BENCHMARK_ENV.get(name) for name in required
+    } == required
+
+    inactive_in_block_stack = {
+        "MINI_LLM_OPTIMIZER_OFFLOAD",
+        "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB",
+        "MINI_LLM_AR_COMPACT_TARGET",
+        "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM",
+        "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT",
+        "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD",
+        "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS",
+        "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION",
+        "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT",
+    }
+    assert inactive_in_block_stack <= set(runner.CUPY_BENCHMARK_ENV_APPLICABILITY)
+    assert "prepared once outside timing" in runner.CUPY_BENCHMARK_ENV_APPLICABILITY[
+        "MINI_LLM_ROPE_PREPARED_POSITIONS"
+    ]
+
+
 def test_valid_depths_are_fail_closed():
     assert runner.VALID_DEPTHS == (1, 2, 4, 8, 20)
     for depth in runner.VALID_DEPTHS:

@@ -349,20 +349,55 @@ class ProbabilityResidualCombiner:
             member_var = xp.mean((member - member_mean[:, None, ...]) ** 2, axis=1)
         if profile is not None:
             profile.mark('forward.member_encoder_aggregate')
-        count = xp.full_like(log_pa, math.log1p(members) / math.log(11.0))
-        features = xp.concatenate((
-            member_mean, member_var,
-            log_pa[..., None] / 10.0,
-            difference[..., None] / 10.0,
-            log_ratio_variance[..., None] / 100.0,
-            count[..., None],
-        ), axis=-1)
-        if profile is not None:
-            profile.mark('forward.assemble_features')
-        decoder = xp.tanh(features @ self.fusion_weight.data + self.fusion_bias.data)
+        count_value = xp.float32(math.log1p(members) / math.log(11.0))
+        # Splitting the first decoder contraction avoids a GiB-scale feature
+        # tensor at wide member encoders, but extra gradient GEMMs hurt narrow
+        # encoders. Keep the original single-GEMM path below the measured
+        # crossover and preserve it as the CuPy/NumPy reference implementation.
+        split_features = BACKEND_NAME == "cupy" and self.config.member_width >= 64
+        if split_features:
+            from .fusion_cublas import fp32_matmul_into
+            from .fusion_cuda_kernels import (
+                decoder_bias_tanh_inplace, decoder_scalar_features_tanh_inplace)
+            positions = rows * vocab
+            h = self.config.member_width
+            k = self.config.decoder_width
+            decoder_2d = xp.empty((positions, k), dtype=xp.float32)
+            fp32_matmul_into(member_mean.reshape(positions, h),
+                             self.fusion_weight.data[:h], decoder_2d)
+            fp32_matmul_into(member_var.reshape(positions, h),
+                             self.fusion_weight.data[h:2*h], decoder_2d,
+                             accumulate=True)
+            if profile is not None:
+                profile.mark('forward.assemble_features')
+            decoder = decoder_scalar_features_tanh_inplace(
+                decoder_2d.reshape(rows, vocab, k), log_pa, difference,
+                log_ratio_variance, self.fusion_weight.data[2*h:],
+                self.fusion_bias.data, count_value)
+            features = None
+        else:
+            count = xp.full_like(log_pa, count_value)
+            features = xp.concatenate((
+                member_mean, member_var,
+                log_pa[..., None] / 10.0,
+                difference[..., None] / 10.0,
+                log_ratio_variance[..., None] / 100.0,
+                count[..., None],
+            ), axis=-1)
+            if profile is not None:
+                profile.mark('forward.assemble_features')
+            if BACKEND_NAME == "cupy":
+                from .fusion_cuda_kernels import decoder_bias_tanh_inplace
+                decoder = decoder_bias_tanh_inplace(
+                    features @ self.fusion_weight.data, self.fusion_bias.data)
+            else:
+                decoder = xp.tanh(features @ self.fusion_weight.data + self.fusion_bias.data)
         decoder_states = [decoder]
         for weight, bias in zip(self.decoder_hidden_weights, self.decoder_hidden_biases):
-            decoder = xp.tanh(decoder @ weight.data + bias.data)
+            if BACKEND_NAME == "cupy":
+                decoder = decoder_bias_tanh_inplace(decoder @ weight.data, bias.data)
+            else:
+                decoder = xp.tanh(decoder @ weight.data + bias.data)
             decoder_states.append(decoder)
         residual = decoder @ self.output_weight.data + self.output_bias.data
         if profile is not None:
@@ -381,8 +416,11 @@ class ProbabilityResidualCombiner:
             "entropy_centered": entropy_centered, "model_token": model_token,
             "moments": moments, "token_context": token_context,
             "member": member, "member_mean": member_mean,
-            "features": features, "decoder": decoder,
-            "decoder_states": decoder_states, "final": result,
+            "member_var": member_var if split_features else None,
+            "log_ratio_variance": log_ratio_variance if split_features else None,
+            "features": features, "split_features": split_features,
+            "decoder": decoder,
+            "decoder_states": decoder_states, "log_final": log_pc,
         }
 
     def loss_and_backward(self, logits, model_ids, targets, *, return_weighted=False,
@@ -406,10 +444,9 @@ class ProbabilityResidualCombiner:
             raise ValueError("targets must be valid [rows] vocabulary indices")
         indices = xp.arange(rows)
         targets_xp = xp.asarray(y)
-        # Logits-space loss is stable even when softmax underflows in FP32.
-        final_logits = cache["log_weighted"] + (cache["decoder"] @ self.output_weight.data) + self.output_bias.data
-        log_final = _log_softmax(final_logits)
-        loss = -xp.mean(log_final[indices, targets_xp])
+        # Forward already computed stable full-vocabulary log probabilities.
+        # Reuse them instead of repeating the output head and log-softmax.
+        loss = -xp.mean(cache["log_final"][indices, targets_xp])
         baseline = -xp.mean(cache["log_pa"][indices, targets_xp])
         weighted_ce = -xp.mean(cache["log_weighted"][indices, targets_xp]) if return_weighted else None
         if not defer_metrics:
@@ -472,11 +509,20 @@ class ProbabilityResidualCombiner:
             profile.mark('backward.output_head.bias_grad')
         # Reverse through the optional extra token-wise decoder layers.
         states = cache["decoder_states"]
-        if BACKEND_NAME == "cupy" and not self.decoder_hidden_weights:
-            from .fusion_cuda_kernels import decoder_first_layer_backward
-            # Fuse (dz * w_out) * (1 - tanh^2) without a full-size ddecoder.
-            dpre_decoder = decoder_first_layer_backward(states[0], dz,
-                                                        self.output_weight.data)
+        if BACKEND_NAME == "cupy":
+            from .fusion_cuda_kernels import (
+                decoder_activation_backward, decoder_first_layer_backward)
+            # Fuse output-head propagation with the terminal tanh derivative at
+            # every depth; deeper layers then use one fused derivative pass each.
+            layer_grad = decoder_first_layer_backward(states[-1], dz,
+                                                       self.output_weight.data)
+            for j in range(len(self.decoder_hidden_weights) - 1, -1, -1):
+                self.decoder_hidden_weights[j].grad += (
+                    states[j].reshape(-1, k).T @ layer_grad.reshape(-1, k))
+                self.decoder_hidden_biases[j].grad += self._decoder_bias_gradient(layer_grad)
+                ddecoder = layer_grad @ self.decoder_hidden_weights[j].data.T
+                layer_grad = decoder_activation_backward(states[j], ddecoder)
+            dpre_decoder = layer_grad
         else:
             ddecoder = dz[..., None] * self.output_weight.data
             for j in range(len(self.decoder_hidden_weights) - 1, -1, -1):
@@ -491,21 +537,38 @@ class ProbabilityResidualCombiner:
                 profile.mark('backward.output_head.propagate_and_decoder_activation')
             else:
                 profile.mark('backward.output_head')
-        n_features = 2 * self.config.member_width + 4
-        self.fusion_weight.grad += (cache["features"].reshape(-1, n_features).T @
-                                    dpre_decoder.reshape(-1, k))
+        h = self.config.member_width
+        n_features = 2 * h + 4
+        if cache["split_features"]:
+            positions = rows * vocab
+            decoder_grad = dpre_decoder.reshape(positions, k)
+            weight_grad = self.fusion_weight.grad
+            weight_grad[:h] += cache["member_mean"].reshape(positions, h).T @ decoder_grad
+            weight_grad[h:2*h] += cache["member_var"].reshape(positions, h).T @ decoder_grad
+            weight_grad[2*h] += (decoder_grad.T @ cache["log_pa"].reshape(positions)) / xp.float32(10.0)
+            weight_grad[2*h + 1] += (decoder_grad.T @ cache["difference"].reshape(positions)) / xp.float32(10.0)
+            weight_grad[2*h + 2] += (decoder_grad.T @ cache["log_ratio_variance"].reshape(positions)) / xp.float32(100.0)
+            bias_grad = self._decoder_bias_gradient(dpre_decoder)
+            count_value = xp.float32(math.log1p(cache["member"].shape[1]) / math.log(11.0))
+            weight_grad[2*h + 3] += count_value * bias_grad
+        else:
+            self.fusion_weight.grad += (cache["features"].reshape(-1, n_features).T @
+                                        dpre_decoder.reshape(-1, k))
+            bias_grad = self._decoder_bias_gradient(dpre_decoder)
         if profile is not None and BACKEND_NAME == "cupy":
             profile.mark('backward.decoder.weight_grad')
-        self.fusion_bias.grad += self._decoder_bias_gradient(dpre_decoder)
+        self.fusion_bias.grad += bias_grad
         if profile is not None and BACKEND_NAME == "cupy":
             profile.mark('backward.decoder.bias_grad')
-        dfeatures = dpre_decoder @ self.fusion_weight.data.T
+        if cache["split_features"]:
+            dfeatures = dpre_decoder @ self.fusion_weight.data[:2*h].T
+        else:
+            dfeatures = dpre_decoder @ self.fusion_weight.data.T
         if profile is not None:
             if BACKEND_NAME == "cupy":
                 profile.mark('backward.decoder.features_grad')
             else:
                 profile.mark('backward.decoder')
-        h = self.config.member_width
         member = cache["member"]
         members = member.shape[1]
         if BACKEND_NAME == "cupy":

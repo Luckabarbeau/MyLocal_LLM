@@ -5,7 +5,9 @@ from ..backend import (
     xp, BACKEND_NAME, is_low_precision_dtype, is_bfloat16_dtype,
 )
 from ..init import matrix_parameter
-from .rope import rope_forward, rope_backward, clear_rope_cache
+from .rope import (
+    PreparedRoPEPositions, clear_rope_cache, rope_backward, rope_forward,
+)
 from .attention_selection import (
     build_local_causal_plan,
 )
@@ -103,6 +105,161 @@ def _compact_packed_v_enabled():
 
 _PACKED_QKV_BF16_PACK_KERNEL = None
 _PACKED_QKV_BF16_PACK_DISABLED = False
+_PACKED_QKV_ROPE_FWD_KERNEL = None
+_PACKED_QKV_ROPE_FWD_DISABLED = False
+
+
+def _fused_packed_qkv_rope_forward_enabled():
+    raw = os.environ.get("MINI_LLM_FUSED_QKV_ROPE_FORWARD", "0").strip().lower()
+    return raw not in {"", "0", "false", "off", "no"}
+
+
+def _get_packed_qkv_rope_forward_kernel():
+    """Compile/cache packed QKV -> contiguous RoPE(Q), RoPE(K), V."""
+    global _PACKED_QKV_ROPE_FWD_KERNEL, _PACKED_QKV_ROPE_FWD_DISABLED
+    if BACKEND_NAME != "cupy" or _PACKED_QKV_ROPE_FWD_DISABLED:
+        return None
+    if _PACKED_QKV_ROPE_FWD_KERNEL is not None:
+        return _PACKED_QKV_ROPE_FWD_KERNEL
+
+    code = r"""
+    #include <cuda_bf16.h>
+
+    __device__ __forceinline__ float bf16_round(float value) {
+        return __bfloat162float(__float2bfloat16_rn(value));
+    }
+
+    extern "C" __global__
+    void packed_qkv_rope_forward_bf16(
+        const __nv_bfloat16* __restrict__ packed,
+        const __nv_bfloat16* __restrict__ cos_table,
+        const __nv_bfloat16* __restrict__ sin_table,
+        __nv_bfloat16* __restrict__ q_out,
+        __nv_bfloat16* __restrict__ k_out,
+        __nv_bfloat16* __restrict__ v_out,
+        int rows, int seq_len, int factor_batches,
+        int q_width, int kv_width, int d_head)
+    {
+        const long long total_width = (long long)q_width + 2LL * kv_width;
+        const long long pairs_per_row = total_width >> 1;
+        const long long total_pairs = (long long)rows * pairs_per_row;
+        const int q_pairs = q_width >> 1;
+        const int kv_pairs = kv_width >> 1;
+        const int half = d_head >> 1;
+        const __nv_bfloat162* packed2 =
+            reinterpret_cast<const __nv_bfloat162*>(packed);
+        __nv_bfloat162* q2 = reinterpret_cast<__nv_bfloat162*>(q_out);
+        __nv_bfloat162* k2 = reinterpret_cast<__nv_bfloat162*>(k_out);
+        __nv_bfloat162* v2 = reinterpret_cast<__nv_bfloat162*>(v_out);
+
+        for (long long index = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             index < total_pairs;
+             index += (long long)blockDim.x * gridDim.x) {
+            const int row = (int)(index / pairs_per_row);
+            const int pair_col = (int)(index - (long long)row * pairs_per_row);
+            const __nv_bfloat162 packed_value = packed2[index];
+
+            if (pair_col < q_pairs + kv_pairs) {
+                const bool is_q = pair_col < q_pairs;
+                const int local_pair = is_q ? pair_col : pair_col - q_pairs;
+                const int head_pair = local_pair % half;
+                const int factor_row = factor_batches == 1 ? row % seq_len : row;
+                const long long trig = (long long)factor_row * half + head_pair;
+                const float2 values = __bfloat1622float2(packed_value);
+                const float c = __bfloat162float(cos_table[trig]);
+                const float s = __bfloat162float(sin_table[trig]);
+                const float ac = bf16_round(values.x * c);
+                const float bs = bf16_round(values.y * s);
+                const float as = bf16_round(values.x * s);
+                const float bc = bf16_round(values.y * c);
+                const __nv_bfloat162 rotated = __floats2bfloat162_rn(
+                    bf16_round(ac - bs), bf16_round(as + bc));
+                const long long out_index = (long long)row
+                    * (is_q ? q_pairs : kv_pairs) + local_pair;
+                if (is_q) {
+                    q2[out_index] = rotated;
+                } else {
+                    k2[out_index] = rotated;
+                }
+            } else {
+                const int local_pair = pair_col - q_pairs - kv_pairs;
+                v2[(long long)row * kv_pairs + local_pair] = packed_value;
+            }
+        }
+    }
+    """
+    try:
+        _PACKED_QKV_ROPE_FWD_KERNEL = xp.RawKernel(
+            code,
+            "packed_qkv_rope_forward_bf16",
+            options=("--std=c++11",),
+        )
+    except Exception:
+        _PACKED_QKV_ROPE_FWD_DISABLED = True
+        if _packed_qkv_strict():
+            raise
+        return None
+    return _PACKED_QKV_ROPE_FWD_KERNEL
+
+
+def _fused_packed_qkv_rope_forward_bf16(
+    qkv, position_ids, *, batch, seq_len, q_heads, kv_heads, d_head
+):
+    """Return contiguous RoPE(Q), RoPE(K), V and caches, or None."""
+    if (
+        BACKEND_NAME != "cupy"
+        or not _fused_packed_qkv_rope_forward_enabled()
+        or not isinstance(position_ids, PreparedRoPEPositions)
+        or not is_bfloat16_dtype(qkv.dtype)
+        or not qkv.flags.c_contiguous
+        or int(d_head) % 2
+    ):
+        return None
+    cos = position_ids.cos
+    sin = position_ids.sin
+    if (
+        not is_bfloat16_dtype(cos.dtype)
+        or not is_bfloat16_dtype(sin.dtype)
+        or not cos.flags.c_contiguous
+        or not sin.flags.c_contiguous
+    ):
+        return None
+    factor_batches = int(cos.shape[0])
+    if factor_batches not in (1, int(batch)):
+        return None
+    q_width = int(q_heads) * int(d_head)
+    kv_width = int(kv_heads) * int(d_head)
+    rows = int(batch) * int(seq_len)
+    if tuple(qkv.shape) != (rows, q_width + 2 * kv_width):
+        return None
+
+    q = xp.empty((batch, seq_len, q_heads, d_head), dtype=qkv.dtype)
+    k = xp.empty((batch, seq_len, kv_heads, d_head), dtype=qkv.dtype)
+    v = xp.empty((batch, seq_len, kv_heads, d_head), dtype=qkv.dtype)
+    kernel = _get_packed_qkv_rope_forward_kernel()
+    if kernel is None:
+        return None
+    total_pairs = int(qkv.size // 2)
+    threads = 256
+    blocks = min((total_pairs + threads - 1) // threads, 65535)
+    try:
+        kernel(
+            (blocks,),
+            (threads,),
+            (
+                qkv, cos, sin, q, k, v,
+                np.int32(rows), np.int32(seq_len), np.int32(factor_batches),
+                np.int32(q_width), np.int32(kv_width), np.int32(d_head),
+            ),
+        )
+    except Exception:
+        global _PACKED_QKV_ROPE_FWD_DISABLED
+        _PACKED_QKV_ROPE_FWD_DISABLED = True
+        if _packed_qkv_strict():
+            raise
+        return None
+    cache = {"cos": cos, "sin": sin}
+    return q, k, v, cache, cache
 
 
 def _get_packed_qkv_bf16_pack_kernel():
@@ -1212,8 +1369,10 @@ class GQAAttention:
         # Keep projection GEMMs strictly 2-D. CuPy 14 supports BF16 2-D GEMM
         # efficiently, but its generic N-D @ 2-D path currently fails on BF16.
         x2 = x.reshape(-1, self.d_model)
+        packed_qkv = _packed_qkv_enabled()
+        qkv = None
         with performance_scope("attention.qkv_projection.forward"):
-            if _packed_qkv_enabled():
+            if packed_qkv:
                 with performance_scope("attention.qkv_projection.forward.packed_gemm"):
                     qkv = x2 @ self._get_packed_qkv_weight()
                 q_end = self._q_width
@@ -1238,13 +1397,28 @@ class GQAAttention:
                     b, t, self.n_kv_heads, self.d_head
                 )
 
-        with performance_scope("attention.rope.forward"):
-            q, q_rope_cache = rope_forward(
-                q_pre, self.rope_base, position_ids=position_ids
-            )
-            k, k_rope_cache = rope_forward(
-                k_pre, self.rope_base, position_ids=position_ids
-            )
+        fused_qkv_rope = None
+        if qkv is not None and _compact_packed_v_enabled():
+            with performance_scope("attention.rope.forward.fused_packed_qkv"):
+                fused_qkv_rope = _fused_packed_qkv_rope_forward_bf16(
+                    qkv,
+                    position_ids,
+                    batch=b,
+                    seq_len=t,
+                    q_heads=self.n_q_heads,
+                    kv_heads=self.n_kv_heads,
+                    d_head=self.d_head,
+                )
+        if fused_qkv_rope is None:
+            with performance_scope("attention.rope.forward"):
+                q, q_rope_cache = rope_forward(
+                    q_pre, self.rope_base, position_ids=position_ids
+                )
+                k, k_rope_cache = rope_forward(
+                    k_pre, self.rope_base, position_ids=position_ids
+                )
+        else:
+            q, k, v, q_rope_cache, k_rope_cache = fused_qkv_rope
 
         # 0055A: with packed QKV, V is a narrow strided view into the much
         # larger packed projection.  Q and K already have independent RoPE
@@ -1252,10 +1426,12 @@ class GQAAttention:
         # QKV backing allocation in every layer until backward.  Copy only V
         # (~1/6 of the packed tensor for the production GQA geometry) and let
         # the original packed storage be reclaimed.
-        if _packed_qkv_enabled() and _compact_packed_v_enabled():
-            with performance_scope("attention.qkv_projection.forward.compact_v"):
-                v = xp.array(v, copy=True, order="C")
-            del qkv, q_pre, k_pre
+        if qkv is not None and _compact_packed_v_enabled():
+            if fused_qkv_rope is None:
+                with performance_scope("attention.qkv_projection.forward.compact_v"):
+                    v = xp.array(v, copy=True, order="C")
+            qkv = None
+            del q_pre, k_pre
 
         if block_context_length is not None:
             if attention_allow_mask is not None or self.attention_config is None:

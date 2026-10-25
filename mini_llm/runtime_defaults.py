@@ -44,6 +44,9 @@ _GPU_FAST_DEFAULTS: dict[str, str] = {
     "MINI_LLM_FUSED_BF16_CE": "1",
     "MINI_LLM_DIRECT_RETRIEVAL_SCATTER": "1",
     "MINI_LLM_FUSED_SWIGLU": "1",
+    # 0089L: aligned vec2 BF16 loads/stores reduced complete depth-20 F+B
+    # latency in two independent baseline/candidate process pairs.
+    "MINI_LLM_SWIGLU_VEC2": "1",
     "MINI_LLM_FUSED_BF16_LOCAL_PIPELINE": "1",
     "MINI_LLM_CONCURRENT_EXPERTS": "0",
     "MINI_LLM_FUSED_INDEXED_SOFTMAX": "1",
@@ -53,6 +56,9 @@ _GPU_FAST_DEFAULTS: dict[str, str] = {
     "MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE": "1",
     "MINI_LLM_FUSED_BF16_RMSNORM": "1",
     "MINI_LLM_PACKED_QKV": "1",
+    # 0089N: one packed-QKV kernel replaces forward Q/K RoPE arithmetic and
+    # compact-V materialization, reducing depth-20 complete F+B latency.
+    "MINI_LLM_FUSED_QKV_ROPE_FORWARD": "1",
     "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "1",
     "MINI_LLM_LOCAL_CUBLAS_MODE": "grouped",
     "MINI_LLM_CUBLAS_AUTOTUNE": "0",
@@ -203,11 +209,13 @@ def format_runtime_fast_paths(config=None) -> str:
     names = (
         ("ffn_packed_gate_up", "MINI_LLM_FUSED_EXPERT_GEMM", "0"),
         ("packed_qkv", "MINI_LLM_PACKED_QKV", "0"),
+        ("fused_qkv_rope_forward", "MINI_LLM_FUSED_QKV_ROPE_FORWARD", "0"),
         ("fused_sparse_decode", "MINI_LLM_FUSED_SPARSE_DECODE", "0"),
         ("grouped_local_gemm", "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM", "0"),
         ("bf16_local_pipeline", "MINI_LLM_FUSED_BF16_LOCAL_PIPELINE", "0"),
         ("bf16_indexed_pipeline", "MINI_LLM_FUSED_BF16_INDEXED_PIPELINE", "0"),
         ("fused_swiglu", "MINI_LLM_FUSED_SWIGLU", "0"),
+        ("swiglu_vec2", "MINI_LLM_SWIGLU_VEC2", "0"),
         ("bf16_ce", "MINI_LLM_FUSED_BF16_CE", "0"),
         (
             "train_residual_rmsnorm",

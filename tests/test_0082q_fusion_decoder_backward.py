@@ -38,8 +38,27 @@ def test_decoder_bias_reduction_retains_numpy_reference():
 
 
 @pytest.mark.skipif(BACKEND_NAME != 'cupy', reason='requires CUDA and CuPy')
+def test_fp32_cublas_accumulation_matches_cupy_matmul():
+    from mini_llm.collective.fusion_cublas import fp32_matmul_into
+
+    rng = np.random.default_rng(31)
+    for rows, inner, width in ((7, 5, 3), (19, 8, 24), (11, 16, 7)):
+        a = xp.asarray(rng.normal(size=(rows, inner)).astype('float32'))
+        b = xp.asarray(rng.normal(size=(inner, width)).astype('float32'))
+        c = xp.asarray(rng.normal(size=(rows, inner)).astype('float32'))
+        d = xp.asarray(rng.normal(size=(inner, width)).astype('float32'))
+        out = xp.empty((rows, width), dtype=xp.float32)
+        fp32_matmul_into(a, b, out)
+        xp.testing.assert_allclose(out, a @ b, rtol=3e-6, atol=3e-6)
+        fp32_matmul_into(c, d, out, accumulate=True)
+        xp.testing.assert_allclose(out, a @ b + c @ d, rtol=3e-6, atol=3e-6)
+
+
+@pytest.mark.skipif(BACKEND_NAME != 'cupy', reason='requires CUDA and CuPy')
 def test_gpu_fused_decoder_propagation_matches_unfused():
-    from mini_llm.collective.fusion_cuda_kernels import decoder_first_layer_backward
+    from mini_llm.collective.fusion_cuda_kernels import (
+        decoder_activation_backward, decoder_bias_tanh_inplace,
+        decoder_first_layer_backward, decoder_scalar_features_tanh_inplace)
 
     rng = np.random.default_rng(49)
     for rows, vocab, width in ((1, 13, 4), (3, 67, 24), (2, 17, 48)):
@@ -49,6 +68,31 @@ def test_gpu_fused_decoder_propagation_matches_unfused():
         expected = (dz[..., None] * weight) * (1.0 - decoder ** 2)
         actual = decoder_first_layer_backward(decoder, dz, weight)
         xp.testing.assert_allclose(actual, expected, rtol=3e-6, atol=3e-6)
+        upstream = xp.asarray(rng.normal(0, .1, decoder.shape).astype('float32'))
+        expected_activation = upstream * (1.0 - decoder ** 2)
+        actual_activation = decoder_activation_backward(decoder, upstream)
+        xp.testing.assert_allclose(actual_activation, expected_activation,
+                                   rtol=3e-6, atol=3e-6)
+        bias = xp.asarray(rng.normal(0, .1, (width,)).astype('float32'))
+        linear = xp.asarray(rng.normal(0, .2, decoder.shape).astype('float32'))
+        expected_forward = xp.tanh(linear + bias)
+        actual_forward = decoder_bias_tanh_inplace(linear.copy(), bias)
+        xp.testing.assert_allclose(actual_forward, expected_forward,
+                                   rtol=3e-6, atol=3e-6)
+        log_pa = xp.asarray(rng.normal(size=(rows, vocab)).astype('float32'))
+        difference = xp.asarray(rng.normal(size=(rows, vocab)).astype('float32'))
+        variance = xp.asarray(rng.normal(size=(rows, vocab)).astype('float32'))
+        scalar_weight = xp.asarray(rng.normal(size=(4, width)).astype('float32'))
+        count = np.float32(0.37)
+        expected_scalar = xp.tanh(
+            linear + bias + (log_pa / 10.0)[..., None] * scalar_weight[0]
+            + (difference / 10.0)[..., None] * scalar_weight[1]
+            + (variance / 100.0)[..., None] * scalar_weight[2]
+            + count * scalar_weight[3])
+        actual_scalar = decoder_scalar_features_tanh_inplace(
+            linear.copy(), log_pa, difference, variance, scalar_weight, bias, count)
+        xp.testing.assert_allclose(actual_scalar, expected_scalar,
+                                   rtol=3e-6, atol=3e-6)
 
 
 @pytest.mark.skipif(BACKEND_NAME != 'cupy', reason='requires CUDA and CuPy')
@@ -58,8 +102,11 @@ def test_full_cuda_fusion_gradients_match_original_decoder(monkeypatch):
     rng = np.random.default_rng(107)
     # Both native shallow GPU fast path and generic deeper decoder path,
     # including contextual attention which reuses decoder gradients.
-    for members, depth, context in ((1, 1, 0), (2, 1, 0), (3, 3, 0), (2, 2, 2)):
-        cfg = FusionConfig(vocab_size=47, max_models=4,
+    for members, depth, context, member_width in (
+        (1, 1, 0, 8), (2, 1, 0, 8), (3, 3, 0, 8),
+        (2, 2, 2, 8), (2, 4, 0, 64),
+    ):
+        cfg = FusionConfig(vocab_size=47, max_models=4, member_width=member_width,
                            decoder_layers=depth, context_heads=context)
         fast = ProbabilityResidualCombiner(cfg)
         fast.output_weight.data[...] = xp.asarray(
@@ -75,6 +122,9 @@ def test_full_cuda_fusion_gradients_match_original_decoder(monkeypatch):
             kw['context_lengths'] = np.array([11, 7, 8, 3, 10], dtype=np.int64)
         fast.zero_grad()
         ref.zero_grad()
+        probability, cache = fast.forward(logits, ids, return_cache=True, **kw)
+        xp.testing.assert_allclose(xp.exp(cache['log_final']), probability,
+                                   rtol=3e-6, atol=3e-6)
         actual = fast.loss_and_backward(logits, ids, targets, return_weighted=True, **kw)
         with monkeypatch.context() as mp:
             mp.setattr(fusion_mod, 'BACKEND_NAME', 'numpy')

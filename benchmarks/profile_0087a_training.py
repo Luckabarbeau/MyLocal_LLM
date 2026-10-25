@@ -55,6 +55,8 @@ _PRODUCTION_BENCH_DEFAULTS = {
     "MINI_LLM_TRAIN_ATTN_BACKEND": "grouped",
     "MINI_LLM_LOCAL_DETAIL_PROFILE": "0",
     "MINI_LLM_MOE_DETAIL_PROFILE": "0",
+    "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+    "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
     "MINI_LLM_ACTIVATION_CHECKPOINT": "none",
     "MINI_LLM_HISTORY_RECOMPUTE": "1",
     "MINI_LLM_HISTORY_QUERY_CHUNK": "1024",
@@ -69,11 +71,23 @@ _PRODUCTION_BENCH_DEFAULTS = {
     "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "1",
     "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
     "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
+    "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "5",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "1",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "1",
+    "MINI_LLM_GPU_MEMORY_AUDIT": "0",
 }
 _REPORT_ENV_NAMES = tuple(sorted({
     *_PRODUCTION_BENCH_DEFAULTS,
     "MINI_LLM_TRAIN_ATTN_STRICT",
     "MINI_LLM_BF16_MIXED_CONTEXT",
+    "MINI_LLM_HISTORY_BF16_BACKWARD",
+    "MINI_LLM_EXPERT_DX_GEMM_BETA",
+    "MINI_LLM_EXPERT_WGRAD_FP32_GEMM",
+    "MINI_LLM_FUSED_CROSS_BLOCK_NORM1",
+    "MINI_LLM_SWIGLU_VEC2",
+    "MINI_LLM_FUSED_QKV_ROPE_FORWARD",
+    "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD",
+    "MINI_LLM_TRITON_HISTORICAL_BLOCK_PREWARM",
 }))
 
 
@@ -83,7 +97,9 @@ def _env_enabled(name: str, default: str = "0") -> bool:
 
 
 def _scope_label(name: str) -> str | None:
-    """Translate existing synchronized profiler scopes to coarse NVTX labels."""
+    """Translate profiler scopes to stable NVTX labels without synchronization."""
+    if name.startswith("historical."):
+        return name
     if name.startswith("attention.dense."):
         return "attention_full"
     if name.startswith("attention.local.") or name.startswith(
@@ -310,9 +326,10 @@ def _install_scope_translation(controller: RangeController) -> None:
     import mini_llm.blocks.transformer_block as transformer_block
     import mini_llm.model.decoder_lm as decoder_lm
     import mini_llm.ops.attention as attention
+    import mini_llm.ops.historical_read as historical_read
 
-    for module in (decoder_lm, transformer_block, attention):
-        module.performance_scope = controller.scope
+    for module in (decoder_lm, transformer_block, attention, historical_read):
+        setattr(module, "performance_scope", controller.scope)
 
 
 def _active_head_patterns(config, metadata: dict) -> dict:
@@ -635,7 +652,10 @@ def main() -> int:
         parameter.data[...] = loaded.pop(parameter.name)
     del loaded
     model.refresh_compute_buffers()
-    cp.get_default_memory_pool().free_all_blocks()
+    pool = cp.get_default_memory_pool()
+    pool.free_all_blocks()
+    baseline_pool_used = int(pool.used_bytes())
+    baseline_pool_reserved = int(pool.total_bytes())
 
     emitter = cp.cuda.nvtx
     controller = RangeController(
@@ -682,6 +702,7 @@ def main() -> int:
         wall_end = time.perf_counter_ns()
         gpu_ms.append(float(cp.cuda.get_elapsed_time(start_event, end_event)))
         wall_ms.append((wall_end - wall_start) / 1_000_000.0)
+        device_free, device_total = cp.cuda.runtime.memGetInfo()
 
         result = {
             "schema_version": "0089A-v1",
@@ -740,6 +761,19 @@ def main() -> int:
                 "batches": [batch[4] for batch in batches],
                 "total_supervised_rows_per_sample": int(sum(batch[4]["supervised_rows"] for batch in batches)),
                 "total_computed_rows_per_sample": int(sum(batch[4]["computed_rows"] for batch in batches)),
+            },
+            "memory": {
+                "baseline_pool_used_bytes": baseline_pool_used,
+                "baseline_pool_reserved_bytes": baseline_pool_reserved,
+                "current_pool_used_bytes": int(pool.used_bytes()),
+                "peak_pool_reserved_bytes": int(pool.total_bytes()),
+                "device_used_bytes": int(device_total - device_free),
+                "device_total_bytes": int(device_total),
+                "semantics": (
+                    "CuPy pool total_bytes after warmup/measurement is the process "
+                    "reservation high-water because this benchmark performs no pool trim; "
+                    "device used includes other GPU processes"
+                ),
             },
             "timing": {
                 "gpu_event": summarize_ms(gpu_ms),

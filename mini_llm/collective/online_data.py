@@ -7,19 +7,27 @@ training on the teacher's original train shards would bias fusion results.
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 import numpy as np
 
 from ..data.mixed_shards import load_weighted_shard_sources
 
 
-def split_fusion_shards(sources, seed):
-    """Stable per-source file split, compatible with the 0082B partitions."""
+def split_fusion_shards(sources, seed, *, min_shard_bytes=0):
+    """Stable disjoint file splits; ignore sources without enough valid shards."""
     split = {key: {} for key in ('train', 'val', 'test')}
     for source in sorted(sources, key=lambda item: item.name):
         paths = list(source.val_paths)
+        if min_shard_bytes:
+            paths = [path for path in paths
+                     if path.stat().st_size >= min_shard_bytes]
         if len(paths) < 3:
-            raise ValueError(f'{source.name}: >=3 validation shards needed for fusion splits')
+            warnings.warn(
+                f'fusion: skipping source {source.name!r}: {len(paths)} validation '
+                'shard(s), but independent train/val/test splits require >=3',
+                RuntimeWarning, stacklevel=2)
+            continue
         digest = hashlib.sha256(f'{seed}/{source.name}'.encode()).digest()
         rng = np.random.default_rng(int.from_bytes(digest[:8], 'little'))
         rng.shuffle(paths)
@@ -27,10 +35,18 @@ def split_fusion_shards(sources, seed):
         ntest = max(1, round(len(paths) * 0.15))
         ntrain = len(paths) - nval - ntest
         if ntrain < 1:
-            raise ValueError(f'{source.name}: empty fusion train split')
+            warnings.warn(
+                f'fusion: skipping source {source.name!r}: empty fusion train '
+                'split after reserving independent validation/test shards',
+                RuntimeWarning, stacklevel=2)
+            continue
         split['train'][source.name] = tuple(paths[:ntrain])
         split['val'][source.name] = tuple(paths[ntrain:ntrain+nval])
         split['test'][source.name] = tuple(paths[ntrain+nval:])
+    if not split['train']:
+        raise ValueError(
+            'no eligible fusion sources: at least one corpus must contain '
+            'three independent teacher-validation shard files')
     return split
 
 
@@ -67,10 +83,16 @@ class OnlineShardSampler:
 
     def draw(self):
         for _ in range(500):
-            name = self.names[int(self.rng.choice(len(self.names), p=self.weights))]
+            # Shards can become exhausted at runtime (e.g. no EOS-bounded
+            # window). Never keep sampling a source with no remaining files.
+            eligible = [i for i, name in enumerate(self.names) if self.paths[name]]
+            if not eligible:
+                raise RuntimeError('all fusion shards exhausted: no EOS-bounded '
+                                   'windows remain for the requested context length')
+            probs = self.weights[eligible]
+            probs = probs / probs.sum()
+            name = self.names[int(self.rng.choice(eligible, p=probs))]
             paths = self.paths[name]
-            if not paths:
-                raise RuntimeError(f'no eligible fusion shard files for {name}')
             sizes = np.array([p.stat().st_size for p in paths], dtype=np.float64)
             path = paths[int(self.rng.choice(len(paths), p=sizes / sizes.sum()))]
             if path not in self.cache:
@@ -101,7 +123,27 @@ class OnlineShardSampler:
 
 def make_online_samplers(root, context_length, partition_seed, seed):
     sources, manifest = load_weighted_shard_sources(root)
-    parts = split_fusion_shards(sources, partition_seed)
+    # The fusion split uses only teacher-validation files. Filter shards too
+    # short for the requested context BEFORE splitting, so a tiny shard cannot
+    # occupy the sole train, validation or test slot for an otherwise good source.
+    dtype = np.dtype(manifest.get('token_dtype', 'uint16'))
+    min_bytes = (int(context_length) + 3) * dtype.itemsize
+    parts = split_fusion_shards(sources, partition_seed,
+                                min_shard_bytes=min_bytes)
+    # Both samplers must use the SAME eligible source set and renormalized
+    # probabilities. Never fall back to pretraining shards or duplicate a file
+    # across fusion train/val/test to compensate for an undersized corpus.
+    sources = [source for source in sources
+               if source.name in parts['train'] and float(source.weight) > 0]
+    if not sources:
+        raise ValueError(
+            'no positive-weight fusion source has >=3 teacher-validation '
+            f'shards large enough for context length {context_length}; '
+            'reduce --context-length or provide additional validation shards')
+    for partition in parts.values():
+        for name in tuple(partition):
+            if name not in {source.name for source in sources}:
+                partition.pop(name)
     train_rng = np.random.default_rng(seed)
     val_rng = np.random.default_rng(seed + 10000)
     samplers = {

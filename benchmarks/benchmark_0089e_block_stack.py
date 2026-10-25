@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import importlib
 import json
 import os
@@ -26,6 +27,52 @@ TORCH_LEAVES_PER_LAYER = 7
 RELATIVE_L2_MAX = 0.02
 COSINE_MIN = 0.999
 RESULT_SCHEMA = "0089E-block-stack-result-v1"
+
+CUPY_BENCHMARK_ENV = {
+    "MINI_LLM_BACKEND": "cupy",
+    "MINI_LLM_LOCAL_DETAIL_PROFILE": "0",
+    "MINI_LLM_MOE_DETAIL_PROFILE": "0",
+    "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+    "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
+    "MINI_LLM_FUSED_EXPERT_GEMM": "0",
+    "MINI_LLM_AR_COMPACT_TARGET": "1",
+    "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "1",
+    "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "1",
+    "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT": "0",
+    "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "1",
+    "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
+    "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
+    "MINI_LLM_FUSED_QKV_ROPE_FORWARD": os.environ.get(
+        "MINI_LLM_FUSED_QKV_ROPE_FORWARD", "1"
+    ),
+    "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "5",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "1",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "1",
+    "MINI_LLM_GPU_MEMORY_AUDIT": "0",
+    "MINI_LLM_TRAIN_ATTN_BACKEND": "triton",
+    "MINI_LLM_TRAIN_ATTN_STRICT": "1",
+    "MINI_LLM_BF16_MIXED_CONTEXT": "0",
+    "MINI_LLM_FUSED_BF16_RMSNORM": "1",
+    "MINI_LLM_FUSED_BF16_RMSNORM_STRICT": "1",
+    "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM": "1",
+}
+
+CUPY_BENCHMARK_ENV_APPLICABILITY = {
+    "MINI_LLM_OPTIMIZER_OFFLOAD": "recorded; no optimizer in block-stack scope",
+    "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "recorded; no optimizer in block-stack scope",
+    "MINI_LLM_AR_COMPACT_TARGET": "recorded; no decoder sampling/loss in block-stack scope",
+    "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "recorded; one fixed-shape F+B per sample",
+    "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "recorded fallback; strict Triton attention executes",
+    "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT": "recorded fallback; strict Triton attention executes",
+    "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "recorded fallback; strict Triton attention executes",
+    "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "recorded fallback; strict Triton attention executes",
+    "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "recorded; no training-loop interval in block-stack scope",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "recorded; no validation in block-stack scope",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "recorded; no checkpoint write in block-stack scope",
+    "MINI_LLM_GPU_MEMORY_AUDIT": "disabled as requested",
+    "MINI_LLM_ROPE_PREPARED_POSITIONS": "active; position factors prepared once outside timing",
+    "MINI_LLM_FUSED_QKV_ROPE_FORWARD": "promoted production path; set to 0 for scalar baseline",
+}
 
 
 def validate_depth(depth: int) -> int:
@@ -91,9 +138,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-tensors", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--memory-limit-fraction", type=float, default=0.90)
+    parser.add_argument(
+        "--capture",
+        action="store_true",
+        help="capture one warmed F+B with NVTX and cudaProfilerApi",
+    )
     args = parser.parse_args(argv)
     if args.warmup < 0 or args.repeats < 1:
         parser.error("warmup must be non-negative and repeats must be positive")
+    if args.capture:
+        args.repeats = 1
     if not 0.0 < args.memory_limit_fraction <= 1.0:
         parser.error("memory-limit-fraction must be in (0, 1]")
     try:
@@ -426,6 +480,45 @@ def _cupy_backward_stack(blocks, d_out, caches):
     return gradient, boundary_gradient
 
 
+def _install_cupy_nvtx_scopes(cp) -> None:
+    """Translate existing performance scopes to NVTX without synchronizing."""
+    profiler = importlib.import_module("mini_llm.performance_profiler").PERFORMANCE_PROFILER
+
+    @contextmanager
+    def nvtx_scope(name: str):
+        cp.cuda.nvtx.RangePush(str(name))
+        try:
+            yield
+        finally:
+            cp.cuda.nvtx.RangePop()
+
+    profiler.scope = nvtx_scope
+    profiler.moe_detail_scope = nvtx_scope
+    profiler.local_detail_scope = nvtx_scope
+    profiler.rmsnorm_detail_scope = nvtx_scope
+
+
+def _cupy_profiled_combined(cp, blocks, x, d_out, position_ids):
+    cp.cuda.runtime.profilerStart()
+    cp.cuda.nvtx.RangePush("0089K_STACK_FWD_BWD")
+    try:
+        cp.cuda.nvtx.RangePush("0089K_STACK_FORWARD")
+        try:
+            output, caches, boundary = _cupy_forward_stack(blocks, x, position_ids)
+        finally:
+            cp.cuda.nvtx.RangePop()
+        cp.cuda.nvtx.RangePush("0089K_STACK_BACKWARD")
+        try:
+            d_input, boundary_gradient = _cupy_backward_stack(blocks, d_out, caches)
+        finally:
+            cp.cuda.nvtx.RangePop()
+        cp.cuda.get_current_stream().synchronize()
+    finally:
+        cp.cuda.nvtx.RangePop()
+        cp.cuda.runtime.profilerStop()
+    return output, caches, boundary, d_input, boundary_gradient
+
+
 def _validate_cupy_paths_and_dtypes(
     cp, blocks, selected_layers, output, d_input, caches
 ) -> dict[str, Any]:
@@ -479,17 +572,24 @@ def _validate_cupy_paths_and_dtypes(
     }
 
 
-def _time_cupy_combined(cp, blocks, x, d_out, position_ids, warmup, repeats):
+def _time_cupy_combined(
+    cp, blocks, x, d_out, position_ids, warmup, repeats, *, capture=False
+):
     stream = cp.cuda.get_current_stream()
 
-    def one(measure: bool):
+    def one(measure: bool, profile: bool = False):
         _zero_cupy_grads(blocks)
         start = cp.cuda.Event()
         end = cp.cuda.Event()
         wall_start = time.perf_counter_ns()
         start.record(stream)
-        output, caches, _ = _cupy_forward_stack(blocks, x, position_ids)
-        d_input, _ = _cupy_backward_stack(blocks, d_out, caches)
+        if profile:
+            output, caches, _, d_input, _ = _cupy_profiled_combined(
+                cp, blocks, x, d_out, position_ids
+            )
+        else:
+            output, caches, _ = _cupy_forward_stack(blocks, x, position_ids)
+            d_input, _ = _cupy_backward_stack(blocks, d_out, caches)
         end.record(stream)
         end.synchronize()
         wall_end = time.perf_counter_ns()
@@ -507,8 +607,8 @@ def _time_cupy_combined(cp, blocks, x, d_out, position_ids, warmup, repeats):
         one(False)
     device_samples = []
     wall_samples = []
-    for _ in range(repeats):
-        measured = one(True)
+    for sample_index in range(repeats):
+        measured = one(True, profile=capture and sample_index == 0)
         assert measured is not None
         device_ms, wall_ms, output, d_input, caches = measured
         device_samples.append(device_ms)
@@ -566,19 +666,16 @@ def _memory_gate(
 
 
 def _run_cupy(args, manifest, arrays, reference):
-    os.environ["MINI_LLM_BACKEND"] = "cupy"
-    os.environ["MINI_LLM_TRAIN_ATTN_BACKEND"] = "triton"
-    os.environ["MINI_LLM_TRAIN_ATTN_STRICT"] = "1"
-    os.environ["MINI_LLM_BF16_MIXED_CONTEXT"] = "0"
-    os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] = "0"
-    os.environ["MINI_LLM_FUSED_BF16_RMSNORM"] = "1"
-    os.environ["MINI_LLM_FUSED_BF16_RMSNORM_STRICT"] = "1"
-    os.environ["MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM"] = "1"
+    for name, value in CUPY_BENCHMARK_ENV.items():
+        os.environ[name] = value
 
     import cupy as cp
+    if args.capture:
+        _install_cupy_nvtx_scopes(cp)
     from mini_llm.backend import RandomStream
     from mini_llm.blocks.transformer_block import TransformerBlock
     from mini_llm.config import ModelConfig
+    from mini_llm.ops.rope import prepare_rope_positions
     from mini_llm.runtime_defaults import apply_runtime_defaults
 
     setup_start = time.perf_counter_ns()
@@ -643,7 +740,13 @@ def _run_cupy(args, manifest, arrays, reference):
     storage = _check_cupy_storage(selected_layers)
     x = cp.asarray(arrays["x"], dtype=cp.float32)
     d_out = cp.asarray(arrays["d_out"], dtype=cp.float32)
-    position_ids = cp.asarray(arrays["position_ids"])
+    raw_position_ids = cp.asarray(arrays["position_ids"])
+    position_ids = prepare_rope_positions(
+        raw_position_ids,
+        d_head=config.d_head,
+        base=config.rope_base,
+        dtype="bfloat16",
+    )
     stream = cp.cuda.get_current_stream()
     stream.synchronize()
     fixture_setup_ms = (time.perf_counter_ns() - setup_start) / 1_000_000.0
@@ -696,6 +799,7 @@ def _run_cupy(args, manifest, arrays, reference):
                 position_ids,
                 args.warmup,
                 args.repeats,
+                capture=args.capture,
             )
         }
         if args.depth <= 2:
@@ -740,18 +844,10 @@ def _run_cupy(args, manifest, arrays, reference):
         "storage_independence": storage,
         "health": health,
         "environment_contract": {
-            name: os.environ[name]
-            for name in (
-                "MINI_LLM_BACKEND",
-                "MINI_LLM_TRAIN_ATTN_BACKEND",
-                "MINI_LLM_TRAIN_ATTN_STRICT",
-                "MINI_LLM_BF16_MIXED_CONTEXT",
-                "MINI_LLM_FUSED_EXPERT_GEMM",
-                "MINI_LLM_FUSED_BF16_RMSNORM",
-                "MINI_LLM_FUSED_BF16_RMSNORM_STRICT",
-                "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM",
-            )
+            name: os.environ[name] for name in CUPY_BENCHMARK_ENV
         },
+        "environment_applicability": CUPY_BENCHMARK_ENV_APPLICABILITY,
+        "rope_positions": "prepared once outside timing and shared by every layer",
         "cache_structure": "one forward cache per layer; reverse-order backward",
         "gradient_clearing": "outside the timed CUDA event",
     }
@@ -910,30 +1006,60 @@ def _torch_boundary_gradient(
     )[0]
 
 
-def _execute_torch_combined(torch, forward, depth, x, d_out, layer_leaves):
+def _execute_torch_combined(
+    torch, forward, depth, x, d_out, layer_leaves, *, profile=False
+):
     flat = tuple(value for layer in layer_leaves for value in layer)
-    result = forward(x, *flat)
-    output, boundary = _split_torch_output(depth, result)
-    if boundary is not None:
-        boundary.retain_grad()
-    output.backward(d_out)
-    exported = _torch_export_gradients(torch, layer_leaves)
+    if profile:
+        torch.cuda.cudart().cudaProfilerStart()
+        torch.cuda.nvtx.range_push("0089K_STACK_FWD_BWD")
+    try:
+        if profile:
+            torch.cuda.nvtx.range_push("0089K_STACK_FORWARD")
+        try:
+            result = forward(x, *flat)
+        finally:
+            if profile:
+                torch.cuda.nvtx.range_pop()
+        output, boundary = _split_torch_output(depth, result)
+        if boundary is not None:
+            boundary.retain_grad()
+        if profile:
+            torch.cuda.nvtx.range_push("0089K_STACK_BACKWARD")
+        try:
+            output.backward(d_out)
+        finally:
+            if profile:
+                torch.cuda.nvtx.range_pop()
+        if profile:
+            torch.cuda.nvtx.range_push("0089K_GRADIENT_EXPORT")
+        try:
+            exported = _torch_export_gradients(torch, layer_leaves)
+        finally:
+            if profile:
+                torch.cuda.nvtx.range_pop()
+        if profile:
+            torch.cuda.synchronize()
+    finally:
+        if profile:
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.cudart().cudaProfilerStop()
     return output, boundary, exported
 
 
 def _time_torch_combined(
-    torch, forward, depth, x, d_out, layer_leaves, warmup, repeats
+    torch, forward, depth, x, d_out, layer_leaves, warmup, repeats, *, capture=False
 ):
     flat = tuple(value for layer in layer_leaves for value in layer)
 
-    def one(measure: bool):
+    def one(measure: bool, profile: bool = False):
         _zero_torch_grads(x, flat)
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         wall_start = time.perf_counter_ns()
         start.record()
         output, boundary, exported = _execute_torch_combined(
-            torch, forward, depth, x, d_out, layer_leaves
+            torch, forward, depth, x, d_out, layer_leaves, profile=profile
         )
         end.record()
         end.synchronize()
@@ -952,8 +1078,8 @@ def _time_torch_combined(
         one(False)
     device_samples = []
     wall_samples = []
-    for _ in range(repeats):
-        measured = one(True)
+    for sample_index in range(repeats):
+        measured = one(True, profile=capture and sample_index == 0)
         assert measured is not None
         device_ms, wall_ms, output, boundary, exported = measured
         device_samples.append(device_ms)
@@ -1096,6 +1222,7 @@ def _run_torch(args, manifest, arrays, reference):
                 layer_leaves,
                 args.warmup,
                 args.repeats,
+                capture=args.capture,
             )
         }
         if args.depth <= 2:
@@ -1242,6 +1369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "warmup": args.warmup,
         "repeats": args.repeats,
+        "capture": bool(args.capture),
         "timings": timings,
         "combined_ms_per_block": _timing_per_block(timings, args.depth),
         "setup": details,
@@ -1252,7 +1380,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "timing_note": (
             "Complete F+B only. Gradient clearing is outside timing. Torch BF16 "
             "logical parameter-gradient conversion to FP32 is inside timing. Raw "
-            "GPU-event and synchronized host-wall samples are retained."
+            "GPU-event and synchronized host-wall samples are retained. Capture "
+            "samples are profiler-perturbed and are not authoritative latency."
         ),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

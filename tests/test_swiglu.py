@@ -22,6 +22,27 @@ def test_fused_fp16_swiglu_matches_reference(monkeypatch):
     np.testing.assert_allclose(asnumpy(actual), expected, rtol=2e-3, atol=2e-3)
 
 
+def test_fused_bf16_swiglu_even_and_odd_match_scalar_reference(monkeypatch):
+    if BACKEND_NAME != "cupy":
+        return
+    monkeypatch.setenv("MINI_LLM_FUSED_SWIGLU", "1")
+    monkeypatch.setenv("MINI_LLM_SWIGLU_VEC2", "1")
+    rng = np.random.default_rng(89)
+    for shape in ((4, 258), (3, 257)):
+        g_np = rng.normal(size=shape).astype(np.float32)
+        u_np = rng.normal(size=shape).astype(np.float32)
+        g = xp.asarray(g_np).astype("bfloat16")
+        u = xp.asarray(u_np).astype("bfloat16")
+        actual = _fused_swiglu_forward(g, u)
+        synchronize()
+        assert actual is not None
+        g_rounded = asnumpy(g).astype(np.float32)
+        u_rounded = asnumpy(u).astype(np.float32)
+        expected = g_rounded / (1.0 + np.exp(-g_rounded)) * u_rounded
+        expected = xp.asarray(expected).astype("bfloat16")
+        np.testing.assert_array_equal(asnumpy(actual), asnumpy(expected))
+
+
 def test_swiglu_backward_direction():
     rng = RandomStream(5)
     layer = SwiGLU(4, 7, 0.1, 0.05, rng, dtype="float64")

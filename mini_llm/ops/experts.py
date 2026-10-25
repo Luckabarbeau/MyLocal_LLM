@@ -113,6 +113,31 @@ def _get_fused_swiglu_module():
     }
 
     extern "C" __global__
+    void bf16_swiglu_fwd_vec2(
+        const unsigned int* g,
+        const unsigned int* u,
+        unsigned int* h,
+        long long n_pairs) {
+        long long idx = ((long long)blockIdx.x) * blockDim.x + threadIdx.x;
+        long long stride = ((long long)gridDim.x) * blockDim.x;
+        for (; idx < n_pairs; idx += stride) {
+            unsigned int gp = g[idx];
+            unsigned int up = u[idx];
+            unsigned short g0 = (unsigned short)(gp & 0xffffu);
+            unsigned short g1 = (unsigned short)(gp >> 16);
+            unsigned short u0 = (unsigned short)(up & 0xffffu);
+            unsigned short u1 = (unsigned short)(up >> 16);
+            float gf0 = bf16_to_float(g0);
+            float gf1 = bf16_to_float(g1);
+            float s0 = sigmoidf_stable(gf0);
+            float s1 = sigmoidf_stable(gf1);
+            unsigned int h0 = (unsigned int)float_to_bf16((gf0 * s0) * bf16_to_float(u0));
+            unsigned int h1 = (unsigned int)float_to_bf16((gf1 * s1) * bf16_to_float(u1));
+            h[idx] = h0 | (h1 << 16);
+        }
+    }
+
+    extern "C" __global__
     void bf16_swiglu_fwd_strided(
         const unsigned short* g,
         const unsigned short* u,
@@ -186,13 +211,15 @@ def _get_fused_swiglu_module():
             options=("--std=c++11",),
             name_expressions=(
                 "fp16_swiglu_fwd", "fp16_swiglu_fwd_strided",
-                "bf16_swiglu_fwd", "bf16_swiglu_fwd_strided",
-                "bf16_swiglu_bwd", "bf16_swiglu_bwd_strided",
+                "bf16_swiglu_fwd", "bf16_swiglu_fwd_vec2",
+                "bf16_swiglu_fwd_strided", "bf16_swiglu_bwd",
+                "bf16_swiglu_bwd_strided",
             ),
         )
         module.get_function("fp16_swiglu_fwd")
         module.get_function("fp16_swiglu_fwd_strided")
         module.get_function("bf16_swiglu_fwd")
+        module.get_function("bf16_swiglu_fwd_vec2")
         module.get_function("bf16_swiglu_fwd_strided")
         module.get_function("bf16_swiglu_bwd")
         module.get_function("bf16_swiglu_bwd_strided")
@@ -237,7 +264,24 @@ def _fused_swiglu_forward(g, u):
     threads = 256
     blocks = min(65535, max(1, (n + threads - 1) // threads))
     prefix = "bf16" if is_bfloat16_dtype(g.dtype) else "fp16"
-    if g_row_stride == cols and u_row_stride == cols:
+    compact = g_row_stride == cols and u_row_stride == cols
+    vectorized_bf16 = (
+        compact
+        and prefix == "bf16"
+        and os.environ.get("MINI_LLM_SWIGLU_VEC2", "0").strip().lower()
+        not in {"0", "false", "off", "no", ""}
+        and n % 2 == 0
+        and int(g.data.ptr) % 4 == 0
+        and int(u.data.ptr) % 4 == 0
+        and int(h.data.ptr) % 4 == 0
+    )
+    if vectorized_bf16:
+        n_pairs = n // 2
+        pair_blocks = min(65535, max(1, (n_pairs + threads - 1) // threads))
+        module.get_function("bf16_swiglu_fwd_vec2")((pair_blocks,), (threads,), (
+            g, u, h, np.int64(n_pairs),
+        ))
+    elif compact:
         module.get_function(f"{prefix}_swiglu_fwd")((blocks,), (threads,), (
             g, u, h, np.int64(n),
         ))

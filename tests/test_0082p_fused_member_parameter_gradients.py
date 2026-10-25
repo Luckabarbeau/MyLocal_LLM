@@ -40,7 +40,8 @@ def test_fused_member_gradients_match_numpy_reference():
     rng = np.random.default_rng(93)
     # Test incomplete tiles, multiple tiles, variable model counts, and widths.
     for rows, members, vocab, hidden in (
-        (1, 1, 11, 3), (3, 2, 17, 8), (4, 3, 129, 12), (2, 5, 599, 8),
+        (1, 1, 11, 3), (3, 2, 17, 8), (4, 3, 129, 12),
+        (2, 4, 67, 16), (2, 2, 131, 64), (2, 5, 599, 8),
     ):
         dpre = rng.normal(0., 0.1, (rows, members, vocab, hidden)).astype('float32')
         ratio = rng.normal(size=(rows, members, vocab)).astype('float32')

@@ -547,7 +547,10 @@ class ExtendedTrainer:
         
         # Training state (Issue #16: Track tokens processed separately)
         self.step = 0
-        self.tokens_processed = 0  # New: track cumulative tokens
+        self.tokens_processed = 0  # Source-capacity counter (legacy)
+        self.supervised_tokens_total = 0.0  # Effective supervised-token weight
+        self.supervised_tokens_provenance = "measured"
+        self.live_benchmark_scheduler = None
         self.total_steps = total_steps
         # Bounded LRU caches of read-only memmaps.  The previous dictionary
         # retained every shard encountered, eventually holding the whole token
@@ -1115,34 +1118,58 @@ class ExtendedTrainer:
             self.source_metrics[str(name)] = record
         self._source_metrics_interval = {}
 
+    _LOG_COLUMNS_LEGACY = (
+        "step", "tokens_processed", "train_loss", "lr", "grad_norm",
+        "val_loss", "steps_per_sec",
+    )
+    _LOG_COLUMNS_0092 = _LOG_COLUMNS_LEGACY + (
+        "supervised_tokens_step", "supervised_tokens_total",
+        "supervised_tokens_billions", "supervised_tokens_provenance",
+    )
+
     def _setup_logging(self):
-        """Initialize CSV logging."""
+        """Preserve old CSV schemas; new runs gain exact supervised counters."""
+        self._log_columns = self._LOG_COLUMNS_0092
         if self.log_file:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            # Write header if file doesn't exist
-            if not self.log_file.exists():
-                with open(self.log_file, "w", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerow([
-                        "step", "tokens_processed", "train_loss", "lr", "grad_norm",
-                        "val_loss", "steps_per_sec"
-                    ])
-    
+            if self.log_file.exists() and self.log_file.stat().st_size:
+                with self.log_file.open(newline="", encoding="utf-8") as f:
+                    columns = tuple(next(csv.reader(f)))
+                if columns not in (self._LOG_COLUMNS_LEGACY, self._LOG_COLUMNS_0092):
+                    raise ValueError(f"Unrecognized training CSV columns at {self.log_file}: {columns}")
+                self._log_columns = columns
+            else:
+                with self.log_file.open("w", newline="", encoding="utf-8") as f:
+                    csv.writer(f).writerow(self._log_columns)
+            # Dedicated sidecar always has the same schema, even on legacy resumes.
+            path = self._supervised_metrics_log_path()
+            if not path.exists() or not path.stat().st_size:
+                with path.open("w", newline="", encoding="utf-8") as f:
+                    csv.writer(f).writerow((
+                        "step", "supervised_tokens_step", "supervised_tokens_total",
+                        "supervised_tokens_billions", "provenance",
+                    ))
+
+    def _supervised_metrics_log_path(self):
+        if self.log_file is None:
+            return None
+        return self.log_file.with_name(
+            self.log_file.stem + ".supervised" + (self.log_file.suffix or ".csv")
+        )
+
     def _log(self, row: Dict[str, Any]):
-        """Log a row to CSV."""
-        if self.log_file:
-            with open(self.log_file, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    row.get("step", ""),
-                    row.get("tokens_processed", ""),  # Issue #16: Track tokens processed
-                    row.get("train_loss", ""),
-                    row.get("lr", ""),
-                    row.get("grad_norm", ""),
-                    row.get("val_loss", ""),
-                    row.get("steps_per_sec", ""),
-                ])
-    
+        if not self.log_file:
+            return
+        with self.log_file.open("a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([row.get(column, "") for column in self._log_columns])
+        with self._supervised_metrics_log_path().open("a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                row.get("step", ""), row.get("supervised_tokens_step", ""),
+                row.get("supervised_tokens_total", ""),
+                row.get("supervised_tokens_billions", ""),
+                row.get("supervised_tokens_provenance", ""),
+            ])
+
     def _expert_usage_log_path(self):
         if self.log_file is None:
             return None
@@ -3215,7 +3242,9 @@ class ExtendedTrainer:
         # Issue #16: Track tokens_processed
         training_state = {
             "step": self.step,
-            "tokens_processed": self.tokens_processed,  # New: track cumulative tokens
+            "tokens_processed": self.tokens_processed,  # Source capacity (legacy)
+            "supervised_tokens_total": self.supervised_tokens_total,
+            "supervised_tokens_provenance": self.supervised_tokens_provenance,
             "gradient_accumulation_weighting": self.gradient_accumulation_weighting,
             "ar_accum_length_buckets": bool(self.ar_accum_length_buckets),
             "ar_compact_target": bool(self.ar_compact_target),
@@ -3393,7 +3422,12 @@ class ExtendedTrainer:
 
             # Train step
             precise_step_start = time.perf_counter()
+            completed_before = self.step
             loss, grad_norm = self.train_step()
+            if self.step == completed_before:
+                # train_step() can skip an update on non-finite gradients.
+                # Never count its sampled tokens or schedule an evaluation.
+                continue
             if self._last_step_expert_usage is not None:
                 self._write_expert_usage(self._last_step_expert_usage)
                 self._last_step_expert_usage = None
@@ -3412,6 +3446,10 @@ class ExtendedTrainer:
                 del recent_step_seconds[0]
             losses.append(loss)
             
+            # Count effective supervised weight only after the successful update.
+            # train_step() may skip nonfinite gradients without advancing step.
+            self.supervised_tokens_total += float(self._last_step_supervised_tokens)
+
             # train_step() increments self.step after a successful optimizer
             # update.  Therefore self.step is already the completed 1-based
             # optimizer-step count here; adding one would make every periodic
@@ -3549,6 +3587,7 @@ class ExtendedTrainer:
                     f"grad_norm={grad_norm:.4f}, "
                     f"grad_weighting={self.gradient_accumulation_weighting}, "
                     f"target_fill={100.0 * self._last_step_supervised_utilization:.1f}%, "
+                    f"supervised_total={self.supervised_tokens_total:,.0f}, "
                     f"{steps_per_sec:.2f} steps/sec, "
                     f"step_time={precise_step_seconds * 1000.0:.1f} ms, "
                     f"{throughput_text}"
@@ -3635,6 +3674,11 @@ class ExtendedTrainer:
                 # Log to CSV
                 self._log({
                     "step": self.step,
+                    "tokens_processed": self.tokens_processed,
+                    "supervised_tokens_step": self._last_step_supervised_tokens,
+                    "supervised_tokens_total": self.supervised_tokens_total,
+                    "supervised_tokens_billions": self.supervised_tokens_total / 1e9,
+                    "supervised_tokens_provenance": self.supervised_tokens_provenance,
                     "train_loss": avg_loss,
                     "lr": lr,
                     "grad_norm": grad_norm,
@@ -3651,6 +3695,9 @@ class ExtendedTrainer:
                     memory_interval_seconds = 0.0
                     memory_interval_steps = 0
             
+            if self.live_benchmark_scheduler is not None:
+                self.live_benchmark_scheduler.maybe_run(self)
+
             # Save using the completed optimizer-step count.
             if self.step % self.save_interval == 0:
                 self._gpu_memory_boundary("before_checkpoint_save")

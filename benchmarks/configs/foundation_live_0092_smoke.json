@@ -1,0 +1,46 @@
+{
+  "suite_name": "foundation_live_0092_smoke",
+  "version": 1,
+  "output_root": "./benchmarks/results/foundation_live_0092_smoke",
+  "on_error": "raise",
+  "benchmarks": [
+    {
+      "id": "wikitext_smoke",
+      "type": "wikitext",
+      "every_optimizer_steps": 1,
+      "parameters": {
+        "data": "../benchmarks/wikitext-2-raw/wiki.test.raw",
+        "context_length": 256,
+        "stride": 256,
+        "max_tokens": 512
+      }
+    },
+    {
+      "id": "generation_smoke",
+      "type": "generation",
+      "every_optimizer_steps": 1,
+      "parameters": {
+        "prompt_suite": "benchmarks/generation_prompts_v1.json",
+        "prompt_ids": ["code_python_short"],
+        "seeds": [42],
+        "strategies": ["greedy"],
+        "max_new_tokens": 8,
+        "use_kv_cache": true
+      }
+    },
+    {
+      "id": "reference_smoke",
+      "type": "reference_continuation",
+      "every_optimizer_steps": 1,
+      "parameters": {
+        "references": "benchmarks/tasks/reference_texts_v1.json",
+        "top_k_predictions": 3,
+        "cutoffs": [0.5],
+        "generation_tokens": 8,
+        "seeds": [42],
+        "use_kv_cache": true,
+        "max_context": 4096
+      }
+    }
+  ]
+}

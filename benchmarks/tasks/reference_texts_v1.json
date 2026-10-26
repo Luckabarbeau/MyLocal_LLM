@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "purpose": "Fixed document continuations for token-rank and branching analysis; withheld from training",
+  "references": [
+    {"id": "prime_explanation", "category": "mathematics", "text": "A prime number is a positive integer greater than one that has exactly two positive divisors: one and itself. The number two is the only even prime number, because every other even integer is divisible by two and therefore has at least three positive divisors."},
+    {"id": "python_prime", "category": "coding", "text": "def is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    if n == 2:\n        return True\n    if n % 2 == 0:\n        return False\n    divisor = 3\n    while divisor * divisor <= n:\n        if n % divisor == 0:\n            return False\n        divisor += 2\n    return True\n"},
+    {"id": "terminal_git", "category": "terminal", "text": "To create a new Git branch and switch to it, run `git switch -c feature-branch`. To check your current branch and working tree, use `git status`. To list local branches, run `git branch`."},
+    {"id": "pipe_flow", "category": "science", "text": "When viscous fluid flows steadily through a narrow pipe, friction at the pipe wall resists the motion. In laminar flow, the axial velocity is largest near the pipe center and decreases toward the walls, where the no-slip boundary condition sets the fluid velocity to zero."},
+    {"id": "detective_story", "category": "story", "text": "The detective arrived at the abandoned railway station shortly after midnight. The platform was empty, but a single lamp was still burning inside the ticket office. When she approached the window, she noticed a freshly written message on the glass. The ink was wet, and footsteps echoed in the corridor behind her."}
+  ]
+}

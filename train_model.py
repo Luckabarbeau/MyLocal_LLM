@@ -352,6 +352,15 @@ def parse_args():
         help="CSV log file path",
     )
     
+    parser.add_argument(
+        "--benchmark-suite", type=str, default=None,
+        help="0092: Optional JSON benchmark suite evaluated in-process at supervised-token milestones",
+    )
+    parser.add_argument(
+        "--benchmark-supervised-tokens-offset", type=float, default=None,
+        help="0092: Explicit cumulative supervised-token count for legacy checkpoints lacking the counter",
+    )
+
     # Validation
     parser.add_argument(
         "--val-interval",
@@ -2022,6 +2031,26 @@ def main():
 
     trainer.step = start_step
     trainer.tokens_processed = tokens_processed
+    if training_state and "supervised_tokens_total" in training_state:
+        trainer.supervised_tokens_total = float(training_state["supervised_tokens_total"])
+        trainer.supervised_tokens_provenance = str(
+            training_state.get("supervised_tokens_provenance", "measured")
+        )
+        if (args.benchmark_supervised_tokens_offset is not None
+                and abs(trainer.supervised_tokens_total - args.benchmark_supervised_tokens_offset) > 0.1):
+            raise ValueError("Explicit token offset disagrees with checkpoint counter")
+    elif args.benchmark_supervised_tokens_offset is not None:
+        if args.benchmark_supervised_tokens_offset < 0:
+            raise ValueError("benchmark token offset must be nonnegative")
+        trainer.supervised_tokens_total = float(args.benchmark_supervised_tokens_offset)
+        trainer.supervised_tokens_provenance = "user_supplied_legacy_offset"
+    elif training_state and start_step:
+        # An old checkpoint has no authoritative supervised-token total.
+        # Do not silently substitute source capacity or sampled counters.
+        trainer.supervised_tokens_provenance = "since_0092_only"
+        print("WARNING: Legacy checkpoint lacks cumulative supervised tokens; "
+              "recording newly measured tokens from zero. Pass "
+              "--benchmark-supervised-tokens-offset to align absolute milestones.")
     if training_objective is not None and training_state:
         trainer._block_proposal_supervised_tokens = int(training_state.get("supervised_tokens", 0))
     if args.resume_from and training_state:
@@ -2172,6 +2201,16 @@ def main():
         raise ValueError("--max-run-steps must be >= 1")
 
     print()
+    if args.benchmark_suite:
+        if training_objective is not None:
+            raise ValueError("0092 live benchmark runner currently supports only AR objective")
+        if tokenizer_path is None or not Path(tokenizer_path).is_file():
+            raise ValueError("0092 requires an existing tokenizer file")
+        from benchmarks.live_suite import LiveBenchmarkScheduler
+        trainer.live_benchmark_scheduler = LiveBenchmarkScheduler.from_file(
+            Path(args.benchmark_suite), tokenizer, trainer,
+        )
+
     print("=" * 60)
     print("Starting Training")
     print("=" * 60)

@@ -41,6 +41,15 @@ PROFILE_VARS = {
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL",
     "MINI_LLM_AR_COMPACT_TARGET",
+    "MINI_LLM_ROPE_PREPARED_POSITIONS",
+    "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD",
+    "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS",
+    "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS",
+    "MINI_LLM_HISTORY_QUERY_CHUNK",
+    "MINI_LLM_HISTORY_RECOMPUTE",
+    "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS",
+    "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD",
+    "MINI_LLM_TRITON_HISTORICAL_BLOCK_PREWARM",
 }
 
 
@@ -247,3 +256,71 @@ def test_unmeasured_1024_memory_model_keeps_prior_query_chunk(monkeypatch):
     apply_runtime_defaults("gpu-fast", backend_name="cupy", config=config, training=True)
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"
     assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ
+
+
+def _bf16_historical_config():
+    import dataclasses
+    config = ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    return dataclasses.replace(
+        config, dtype="bfloat16", context_length=config.memory_context.active_length,
+    )
+
+
+def test_explicit_gpu_fast_enables_0089t_historical_family(monkeypatch):
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=_bf16_historical_config(),
+        training=True, precision="bf16-mixed",
+    )
+    assert os.environ["MINI_LLM_HISTORY_QUERY_CHUNK"] == "1024"
+    assert os.environ["MINI_LLM_HISTORY_RECOMPUTE"] == "1"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS"] == "1"
+    assert os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] == "1"
+    assert os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_PREWARM"] == "1"
+    assert os.environ["MINI_LLM_ROPE_PREPARED_POSITIONS"] == "1"
+    assert os.environ["MINI_LLM_AR_ACCUM_LENGTH_BUCKETS"] == "1"
+
+
+def test_auto_preserves_opt_in_historical_triton_boundary(monkeypatch):
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        None, backend_name="cupy", config=_bf16_historical_config(),
+        training=True, precision="bf16-mixed",
+    )
+    assert "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD" not in os.environ
+    assert os.environ["MINI_LLM_HISTORY_QUERY_CHUNK"] == "1024"
+
+
+def test_historical_fast_path_respects_overrides(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD", "0")
+    monkeypatch.setenv("MINI_LLM_HISTORY_QUERY_CHUNK", "512")
+    monkeypatch.setenv("MINI_LLM_HISTORY_RECOMPUTE", "0")
+    apply_runtime_defaults(
+        "consumer-gpu", backend_name="cupy", config=_bf16_historical_config(),
+        training=True, precision="bf16-mixed",
+    )
+    assert os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] == "0"
+    assert os.environ["MINI_LLM_HISTORY_QUERY_CHUNK"] == "512"
+    assert os.environ["MINI_LLM_HISTORY_RECOMPUTE"] == "0"
+
+
+def test_historical_triton_is_not_global_or_wrong_precision(monkeypatch):
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=ModelConfig.wide_500m_memory_64k(),
+        training=True, precision="bf16-mixed",
+    )
+    assert "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD" not in os.environ
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=_bf16_historical_config(),
+        training=True, precision="float32",
+    )
+    assert "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD" not in os.environ
+    _clear(monkeypatch)
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="numpy", config=_bf16_historical_config(),
+        training=True, precision="bf16-mixed",
+    )
+    assert "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD" not in os.environ

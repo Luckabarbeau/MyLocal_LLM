@@ -21,6 +21,9 @@ be treated as required setup steps.
 
 - [`research/`](research/) contains active predictive and probability-combination
   design reports and experiment audits.
+- [`research/0090B_modular_residual_specialist_combination.tex`](research/0090B_modular_residual_specialist_combination.tex)
+  is the living LaTeX research note for frozen-foundation residual specialists,
+  learned combination, per-specialist historical memory, and the evidence ledger.
 
 ## Operational entry points
 

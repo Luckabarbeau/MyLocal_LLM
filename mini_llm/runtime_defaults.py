@@ -67,12 +67,19 @@ _GPU_FAST_DEFAULTS: dict[str, str] = {
     "MINI_LLM_FUSED_DILATED_MULTI_CHUNK_SOFTMAX": "1",
     "MINI_LLM_INPLACE_BF16_CE": "1",
     "MINI_LLM_COMPACT_PACKED_V": "1",
+    # 0089M: prepare RoPE positions once; avoid repeated grouped-cuBLAS
+    # pointer uploads and dense descriptor construction.
+    "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
+    "MINI_LLM_CUBLAS_PACKED_POINTER_UPLOAD": "1",
+    "MINI_LLM_CUBLAS_COMPACT_DESCRIPTORS": "1",
 }
 
 _GPU_FAST_TRAINING_DEFAULTS: dict[str, str] = {
     # 0089C: fusing the attention branch promotion/residual add into RMSNorm2
     # reduced complete B3/T2304 block F+B latency in two interleaved A/B runs.
     "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM": "1",
+    # 0089M: batch similarly sized autoregressive accumulation windows.
+    "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "1",
 }
 
 _CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
@@ -145,6 +152,29 @@ def _use_fused_historical_decode(config, *, training: bool) -> bool:
         and int(getattr(config, "d_head", 0)) == 64
         and str(getattr(config, "dtype", "")).lower() in {"bfloat16", "bf16"}
         and getattr(config, "attention_layers", None) is not None
+    )
+
+
+def _is_validated_historical_training_family(config, *, precision: str | None) -> bool:
+    """0089T validated the Triton block sweep on this BF16 20L/1024 family.
+
+    It is deliberately NOT enabled through the automatic profile: changing
+    floating-point reduction order in an existing run is a reproducibility
+    decision. Explicit gpu-fast/consumer-gpu selection opts into this measured
+    mathematical-forward variant. Users can still override any flag with 0.
+    """
+    if config is None or str(precision).lower() != "bf16-mixed":
+        return False
+    memory = getattr(config, "memory_context", None)
+    return bool(
+        memory is not None
+        and getattr(memory, "enabled", False)
+        and getattr(memory, "integration_mode", None) == "historical_read"
+        and int(getattr(config, "d_model", 0)) == 1024
+        and int(getattr(config, "n_layers", 0)) == 20
+        and int(getattr(config, "n_q_heads", 0)) == 16
+        and int(getattr(config, "d_head", 0)) == 64
+        and str(getattr(config, "dtype", "")).lower() in {"bfloat16", "bf16"}
     )
 
 
@@ -226,6 +256,10 @@ def format_runtime_fast_paths(config=None) -> str:
         ("local_prob_recompute", "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS", "0"),
         ("lm_head_chunk", "MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"),
         ("optimizer_offload", "MINI_LLM_OPTIMIZER_OFFLOAD", "none"),
+        ("rope_prepared", "MINI_LLM_ROPE_PREPARED_POSITIONS", "0"),
+        ("historical_query_chunk", "MINI_LLM_HISTORY_QUERY_CHUNK", "128"),
+        ("historical_recompute", "MINI_LLM_HISTORY_RECOMPUTE", "0"),
+        ("historical_triton_block", "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD", "0"),
     )
     return (
         "GPU effective fast paths (" + str(getattr(config, "ffn_mode", "unknown"))
@@ -280,6 +314,22 @@ def apply_runtime_defaults(
         _setdefaults(_GPU_FAST_TRAINING_DEFAULTS, applied)
     if _use_fused_historical_decode(config, training=training):
         _setdefaults({"MINI_LLM_FUSED_SPARSE_DECODE": "1"}, applied)
+    if training and _is_validated_historical_training_family(config, precision=precision):
+        # Verified production geometry: 1024 rows with recompute was used on
+        # the 16 GiB BF16 setup. Users may lower query chunks after an OOM.
+        _setdefaults({
+            "MINI_LLM_HISTORY_QUERY_CHUNK": "1024",
+            "MINI_LLM_HISTORY_RECOMPUTE": "1",
+            "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS": "1",
+        }, applied)
+        if requested_profile != "auto":
+            # 0089T observed improved throughput, but whole-stack BF16 parity
+            # is not bitwise. Never change an existing auto-profile resume
+            # silently. Selecting gpu-fast explicitly is the opt-in.
+            _setdefaults({
+                "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD": "1",
+                "MINI_LLM_TRITON_HISTORICAL_BLOCK_PREWARM": "1",
+            }, applied)
 
     chunk = _local_query_chunk_default(config)
     if chunk is not None:

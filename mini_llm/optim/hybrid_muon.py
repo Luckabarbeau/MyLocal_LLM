@@ -6,6 +6,7 @@ unchanged AdamW. No persistent second-moment tensor exists for Muon matrices.
 
 import math
 import os
+import re
 
 import numpy as np
 
@@ -22,7 +23,9 @@ def muon_eligible(parameter):
         # The learned horizon embedding represents token position, not a
         # hidden-to-hidden transform. Only the two proposal projections qualify.
         return name in {"block_proposal.horizon_context", "block_proposal.horizon_back"}
-    if not (name.startswith("blocks.") or name.startswith("block_decoder.")):
+    specialist_block = re.match(r"^specialists\.[A-Za-z0-9_-]+\.blocks\.\d+\.", name)
+    if not (name.startswith("blocks.") or name.startswith("block_decoder.")
+            or specialist_block):
         return False
     # Router tensors are intentionally left to AdamW in the first comparison.
     if any(token in name.lower() for token in (

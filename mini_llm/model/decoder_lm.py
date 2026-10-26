@@ -1050,7 +1050,7 @@ class DecoderLanguageModel:
             with performance_scope("memory_context.embedding.backward"):
                 self.embedding.backward(dworking_total, {"token_ids": working_ids})
 
-    def _historical_context_forward(self, token_ids, memory_metadata=None):
+    def _historical_context_forward(self, token_ids, memory_metadata=None, *, inference=False):
         """Keep all 4096 current rows; block-encode preceding same-document history."""
         cfg = self.config.memory_context
         source = xp.asarray(token_ids)
@@ -1069,7 +1069,9 @@ class DecoderLanguageModel:
         working_ids = source[:, h:h+w]
         valid_mask = (None if memory_metadata is None else
                       memory_metadata.get("history_valid_mask"))
-        state = self.historical_memory.open(source[:, :h], starts, valid_mask)
+        state = self.historical_memory.open(
+            source[:, :h], starts, valid_mask, inference=inference
+        )
         pos = xp.broadcast_to(xp.arange(h, h+w, dtype=xp.int64)[None, :],
                               (batch, w))
         active = ActiveContext(
@@ -1086,11 +1088,11 @@ class DecoderLanguageModel:
         self.embedding.backward(dactive, {"token_ids": cache["working_ids"]})
         self.historical_memory.close(cache["state"])
 
-    def _hierarchical_context_forward(self, token_ids, memory_metadata=None):
+    def _hierarchical_context_forward(self, token_ids, memory_metadata=None, *, inference=False):
         mode = self.config.memory_context.integration_mode
         if mode == "historical_read":
             return self._historical_context_forward(
-                token_ids, memory_metadata=memory_metadata
+                token_ids, memory_metadata=memory_metadata, inference=inference
             )
         if mode == "terminal_landmark":
             return self._terminal_landmark_context_forward(
@@ -1270,7 +1272,8 @@ class DecoderLanguageModel:
                 )
             with performance_scope("memory_context.forward"):
                 active, memory_context_cache = self._hierarchical_context_forward(
-                    token_ids, memory_metadata=memory_metadata
+                    token_ids, memory_metadata=memory_metadata,
+                    inference=not return_cache,
                 )
             x = active.embeddings
             effective_position_ids = active.position_ids
@@ -1596,8 +1599,14 @@ class DecoderLanguageModel:
         }
         return (loss_sum if return_device_loss else float(loss_sum.item())), cache
 
-    def chunked_lm_head_backward(self, loss_cache, *, grad_scale=1.0):
-        """Recompute each LM-head tile and scatter target-only gradients."""
+    def chunked_lm_head_backward(self, loss_cache, *, grad_scale=1.0,
+                                 frozen_output_projection=False):
+        """Recompute LM-head tiles and scatter target-only gradients.
+
+        When `frozen_output_projection` is True, gradients flow into the
+        hidden representation but never into the shared frozen vocabulary head.
+        The default maintains the original autoregressive training behavior.
+        """
         head_input = loss_cache.pop("head_input")
         flat_x = head_input.reshape(-1, head_input.shape[-1])
         targets = loss_cache["targets"]
@@ -1612,7 +1621,8 @@ class DecoderLanguageModel:
             self.hierarchical_memory_enabled
             and self.config.memory_context.memory_training == "router_only"
         )
-        W_grad = None if router_only else self.output_proj.W.grad
+        W_grad = (None if router_only or frozen_output_projection
+                  else self.output_proj.W.grad)
         for start in range(0, n, chunk_tokens):
             end = min(start + chunk_tokens, n)
             x_chunk = flat_x[start:end]

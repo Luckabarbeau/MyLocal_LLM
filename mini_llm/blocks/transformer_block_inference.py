@@ -66,6 +66,7 @@ class TransformerBlockInference:
         # is unchanged.
         self.alpha_attn = 1.0
         self.alpha_mlp = 1.0
+        self.full_history_head = None
         
         # RMSNorms (weights shared with training)
         self.norm1 = RMSNormInference(d_model, eps=rms_eps, dtype=dtype)
@@ -102,6 +103,7 @@ class TransformerBlockInference:
         Args:
             training_block: Training TransformerBlock instance
         """
+        self.full_history_head = training_block.full_history_head
         self.norm1.set_weights(training_block.norm1.gamma.data)
         self.norm2.set_weights(training_block.norm2.gamma.data)
         self.attention.set_weights(
@@ -123,7 +125,7 @@ class TransformerBlockInference:
         self, x, k_cache, v_cache, start_pos, router_input_cache=None,
         retrieval_route_cache=None, *, rope_start_pos=None, position_ids=None,
         terminal_memory_store=None, terminal_memory_route=None,
-        historical_state=None,
+        historical_state=None, full_history_state=None, full_history_rope_start=None,
     ):
         """
         Prefill through this block.
@@ -160,6 +162,14 @@ class TransformerBlockInference:
             terminal_memory_route=terminal_memory_route,
             historical_state=historical_state,
         )
+        if self.full_history_head is not None:
+            if full_history_state is None or full_history_rope_start is None:
+                raise RuntimeError("full history inference prefill state missing")
+            extra = self.full_history_head.inference_prefill(
+                h, historical_state, full_history_state, self.layer_idx,
+                int(full_history_rope_start),
+            )
+            a = a + extra.astype(a.dtype, copy=False)
         a_residual = (
             a.astype(xp.float32, copy=False) if self.use_fp32_residual else a
         )
@@ -188,6 +198,11 @@ class TransformerBlockInference:
 
         The per-layer committed-context cache is strictly read-only.
         """
+        if self.full_history_head is not None:
+            raise NotImplementedError(
+                "provisional block decoding must implement independent full-history "
+                "attention before it can serve an upgraded checkpoint"
+            )
         if self.use_fp32_residual:
             x = x.astype(xp.float32, copy=False)
         residual1 = x
@@ -221,7 +236,7 @@ class TransformerBlockInference:
         terminal_memory_store=None, terminal_memory_route=None,
         historical_state=None, historical_routes=None, historical_clock=0,
         historical_refresh_id=None,
-        normalized_input=None, next_norm=None,
+        normalized_input=None, next_norm=None, full_history_state=None,
     ):
         """
         Decode one token through this block.
@@ -265,6 +280,15 @@ class TransformerBlockInference:
             historical_clock=historical_clock,
             historical_refresh_id=historical_refresh_id,
         )
+        if self.full_history_head is not None:
+            if full_history_state is None:
+                raise RuntimeError("full history inference decode state missing")
+            extra = self.full_history_head.inference_decode(
+                h, historical_state, full_history_state, self.layer_idx,
+                rope_position=rope_position, cache_position=cache_position,
+                cache_start=cache_start, working_count=working_count,
+            )
+            a = a + extra.astype(a.dtype, copy=False)
         if self.use_fp32_residual:
             x, h = self.norm2.forward_residual_add(
                 residual1, a, self.alpha_attn

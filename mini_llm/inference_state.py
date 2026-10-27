@@ -52,6 +52,8 @@ class GenerationState:
     historical_memory_state: object = None
     historical_token_ids: object = None
     historical_reader_routes: dict = field(default_factory=dict)
+    full_history_current_kv: dict = field(default_factory=dict)
+    full_history_historical_kv: dict = field(default_factory=dict)
     historical_refresh_count: int = 0
     historical_tokens_since_refresh: int = 0
     historical_origin: int = 0
@@ -74,6 +76,8 @@ class GenerationState:
         self.length = 0
         self.retrieval_routes.clear()
         self.historical_reader_routes.clear()
+        self.full_history_current_kv.clear()
+        self.full_history_historical_kv.clear()
         self.historical_memory_state = None
         self.historical_token_ids = None
         self.historical_refresh_count = 0

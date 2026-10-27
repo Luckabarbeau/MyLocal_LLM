@@ -1615,35 +1615,44 @@ def main():
             checkpoint_path,
             param_names=param_names,
         )
-        if training_objective is not None:
-            # AR historically tolerates missing tensors for architecture
-            # migrations. 0080 joint resume must *never* silently initialize
-            # absent horizon/decoder parameters or optimizer components.
-            if set(loaded_params) != set(param_names):
-                missing = set(param_names) - set(loaded_params)
-                raise ValueError("incomplete 0080 checkpoint parameters: " +
-                                 ", ".join(sorted(missing)[:8]))
-            if optimizer_state is None:
-                raise ValueError("incomplete 0080 optimizer checkpoint state")
-            saved_optimizer_kind = (training_state or {}).get("optimizer_kind", "adamw")
-            if saved_optimizer_kind not in {"adamw", "hybrid-muon"}:
-                raise ValueError("unknown 0080 checkpoint optimizer kind")
-            if saved_optimizer_kind == "hybrid-muon":
-                from mini_llm.optim.hybrid_muon import muon_eligible
-                muon_names = {p.name for p in restore_parameters if muon_eligible(p)}
-                adam_names = set(param_names) - muon_names
-                expected_components = {
-                    "master_weights": set(param_names), "m": adam_names,
-                    "v": adam_names, "muon_m": muon_names,
-                }
-            else:
-                expected_components = {
-                    "master_weights": set(param_names),
-                    "m": set(param_names), "v": set(param_names),
-                }
-            for component, names in expected_components.items():
-                if set(optimizer_state.get(component) or {}) != names:
-                    raise ValueError("incomplete 0080 optimizer checkpoint state: " + component)
+        # Resume is an exact continuation, never an architecture warm start.
+        # Partial loading remains available only through the explicit --init-from
+        # path. Check the on-disk set too because load_checkpoint(param_names=...)
+        # intentionally filters unexpected arrays.
+        expected_names = set(param_names)
+        disk_names = {
+            path.stem for path in (checkpoint_path / "model_params").glob("*.npy")
+        }
+        if disk_names != expected_names or set(loaded_params) != expected_names:
+            missing = sorted(expected_names - disk_names)
+            extra = sorted(disk_names - expected_names)
+            raise ValueError(
+                "resume checkpoint parameter set differs from current architecture; "
+                f"missing={missing[:8]} extra={extra[:8]}"
+            )
+        if optimizer_state is None or training_state is None:
+            raise ValueError("resume requires complete optimizer and training state")
+        saved_optimizer_kind = training_state.get("optimizer_kind")
+        if saved_optimizer_kind not in {"adamw", "hybrid-muon"}:
+            raise ValueError("unknown or missing checkpoint optimizer kind")
+        if saved_optimizer_kind == "hybrid-muon":
+            from mini_llm.optim.hybrid_muon import muon_eligible
+            muon_names = {p.name for p in restore_parameters if muon_eligible(p)}
+            adam_names = expected_names - muon_names
+            expected_components = {
+                "master_weights": expected_names, "m": adam_names,
+                "v": adam_names, "muon_m": muon_names,
+            }
+        else:
+            expected_components = {
+                "master_weights": expected_names,
+                "m": expected_names, "v": expected_names,
+            }
+        for component, names in expected_components.items():
+            if set(optimizer_state.get(component) or {}) != names:
+                raise ValueError(
+                    "incomplete resume optimizer checkpoint state: " + component
+                )
         # Copy checkpoint parameters into the already-allocated model and
         # immediately drop each temporary backend copy.  On CuPy,
         # load_checkpoint() materializes checkpoint arrays on the GPU, so
@@ -1656,10 +1665,10 @@ def main():
                 del loaded
         loaded_params.clear()
         del loaded_params
+        for block in model.blocks:
+            if hasattr(block, "refresh_compute_buffers"):
+                block.refresh_compute_buffers()
         if training_objective is not None:
-            for block in model.blocks:
-                if hasattr(block, "refresh_compute_buffers"):
-                    block.refresh_compute_buffers()
             for layer in training_objective.net.decoder.layers:
                 if hasattr(layer.attn, "refresh_compute_buffers"):
                     layer.attn.refresh_compute_buffers()

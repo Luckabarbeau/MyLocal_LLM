@@ -613,20 +613,21 @@ def mixed_attention_forward(q, k, v, active_local_heads, *, window=512, scale=0.
         num_warps=4,
         num_stages=3,
     )
-    _fwd_kernel[(grid_m, batch * len(active_local_heads))](
-        *common,
-        n_ctx=length,
-        scale_log2=scale_log2,
-        active_mask=active_mask,
-        head_begin=1,
-        head_count=len(active_local_heads),
-        use_head_indices=local_heads_indexed,
-        window=LOCAL_WINDOW,
-        block_m=64,
-        block_n=64,
-        num_warps=4,
-        num_stages=3,
-    )
+    if active_local_heads:
+        _fwd_kernel[(grid_m, batch * len(active_local_heads))](
+            *common,
+            n_ctx=length,
+            scale_log2=scale_log2,
+            active_mask=active_mask,
+            head_begin=1,
+            head_count=len(active_local_heads),
+            use_head_indices=local_heads_indexed,
+            window=LOCAL_WINDOW,
+            block_m=64,
+            block_n=64,
+            num_warps=4,
+            num_stages=3,
+        )
     return output, AttentionCache(
         q=q,
         k=k,
@@ -696,21 +697,22 @@ def mixed_attention_backward(d_out, cache: AttentionCache):
         num_stages=3,
     )
     local_head_count = int(cache.active_local_heads.size)
-    _dq_kernel[(grid_m, batch * local_head_count)](
-        *dq_common,
-        n_ctx=length,
-        scale=cache.scale,
-        scale_log2=cache.scale * _LOG2E,
-        active_mask=cache.active_mask,
-        head_begin=1,
-        head_count=local_head_count,
-        use_head_indices=cache.local_heads_indexed,
-        window=LOCAL_WINDOW,
-        block_m=64,
-        block_n=64,
-        num_warps=4,
-        num_stages=3,
-    )
+    if local_head_count:
+        _dq_kernel[(grid_m, batch * local_head_count)](
+            *dq_common,
+            n_ctx=length,
+            scale=cache.scale,
+            scale_log2=cache.scale * _LOG2E,
+            active_mask=cache.active_mask,
+            head_begin=1,
+            head_count=local_head_count,
+            use_head_indices=cache.local_heads_indexed,
+            window=LOCAL_WINDOW,
+            block_m=64,
+            block_n=64,
+            num_warps=4,
+            num_stages=3,
+        )
 
     dkdv_common = (
         _ptr(q), _ptr(k), _ptr(v), _ptr(d_out), _ptr(cache.lse_log2),

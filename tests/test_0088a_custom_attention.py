@@ -109,6 +109,42 @@ def test_custom_forward_backward_matches_fp64_oracle_and_inactive_heads(monkeypa
     importlib.util.find_spec("triton") is None,
     reason="requires isolated Triton benchmark environment",
 )
+def test_custom_full_head_only_skips_empty_local_launches(monkeypatch):
+    monkeypatch.setenv("MINI_LLM_BACKEND", "cupy")
+    import cupy as cp
+    import mini_llm.backend  # noqa: F401
+
+    from mini_llm.ops.triton_mixed_attention import (
+        mixed_attention_backward,
+        mixed_attention_forward,
+    )
+
+    rng = np.random.default_rng(88002)
+    q = cp.asarray(rng.normal(0.0, 0.2, (1, 33, 16, 64)), dtype="bfloat16")
+    k = cp.asarray(rng.normal(0.0, 0.2, (1, 33, 4, 64)), dtype="bfloat16")
+    v = cp.asarray(rng.normal(0.0, 0.2, (1, 33, 4, 64)), dtype="bfloat16")
+    upstream = cp.zeros(q.shape, dtype=cp.float32)
+    upstream[:, :, 0] = 1.0
+
+    output, cache = mixed_attention_forward(q, k, v, ())
+    d_q, d_k, d_v = mixed_attention_backward(upstream, cache)
+    cp.cuda.get_current_stream().synchronize()
+
+    assert bool(cp.all(cp.isfinite(output[:, :, 0])))
+    assert bool(cp.all(cp.isfinite(d_q[:, :, 0])))
+    assert bool(cp.all(cp.isfinite(d_k[:, :, 0])))
+    assert bool(cp.all(cp.isfinite(d_v[:, :, 0])))
+    assert float(cp.max(cp.abs(output[:, :, 1:]))) == 0.0
+    assert float(cp.max(cp.abs(d_q[:, :, 1:]))) == 0.0
+    assert float(cp.max(cp.abs(d_k[:, :, 1:]))) == 0.0
+    assert float(cp.max(cp.abs(d_v[:, :, 1:]))) == 0.0
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(
+    importlib.util.find_spec("triton") is None,
+    reason="requires isolated Triton benchmark environment",
+)
 def test_custom_local_window_has_exact_query_519_boundary(monkeypatch):
     monkeypatch.setenv("MINI_LLM_BACKEND", "cupy")
     import cupy as cp

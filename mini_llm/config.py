@@ -246,6 +246,10 @@ class ModelConfig:
     # layer. Otherwise provide one AttentionLayerConfig per Transformer layer.
     attention_layers: tuple | None = None
 
+    # 0100: optional independent full-causal-history heads, zero-based layer indices.
+    # Existing ensemble presets/checkpoints keep these disabled until migrated.
+    full_history_layers: tuple = ()
+
     # 0064B progressive-depth training.  ``n_layers`` remains the maximum/final
     # architecture depth.  When enabled, only the first
     # ``progressive_initial_layers`` blocks execute initially; later blocks are
@@ -263,6 +267,15 @@ class ModelConfig:
         object.__setattr__(
             self, "memory_context", _coerce_memory_context(self.memory_context)
         )
+        selected = tuple(int(i) for i in self.full_history_layers)
+        if len(set(selected)) != len(selected) or any(
+            i < 0 or i >= self.n_layers for i in selected
+        ):
+            raise ValueError("full_history_layers must contain unique valid zero-based indices")
+        if selected and (not self.memory_context.enabled or
+                         self.memory_context.integration_mode != "historical_read"):
+            raise ValueError("full-history heads require historical_read memory context")
+        object.__setattr__(self, "full_history_layers", selected)
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if self.n_q_heads % self.n_kv_heads != 0:
@@ -363,6 +376,9 @@ class ModelConfig:
         total = (1 if self.tie_embeddings else 2) * int(self.vocab_size) * d + d
 
         for layer_index in range(layer_count):
+            if layer_index in self.full_history_layers:
+                total += 4 * d * int(self.d_head)
+
             # Two RMSNorm scales per Transformer block.
             total += 2 * d
 

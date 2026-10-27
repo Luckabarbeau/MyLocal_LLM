@@ -58,6 +58,7 @@ class TransformerBlock:
         self.compute_dtype = resolve_dtype(dtype)
         self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
         self.residual_gates = bool(residual_gates)
+        self.full_history_head = None  # Attached post-backbone for checkpoint RNG parity.
 
         # 0064A: optional learned residual gates used by progressive-depth
         # training.  Ordinary blocks leave this feature disabled, preserving the
@@ -120,6 +121,8 @@ class TransformerBlock:
         params = []
         params.extend(self.norm1.parameters())
         params.extend(self.attention.parameters())
+        if self.full_history_head is not None:
+            params.extend(self.full_history_head.parameters())
         params.extend(self.norm2.parameters())
         params.extend(self.moe.parameters())
         if getattr(self, "residual_gates", False):
@@ -143,6 +146,8 @@ class TransformerBlock:
         shared_context_kv=None, shared_context_length=None,
         shared_context_block_starts=None, shared_context_plans=None,
         shared_context_retrieval_tasks=None, historical_state=None,
+        full_history_positions=None, full_history_current_valid_mask=None,
+        full_history_historical_allow_mask=None,
     ):
         """
         Forward pass through the Transformer block.
@@ -230,6 +235,17 @@ class TransformerBlock:
                 else:
                     attn_out = self.attention.forward(norm1_compute, **kwargs)
             attn_cache = None
+        full_history_cache = None
+        if self.full_history_head is not None:
+            with performance_scope("block.full_history.forward"):
+                extra, full_history_cache = self.full_history_head.forward(
+                    norm1_compute, historical_state, full_history_positions,
+                    return_cache=return_cache,
+                    attention_allow_mask=attention_allow_mask,
+                    current_valid_mask=full_history_current_valid_mask,
+                    historical_allow_mask=full_history_historical_allow_mask,
+                )
+            attn_out = attn_out + extra.astype(attn_out.dtype, copy=False)
         if finite_trace is not None:
             finite_trace.append((f"block{layer_idx}.attention", xp.all(xp.isfinite(attn_out))))
 
@@ -305,6 +321,7 @@ class TransformerBlock:
             "residual1": residual1,
             "norm1_cache": norm1_cache,
             "attn_cache": attn_cache,
+            "full_history_cache": full_history_cache,
             "residual2": residual2,
             "norm2_cache": norm2_cache,
             "moe_cache": moe_cache,
@@ -386,6 +403,23 @@ class TransformerBlock:
             if self.use_fp32_residual else dx_norm2
         )
         
+        full_history_dx = None
+        if self.full_history_head is not None:
+            with performance_scope("block.full_history.backward"):
+                if getattr(self, "residual_gates", False):
+                    full_history_dx, full_history_gate_grad = self.full_history_head.backward(
+                        dattn_out, cache["full_history_cache"],
+                        output_scale=self.alpha_attn.data,
+                        return_output_scale_grad=True,
+                    )
+                    self.alpha_attn.grad += full_history_gate_grad.astype(
+                        self.alpha_attn.grad.dtype, copy=False
+                    )
+                else:
+                    full_history_dx = self.full_history_head.backward(
+                        dattn_out, cache["full_history_cache"]
+                    )
+
         # Backward through attention.  The attention output projection can
         # recover dL/d(alpha) from its raw weight-gradient matrix, avoiding a
         # retained [B,T,D] attention-output activation.
@@ -415,6 +449,10 @@ class TransformerBlock:
                     dnorm1_out, context_kv_grad = result
                 else:
                     dnorm1_out = result
+        if full_history_dx is not None:
+            dnorm1_out = dnorm1_out + full_history_dx.astype(
+                dnorm1_out.dtype, copy=False
+            )
         
         # Backward through first RMSNorm.  As above, the fused path avoids a
         # separate BF16->FP32 gradient promotion.

@@ -79,6 +79,7 @@ class InferenceModel:
             else None
         )
         self.historical_reader = None
+        self.full_history_enabled = bool(config.full_history_layers)
         self.historical_refresh_tokens = int(
             os.environ.get("MINI_LLM_HISTORICAL_REFRESH_TOKENS", "32")
         )
@@ -157,9 +158,15 @@ class InferenceModel:
             GenerationState with preallocated caches
         """
         max_length = int(max_length)
+        # Independent full-history heads require their own current K/V state even
+        # for short prompts. Route those checkpoints through historical_read with
+        # an empty historical prefix rather than silently omitting the branch.
         long_memory = bool(
-            (self.historical_read_memory or self.terminal_landmark_memory or self.routed_prefix_memory)
-            and max_length > int(self.config.memory_context.target_length)
+            self.full_history_enabled or (
+                (self.historical_read_memory or self.terminal_landmark_memory
+                 or self.routed_prefix_memory)
+                and max_length > int(self.config.memory_context.target_length)
+            )
         )
         if long_memory and max_length > int(self.config.memory_context.memory_length):
             raise ValueError(
@@ -318,6 +325,7 @@ class InferenceModel:
                 padded, starts, position_offset=offset, inference=True
             )
         state.historical_reader_routes.clear()
+        state.full_history_historical_kv.clear()
         state.historical_refresh_count += 1
         state.historical_tokens_since_refresh = 0
 
@@ -333,6 +341,8 @@ class InferenceModel:
         state.working_count = int(working.shape[1])
         state.working_capacity = cap
         state.cache_start = 0
+        state.full_history_current_kv.clear()
+        state.full_history_historical_kv.clear()
         state.working_start_abs = past
         state.next_abs_pos = total
         state.historical_origin = past
@@ -347,6 +357,8 @@ class InferenceModel:
                 retrieval_route_cache=state.retrieval_routes,
                 rope_start_pos=int(self.config.memory_context.distant_memory_length),
                 historical_state=state.historical_memory_state,
+                full_history_state=state,
+                full_history_rope_start=int(self.config.memory_context.distant_memory_length),
             )
         state.length = total
         x = self.final_norm.forward(x)
@@ -365,6 +377,7 @@ class InferenceModel:
         working_ids = self._logical_working_ids(state).copy()
         state.working_token_ids[:, :count] = working_ids
         state.cache_start = 0
+        state.full_history_current_kv.clear()
         state.historical_origin = int(state.working_start_abs)
         state.retrieval_routes.clear()
         state.historical_reader_routes.clear()
@@ -378,6 +391,8 @@ class InferenceModel:
                 retrieval_route_cache=state.retrieval_routes,
                 rope_start_pos=int(self.config.memory_context.distant_memory_length),
                 historical_state=state.historical_memory_state,
+                full_history_state=state,
+                full_history_rope_start=int(self.config.memory_context.distant_memory_length),
             )
         x = self.final_norm.forward(x)
         return self._lm_head_forward(x[:, -1, :].astype(self.dtype, copy=False))
@@ -443,6 +458,7 @@ class InferenceModel:
                 historical_state=state.historical_memory_state,
                 historical_routes=state.historical_reader_routes,
                 historical_clock=abs_pos, historical_refresh_id=epoch,
+                full_history_state=state,
             )
         state.next_abs_pos += 1
         state.length += 1
@@ -871,6 +887,10 @@ class InferenceModel:
         Only available for direct, dense GQA. This does not mutate the cache;
         provisional bidirectional states are never reusable causal entries.
         """
+        if self.full_history_enabled:
+            raise NotImplementedError(
+                "predictive refinement does not support independent full-history heads"
+            )
         if self.sparse_attention or state.long_memory_enabled:
             raise NotImplementedError(
                 "predictive refinement cache supports direct dense attention only"
@@ -898,6 +918,11 @@ class InferenceModel:
         with the existing triangular attention over new tokens and the
         immutable preceding cache. State length advances only on success.
         """
+        if self.full_history_enabled:
+            raise NotImplementedError(
+                "predictive refinement cache append does not support independent "
+                "full-history heads"
+            )
         if self.sparse_attention or state.long_memory_enabled:
             raise NotImplementedError(
                 "predictive refinement cache append supports direct dense attention only"

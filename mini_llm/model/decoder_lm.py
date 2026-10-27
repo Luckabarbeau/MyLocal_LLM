@@ -184,6 +184,18 @@ class DecoderLanguageModel:
             for i, block in enumerate(self.blocks):
                 block.attention.historical_reader = self.historical_memory
                 block.attention.historical_layer = i
+
+        # The new heads are created AFTER all original parameters to preserve
+        # original RNG initialization and checkpoint array names/shapes.
+        if config.full_history_layers:
+            from mini_llm.ops.full_history_head import FullHistoryHead
+            for layer_idx in config.full_history_layers:
+                self.blocks[layer_idx].full_history_head = FullHistoryHead(
+                    d_model=config.d_model, d_head=config.d_head,
+                    embedding=self.embedding.W, rng=rng,
+                    init_std=config.init_std, rope_base=config.rope_base,
+                    name=f"blocks.{layer_idx}.full_history", dtype=self.dtype,
+                )
     
     def parameters(self):
         """Return all trainable parameters."""
@@ -1069,6 +1081,16 @@ class DecoderLanguageModel:
         working_ids = source[:, h:h+w]
         valid_mask = (None if memory_metadata is None else
                       memory_metadata.get("history_valid_mask"))
+        valid_lengths = (xp.full((batch,), w, dtype=xp.int64)
+                         if memory_metadata is None else xp.asarray(
+                             memory_metadata.get("target_valid_lengths",
+                                                 xp.full((batch,), w, dtype=xp.int64)),
+                             dtype=xp.int64))
+        if valid_lengths.shape != (batch,) or bool(xp.any(
+            (valid_lengths < 0) | (valid_lengths > w)
+        )):
+            raise ValueError("invalid historical_read target_valid_lengths")
+        current_valid = xp.arange(w)[None, :] < valid_lengths[:, None]
         state = self.historical_memory.open(
             source[:, :h], starts, valid_mask, inference=inference
         )
@@ -1082,7 +1104,8 @@ class DecoderLanguageModel:
         )
         return active, {"mode": "historical_read", "working_ids": working_ids,
                         "state": state, "target_slice": (0, w),
-                        "history_valid_starts": starts}
+                        "history_valid_starts": starts,
+                        "current_valid_mask": current_valid}
 
     def _historical_context_backward(self, dactive, cache):
         self.embedding.backward(dactive, {"token_ids": cache["working_ids"]})
@@ -1264,6 +1287,7 @@ class DecoderLanguageModel:
         target_slice = None
         terminal_memory = None
         historical_state = None
+        full_history_current_valid_mask = None
         if self.hierarchical_memory_enabled:
             if position_ids is not None:
                 raise ValueError(
@@ -1288,6 +1312,9 @@ class DecoderLanguageModel:
             terminal_memory = active.terminal_memory
             if self.historical_memory is not None:
                 historical_state = memory_context_cache["state"]
+                full_history_current_valid_mask = memory_context_cache.get(
+                    "current_valid_mask"
+                )
             embed_cache = None
             if finite_trace is not None:
                 finite_trace.append(
@@ -1309,6 +1336,11 @@ class DecoderLanguageModel:
             effective_position_ids = position_ids
             if finite_trace is not None:
                 finite_trace.append(("embedding", xp.all(xp.isfinite(x))))
+
+        # The independent reader requires original token coordinates, even when
+        # the regular attention path replaces positions with prepared RoPE.
+        full_history_positions = (effective_position_ids if
+            self.config.full_history_layers else None)
 
         # 0080BU: validate/index explicit source positions ONCE per active
         # context, then reuse the same Q/K RoPE factors across all deep layers.
@@ -1370,6 +1402,8 @@ class DecoderLanguageModel:
                         block_context_length=block_context_length,
                         block_valid_mask=block_valid_mask,
                         historical_state=historical_state,
+                        full_history_positions=full_history_positions,
+                        full_history_current_valid_mask=full_history_current_valid_mask,
                     )
             elif retain_block and not checkpoint_blocks:
                 if layer_memory_audit is not None:
@@ -1388,6 +1422,8 @@ class DecoderLanguageModel:
                             block_context_length=block_context_length,
                             block_valid_mask=block_valid_mask,
                             historical_state=historical_state,
+                            full_history_positions=full_history_positions,
+                            full_history_current_valid_mask=full_history_current_valid_mask,
                         )
                 except Exception as exc:
                     if layer_memory_audit is not None and (
@@ -1416,6 +1452,8 @@ class DecoderLanguageModel:
                         block_context_length=block_context_length,
                         block_valid_mask=block_valid_mask,
                         historical_state=historical_state,
+                        full_history_positions=full_history_positions,
+                        full_history_current_valid_mask=full_history_current_valid_mask,
                     )
 
         with performance_scope("model.final_norm.forward"):
@@ -1447,6 +1485,8 @@ class DecoderLanguageModel:
             cache["position_ids"] = effective_position_ids
             cache["terminal_memory"] = terminal_memory
             cache["historical_state"] = historical_state
+            cache["full_history_positions"] = full_history_positions
+            cache["full_history_current_valid_mask"] = full_history_current_valid_mask
             cache["attention_allow_mask"] = attention_allow_mask
             cache["block_context_length"] = block_context_length
             cache["block_valid_mask"] = block_valid_mask
@@ -1695,6 +1735,11 @@ class DecoderLanguageModel:
         This is a bounded research path; it never alters committed-context
         hidden states or the standard autoregressive forward implementation.
         """
+        if self.config.full_history_layers:
+            raise NotImplementedError(
+                "shared-context provisional decoding must implement the new "
+                "full-history heads before it is supported"
+            )
         if self.hierarchical_memory_enabled:
             if (self.config.memory_context.integration_mode != "routed_prefix"
                     or any(b.attention.terminal_memory is not None
@@ -1790,6 +1835,10 @@ class DecoderLanguageModel:
             position_ids = cache.pop("position_ids", None)
             terminal_memory = cache.pop("terminal_memory", None)
             historical_state = cache.pop("historical_state", None)
+            full_history_positions = cache.pop("full_history_positions", None)
+            full_history_current_valid_mask = cache.pop(
+                "full_history_current_valid_mask", None
+            )
             attention_allow_mask = cache.pop("attention_allow_mask", None)
             block_context_length = cache.pop("block_context_length", None)
             block_valid_mask = cache.pop("block_valid_mask", None)
@@ -1821,6 +1870,8 @@ class DecoderLanguageModel:
                         block_context_length=block_context_length,
                             block_valid_mask=block_valid_mask,
                             historical_state=historical_state,
+                            full_history_positions=full_history_positions,
+                            full_history_current_valid_mask=full_history_current_valid_mask,
                         )
                 finally:
                     if replay_router is not None:

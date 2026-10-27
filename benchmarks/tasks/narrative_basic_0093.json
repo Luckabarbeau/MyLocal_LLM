@@ -1,0 +1,7 @@
+{
+  "version": 1, "family": "narrative", "tasks": [
+    {"id":"key_drawer", "prompt":"Mira placed the copper key inside the blue drawer. She closed the drawer before leaving the room. When she returned, Mira searched for the key. She", "recall_prompt":"Mira placed the copper key inside the blue drawer. She closed the drawer before leaving the room. The key was in the", "choices":[" red cupboard", " blue drawer", " coat pocket"], "answer":1, "anchors":["Mira", "key", "drawer"]},
+    {"id":"station_lamp", "prompt":"A detective entered the old railway station. The platform was deserted, but a brass lamp was still burning in the ticket office. She approached the window and", "recall_prompt":"A detective entered the old railway station. The platform was deserted, but a brass lamp was still burning in the", "choices":[" waiting room", " ticket office", " train carriage"], "answer":1, "anchors":["detective", "station", "lamp"]},
+    {"id":"village_map", "prompt":"Jonah carried a hand-drawn map as he walked toward the mountain village. A river blocked the northern path, so he followed the trail through the forest. By sunset, he", "recall_prompt":"Jonah carried a hand-drawn map as he walked toward the mountain village. The path he chose led through the", "choices":[" ocean", " forest", " desert"], "answer":1, "anchors":["Jonah", "village", "map"]}
+  ]
+}

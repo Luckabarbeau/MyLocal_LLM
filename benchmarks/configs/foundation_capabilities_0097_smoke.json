@@ -1,0 +1,140 @@
+{
+  "suite_name": "foundation_capabilities_0097_smoke",
+  "version": 1,
+  "output_root": "./benchmarks/results/foundation_capabilities_0097_smoke",
+  "on_error": "raise",
+  "benchmarks": [
+    {
+      "id": "math_ladders_0097",
+      "type": "math",
+      "enabled": true,
+      "every_supervised_tokens": 1000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/math_ladders_0097.json",
+        "scoring": "mean",
+        "task_ids": [
+          "math_ladder_00_s1",
+          "math_ladder_00_s2"
+        ]
+      }
+    },
+    {
+      "id": "logic_ladders_0097",
+      "type": "logic",
+      "enabled": true,
+      "every_supervised_tokens": 1000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/logic_ladders_0097.json",
+        "scoring": "mean",
+        "task_ids": [
+          "logic_queue_00_s1",
+          "logic_queue_00_s2"
+        ]
+      }
+    },
+    {
+      "id": "narrative_ladders_0097",
+      "type": "narrative",
+      "enabled": true,
+      "every_supervised_tokens": 1000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/narrative_ladders_0097.json",
+        "scoring": "mean",
+        "max_new_tokens": 0,
+        "seeds": [],
+        "task_ids": [
+          "narrative_ladder_00_s1",
+          "narrative_ladder_00_s2"
+        ]
+      }
+    },
+    {
+      "id": "terminal_advanced_0097",
+      "type": "terminal",
+      "enabled": true,
+      "every_supervised_tokens": 2000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/terminal_advanced_0097.json",
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy",
+        "max_new_tokens": 16,
+        "task_ids": [
+          "terminal_advanced_show_directory"
+        ]
+      }
+    },
+    {
+      "id": "python_advanced_0097",
+      "type": "python_code",
+      "enabled": true,
+      "every_supervised_tokens": 2000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/python_advanced_0097.json",
+        "run_tests": false,
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy",
+        "max_new_tokens": 48,
+        "task_ids": [
+          "challenge_running_total"
+        ]
+      }
+    },
+    {
+      "id": "cpp_advanced_0097",
+      "type": "cpp_code",
+      "enabled": true,
+      "every_supervised_tokens": 2000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/cpp_advanced_0097.json",
+        "run_tests": false,
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy",
+        "max_new_tokens": 48,
+        "task_ids": [
+          "challenge_gcd_int"
+        ]
+      }
+    },
+    {
+      "id": "reference_advanced_tokens_0097",
+      "type": "reference_continuation",
+      "enabled": true,
+      "every_supervised_tokens": 500000000,
+      "parameters": {
+        "references": "benchmarks/tasks/reference_texts_advanced_0097.json",
+        "top_k_predictions": 10,
+        "max_context": 4096,
+        "generation_tokens": 0,
+        "seeds": [],
+        "cutoffs": [],
+        "reference_ids": [
+          "challenge_python_00"
+        ]
+      }
+    },
+    {
+      "id": "long_retrieval_0097",
+      "type": "long_retrieval",
+      "enabled": true,
+      "every_supervised_tokens": 2000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/long_retrieval_0097.json",
+        "distances": [
+          1000,
+          4000,
+          16000
+        ],
+        "task_ids": [
+          "archive_00"
+        ],
+        "include_counterfactual": false
+      }
+    }
+  ]
+}

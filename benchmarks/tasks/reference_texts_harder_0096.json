@@ -1,0 +1,64 @@
+{
+  "references": [
+    {
+      "id": "theater_timeline",
+      "category": "long_narrative",
+      "text": "Elena left the theater just after the second act, carrying a borrowed umbrella. At the ticket counter she realized she had forgotten her gloves in the balcony. She returned to the balcony, collected the gloves, and then handed the umbrella to the attendant before stepping outside. During the interval, another visitor had reported seeing the umbrella in the coatroom, but that report came from the previous performance. When Elena later returned to retrieve her belongings, the attendant could find the umbrella but not the gloves. Elena checked her own pockets and discovered that she had been carrying the gloves throughout the final act."
+    },
+    {
+      "id": "train_route",
+      "category": "long_narrative",
+      "text": "The morning train was scheduled to depart from Harbor Station and stop at Willow before continuing to Eastfield. An announcement incorrectly directed passengers to Platform Four, but a second announcement corrected it to Platform Two. Nora moved to Platform Two and boarded the train there. It stopped at Willow for ten minutes because a signal was damaged. A passenger said that the train would now skip Eastfield, although the conductor made no such announcement. The train eventually continued to Eastfield and reached its destination later than planned. Nora wrote a diary entry distinguishing the station it departed from, the intermediate stop, and the final destination."
+    },
+    {
+      "id": "inventory_recount",
+      "category": "long_narrative",
+      "text": "The workshop inventory recorded twelve copper fittings on Monday morning. Two fittings were used to repair a pump, and three were transferred to the north storeroom. Later, a delivery brought five additional fittings. The foreman initially announced that only seven fittings remained, forgetting that the delivery had already arrived. The corrected inventory counted twelve fittings in the workshop, with the three transferred fittings stored separately in the north room. The repair team then reserved four workshop fittings for the next morning but did not remove them from the shelf. A final report distinguished physical stock from material that had already been reserved for work."
+    },
+    {
+      "id": "python_state",
+      "category": "code_explanation",
+      "text": "A Python program keeps a dictionary whose keys are student names and whose values are lists of scores. The function add_score creates an empty list when a name is first encountered, then appends the new score. The average function returns None for a missing student or an empty list, rather than dividing by zero. In an early version, the programmer accidentally used one shared default list for every student. The correction was to create a new list separately for each dictionary entry. A unit test added a score for Ada and then checked that Ben's scores remained unchanged. This test specifically detects the earlier aliasing mistake."
+    },
+    {
+      "id": "cpp_vector",
+      "category": "code_explanation",
+      "text": "In C++, a function computes the dot product of two vectors of equal length. It first compares their sizes and throws an invalid_argument exception when they differ. Otherwise, it initializes an accumulator to zero and visits each matching pair of elements. During the loop, the accumulator increases by the product of the two elements. An earlier implementation returned from inside the loop, so it only considered the first pair. Moving the return statement after the loop fixed that problem. Tests then covered empty vectors, vectors containing negative values, and a pair of vectors with mismatched lengths."
+    },
+    {
+      "id": "git_revert",
+      "category": "technical_explanation",
+      "text": "A developer created a temporary Git branch to test a change. After committing the change locally, the developer wanted to remove the effect without rewriting a shared history. The chosen operation was git revert, which creates a new commit that reverses an earlier commit. The team distinguished this from git reset, which can move the current branch pointer and may discard local history depending on the mode. A colleague initially suggested force-pushing the branch, but the developer rejected that advice because the repository was shared. The final documentation emphasized reviewing the diff before performing any history-changing operation."
+    },
+    {
+      "id": "linux_permissions",
+      "category": "technical_explanation",
+      "text": "A Linux script failed with a permission error while opening a configuration file. The file existed, so the problem was not a missing path. The developer used ls -l to inspect its permissions and found that the process account lacked read access. Changing the working directory did not solve that problem. Before modifying permissions, the developer checked the file's ownership and the service account that launched the script. The team later applied a minimal access change rather than granting every user full read and write access. The incident report separated filesystem permissions from interpreter errors and shell quoting errors."
+    },
+    {
+      "id": "prime_correction",
+      "category": "math_reasoning",
+      "text": "A prime number is a positive integer greater than one with exactly two positive divisors: one and itself. The number two is prime even though it is even, while every larger even integer is composite because two divides it. Someone proposed a function that returned false for every even input without first testing whether the input was two. That function failed the example n equals two. The corrected algorithm checks for numbers below two, handles two as a special case, and then rejects other even numbers. It finally tests possible odd divisors up to the square root of the input. A candidate that survives all of those tests is prime."
+    },
+    {
+      "id": "fractions",
+      "category": "math_reasoning",
+      "text": "To compare two positive fractions, one method is to convert them to a common denominator. Consider three quarters and five eighths. Three quarters becomes six eighths, and six eighths is greater than five eighths. A student first claimed that five eighths must be larger because five is greater than three. That reasoning ignored the denominators. The instructor corrected the comparison by explicitly writing the equivalent fractions and by checking their decimal values, 0.75 and 0.625. The conclusion was that three quarters is the larger number, even though its numerator is smaller."
+    },
+    {
+      "id": "flow_conditions",
+      "category": "science_explanation",
+      "text": "A scientist compares water flowing through two straight pipes of equal diameter. For a steady laminar flow of a Newtonian liquid in a fully developed circular pipe, a larger pressure drop across the same length produces a larger volumetric flow rate when viscosity is fixed. The scientist does not assume this relation remains valid for turbulent flow. A colleague initially treats pressure at one point as if it were identical to pressure drop between two points. The scientist corrects the distinction: the governing relation uses a difference in pressure, as well as geometry and viscosity. The final explanation notes the conditions under which the simplified relationship is justified."
+    },
+    {
+      "id": "stellar_sequence",
+      "category": "science_explanation",
+      "text": "A star begins to form when part of a molecular cloud collapses under gravity. Material becomes denser and hotter as it moves toward the growing protostar. The young object is not yet a stable main-sequence star. When the core becomes sufficiently hot and dense, hydrogen fusion can become sustained, and a balance develops between inward gravity and outward pressure. An early explanation incorrectly says that hydrogen fusion causes the initial cloud collapse, reversing the sequence. The revised explanation places gravitational collapse first and sustained core fusion later. Not every young star follows an identical path, since mass and surrounding conditions influence its evolution."
+    },
+    {
+      "id": "hospital_handoff",
+      "category": "long_context_tracking",
+      "text": "During an equipment handoff, a portable monitor moved between three rooms. The morning log listed it in Room A. At noon, a technician carried the monitor to Room B to test a cable. In the afternoon, a second technician moved it to Room C and signed the transfer sheet. A note posted near Room A was not updated and continued to claim the monitor was there. The evening shift consulted both the note and the transfer sheet. Because the signed record was more recent and explicitly documented the move, the supervisor checked Room C and found the monitor. The final handoff corrected the old note and explained why Room C, not Room A or Room B, was the current location."
+    }
+  ]
+}

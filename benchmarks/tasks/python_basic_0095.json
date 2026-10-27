@@ -1,0 +1,725 @@
+{
+  "version": 1,
+  "family": "python",
+  "purpose": "30 short continuations targeting original function, validity, and unit tests.",
+  "tasks": [
+    {
+      "id": "prime",
+      "function": "is_prime",
+      "prompt": "def is_prime(n: int) -> bool:\n    \"\"\"Return whether n is a prime number.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            0
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            2
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            29
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            49
+          ],
+          "expected": false
+        }
+      ]
+    },
+    {
+      "id": "sum_squares",
+      "function": "sum_squares",
+      "prompt": "def sum_squares(values: list[int]) -> int:\n    \"\"\"Sum the squares of integers.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        },
+        {
+          "args": [
+            [
+              -2,
+              3
+            ]
+          ],
+          "expected": 13
+        }
+      ]
+    },
+    {
+      "id": "reverse_string",
+      "function": "reverse_string",
+      "prompt": "def reverse_string(text: str) -> str:\n    \"\"\"Reverse the characters of a string.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "abcd"
+          ],
+          "expected": "dcba"
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expected": ""
+        }
+      ]
+    },
+    {
+      "id": "count_even",
+      "function": "count_even",
+      "prompt": "def count_even(values: list[int]) -> int:\n    \"\"\"Count even numbers in the input.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              1,
+              2,
+              0,
+              5
+            ]
+          ],
+          "expected": 2
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "clamp",
+      "function": "clamp",
+      "prompt": "def clamp(x: int, lo: int, hi: int) -> int:\n    \"\"\"Clamp x into the inclusive interval.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            12,
+            0,
+            9
+          ],
+          "expected": 9
+        },
+        {
+          "args": [
+            -1,
+            0,
+            9
+          ],
+          "expected": 0
+        },
+        {
+          "args": [
+            5,
+            0,
+            9
+          ],
+          "expected": 5
+        }
+      ]
+    },
+    {
+      "id": "factorial",
+      "function": "factorial",
+      "prompt": "def factorial(n: int) -> int:\n    \"\"\"Compute factorial of a nonnegative integer.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            0
+          ],
+          "expected": 1
+        },
+        {
+          "args": [
+            5
+          ],
+          "expected": 120
+        },
+        {
+          "args": [
+            3
+          ],
+          "expected": 6
+        }
+      ]
+    },
+    {
+      "id": "fibonacci",
+      "function": "fibonacci",
+      "prompt": "def fibonacci(n: int) -> int:\n    \"\"\"Return the nth Fibonacci number; F0=0, F1=1.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            0
+          ],
+          "expected": 0
+        },
+        {
+          "args": [
+            1
+          ],
+          "expected": 1
+        },
+        {
+          "args": [
+            7
+          ],
+          "expected": 13
+        }
+      ]
+    },
+    {
+      "id": "is_even",
+      "function": "is_even",
+      "prompt": "def is_even(n: int) -> bool:\n    \"\"\"Return True when the integer is even.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            3
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            10
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "id": "absolute",
+      "function": "absolute",
+      "prompt": "def absolute(n: int) -> int:\n    \"\"\"Return the absolute value of n.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            -4
+          ],
+          "expected": 4
+        },
+        {
+          "args": [
+            0
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "maximum",
+      "function": "maximum",
+      "prompt": "def maximum(values: list[int]) -> int:\n    \"\"\"Return largest number in nonempty list.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              3,
+              -1,
+              8
+            ]
+          ],
+          "expected": 8
+        },
+        {
+          "args": [
+            [
+              5
+            ]
+          ],
+          "expected": 5
+        }
+      ]
+    },
+    {
+      "id": "minimum",
+      "function": "minimum",
+      "prompt": "def minimum(values: list[int]) -> int:\n    \"\"\"Return smallest number in nonempty list.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              3,
+              -1,
+              8
+            ]
+          ],
+          "expected": -1
+        },
+        {
+          "args": [
+            [
+              5
+            ]
+          ],
+          "expected": 5
+        }
+      ]
+    },
+    {
+      "id": "average",
+      "function": "average",
+      "prompt": "def average(values: list[float]) -> float:\n    \"\"\"Return the mean, or zero for empty list.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              2,
+              4,
+              6
+            ]
+          ],
+          "expected": 4
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "count_positive",
+      "function": "count_positive",
+      "prompt": "def count_positive(values: list[int]) -> int:\n    \"\"\"Count positive values.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              -1,
+              0,
+              5,
+              2
+            ]
+          ],
+          "expected": 2
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "sum_list",
+      "function": "sum_list",
+      "prompt": "def sum_list(values: list[int]) -> int:\n    \"\"\"Return sum of list of integers.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "expected": 6
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "unique",
+      "function": "unique",
+      "prompt": "def unique(values: list[int]) -> list[int]:\n    \"\"\"Remove duplicates while preserving input order.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              3,
+              1,
+              3,
+              2,
+              1
+            ]
+          ],
+          "expected": [
+            3,
+            1,
+            2
+          ]
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": []
+        }
+      ]
+    },
+    {
+      "id": "palindrome",
+      "function": "is_palindrome",
+      "prompt": "def is_palindrome(text: str) -> bool:\n    \"\"\"Check whether a string reads the same backward.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "level"
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            "hello"
+          ],
+          "expected": false
+        }
+      ]
+    },
+    {
+      "id": "count_vowels",
+      "function": "count_vowels",
+      "prompt": "def count_vowels(text: str) -> int:\n    \"\"\"Count vowel letters, ignoring letter case.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "Apple"
+          ],
+          "expected": 2
+        },
+        {
+          "args": [
+            "rhythm"
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "count_words",
+      "function": "count_words",
+      "prompt": "def count_words(text: str) -> int:\n    \"\"\"Count words separated by whitespace.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "one two three"
+          ],
+          "expected": 3
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "repeat",
+      "function": "repeat",
+      "prompt": "def repeat(text: str, times: int) -> str:\n    \"\"\"Repeat text the given number of times.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "hi",
+            3
+          ],
+          "expected": "hihihi"
+        },
+        {
+          "args": [
+            "x",
+            0
+          ],
+          "expected": ""
+        }
+      ]
+    },
+    {
+      "id": "last",
+      "function": "last",
+      "prompt": "def last(values: list[int]) -> int:\n    \"\"\"Return last element of a nonempty list.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "expected": 3
+        },
+        {
+          "args": [
+            [
+              9
+            ]
+          ],
+          "expected": 9
+        }
+      ]
+    },
+    {
+      "id": "squared_norm",
+      "function": "squared_norm",
+      "prompt": "def squared_norm(values: list[int]) -> int:\n    \"\"\"Sum squares of vector components.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              3,
+              4
+            ]
+          ],
+          "expected": 25
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": 0
+        }
+      ]
+    },
+    {
+      "id": "prefix_sums",
+      "function": "prefix_sums",
+      "prompt": "def prefix_sums(values: list[int]) -> list[int]:\n    \"\"\"Compute cumulative prefix sums.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "expected": [
+            1,
+            3,
+            6
+          ]
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": []
+        }
+      ]
+    },
+    {
+      "id": "index_of",
+      "function": "index_of",
+      "prompt": "def index_of(values: list[int], target: int) -> int:\n    \"\"\"Return index of first matching value or -1.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              4,
+              5,
+              4
+            ],
+            4
+          ],
+          "expected": 0
+        },
+        {
+          "args": [
+            [
+              4,
+              5
+            ],
+            3
+          ],
+          "expected": -1
+        }
+      ]
+    },
+    {
+      "id": "all_nonnegative",
+      "function": "all_nonnegative",
+      "prompt": "def all_nonnegative(values: list[int]) -> bool:\n    \"\"\"Check whether all numbers are >=0.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              0,
+              2,
+              3
+            ]
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            [
+              1,
+              -1
+            ]
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            []
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "id": "dict_count",
+      "function": "count_letters",
+      "prompt": "def count_letters(text: str) -> dict[str,int]:\n    \"\"\"Return a frequency dictionary for characters.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            "aba"
+          ],
+          "expected": {
+            "a": 2,
+            "b": 1
+          }
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expected": {}
+        }
+      ]
+    },
+    {
+      "id": "merge_sorted",
+      "function": "merge_sorted",
+      "prompt": "def merge_sorted(a: list[int], b: list[int]) -> list[int]:\n    \"\"\"Merge two sorted integer lists into a sorted list.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            [
+              1,
+              3
+            ],
+            [
+              2,
+              4
+            ]
+          ],
+          "expected": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "args": [
+            [
+              1
+            ],
+            []
+          ],
+          "expected": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gcd",
+      "function": "gcd",
+      "prompt": "def gcd(a: int, b: int) -> int:\n    \"\"\"Greatest common divisor of nonnegative integers.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            12,
+            18
+          ],
+          "expected": 6
+        },
+        {
+          "args": [
+            7,
+            3
+          ],
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "id": "leap_year",
+      "function": "is_leap_year",
+      "prompt": "def is_leap_year(year: int) -> bool:\n    \"\"\"Return True for Gregorian leap years.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            2000
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            1900
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            2024
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "id": "celsius",
+      "function": "celsius_to_fahrenheit",
+      "prompt": "def celsius_to_fahrenheit(c: float) -> float:\n    \"\"\"Convert Celsius to Fahrenheit.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            0
+          ],
+          "expected": 32
+        },
+        {
+          "args": [
+            100
+          ],
+          "expected": 212
+        }
+      ]
+    },
+    {
+      "id": "square",
+      "function": "square",
+      "prompt": "def square(x: int) -> int:\n    \"\"\"Return x squared.\"\"\"\n",
+      "tests": [
+        {
+          "args": [
+            -5
+          ],
+          "expected": 25
+        },
+        {
+          "args": [
+            0
+          ],
+          "expected": 0
+        }
+      ]
+    }
+  ]
+}

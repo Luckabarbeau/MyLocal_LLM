@@ -23,7 +23,9 @@ import numpy as np
 from mini_llm.backend import xp, asnumpy
 
 
-SUPPORTED = {'wikitext', 'generation', 'reference_continuation'}
+SUPPORTED = {'wikitext', 'generation', 'reference_continuation',
+             'python_code', 'cpp_code', 'math', 'logic', 'terminal', 'narrative',
+             'long_retrieval'}
 
 
 def _atomic_json(path, payload):
@@ -136,17 +138,51 @@ def _generator(model, tokenizer, *, max_context=None):
     return TextGenerator(model, tokenizer, max_context=min(horizon, int(max_context)) if max_context else horizon)
 
 
+@contextlib.contextmanager
+def _strict_graph_decode_for_generation(required):
+    """Activate native CUDA graphs only for this benchmark, never globally.
+
+    Running the complete capability suite must not accidentally apply strict
+    CUDA-graph constraints to unrelated long-context inference benchmarks.
+    The caller's original environment is restored even if generation fails.
+    """
+    if not required:
+        yield
+        return
+    names = ('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE',
+             'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT')
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ[name] = '1'
+        from mini_llm.native_cuda_graph_decode import enabled, strict
+        if not (enabled() and strict()):
+            raise RuntimeError('native CUDA graph decode requires MINI_LLM_BACKEND=cupy')
+        yield
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42,),
                    strategies=('greedy', 'top-k'), max_new_tokens=128, temperature=0.8,
-                   top_k=40, top_p=1.0, use_kv_cache=True):
+                   top_k=40, top_p=1.0, use_kv_cache=True, max_context=None,
+                   require_native_cuda_graph_decode=False, print_generations=False):
     from benchmarks.evaluate_generation import select_prompts
     from benchmarks.generation_metrics import repetition_metrics, grouped_summary
     suite_path = Path(prompt_suite)
     suite = json.loads(suite_path.read_text(encoding='utf-8'))
     prompts = select_prompts(suite, ','.join(prompt_ids) if prompt_ids else None, None, None)
-    generator = _generator(model, tokenizer)
+    if max_context is not None and int(max_context) <= 0:
+        raise ValueError('generation max_context must be positive')
+    if require_native_cuda_graph_decode and not use_kv_cache:
+        raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     records = []
-    with _preserve_global_rng():
+    with _strict_graph_decode_for_generation(require_native_cuda_graph_decode), _preserve_global_rng():
+        generator = _generator(model, tokenizer, max_context=max_context)
         for prompt in prompts:
             for seed in seeds:
                 for strategy in strategies:
@@ -156,8 +192,19 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
                         top_k=int(top_k) if strategy == 'top-k' else None,
                         top_p=float(top_p) if strategy == 'top-p' else None,
                         seed=int(seed), use_kv_cache=use_kv_cache,
-                        return_token_ids=True,
+                        log_speed=True, return_token_ids=True,
                     )
+                    if require_native_cuda_graph_decode:
+                        state = getattr(generator, '_state', None)
+                        if getattr(state, '_native_cuda_graph', None) is None:
+                            reason = getattr(state, '_native_cuda_graph_failure', None)
+                            raise RuntimeError(
+                                'native CUDA graph decode was requested but not active'
+                                + (f': {reason}' if reason else '')
+                            )
+                    if print_generations:
+                        print('    Generated:\n' + text_out[:1200] +
+                              ('...' if len(text_out) > 1200 else ''), flush=True)
                     raw_ids = timing['generated_token_ids']
                     ended = bool(raw_ids and raw_ids[-1] == timing['eos_token_id'])
                     ids = raw_ids[:-1] if ended else raw_ids
@@ -168,6 +215,12 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
                                      'top_p': top_p if strategy == 'top-p' else None},
                         'generated_text': text_out, 'generated_token_ids': ids,
                         'stopped_on_eos': ended, 'metrics': repetition_metrics(ids),
+                        'timing': {
+                            'total_time_s': timing.get('total_time_s'),
+                            'prefill_time_s': timing.get('prefill_time_s'),
+                            'tokens_per_sec': timing.get('tokens_per_sec'),
+                            'decode_tokens_per_sec': timing.get('decode_tokens_per_sec'),
+                        },
                     })
     # Force recreation at each future checkpoint: cached InferenceModel copies
     # must never accidentally carry earlier step's weights.
@@ -180,19 +233,35 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
 def run_reference(model, tokenizer, *, references, top_k_predictions=10,
                   cutoffs=(0.25, 0.5, 0.75), generation_tokens=128,
                   seeds=(42,), strategy='top-k', temperature=0.8,
-                  top_k=40, use_kv_cache=True, branch_top_k=0, max_context=4096):
+                  top_k=40, use_kv_cache=True, branch_top_k=0, max_context=4096,
+                  reference_ids=None, reference_categories=None):
     from benchmarks.reference_continuation import analyze_reference, load_references
     cases, digest = load_references(references)
+    if reference_ids is not None:
+        requested = set(reference_ids)
+        known = {case['id'] for case in cases}
+        if requested - known:
+            raise ValueError(f'Unknown reference IDs: {sorted(requested - known)}')
+        cases = [case for case in cases if case['id'] in requested]
+    if reference_categories is not None:
+        categories = set(reference_categories)
+        cases = [case for case in cases if case.get('category') in categories]
+    if not cases:
+        raise ValueError('Reference filters selected no texts')
+    if int(generation_tokens) < 0:
+        raise ValueError('generation_tokens must be nonnegative')
     results = []
     with _preserve_global_rng():
         with _plain_4096_model(model):
             # Build a fresh plain-context KV inference model, backed by the
             # live training weights. Do not mutate the frozen training memory
             # configuration outside this context manager.
-            generator = _generator(model, tokenizer, max_context=max_context)
+            generator = (_generator(model, tokenizer, max_context=max_context)
+                         if int(generation_tokens) > 0 else None)
             for ref in cases:
                 result = analyze_reference(
-                    model, tokenizer, ref['text'], top_k=int(top_k_predictions),
+                    model, tokenizer, ref['text'], category=ref.get('category'),
+                    top_k=int(top_k_predictions),
                     max_context=int(max_context), cutoffs=cutoffs,
                     max_new_tokens=int(generation_tokens), generator=generator,
                     seeds=seeds, strategy=strategy, temperature=float(temperature),
@@ -201,8 +270,10 @@ def run_reference(model, tokenizer, *, references, top_k_predictions=10,
                 )
                 results.append({'id': ref['id'], 'category': ref.get('category'), **result})
             del generator
+    from benchmarks.reference_diagnostics import summarize_cases
     gc.collect()
-    return {'references_sha256': digest, 'cases': results}
+    return {'references_sha256': digest, 'cases': results,
+            'diagnostics': summarize_cases(results)}
 
 
 class LiveBenchmarkScheduler:
@@ -245,10 +316,23 @@ class LiveBenchmarkScheduler:
             allowed = {
                 'wikitext': {'data', 'context_length', 'stride', 'document_mode', 'max_tokens'},
                 'generation': {'prompt_suite', 'prompt_ids', 'seeds', 'strategies',
-                               'max_new_tokens', 'temperature', 'top_k', 'top_p', 'use_kv_cache'},
+                               'max_new_tokens', 'temperature', 'top_k', 'top_p', 'use_kv_cache',
+                               'max_context', 'require_native_cuda_graph_decode', 'print_generations'},
                 'reference_continuation': {'references', 'top_k_predictions', 'cutoffs',
                     'generation_tokens', 'seeds', 'strategy', 'temperature', 'top_k',
-                    'use_kv_cache', 'branch_top_k', 'max_context'},
+                    'use_kv_cache', 'branch_top_k', 'max_context',
+                    'reference_ids', 'reference_categories'},
+                'python_code': {'tasks', 'task_ids', 'run_tests', 'max_new_tokens', 'seeds', 'strategy',
+                    'temperature', 'top_k', 'use_kv_cache'},
+                'cpp_code': {'tasks', 'task_ids', 'run_tests', 'max_new_tokens', 'seeds', 'strategy',
+                    'temperature', 'top_k', 'use_kv_cache'},
+                'math': {'tasks', 'task_ids', 'scoring', 'max_context'},
+                'logic': {'tasks', 'task_ids', 'scoring', 'max_context'},
+                'terminal': {'tasks', 'task_ids', 'scoring', 'max_context', 'max_new_tokens', 'seeds',
+                    'strategy', 'temperature', 'top_k', 'use_kv_cache'},
+                'narrative': {'tasks', 'task_ids', 'scoring', 'max_context', 'max_new_tokens', 'seeds',
+                    'strategy', 'temperature', 'top_k', 'use_kv_cache'},
+                'long_retrieval': {'tasks','task_ids','distances','include_counterfactual','max_cases'},
             }[kind]
             if set(params) - allowed:
                 raise ValueError(f'{name} unknown parameters: {sorted(set(params)-allowed)}')
@@ -258,6 +342,8 @@ class LiveBenchmarkScheduler:
                 raise ValueError(f'{name}: generation requires prompt_suite')
             if kind == 'reference_continuation' and 'references' not in params:
                 raise ValueError(f'{name}: reference_continuation requires references')
+            if kind in ('python_code', 'cpp_code', 'math', 'logic', 'terminal', 'narrative', 'long_retrieval') and 'tasks' not in params:
+                raise ValueError(f'{name}: {kind} requires tasks')
             if token_interval is not None:
                 self.next_due[name] = {'unit': 'supervised_tokens',
                     'value': (int(initial_tokens) // amount + 1) * amount}
@@ -276,6 +362,104 @@ class LiveBenchmarkScheduler:
                 scheduler.next_due[name]['value'] = (int(trainer.step) // amount + 1) * amount
         return scheduler
 
+    def run_selected(self, model, *, step, supervised_tokens_total, provenance,
+                     benchmark_ids=None, checkpoint_id=None, checkpoint_path=None):
+        """Evaluate a suite immediately (no scheduling), e.g. saved checkpoints.
+
+        Never writes model weights. A checkpoint-specific directory avoids
+        collisions with existing live training steps and other checkpoints.
+        """
+        selected = set(benchmark_ids) if benchmark_ids else None
+        available = {b['id'] for b in self.suite['benchmarks']}
+        if selected and selected - available:
+            raise ValueError(f'Unknown benchmark IDs: {sorted(selected - available)}')
+        rows = []
+        for benchmark in self.suite['benchmarks']:
+            if selected is not None and benchmark['id'] not in selected:
+                continue
+            if selected is None and not benchmark.get('enabled', True):
+                continue
+            subdir = f'step_{int(step):08d}'
+            if checkpoint_id is not None:
+                subdir += '_checkpoint_' + str(checkpoint_id) + '_suite_' + self.config_hash[:12]
+            dest = self.output_root / subdir / benchmark['id']
+            rows.append(self._evaluate_one(
+                benchmark, model, dest, step=int(step),
+                total=float(supervised_tokens_total), provenance=provenance,
+                checkpoint_id=checkpoint_id, checkpoint_path=checkpoint_path,
+                crossed=None, unit='manual_checkpoint' if checkpoint_id else 'manual_live',
+            ))
+        return rows
+
+    def _evaluate_one(self, benchmark, model, dest, *, step, total, provenance,
+                      crossed, unit, checkpoint_id=None, checkpoint_path=None):
+        name = benchmark['id']
+        if (dest/'result.json').exists():
+            existing = json.loads((dest/'result.json').read_text(encoding='utf-8'))
+            if existing.get('suite_hash') != self.config_hash or existing.get('configuration') != benchmark:
+                raise ValueError(f'Existing benchmark result has different configuration: {dest}')
+            return existing
+        event = {
+            'benchmark_id': name, 'benchmark_type': benchmark['type'],
+            'optimizer_step': step, 'supervised_tokens_total': total,
+            'supervised_tokens_provenance': provenance,
+            'threshold_crossed': crossed, 'threshold_unit': unit,
+            'suite_hash': self.config_hash, 'configuration': benchmark,
+            'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path,
+        }
+        print(f'[0093] Benchmark {name} at step={step} tokens={total:,.0f}', flush=True)
+        before = time.perf_counter()
+        try:
+            kind = benchmark['type']
+            if kind in ('math', 'logic', 'python_code', 'cpp_code', 'terminal', 'narrative'):
+                from benchmarks.capability_suite import (
+                    run_choices, run_code, run_terminal, run_narrative)
+                fn = {'math': lambda m,t,**kw: run_choices(m,t,family='math',**kw),
+                      'logic': lambda m,t,**kw: run_choices(m,t,family='logic',**kw),
+                      'python_code': lambda m,t,**kw: run_code(m,t,language='python',**kw),
+                      'cpp_code': lambda m,t,**kw: run_code(m,t,language='cpp',**kw),
+                      'terminal': run_terminal, 'narrative': run_narrative}[kind]
+            else:
+                if kind == 'long_retrieval':
+                    from benchmarks.long_retrieval_0097 import run_long_retrieval
+                    fn = run_long_retrieval
+                else:
+                    fn = {'wikitext': run_wikitext, 'generation': run_generation,
+                          'reference_continuation': run_reference}[kind]
+            result = fn(model, self.tokenizer, **benchmark.get('parameters', {}))
+            from benchmarks.live_report import (summary_metrics, reference_html,
+                                                rebuild_summary_csv, capability_html)
+            event.update(status='complete', results=result,
+                         summary_metrics=summary_metrics(kind, result),
+                         elapsed_seconds=time.perf_counter() - before)
+            _atomic_json(dest / 'result.json', event)
+            if kind == 'reference_continuation':
+                from benchmarks.live_report import reference_per_case_csv
+                (dest/'report.html').write_text(reference_html(result), encoding='utf-8')
+                reference_per_case_csv(result, dest/'reference_per_case.csv')
+            elif kind in ('python_code', 'cpp_code', 'math', 'logic', 'terminal', 'narrative'):
+                (dest/'report.html').write_text(capability_html(kind, result), encoding='utf-8')
+                from benchmarks.live_report import progression_detail_csv
+                progression_detail_csv(result, dest)
+                if kind == 'narrative':
+                    from benchmarks.live_report import narrative_detail_csv
+                    narrative_detail_csv(result, dest)
+            elif kind == 'long_retrieval':
+                from benchmarks.live_report import long_retrieval_html, long_retrieval_case_csv
+                (dest/'report.html').write_text(long_retrieval_html(result), encoding='utf-8')
+                long_retrieval_case_csv(result, dest/'retrieval_by_case.csv')
+            rebuild_summary_csv(self.output_root, self.config_hash)
+        except Exception as exc:
+            event.update(status='error', error=f'{type(exc).__name__}: {exc}',
+                         elapsed_seconds=time.perf_counter() - before)
+            _atomic_json(dest/'error.json', event)
+            print(f'[0093] Benchmark {name} failed: {exc}', flush=True)
+            if self.suite.get('on_error', 'raise') == 'raise':
+                raise
+        finally:
+            gc.collect()
+        return event
+
     def maybe_run(self, trainer):
         total = float(trainer.supervised_tokens_total)
         for benchmark in self.suite['benchmarks']:
@@ -286,43 +470,11 @@ class LiveBenchmarkScheduler:
             current = int(trainer.step) if due['unit'] == 'optimizer_steps' else total
             if current < due['value']:
                 continue
-            amount = int(benchmark['every_optimizer_steps'] if due['unit'] == 'optimizer_steps'
+            amount = int(benchmark['every_optimizer_steps'] if due['unit']=='optimizer_steps'
                          else benchmark['every_supervised_tokens'])
             crossed = due['value']
-            due['value'] = (int(current) // amount + 1) * amount
+            due['value'] = (int(current)//amount + 1) * amount
             dest = self.output_root / f'step_{trainer.step:08d}' / name
-            if (dest / 'result.json').exists():
-                continue
-            event = {
-                'benchmark_id': name, 'benchmark_type': benchmark['type'],
-                'optimizer_step': int(trainer.step), 'supervised_tokens_total': total,
-                'supervised_tokens_provenance': trainer.supervised_tokens_provenance,
-                'threshold_crossed': crossed, 'threshold_unit': due['unit'],
-                'suite_hash': self.config_hash,
-                'configuration': benchmark,
-            }
-            print(f'[0092] Live benchmark {name} at step={trainer.step} tokens={total:,.0f}', flush=True)
-            before = time.perf_counter()
-            try:
-                kind = benchmark['type']
-                fn = {'wikitext': run_wikitext, 'generation': run_generation,
-                      'reference_continuation': run_reference}[kind]
-                result = fn(trainer.model, self.tokenizer, **benchmark.get('parameters', {}))
-                from benchmarks.live_report import (summary_metrics, reference_html,
-                                                    rebuild_summary_csv)
-                event.update(status='complete', results=result,
-                             summary_metrics=summary_metrics(kind, result),
-                             elapsed_seconds=time.perf_counter() - before)
-                _atomic_json(dest / 'result.json', event)
-                if kind == 'reference_continuation':
-                    (dest / 'report.html').write_text(reference_html(result), encoding='utf-8')
-                rebuild_summary_csv(self.output_root, self.config_hash)
-            except Exception as exc:
-                event.update(status='error', error=f'{type(exc).__name__}: {exc}',
-                             elapsed_seconds=time.perf_counter() - before)
-                _atomic_json(dest / 'error.json', event)
-                print(f'[0092] Benchmark {name} failed: {exc}', flush=True)
-                if self.suite.get('on_error', 'raise') == 'raise':
-                    raise
-            finally:
-                gc.collect()
+            self._evaluate_one(benchmark, trainer.model, dest, step=int(trainer.step),
+                               total=total, provenance=trainer.supervised_tokens_provenance,
+                               crossed=crossed, unit=due['unit'])

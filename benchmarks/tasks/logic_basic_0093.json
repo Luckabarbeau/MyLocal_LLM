@@ -1,0 +1,9 @@
+{
+  "version": 1, "family": "logic", "tasks": [
+    {"id":"comparison", "prompt":"A box has 5 red balls and 2 blue balls. There are more", "choices":[" blue balls", " red balls"], "answer":1},
+    {"id":"transitivity", "prompt":"If Alice is taller than Bob and Bob is taller than Carol, then the tallest is", "choices":[" Alice", " Bob", " Carol"], "answer":0},
+    {"id":"before_after", "prompt":"The train arrives before the bus, and the bus arrives before the taxi. The last to arrive is the", "choices":[" train", " bus", " taxi"], "answer":2},
+    {"id":"containment", "prompt":"Every robin is a bird. A robin is therefore a", "choices":[" fish", " bird", " tree"], "answer":1},
+    {"id":"exclusion", "prompt":"Mina has exactly three coins. She gives one away and receives none. She now has", "choices":[" two coins", " three coins", " four coins"], "answer":0}
+  ]
+}

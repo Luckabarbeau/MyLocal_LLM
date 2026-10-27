@@ -1,0 +1,2707 @@
+{
+  "version": 1,
+  "family": "math",
+  "purpose": "30 scenarios, 6 steps each: exact arithmetic through expert modular and large-integer operations.",
+  "tasks": [
+    {
+      "id": "math_ladder_00_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_00",
+      "stage": 1,
+      "prompt": "The sum of 31 and 13 equals",
+      "choices": [
+        " 45",
+        " 44",
+        " 43",
+        " 47"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_00_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_00",
+      "stage": 2,
+      "prompt": "The exact product of 31 and 13 equals",
+      "choices": [
+        " 434",
+        " 416",
+        " 403",
+        " 402"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_00_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_00",
+      "stage": 3,
+      "prompt": "For a=31 and b=13, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 448",
+        " 445",
+        " 434",
+        " 447"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_00_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_00",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (31 ** 22) mod 97 equals",
+      "choices": [
+        " 54",
+        " 55",
+        " 56",
+        " 57"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_00_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_00",
+      "stage": 5,
+      "prompt": "For a=31 and n=250, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 8696",
+        " 8695",
+        " 8697",
+        " 8700"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_00_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_00",
+      "stage": 6,
+      "prompt": "The exact integer value of 403*1000003 + 37*31^2 + 13^3 is",
+      "choices": [
+        " 403038962",
+        " 403038964",
+        " 403038963",
+        " 403038973"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_01_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_01",
+      "stage": 1,
+      "prompt": "The sum of 42 and 20 equals",
+      "choices": [
+        " 63",
+        " 61",
+        " 62",
+        " 65"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_01_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_01",
+      "stage": 2,
+      "prompt": "The exact product of 42 and 20 equals",
+      "choices": [
+        " 882",
+        " 860",
+        " 839",
+        " 840"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_01_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_01",
+      "stage": 3,
+      "prompt": "For a=42 and b=20, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 902",
+        " 903",
+        " 900",
+        " 882"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_01_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_01",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (42 ** 29) mod 101 equals",
+      "choices": [
+        " 30",
+        " 29",
+        " 31",
+        " 32"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_01_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_01",
+      "stage": 5,
+      "prompt": "For a=42 and n=251, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 8196",
+        " 8197",
+        " 8195",
+        " 8200"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_01_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_01",
+      "stage": 6,
+      "prompt": "The exact integer value of 840*1000003 + 37*42^2 + 20^3 is",
+      "choices": [
+        " 840075787",
+        " 840075789",
+        " 840075798",
+        " 840075788"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_02_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_02",
+      "stage": 1,
+      "prompt": "The sum of 53 and 27 equals",
+      "choices": [
+        " 81",
+        " 79",
+        " 83",
+        " 80"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_02_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_02",
+      "stage": 2,
+      "prompt": "The exact product of 53 and 27 equals",
+      "choices": [
+        " 1431",
+        " 1484",
+        " 1458",
+        " 1430"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_02_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_02",
+      "stage": 3,
+      "prompt": "For a=53 and b=27, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 1512",
+        " 1511",
+        " 1509",
+        " 1484"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_02_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_02",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (53 ** 36) mod 127 equals",
+      "choices": [
+        " 3",
+        " 4",
+        " 2",
+        " 5"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_02_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_02",
+      "stage": 5,
+      "prompt": "For a=53 and n=252, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 4249",
+        " 4250",
+        " 4253",
+        " 4248"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_02_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_02",
+      "stage": 6,
+      "prompt": "The exact integer value of 1431*1000003 + 37*53^2 + 27^3 is",
+      "choices": [
+        " 1431127909",
+        " 1431127908",
+        " 1431127910",
+        " 1431127919"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_03_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_03",
+      "stage": 1,
+      "prompt": "The sum of 64 and 34 equals",
+      "choices": [
+        " 98",
+        " 99",
+        " 97",
+        " 101"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_03_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_03",
+      "stage": 2,
+      "prompt": "The exact product of 64 and 34 equals",
+      "choices": [
+        " 2240",
+        " 2176",
+        " 2210",
+        " 2175"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_03_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_03",
+      "stage": 3,
+      "prompt": "For a=64 and b=34, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 2275",
+        " 2272",
+        " 2274",
+        " 2240"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_03_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_03",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (64 ** 43) mod 257 equals",
+      "choices": [
+        " 5",
+        " 6",
+        " 7",
+        " 4"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_03_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_03",
+      "stage": 5,
+      "prompt": "For a=64 and n=253, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 3704",
+        " 3705",
+        " 3706",
+        " 3709"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_03_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_03",
+      "stage": 6,
+      "prompt": "The exact integer value of 2176*1000003 + 37*64^2 + 34^3 is",
+      "choices": [
+        " 2176197383",
+        " 2176197384",
+        " 2176197385",
+        " 2176197394"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_04_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_04",
+      "stage": 1,
+      "prompt": "The sum of 75 and 41 equals",
+      "choices": [
+        " 117",
+        " 116",
+        " 115",
+        " 119"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_04_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_04",
+      "stage": 2,
+      "prompt": "The exact product of 75 and 41 equals",
+      "choices": [
+        " 3150",
+        " 3116",
+        " 3075",
+        " 3074"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_04_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_04",
+      "stage": 3,
+      "prompt": "For a=75 and b=41, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 3192",
+        " 3189",
+        " 3150",
+        " 3191"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_04_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_04",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (75 ** 50) mod 1009 equals",
+      "choices": [
+        " 663",
+        " 664",
+        " 665",
+        " 666"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_04_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_04",
+      "stage": 5,
+      "prompt": "For a=75 and n=254, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 119",
+        " 118",
+        " 120",
+        " 123"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_04_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_04",
+      "stage": 6,
+      "prompt": "The exact integer value of 3075*1000003 + 37*75^2 + 41^3 is",
+      "choices": [
+        " 3075286270",
+        " 3075286272",
+        " 3075286271",
+        " 3075286281"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_05_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_05",
+      "stage": 1,
+      "prompt": "The sum of 86 and 48 equals",
+      "choices": [
+        " 135",
+        " 133",
+        " 134",
+        " 137"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_05_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_05",
+      "stage": 2,
+      "prompt": "The exact product of 86 and 48 equals",
+      "choices": [
+        " 4214",
+        " 4176",
+        " 4127",
+        " 4128"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_05_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_05",
+      "stage": 3,
+      "prompt": "For a=86 and b=48, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 4262",
+        " 4263",
+        " 4260",
+        " 4214"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_05_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_05",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (86 ** 57) mod 97 equals",
+      "choices": [
+        " 90",
+        " 89",
+        " 91",
+        " 92"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_05_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_05",
+      "stage": 5,
+      "prompt": "For a=86 and n=255, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 3670",
+        " 3671",
+        " 3669",
+        " 3674"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_05_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_05",
+      "stage": 6,
+      "prompt": "The exact integer value of 4128*1000003 + 37*86^2 + 48^3 is",
+      "choices": [
+        " 4128396627",
+        " 4128396629",
+        " 4128396638",
+        " 4128396628"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_06_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_06",
+      "stage": 1,
+      "prompt": "The sum of 97 and 55 equals",
+      "choices": [
+        " 153",
+        " 151",
+        " 155",
+        " 152"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_06_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_06",
+      "stage": 2,
+      "prompt": "The exact product of 97 and 55 equals",
+      "choices": [
+        " 5335",
+        " 5432",
+        " 5390",
+        " 5334"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_06_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_06",
+      "stage": 3,
+      "prompt": "For a=97 and b=55, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 5488",
+        " 5487",
+        " 5485",
+        " 5432"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_06_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_06",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (97 ** 64) mod 101 equals",
+      "choices": [
+        " 81",
+        " 82",
+        " 80",
+        " 83"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_06_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_06",
+      "stage": 5,
+      "prompt": "For a=97 and n=256, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 1269",
+        " 1270",
+        " 1273",
+        " 1268"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_06_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_06",
+      "stage": 6,
+      "prompt": "The exact integer value of 5335*1000003 + 37*97^2 + 55^3 is",
+      "choices": [
+        " 5335530513",
+        " 5335530512",
+        " 5335530514",
+        " 5335530523"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_07_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_07",
+      "stage": 1,
+      "prompt": "The sum of 108 and 62 equals",
+      "choices": [
+        " 170",
+        " 171",
+        " 169",
+        " 173"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_07_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_07",
+      "stage": 2,
+      "prompt": "The exact product of 108 and 62 equals",
+      "choices": [
+        " 6804",
+        " 6696",
+        " 6758",
+        " 6695"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_07_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_07",
+      "stage": 3,
+      "prompt": "For a=108 and b=62, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 6867",
+        " 6864",
+        " 6866",
+        " 6804"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_07_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_07",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (108 ** 71) mod 127 equals",
+      "choices": [
+        " 21",
+        " 22",
+        " 23",
+        " 20"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_07_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_07",
+      "stage": 5,
+      "prompt": "For a=108 and n=257, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 6423",
+        " 6424",
+        " 6425",
+        " 6428"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_07_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_07",
+      "stage": 6,
+      "prompt": "The exact integer value of 6696*1000003 + 37*108^2 + 62^3 is",
+      "choices": [
+        " 6696689983",
+        " 6696689984",
+        " 6696689985",
+        " 6696689994"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_08_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_08",
+      "stage": 1,
+      "prompt": "The sum of 119 and 69 equals",
+      "choices": [
+        " 189",
+        " 188",
+        " 187",
+        " 191"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_08_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_08",
+      "stage": 2,
+      "prompt": "The exact product of 119 and 69 equals",
+      "choices": [
+        " 8330",
+        " 8280",
+        " 8211",
+        " 8210"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_08_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_08",
+      "stage": 3,
+      "prompt": "For a=119 and b=69, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 8400",
+        " 8397",
+        " 8330",
+        " 8399"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_08_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_08",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (119 ** 78) mod 257 equals",
+      "choices": [
+        " 59",
+        " 60",
+        " 61",
+        " 62"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_08_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_08",
+      "stage": 5,
+      "prompt": "For a=119 and n=258, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 9375",
+        " 9374",
+        " 9376",
+        " 9379"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_08_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_08",
+      "stage": 6,
+      "prompt": "The exact integer value of 8211*1000003 + 37*119^2 + 69^3 is",
+      "choices": [
+        " 8211877098",
+        " 8211877100",
+        " 8211877099",
+        " 8211877109"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_09_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_09",
+      "stage": 1,
+      "prompt": "The sum of 130 and 76 equals",
+      "choices": [
+        " 207",
+        " 205",
+        " 206",
+        " 209"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_09_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_09",
+      "stage": 2,
+      "prompt": "The exact product of 130 and 76 equals",
+      "choices": [
+        " 10010",
+        " 9956",
+        " 9879",
+        " 9880"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_09_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_09",
+      "stage": 3,
+      "prompt": "For a=130 and b=76, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 10086",
+        " 10087",
+        " 10084",
+        " 10010"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_09_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_09",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (130 ** 85) mod 1009 equals",
+      "choices": [
+        " 820",
+        " 819",
+        " 821",
+        " 822"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_09_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_09",
+      "stage": 5,
+      "prompt": "For a=130 and n=259, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 7013",
+        " 7014",
+        " 7012",
+        " 7017"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_09_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_09",
+      "stage": 6,
+      "prompt": "The exact integer value of 9880*1000003 + 37*130^2 + 76^3 is",
+      "choices": [
+        " 9881093915",
+        " 9881093917",
+        " 9881093926",
+        " 9881093916"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_10_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_10",
+      "stage": 1,
+      "prompt": "The sum of 141 and 83 equals",
+      "choices": [
+        " 225",
+        " 223",
+        " 227",
+        " 224"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_10_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_10",
+      "stage": 2,
+      "prompt": "The exact product of 141 and 83 equals",
+      "choices": [
+        " 11703",
+        " 11844",
+        " 11786",
+        " 11702"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_10_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_10",
+      "stage": 3,
+      "prompt": "For a=141 and b=83, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 11928",
+        " 11927",
+        " 11925",
+        " 11844"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_10_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_10",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (141 ** 92) mod 97 equals",
+      "choices": [
+        " 92",
+        " 93",
+        " 91",
+        " 94"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_10_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_10",
+      "stage": 5,
+      "prompt": "For a=141 and n=260, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2880",
+        " 2881",
+        " 2884",
+        " 2879"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_10_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_10",
+      "stage": 6,
+      "prompt": "The exact integer value of 11703*1000003 + 37*141^2 + 83^3 is",
+      "choices": [
+        " 11704342493",
+        " 11704342492",
+        " 11704342494",
+        " 11704342503"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_11_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_11",
+      "stage": 1,
+      "prompt": "The sum of 152 and 90 equals",
+      "choices": [
+        " 242",
+        " 243",
+        " 241",
+        " 245"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_11_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_11",
+      "stage": 2,
+      "prompt": "The exact product of 152 and 90 equals",
+      "choices": [
+        " 13832",
+        " 13680",
+        " 13770",
+        " 13679"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_11_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_11",
+      "stage": 3,
+      "prompt": "For a=152 and b=90, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 13923",
+        " 13920",
+        " 13922",
+        " 13832"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_11_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_11",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (152 ** 99) mod 101 equals",
+      "choices": [
+        " 3",
+        " 4",
+        " 5",
+        " 2"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_11_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_11",
+      "stage": 5,
+      "prompt": "For a=152 and n=261, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 7168",
+        " 7169",
+        " 7170",
+        " 7173"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_11_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_11",
+      "stage": 6,
+      "prompt": "The exact integer value of 13680*1000003 + 37*152^2 + 90^3 is",
+      "choices": [
+        " 13681624887",
+        " 13681624888",
+        " 13681624889",
+        " 13681624898"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_12_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_12",
+      "stage": 1,
+      "prompt": "The sum of 163 and 97 equals",
+      "choices": [
+        " 261",
+        " 260",
+        " 259",
+        " 263"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_12_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_12",
+      "stage": 2,
+      "prompt": "The exact product of 163 and 97 equals",
+      "choices": [
+        " 15974",
+        " 15908",
+        " 15811",
+        " 15810"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_12_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_12",
+      "stage": 3,
+      "prompt": "For a=163 and b=97, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 16072",
+        " 16069",
+        " 15974",
+        " 16071"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_12_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_12",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (163 ** 106) mod 127 equals",
+      "choices": [
+        " 49",
+        " 50",
+        " 51",
+        " 52"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_12_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_12",
+      "stage": 5,
+      "prompt": "For a=163 and n=262, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 6805",
+        " 6804",
+        " 6806",
+        " 6809"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_12_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_12",
+      "stage": 6,
+      "prompt": "The exact integer value of 15811*1000003 + 37*163^2 + 97^3 is",
+      "choices": [
+        " 15812943158",
+        " 15812943160",
+        " 15812943159",
+        " 15812943169"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_13_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_13",
+      "stage": 1,
+      "prompt": "The sum of 174 and 104 equals",
+      "choices": [
+        " 279",
+        " 277",
+        " 278",
+        " 281"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_13_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_13",
+      "stage": 2,
+      "prompt": "The exact product of 174 and 104 equals",
+      "choices": [
+        " 18270",
+        " 18200",
+        " 18095",
+        " 18096"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_13_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_13",
+      "stage": 3,
+      "prompt": "For a=174 and b=104, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 18374",
+        " 18375",
+        " 18372",
+        " 18270"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_13_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_13",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (174 ** 113) mod 257 equals",
+      "choices": [
+        " 108",
+        " 107",
+        " 109",
+        " 110"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_13_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_13",
+      "stage": 5,
+      "prompt": "For a=174 and n=263, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 5337",
+        " 5338",
+        " 5336",
+        " 5341"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_13_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_13",
+      "stage": 6,
+      "prompt": "The exact integer value of 18096*1000003 + 37*174^2 + 104^3 is",
+      "choices": [
+        " 18098299363",
+        " 18098299365",
+        " 18098299374",
+        " 18098299364"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_14_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_14",
+      "stage": 1,
+      "prompt": "The sum of 185 and 111 equals",
+      "choices": [
+        " 297",
+        " 295",
+        " 299",
+        " 296"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_14_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_14",
+      "stage": 2,
+      "prompt": "The exact product of 185 and 111 equals",
+      "choices": [
+        " 20535",
+        " 20720",
+        " 20646",
+        " 20534"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_14_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_14",
+      "stage": 3,
+      "prompt": "For a=185 and b=111, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 20832",
+        " 20831",
+        " 20829",
+        " 20720"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_14_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_14",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (185 ** 120) mod 1009 equals",
+      "choices": [
+        " 432",
+        " 433",
+        " 431",
+        " 434"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_14_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_14",
+      "stage": 5,
+      "prompt": "For a=185 and n=264, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2992",
+        " 2993",
+        " 2996",
+        " 2991"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_14_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_14",
+      "stage": 6,
+      "prompt": "The exact integer value of 20535*1000003 + 37*185^2 + 111^3 is",
+      "choices": [
+        " 20537695561",
+        " 20537695560",
+        " 20537695562",
+        " 20537695571"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_15_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_15",
+      "stage": 1,
+      "prompt": "The sum of 196 and 118 equals",
+      "choices": [
+        " 314",
+        " 315",
+        " 313",
+        " 317"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_15_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_15",
+      "stage": 2,
+      "prompt": "The exact product of 196 and 118 equals",
+      "choices": [
+        " 23324",
+        " 23128",
+        " 23246",
+        " 23127"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_15_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_15",
+      "stage": 3,
+      "prompt": "For a=196 and b=118, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 23443",
+        " 23440",
+        " 23442",
+        " 23324"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_15_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_15",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (196 ** 127) mod 97 equals",
+      "choices": [
+        " 67",
+        " 68",
+        " 69",
+        " 66"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_15_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_15",
+      "stage": 5,
+      "prompt": "For a=196 and n=265, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 6647",
+        " 6648",
+        " 6649",
+        " 6652"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_15_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_15",
+      "stage": 6,
+      "prompt": "The exact integer value of 23128*1000003 + 37*196^2 + 118^3 is",
+      "choices": [
+        " 23131133807",
+        " 23131133808",
+        " 23131133809",
+        " 23131133818"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_16_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_16",
+      "stage": 1,
+      "prompt": "The sum of 207 and 125 equals",
+      "choices": [
+        " 333",
+        " 332",
+        " 331",
+        " 335"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_16_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_16",
+      "stage": 2,
+      "prompt": "The exact product of 207 and 125 equals",
+      "choices": [
+        " 26082",
+        " 26000",
+        " 25875",
+        " 25874"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_16_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_16",
+      "stage": 3,
+      "prompt": "For a=207 and b=125, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 26208",
+        " 26205",
+        " 26082",
+        " 26207"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_16_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_16",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (207 ** 134) mod 101 equals",
+      "choices": [
+        " 88",
+        " 89",
+        " 90",
+        " 91"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_16_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_16",
+      "stage": 5,
+      "prompt": "For a=207 and n=266, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 9888",
+        " 9887",
+        " 9889",
+        " 9892"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_16_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_16",
+      "stage": 6,
+      "prompt": "The exact integer value of 25875*1000003 + 37*207^2 + 125^3 is",
+      "choices": [
+        " 25878616162",
+        " 25878616164",
+        " 25878616163",
+        " 25878616173"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_17_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_17",
+      "stage": 1,
+      "prompt": "The sum of 218 and 132 equals",
+      "choices": [
+        " 351",
+        " 349",
+        " 350",
+        " 353"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_17_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_17",
+      "stage": 2,
+      "prompt": "The exact product of 218 and 132 equals",
+      "choices": [
+        " 28994",
+        " 28908",
+        " 28775",
+        " 28776"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_17_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_17",
+      "stage": 3,
+      "prompt": "For a=218 and b=132, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 29126",
+        " 29127",
+        " 29124",
+        " 28994"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_17_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_17",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (218 ** 141) mod 127 equals",
+      "choices": [
+        " 103",
+        " 102",
+        " 104",
+        " 105"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_17_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_17",
+      "stage": 5,
+      "prompt": "For a=218 and n=267, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2973",
+        " 2974",
+        " 2972",
+        " 2977"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_17_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_17",
+      "stage": 6,
+      "prompt": "The exact integer value of 28776*1000003 + 37*218^2 + 132^3 is",
+      "choices": [
+        " 28780144683",
+        " 28780144685",
+        " 28780144694",
+        " 28780144684"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_18_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_18",
+      "stage": 1,
+      "prompt": "The sum of 229 and 139 equals",
+      "choices": [
+        " 369",
+        " 367",
+        " 371",
+        " 368"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_18_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_18",
+      "stage": 2,
+      "prompt": "The exact product of 229 and 139 equals",
+      "choices": [
+        " 31831",
+        " 32060",
+        " 31970",
+        " 31830"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_18_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_18",
+      "stage": 3,
+      "prompt": "For a=229 and b=139, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 32200",
+        " 32199",
+        " 32197",
+        " 32060"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_18_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_18",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (229 ** 148) mod 257 equals",
+      "choices": [
+        " 214",
+        " 215",
+        " 213",
+        " 216"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_18_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_18",
+      "stage": 5,
+      "prompt": "For a=229 and n=268, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2761",
+        " 2762",
+        " 2765",
+        " 2760"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_18_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_18",
+      "stage": 6,
+      "prompt": "The exact integer value of 31831*1000003 + 37*229^2 + 139^3 is",
+      "choices": [
+        " 31835721429",
+        " 31835721428",
+        " 31835721430",
+        " 31835721439"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_19_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_19",
+      "stage": 1,
+      "prompt": "The sum of 240 and 146 equals",
+      "choices": [
+        " 386",
+        " 387",
+        " 385",
+        " 389"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_19_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_19",
+      "stage": 2,
+      "prompt": "The exact product of 240 and 146 equals",
+      "choices": [
+        " 35280",
+        " 35040",
+        " 35186",
+        " 35039"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_19_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_19",
+      "stage": 3,
+      "prompt": "For a=240 and b=146, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 35427",
+        " 35424",
+        " 35426",
+        " 35280"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_19_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_19",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (240 ** 155) mod 1009 equals",
+      "choices": [
+        " 567",
+        " 568",
+        " 569",
+        " 566"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_19_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_19",
+      "stage": 5,
+      "prompt": "For a=240 and n=269, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2841",
+        " 2842",
+        " 2843",
+        " 2846"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_19_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_19",
+      "stage": 6,
+      "prompt": "The exact integer value of 35040*1000003 + 37*240^2 + 146^3 is",
+      "choices": [
+        " 35045348455",
+        " 35045348456",
+        " 35045348457",
+        " 35045348466"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_20_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_20",
+      "stage": 1,
+      "prompt": "The sum of 251 and 153 equals",
+      "choices": [
+        " 405",
+        " 404",
+        " 403",
+        " 407"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_20_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_20",
+      "stage": 2,
+      "prompt": "The exact product of 251 and 153 equals",
+      "choices": [
+        " 38654",
+        " 38556",
+        " 38403",
+        " 38402"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_20_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_20",
+      "stage": 3,
+      "prompt": "For a=251 and b=153, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 38808",
+        " 38805",
+        " 38654",
+        " 38807"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_20_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_20",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (251 ** 162) mod 97 equals",
+      "choices": [
+        " 18",
+        " 19",
+        " 20",
+        " 21"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_20_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_20",
+      "stage": 5,
+      "prompt": "For a=251 and n=270, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 3457",
+        " 3456",
+        " 3458",
+        " 3461"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_20_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_20",
+      "stage": 6,
+      "prompt": "The exact integer value of 38403*1000003 + 37*251^2 + 153^3 is",
+      "choices": [
+        " 38409027822",
+        " 38409027824",
+        " 38409027823",
+        " 38409027833"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_21_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_21",
+      "stage": 1,
+      "prompt": "The sum of 262 and 160 equals",
+      "choices": [
+        " 423",
+        " 421",
+        " 422",
+        " 425"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_21_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_21",
+      "stage": 2,
+      "prompt": "The exact product of 262 and 160 equals",
+      "choices": [
+        " 42182",
+        " 42080",
+        " 41919",
+        " 41920"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_21_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_21",
+      "stage": 3,
+      "prompt": "For a=262 and b=160, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 42342",
+        " 42343",
+        " 42340",
+        " 42182"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_21_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_21",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (262 ** 169) mod 101 equals",
+      "choices": [
+        " 70",
+        " 69",
+        " 71",
+        " 72"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_21_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_21",
+      "stage": 5,
+      "prompt": "For a=262 and n=271, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 1525",
+        " 1526",
+        " 1524",
+        " 1529"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_21_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_21",
+      "stage": 6,
+      "prompt": "The exact integer value of 41920*1000003 + 37*262^2 + 160^3 is",
+      "choices": [
+        " 41926761587",
+        " 41926761589",
+        " 41926761598",
+        " 41926761588"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_22_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_22",
+      "stage": 1,
+      "prompt": "The sum of 273 and 167 equals",
+      "choices": [
+        " 441",
+        " 439",
+        " 443",
+        " 440"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_22_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_22",
+      "stage": 2,
+      "prompt": "The exact product of 273 and 167 equals",
+      "choices": [
+        " 45591",
+        " 45864",
+        " 45758",
+        " 45590"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_22_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_22",
+      "stage": 3,
+      "prompt": "For a=273 and b=167, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 46032",
+        " 46031",
+        " 46029",
+        " 45864"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_22_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_22",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (273 ** 176) mod 127 equals",
+      "choices": [
+        " 108",
+        " 109",
+        " 107",
+        " 110"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_22_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_22",
+      "stage": 5,
+      "prompt": "For a=273 and n=272, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 616",
+        " 617",
+        " 620",
+        " 615"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_22_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_22",
+      "stage": 6,
+      "prompt": "The exact integer value of 45591*1000003 + 37*273^2 + 167^3 is",
+      "choices": [
+        " 45598551809",
+        " 45598551808",
+        " 45598551810",
+        " 45598551819"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_23_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_23",
+      "stage": 1,
+      "prompt": "The sum of 284 and 174 equals",
+      "choices": [
+        " 458",
+        " 459",
+        " 457",
+        " 461"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_23_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_23",
+      "stage": 2,
+      "prompt": "The exact product of 284 and 174 equals",
+      "choices": [
+        " 49700",
+        " 49416",
+        " 49590",
+        " 49415"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_23_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_23",
+      "stage": 3,
+      "prompt": "For a=284 and b=174, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 49875",
+        " 49872",
+        " 49874",
+        " 49700"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_23_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_23",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (284 ** 183) mod 257 equals",
+      "choices": [
+        " 133",
+        " 134",
+        " 135",
+        " 132"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_23_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_23",
+      "stage": 5,
+      "prompt": "For a=284 and n=273, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 977",
+        " 978",
+        " 979",
+        " 982"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_23_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_23",
+      "stage": 6,
+      "prompt": "The exact integer value of 49416*1000003 + 37*284^2 + 174^3 is",
+      "choices": [
+        " 49424400543",
+        " 49424400544",
+        " 49424400545",
+        " 49424400554"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_24_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_24",
+      "stage": 1,
+      "prompt": "The sum of 295 and 181 equals",
+      "choices": [
+        " 477",
+        " 476",
+        " 475",
+        " 479"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_24_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_24",
+      "stage": 2,
+      "prompt": "The exact product of 295 and 181 equals",
+      "choices": [
+        " 53690",
+        " 53576",
+        " 53395",
+        " 53394"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_24_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_24",
+      "stage": 3,
+      "prompt": "For a=295 and b=181, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 53872",
+        " 53869",
+        " 53690",
+        " 53871"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_24_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_24",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (295 ** 190) mod 1009 equals",
+      "choices": [
+        " 508",
+        " 509",
+        " 510",
+        " 511"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_24_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_24",
+      "stage": 5,
+      "prompt": "For a=295 and n=274, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 9510",
+        " 9509",
+        " 9511",
+        " 9514"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_24_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_24",
+      "stage": 6,
+      "prompt": "The exact integer value of 53395*1000003 + 37*295^2 + 181^3 is",
+      "choices": [
+        " 53404309850",
+        " 53404309852",
+        " 53404309851",
+        " 53404309861"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_25_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_25",
+      "stage": 1,
+      "prompt": "The sum of 306 and 188 equals",
+      "choices": [
+        " 495",
+        " 493",
+        " 494",
+        " 497"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_25_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_25",
+      "stage": 2,
+      "prompt": "The exact product of 306 and 188 equals",
+      "choices": [
+        " 57834",
+        " 57716",
+        " 57527",
+        " 57528"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_25_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_25",
+      "stage": 3,
+      "prompt": "For a=306 and b=188, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 58022",
+        " 58023",
+        " 58020",
+        " 57834"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_25_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_25",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (306 ** 197) mod 97 equals",
+      "choices": [
+        " 60",
+        " 59",
+        " 61",
+        " 62"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_25_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_25",
+      "stage": 5,
+      "prompt": "For a=306 and n=275, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 9843",
+        " 9844",
+        " 9842",
+        " 9847"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_25_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_25",
+      "stage": 6,
+      "prompt": "The exact integer value of 57528*1000003 + 37*306^2 + 188^3 is",
+      "choices": [
+        " 57538281787",
+        " 57538281789",
+        " 57538281798",
+        " 57538281788"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_26_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_26",
+      "stage": 1,
+      "prompt": "The sum of 317 and 195 equals",
+      "choices": [
+        " 513",
+        " 511",
+        " 515",
+        " 512"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_26_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_26",
+      "stage": 2,
+      "prompt": "The exact product of 317 and 195 equals",
+      "choices": [
+        " 61815",
+        " 62132",
+        " 62010",
+        " 61814"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_26_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_26",
+      "stage": 3,
+      "prompt": "For a=317 and b=195, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 62328",
+        " 62327",
+        " 62325",
+        " 62132"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_26_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_26",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (317 ** 204) mod 101 equals",
+      "choices": [
+        " 37",
+        " 38",
+        " 36",
+        " 39"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_26_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_26",
+      "stage": 5,
+      "prompt": "For a=317 and n=276, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 2232",
+        " 2233",
+        " 2236",
+        " 2231"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_26_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_26",
+      "stage": 6,
+      "prompt": "The exact integer value of 61815*1000003 + 37*317^2 + 195^3 is",
+      "choices": [
+        " 61826318413",
+        " 61826318412",
+        " 61826318414",
+        " 61826318423"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_27_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_27",
+      "stage": 1,
+      "prompt": "The sum of 328 and 202 equals",
+      "choices": [
+        " 530",
+        " 531",
+        " 529",
+        " 533"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_27_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_27",
+      "stage": 2,
+      "prompt": "The exact product of 328 and 202 equals",
+      "choices": [
+        " 66584",
+        " 66256",
+        " 66458",
+        " 66255"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_27_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_27",
+      "stage": 3,
+      "prompt": "For a=328 and b=202, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 66787",
+        " 66784",
+        " 66786",
+        " 66584"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_27_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_27",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (328 ** 211) mod 127 equals",
+      "choices": [
+        " 45",
+        " 46",
+        " 47",
+        " 44"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_27_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_27",
+      "stage": 5,
+      "prompt": "For a=328 and n=277, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 3555",
+        " 3556",
+        " 3557",
+        " 3560"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_27_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_27",
+      "stage": 6,
+      "prompt": "The exact integer value of 66256*1000003 + 37*328^2 + 202^3 is",
+      "choices": [
+        " 66268421783",
+        " 66268421784",
+        " 66268421785",
+        " 66268421794"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_28_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_28",
+      "stage": 1,
+      "prompt": "The sum of 339 and 209 equals",
+      "choices": [
+        " 549",
+        " 548",
+        " 547",
+        " 551"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_28_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_28",
+      "stage": 2,
+      "prompt": "The exact product of 339 and 209 equals",
+      "choices": [
+        " 71190",
+        " 71060",
+        " 70851",
+        " 70850"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_28_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_28",
+      "stage": 3,
+      "prompt": "For a=339 and b=209, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 71400",
+        " 71397",
+        " 71190",
+        " 71399"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_28_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_28",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (339 ** 218) mod 257 equals",
+      "choices": [
+        " 199",
+        " 200",
+        " 201",
+        " 202"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_28_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_28",
+      "stage": 5,
+      "prompt": "For a=339 and n=278, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 7426",
+        " 7425",
+        " 7427",
+        " 7430"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_28_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_28",
+      "stage": 6,
+      "prompt": "The exact integer value of 70851*1000003 + 37*339^2 + 209^3 is",
+      "choices": [
+        " 70864593958",
+        " 70864593960",
+        " 70864593959",
+        " 70864593969"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_29_s1",
+      "category": "addition",
+      "difficulty": "basic",
+      "scenario_id": "math_ladder_29",
+      "stage": 1,
+      "prompt": "The sum of 350 and 216 equals",
+      "choices": [
+        " 567",
+        " 565",
+        " 566",
+        " 569"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_29_s2",
+      "category": "multiplication",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_29",
+      "stage": 2,
+      "prompt": "The exact product of 350 and 216 equals",
+      "choices": [
+        " 75950",
+        " 75816",
+        " 75599",
+        " 75600"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "math_ladder_29_s3",
+      "category": "compound_arithmetic",
+      "difficulty": "intermediate",
+      "scenario_id": "math_ladder_29",
+      "stage": 3,
+      "prompt": "For a=350 and b=216, the expression a*b + a + b evaluates to",
+      "choices": [
+        " 76166",
+        " 76167",
+        " 76164",
+        " 75950"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "math_ladder_29_s4",
+      "category": "modular_exponentiation",
+      "difficulty": "hard",
+      "scenario_id": "math_ladder_29",
+      "stage": 4,
+      "prompt": "Using integer modular arithmetic, (350 ** 225) mod 1009 equals",
+      "choices": [
+        " 284",
+        " 283",
+        " 285",
+        " 286"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "math_ladder_29_s5",
+      "category": "nested_modular",
+      "difficulty": "expert",
+      "scenario_id": "math_ladder_29",
+      "stage": 5,
+      "prompt": "For a=350 and n=279, evaluate (sum of (a+i)^3 for i=0,...,n-1) mod 9973:",
+      "choices": [
+        " 4131",
+        " 4132",
+        " 4130",
+        " 4135"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "math_ladder_29_s6",
+      "category": "expert_large_integer",
+      "difficulty": "extreme",
+      "scenario_id": "math_ladder_29",
+      "stage": 6,
+      "prompt": "The exact integer value of 75600*1000003 + 37*350^2 + 216^3 is",
+      "choices": [
+        " 75614836995",
+        " 75614836997",
+        " 75614837006",
+        " 75614836996"
+      ],
+      "answer": 3
+    }
+  ]
+}

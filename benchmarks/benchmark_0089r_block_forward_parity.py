@@ -32,6 +32,9 @@ def _parse_args():
     parser.add_argument("--mixed-shard-root", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=48)
     parser.add_argument("--working-length", type=int, default=4096)
+    parser.add_argument(
+        "--target", choices=("forward", "backward"), default="forward"
+    )
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args()
 
@@ -65,7 +68,10 @@ def main() -> int:
     os.environ.setdefault("MINI_LLM_TRAIN_ATTN_BACKEND", "triton")
     os.environ.setdefault("MINI_LLM_TRAIN_ATTN_STRICT", "1")
     os.environ.setdefault("MINI_LLM_FUSED_QKV_ROPE_FORWARD", "1")
-    os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] = "0"
+    os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] = (
+        "1" if args.target == "backward" else "0"
+    )
+    os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_BACKWARD"] = "0"
 
     import cupy as cp
     from mini_llm.backend import BACKEND_NAME, asnumpy
@@ -114,10 +120,20 @@ def main() -> int:
     chunk_tokens = int(os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"])
 
     def run(*, candidate):
-        model.historical_memory.triton_block_forward = candidate
-        os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] = (
-            "1" if candidate else "0"
-        )
+        if args.target == "backward":
+            model.historical_memory.triton_block_forward = True
+            model.historical_memory.triton_block_backward = candidate
+            os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] = "1"
+            os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_BACKWARD"] = (
+                "1" if candidate else "0"
+            )
+        else:
+            model.historical_memory.triton_block_forward = candidate
+            model.historical_memory.triton_block_backward = False
+            os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"] = (
+                "1" if candidate else "0"
+            )
+            os.environ["MINI_LLM_TRITON_HISTORICAL_BLOCK_BACKWARD"] = "0"
         model.zero_grad()
         body_output, cache = model.forward_body(
             inputs,
@@ -187,9 +203,14 @@ def main() -> int:
     )
 
     result = {
-        "schema_version": "0089R-parity-v1",
+        "schema_version": "0089R-parity-v2",
         "status": "passed" if accepted else "failed",
-        "flag": "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD",
+        "target": args.target,
+        "flag": (
+            "MINI_LLM_TRITON_HISTORICAL_BLOCK_BACKWARD"
+            if args.target == "backward"
+            else "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD"
+        ),
         "fixture": fixture,
         "thresholds": _THRESHOLDS,
         "forward_output": body_metrics,

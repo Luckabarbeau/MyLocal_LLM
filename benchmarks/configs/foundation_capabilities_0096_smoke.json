@@ -1,0 +1,28 @@
+{
+  "suite_name": "foundation_0096_smoke",
+  "version": 1,
+  "output_root": "./benchmarks/results/foundation_0096_smoke",
+  "on_error": "raise",
+  "benchmarks": [
+    {
+      "id": "narrative_challenge_scored_0096",
+      "type": "narrative",
+      "enabled": true,
+      "every_optimizer_steps": 100,
+      "parameters": {
+        "tasks": "benchmarks/tasks/narrative_challenge_0096.json",
+        "task_ids": [
+          "delayed_01",
+          "update_01",
+          "binding_01",
+          "belief_01",
+          "order_01",
+          "twohop_01",
+          "negation_01"
+        ],
+        "max_new_tokens": 0,
+        "seeds": []
+      }
+    }
+  ]
+}

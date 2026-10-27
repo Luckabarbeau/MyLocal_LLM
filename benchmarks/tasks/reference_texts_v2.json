@@ -1,0 +1,271 @@
+{
+  "version": 2,
+  "purpose": "Versioned local fixed references; keep out of training; source is authored synthetic short texts; comparisons require same file SHA256.",
+  "references": [
+    {
+      "id": "python_prime",
+      "category": "python",
+      "text": "def is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    if n == 2:\n        return True\n    if n % 2 == 0:\n        return False\n    divisor = 3\n    while divisor * divisor <= n:\n        if n % divisor == 0:\n            return False\n        divisor += 2\n    return True\n"
+    },
+    {
+      "id": "python_unique",
+      "category": "python",
+      "text": "def unique_in_order(values: list[int]) -> list[int]:\n    \"\"\"Keep the first occurrence of each number, preserving order.\"\"\"\n    seen = set()\n    result = []\n    for value in values:\n        if value not in seen:\n            seen.add(value)\n            result.append(value)\n    return result\n"
+    },
+    {
+      "id": "python_average",
+      "category": "python",
+      "text": "def average(values: list[float]) -> float:\n    \"\"\"Return the arithmetic mean, or zero for an empty input.\"\"\"\n    if not values:\n        return 0.0\n    total = sum(values)\n    return total / len(values)\n"
+    },
+    {
+      "id": "python_histogram",
+      "category": "python",
+      "text": "def histogram(words: list[str]) -> dict[str, int]:\n    counts = {}\n    for word in words:\n        normalized = word.strip().lower()\n        if not normalized:\n            continue\n        counts[normalized] = counts.get(normalized, 0) + 1\n    return counts\n"
+    },
+    {
+      "id": "python_binary_search",
+      "category": "python",
+      "text": "def binary_search(values: list[int], target: int) -> int:\n    left, right = 0, len(values) - 1\n    while left <= right:\n        middle = (left + right) // 2\n        if values[middle] == target:\n            return middle\n        if values[middle] < target:\n            left = middle + 1\n        else:\n            right = middle - 1\n    return -1\n"
+    },
+    {
+      "id": "python_clamp",
+      "category": "python",
+      "text": "def clamp(value: float, low: float, high: float) -> float:\n    if low > high:\n        raise ValueError(\"invalid interval\")\n    if value < low:\n        return low\n    if value > high:\n        return high\n    return value\n"
+    },
+    {
+      "id": "python_parse_lines",
+      "category": "python",
+      "text": "def nonempty_lines(document: str) -> list[str]:\n    result = []\n    for line in document.splitlines():\n        line = line.strip()\n        if not line or line.startswith(\"#\"):\n            continue\n        result.append(line)\n    return result\n"
+    },
+    {
+      "id": "cpp_dot",
+      "category": "cpp",
+      "text": "#include <vector>\n#include <stdexcept>\ndouble dot_product(const std::vector<double>& a, const std::vector<double>& b) {\n    if (a.size() != b.size()) throw std::invalid_argument(\"size mismatch\");\n    double result = 0.0;\n    for (std::size_t i = 0; i < a.size(); ++i) {\n        result += a[i] * b[i];\n    }\n    return result;\n}\n"
+    },
+    {
+      "id": "cpp_count",
+      "category": "cpp",
+      "text": "#include <vector>\n#include <cstddef>\nstd::size_t count_positive(const std::vector<int>& data) {\n    std::size_t count = 0;\n    for (int value : data) {\n        if (value > 0) {\n            ++count;\n        }\n    }\n    return count;\n}\n"
+    },
+    {
+      "id": "cpp_max",
+      "category": "cpp",
+      "text": "#include <vector>\n#include <stdexcept>\nint maximum(const std::vector<int>& values) {\n    if (values.empty()) throw std::invalid_argument(\"empty input\");\n    int best = values.front();\n    for (int value : values) {\n        if (value > best) best = value;\n    }\n    return best;\n}\n"
+    },
+    {
+      "id": "cpp_is_even",
+      "category": "cpp",
+      "text": "#include <vector>\nstd::vector<int> even_values(const std::vector<int>& input) {\n    std::vector<int> output;\n    for (int value : input) {\n        if (value % 2 == 0) output.push_back(value);\n    }\n    return output;\n}\n"
+    },
+    {
+      "id": "cpp_prefix",
+      "category": "cpp",
+      "text": "#include <vector>\nstd::vector<int> prefix_sums(const std::vector<int>& data) {\n    std::vector<int> result;\n    int running = 0;\n    for (int value : data) {\n        running += value;\n        result.push_back(running);\n    }\n    return result;\n}\n"
+    },
+    {
+      "id": "cpp_distance",
+      "category": "cpp",
+      "text": "#include <cmath>\nstruct Point { double x; double y; };\ndouble distance(Point a, Point b) {\n    const double dx = a.x - b.x;\n    const double dy = a.y - b.y;\n    return std::sqrt(dx * dx + dy * dy);\n}\n"
+    },
+    {
+      "id": "linux_find",
+      "category": "shell",
+      "text": "To find every Python file below the current working directory, use `find . -type f -name '*.py'`. The `-type f` condition excludes directories, while `-name` matches a filename pattern. To count the matching files, pipe the output into `wc -l`.\n"
+    },
+    {
+      "id": "linux_grep",
+      "category": "shell",
+      "text": "To search recursively for a word in a repository, run `grep -R -n 'TODO' .`. The `-R` flag visits subdirectories and `-n` prints line numbers. To restrict the search to Python files, use `grep -R -n --include='*.py' 'TODO' .`.\n"
+    },
+    {
+      "id": "git_branch",
+      "category": "shell",
+      "text": "A new Git branch can be created and checked out using `git switch -c experiment`. After making changes, inspect the working tree with `git status`, stage a file with `git add src/main.py`, and save the changes using `git commit -m 'Add example'`.\n"
+    },
+    {
+      "id": "git_diff",
+      "category": "shell",
+      "text": "The command `git diff` displays unstaged edits in tracked files. Use `git diff --staged` to inspect changes that have already been added to the index. To examine a particular commit, run `git show HEAD`, and to inspect recent commit summaries use `git log --oneline`.\n"
+    },
+    {
+      "id": "linux_permissions",
+      "category": "shell",
+      "text": "On a Unix system, `ls -l` prints file permissions along with ownership and size. To make a local script executable, use `chmod u+x script.sh`. This grants the file owner execute permission without changing access rights for unrelated users.\n"
+    },
+    {
+      "id": "python_venv",
+      "category": "shell",
+      "text": "Create a Python virtual environment with `python3 -m venv .venv`. Activate it using `source .venv/bin/activate` and install packages with `python -m pip install package_name`. Deactivate the environment with `deactivate` after the work is finished.\n"
+    },
+    {
+      "id": "math_prime",
+      "category": "mathematics",
+      "text": "A prime number is an integer greater than one with exactly two positive divisors: one and itself. The number two is the only even prime. Every other even integer is divisible by two as well as by one and itself, so it is composite.\n"
+    },
+    {
+      "id": "math_fraction",
+      "category": "mathematics",
+      "text": "To add fractions with different denominators, first use a common denominator. For example, one half plus one third equals three sixths plus two sixths, or five sixths. The denominator remains six because the numerators count parts of the same size.\n"
+    },
+    {
+      "id": "math_linear",
+      "category": "mathematics",
+      "text": "Consider the equation 3x + 4 = 19. Subtracting four from each side gives 3x = 15. Dividing both sides by three yields x = 5. Substituting back confirms that three times five plus four equals nineteen.\n"
+    },
+    {
+      "id": "math_average",
+      "category": "mathematics",
+      "text": "The arithmetic mean is the sum of the observations divided by their number. For the measurements 4, 7, and 10, the sum is 21 and there are three observations. The mean is therefore 21 divided by 3, which equals 7.\n"
+    },
+    {
+      "id": "math_pythagorean",
+      "category": "mathematics",
+      "text": "A right triangle has legs of lengths three and four. The Pythagorean theorem states that the square of the hypotenuse equals the sum of the squares of the legs. Since nine plus sixteen equals twenty-five, the hypotenuse has length five.\n"
+    },
+    {
+      "id": "math_probability",
+      "category": "mathematics",
+      "text": "A fair six-sided die has six equally likely outcomes. The numbers greater than four are five and six, giving two favorable outcomes. The probability of rolling a number greater than four is two sixths, or one third.\n"
+    },
+    {
+      "id": "math_derivative",
+      "category": "mathematics",
+      "text": "The derivative of the function f(x) = x squared is f'(x) = 2x. At x = 3, the derivative is six. This derivative describes the instantaneous rate at which the value of the function changes as x increases.\n"
+    },
+    {
+      "id": "math_modulo",
+      "category": "mathematics",
+      "text": "For integers, the remainder operation reports what remains after division. Seventeen divided by five gives three complete groups and a remainder of two. Therefore, in Python, the expression `17 % 5` evaluates to the integer 2.\n"
+    },
+    {
+      "id": "science_pipe",
+      "category": "science",
+      "text": "For steady laminar flow through a circular pipe, the fluid velocity is highest at the center and decreases toward the wall. The no-slip boundary condition sets the velocity to zero at the stationary wall. Viscosity transmits shear stresses between neighboring layers of fluid.\n"
+    },
+    {
+      "id": "science_energy",
+      "category": "science",
+      "text": "Energy can be transferred between a moving object and its surroundings. A ball rolling uphill slows down as kinetic energy is converted into gravitational potential energy. Neglecting friction, the sum of kinetic and potential energy remains constant throughout the motion.\n"
+    },
+    {
+      "id": "science_density",
+      "category": "science",
+      "text": "Density is defined as mass divided by volume. A sample with a mass of two kilograms and a volume of one cubic meter has a density of two kilograms per cubic meter. Density is a material property only when temperature, pressure, and composition are specified.\n"
+    },
+    {
+      "id": "science_stars",
+      "category": "science",
+      "text": "Stars form in dense regions of molecular clouds. Gravity gathers gas into a collapsing region, while pressure and radiation influence its evolution. As the core becomes hotter and denser, sustained hydrogen fusion can eventually begin and a young star enters its main-sequence phase.\n"
+    },
+    {
+      "id": "science_heat",
+      "category": "science",
+      "text": "Heat normally flows from a region at higher temperature toward a region at lower temperature. Thermal conduction transfers energy through a stationary material. In a metal rod heated at one end, a temperature gradient develops and drives energy toward the cooler end.\n"
+    },
+    {
+      "id": "science_electricity",
+      "category": "science",
+      "text": "In a simple electrical circuit, a battery provides a potential difference across a resistor. For an ideal resistor, Ohm's law relates voltage, current, and resistance using V = IR. If the voltage doubles while resistance remains constant, the current also doubles.\n"
+    },
+    {
+      "id": "science_fem",
+      "category": "science",
+      "text": "The finite element method approximates a continuous solution using basis functions on a collection of elements. After selecting a weak formulation, the element contributions are assembled into a global system of algebraic equations. Boundary conditions are then imposed before solving for the unknown degrees of freedom.\n"
+    },
+    {
+      "id": "science_diffusion",
+      "category": "science",
+      "text": "Diffusion transports a quantity from regions of higher concentration toward regions of lower concentration. In Fick's first law, the diffusive flux is proportional to the negative concentration gradient. The minus sign indicates that transport acts down the gradient rather than up it.\n"
+    },
+    {
+      "id": "technical_json",
+      "category": "technical",
+      "text": "A JSON document stores structured data using objects, arrays, strings, numbers, booleans, and null. An object associates keys with values, while an array holds an ordered sequence. For example, the object {\"enabled\": true, \"count\": 3} contains one Boolean and one integer.\n"
+    },
+    {
+      "id": "technical_http",
+      "category": "technical",
+      "text": "An HTTP GET request retrieves a resource without requesting a change to the server's stored state. A successful response commonly uses status code 200. A missing resource may return 404, while a server-side failure often produces a code in the 500 range.\n"
+    },
+    {
+      "id": "technical_sort",
+      "category": "technical",
+      "text": "Merge sort divides an input sequence into smaller halves and sorts those halves recursively. The sorted halves are then merged by repeatedly selecting the smaller next element. With appropriate implementation, merge sort takes O(n log n) time in the worst case.\n"
+    },
+    {
+      "id": "technical_testing",
+      "category": "technical",
+      "text": "A unit test checks a small function against an expected result. Useful tests cover ordinary inputs, empty inputs, and boundary cases. A test that checks only one example can pass even when the implementation fails on another valid input.\n"
+    },
+    {
+      "id": "technical_git_rebase",
+      "category": "technical",
+      "text": "Rebasing a local branch reapplies its commits on top of a new base commit. This changes commit identities because the parent history changes. It is usually safer to avoid rewriting commits that other collaborators have already pulled into shared work.\n"
+    },
+    {
+      "id": "technical_gpu",
+      "category": "technical",
+      "text": "A GPU processes many arithmetic operations in parallel. Matrix multiplication can achieve high throughput when operands are arranged to use the hardware efficiently. Poor memory access patterns, small kernels, and frequent launches can reduce realized performance even when theoretical peak compute is large.\n"
+    },
+    {
+      "id": "story_station",
+      "category": "narrative",
+      "text": "The detective reached the abandoned station shortly after midnight. A lamp flickered behind the ticket-office window, and fresh footprints crossed the wet platform. She followed the prints toward the locked storeroom. As she touched the handle, a voice on the other side whispered her name.\n"
+    },
+    {
+      "id": "story_mira",
+      "category": "narrative",
+      "text": "Mira unfolded the map beside a narrow river. The old bridge marked on the paper had collapsed years ago, so she followed a footpath upstream until she found a shallow crossing. When she reached the other bank, she checked the compass and continued north toward the village.\n"
+    },
+    {
+      "id": "story_lost_key",
+      "category": "narrative",
+      "text": "Jonah placed the brass key in the blue drawer before leaving the workshop. A sudden storm forced him to return after dark. He searched his coat pockets, remembered where he had left the key, and opened the drawer. The brass key was still lying beside the notebook.\n"
+    },
+    {
+      "id": "story_library",
+      "category": "narrative",
+      "text": "At closing time, the librarian noticed a book resting on a table that had been empty all afternoon. Its cover carried no title, but a handwritten date was visible inside. She checked the lending record and found that no one had borrowed the volume for more than thirty years.\n"
+    },
+    {
+      "id": "story_garden",
+      "category": "narrative",
+      "text": "Nora planted three apple seedlings along the garden fence. During the first week she watered them each morning, but a dry spell arrived and the soil began to crack. She carried a watering can from the rain barrel and made sure the roots of every tree were wet.\n"
+    },
+    {
+      "id": "story_mountain",
+      "category": "narrative",
+      "text": "The hikers started before sunrise because the afternoon forecast warned of heavy rain. They reached the ridge while the sky was clear, then saw clouds gathering above the next valley. Rather than cross the exposed summit, they turned toward a lower trail and reached the shelter before the storm.\n"
+    },
+    {
+      "id": "general_library",
+      "category": "general",
+      "text": "Public libraries lend books and often provide access to computers, reference materials, and community events. A library card is commonly needed to borrow items, but reading within the building may be available without one. Borrowed books are generally expected to be returned by a specified due date.\n"
+    },
+    {
+      "id": "general_cooking",
+      "category": "general",
+      "text": "When preparing rice, the amount of water and cooking time depend on the variety being used. Washing rice can remove some surface starch. Once the water reaches a simmer, the pot is usually covered so that the grains absorb moisture without excessive evaporation.\n"
+    },
+    {
+      "id": "general_weather",
+      "category": "general",
+      "text": "A weather forecast describes likely atmospheric conditions during a future period. Temperature, precipitation, cloud cover, and wind are commonly reported. The uncertainty of a forecast generally increases as the forecast period extends farther into the future.\n"
+    },
+    {
+      "id": "general_recycling",
+      "category": "general",
+      "text": "Recycling rules depend on the local collection system. Paper, glass, metals, and some plastics may be accepted in separate or mixed bins. Food contamination can make certain materials difficult to process, so residents should check the collection instructions for their municipality.\n"
+    },
+    {
+      "id": "general_plants",
+      "category": "general",
+      "text": "Most green plants use sunlight to convert water and carbon dioxide into sugars during photosynthesis. The process releases oxygen as a byproduct. Plants also carry out cellular respiration, using energy from sugars to support growth and maintenance.\n"
+    },
+    {
+      "id": "general_time",
+      "category": "general",
+      "text": "A day is divided into twenty-four hours, and each hour contains sixty minutes. When traveling between time zones, the local clock time may change even though the elapsed duration of a journey remains the same. Dates can also differ across the international date line.\n"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "family": "cpp",
+  "purpose": "C++17 completion, compilation and unit-test challenges in isolated sandbox.",
+  "tasks": [
+    {
+      "id": "challenge_running_total",
+      "category": "running_total",
+      "difficulty": "intermediate",
+      "prompt": "#include <vector>\nstd::vector<int> running_total(const std::vector<int>& xs) {\n",
+      "test_harness": "int main(){return running_total({1,2,3})==std::vector<int>({1,3,6}) && running_total({}).empty() ? 0:1;}"
+    },
+    {
+      "id": "challenge_balanced_parens",
+      "category": "balanced_parens",
+      "difficulty": "hard",
+      "prompt": "#include <string>\nbool balanced_parens(const std::string& x) {\n",
+      "test_harness": "int main(){return balanced_parens(\"(()())\")&&!balanced_parens(\"(()\")&&!balanced_parens(\")(\")?0:1;}"
+    },
+    {
+      "id": "challenge_gcd_int",
+      "category": "gcd_int",
+      "difficulty": "intermediate",
+      "prompt": "int gcd_int(int a, int b) {\n",
+      "test_harness": "int main(){return gcd_int(12,18)==6&&gcd_int(0,5)==5?0:1;}"
+    },
+    {
+      "id": "challenge_binary_search_index",
+      "category": "binary_search_index",
+      "difficulty": "hard",
+      "prompt": "#include <vector>\nint binary_search_index(const std::vector<int>& v,int target) {\n",
+      "test_harness": "int main(){return binary_search_index({1,3,5},3)==1 && binary_search_index({1,3,5},4)==-1?0:1;}"
+    },
+    {
+      "id": "challenge_merge_sorted_int",
+      "category": "merge_sorted_int",
+      "difficulty": "hard",
+      "prompt": "#include <vector>\nstd::vector<int> merge_sorted_int(const std::vector<int>& a,const std::vector<int>& b) {\n",
+      "test_harness": "int main(){return merge_sorted_int({1,3},{2,3})==std::vector<int>({1,2,3,3})?0:1;}"
+    },
+    {
+      "id": "challenge_prime_factor_count",
+      "category": "prime_factor_count",
+      "difficulty": "expert",
+      "prompt": "int prime_factor_count(int n) {\n",
+      "test_harness": "int main(){return prime_factor_count(12)==3&&prime_factor_count(13)==1&&prime_factor_count(1)==0?0:1;}"
+    },
+    {
+      "id": "challenge_transpose_matrix",
+      "category": "transpose_matrix",
+      "difficulty": "expert",
+      "prompt": "#include <vector>\nstd::vector<std::vector<int>> transpose_matrix(const std::vector<std::vector<int>>& a) {\n",
+      "test_harness": "int main(){return transpose_matrix({{1,2},{3,4}})==std::vector<std::vector<int>>({{1,3},{2,4}})?0:1;}"
+    },
+    {
+      "id": "challenge_sieve_primes",
+      "category": "sieve_primes",
+      "difficulty": "expert",
+      "prompt": "#include <vector>\nstd::vector<int> sieve_primes(int n) {\n",
+      "test_harness": "int main(){return sieve_primes(10)==std::vector<int>({2,3,5,7}) && sieve_primes(1).empty()?0:1;}"
+    },
+    {
+      "id": "challenge_count_islands_cpp",
+      "category": "count_islands_cpp",
+      "difficulty": "extreme",
+      "prompt": "#include <vector>\nint count_islands_cpp(const std::vector<std::vector<int>>& grid) {\n",
+      "test_harness": "int main(){return count_islands_cpp({{1,0,1},{1,0,0},{0,1,1}})==3?0:1;}"
+    },
+    {
+      "id": "challenge_edit_distance_cpp",
+      "category": "edit_distance_cpp",
+      "difficulty": "extreme",
+      "prompt": "#include <string>\nint edit_distance_cpp(const std::string& a,const std::string& b) {\n",
+      "test_harness": "int main(){return edit_distance_cpp(\"kitten\",\"sitting\")==3&&edit_distance_cpp(\"\",\"abc\")==3?0:1;}"
+    },
+    {
+      "id": "challenge_matmul2",
+      "category": "matmul2",
+      "difficulty": "expert",
+      "prompt": "#include <vector>\nstd::vector<std::vector<int>> matmul2(const std::vector<std::vector<int>>& a,const std::vector<std::vector<int>>& b) {\n",
+      "test_harness": "int main(){return matmul2({{1,2},{3,4}},{{5,6},{7,8}})==std::vector<std::vector<int>>({{19,22},{43,50}})?0:1;}"
+    },
+    {
+      "id": "challenge_is_prime_cpp",
+      "category": "is_prime_cpp",
+      "difficulty": "intermediate",
+      "prompt": "bool is_prime_cpp(int n) {\n",
+      "test_harness": "int main(){return is_prime_cpp(2)&&is_prime_cpp(29)&&!is_prime_cpp(49)&&!is_prime_cpp(0)?0:1;}"
+    }
+  ]
+}

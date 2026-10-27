@@ -1,0 +1,811 @@
+{
+  "version": 1,
+  "family": "math",
+  "purpose": "Fixed arithmetic, number theory, algebra, roots and powers; balanced candidate placement.",
+  "tasks": [
+    {
+      "id": "add_2_3",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 2 and 3 is",
+      "choices": [
+        " 6",
+        " 5",
+        " 4",
+        " 7"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "add_7_5",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 7 and 5 is",
+      "choices": [
+        " 11",
+        " 14",
+        " 12",
+        " 13"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "add_12_9",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 12 and 9 is",
+      "choices": [
+        " 20",
+        " 22",
+        " 23",
+        " 21"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "add_15_8",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 15 and 8 is",
+      "choices": [
+        " 22",
+        " 25",
+        " 24",
+        " 23"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "add_24_17",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 24 and 17 is",
+      "choices": [
+        " 42",
+        " 40",
+        " 43",
+        " 41"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "add_9_6",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 9 and 6 is",
+      "choices": [
+        " 17",
+        " 15",
+        " 14",
+        " 16"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "add_13_14",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 13 and 14 is",
+      "choices": [
+        " 27",
+        " 28",
+        " 26",
+        " 29"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "add_25_16",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 25 and 16 is",
+      "choices": [
+        " 42",
+        " 41",
+        " 43",
+        " 40"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "add_31_11",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 31 and 11 is",
+      "choices": [
+        " 41",
+        " 43",
+        " 42",
+        " 44"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "add_6_18",
+      "category": "arithmetic",
+      "prompt": "The arithmetic sum of 6 and 18 is",
+      "choices": [
+        " 23",
+        " 25",
+        " 24",
+        " 26"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "sub_12_5",
+      "category": "arithmetic",
+      "prompt": "When 5 is subtracted from 12, the result is",
+      "choices": [
+        " 8",
+        " 9",
+        " 7",
+        " 6"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "sub_20_7",
+      "category": "arithmetic",
+      "prompt": "When 7 is subtracted from 20, the result is",
+      "choices": [
+        " 12",
+        " 14",
+        " 15",
+        " 13"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sub_17_9",
+      "category": "arithmetic",
+      "prompt": "When 9 is subtracted from 17, the result is",
+      "choices": [
+        " 8",
+        " 7",
+        " 9",
+        " 10"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "sub_45_13",
+      "category": "arithmetic",
+      "prompt": "When 13 is subtracted from 45, the result is",
+      "choices": [
+        " 33",
+        " 34",
+        " 31",
+        " 32"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sub_18_6",
+      "category": "arithmetic",
+      "prompt": "When 6 is subtracted from 18, the result is",
+      "choices": [
+        " 11",
+        " 13",
+        " 12",
+        " 14"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "sub_100_12",
+      "category": "arithmetic",
+      "prompt": "When 12 is subtracted from 100, the result is",
+      "choices": [
+        " 88",
+        " 89",
+        " 87",
+        " 90"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "sub_33_8",
+      "category": "arithmetic",
+      "prompt": "When 8 is subtracted from 33, the result is",
+      "choices": [
+        " 26",
+        " 24",
+        " 27",
+        " 25"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sub_7_2",
+      "category": "arithmetic",
+      "prompt": "When 2 is subtracted from 7, the result is",
+      "choices": [
+        " 4",
+        " 5",
+        " 7",
+        " 6"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "mul_6_7",
+      "category": "arithmetic",
+      "prompt": "The product of 6 and 7 equals",
+      "choices": [
+        " 42",
+        " 41",
+        " 48",
+        " 49"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "mul_4_8",
+      "category": "arithmetic",
+      "prompt": "The product of 4 and 8 equals",
+      "choices": [
+        " 36",
+        " 32",
+        " 40",
+        " 31"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "mul_9_3",
+      "category": "arithmetic",
+      "prompt": "The product of 9 and 3 equals",
+      "choices": [
+        " 27",
+        " 30",
+        " 36",
+        " 26"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "mul_12_4",
+      "category": "arithmetic",
+      "prompt": "The product of 12 and 4 equals",
+      "choices": [
+        " 60",
+        " 48",
+        " 47",
+        " 52"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "mul_5_11",
+      "category": "arithmetic",
+      "prompt": "The product of 5 and 11 equals",
+      "choices": [
+        " 55",
+        " 60",
+        " 54",
+        " 66"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "mul_3_7",
+      "category": "arithmetic",
+      "prompt": "The product of 3 and 7 equals",
+      "choices": [
+        " 24",
+        " 28",
+        " 21",
+        " 20"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "mul_8_8",
+      "category": "arithmetic",
+      "prompt": "The product of 8 and 8 equals",
+      "choices": [
+        " 64",
+        " 72",
+        " 63",
+        " 75"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "mul_7_9",
+      "category": "arithmetic",
+      "prompt": "The product of 7 and 9 equals",
+      "choices": [
+        " 63",
+        " 62",
+        " 70",
+        " 72"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "div_20_4",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 20 divided by 4 is",
+      "choices": [
+        " 16",
+        " 5",
+        " 6",
+        " 4"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "div_81_9",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 81 divided by 9 is",
+      "choices": [
+        " 9",
+        " 10",
+        " 8",
+        " 20"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "div_72_8",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 72 divided by 8 is",
+      "choices": [
+        " 9",
+        " 8",
+        " 20",
+        " 10"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "div_56_7",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 56 divided by 7 is",
+      "choices": [
+        " 9",
+        " 19",
+        " 8",
+        " 7"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "div_144_12",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 144 divided by 12 is",
+      "choices": [
+        " 23",
+        " 12",
+        " 13",
+        " 11"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "div_96_6",
+      "category": "arithmetic",
+      "prompt": "The integer quotient of 96 divided by 6 is",
+      "choices": [
+        " 17",
+        " 15",
+        " 16",
+        " 6"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "classify_2",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 2 is",
+      "choices": [
+        " less than one",
+        " a prime number",
+        " a composite number",
+        " an odd number"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "classify_4",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 4 is",
+      "choices": [
+        " a negative integer",
+        " an odd integer",
+        " a prime number",
+        " an even integer"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "classify_17",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 17 is",
+      "choices": [
+        " a composite number",
+        " a prime number",
+        " an even number",
+        " a multiple of four"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "classify_21",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 21 is",
+      "choices": [
+        " an even number",
+        " a prime number",
+        " a negative number",
+        " a composite number"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "classify_0",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 0 is",
+      "choices": [
+        " a positive integer",
+        " an even integer",
+        " a prime number",
+        " an odd integer"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "classify_29",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 29 is",
+      "choices": [
+        " a square number",
+        " an even number",
+        " a composite number",
+        " a prime number"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "classify_49",
+      "category": "number_theory",
+      "prompt": "In number theory, the integer 49 is",
+      "choices": [
+        " a composite number",
+        " an even number",
+        " a prime number",
+        " a negative number"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "sqrt_25",
+      "category": "roots",
+      "prompt": "The positive square root of 25 is",
+      "choices": [
+        " 4",
+        " 6",
+        " 7",
+        " 5"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sqrt_36",
+      "category": "roots",
+      "prompt": "The positive square root of 36 is",
+      "choices": [
+        " 5",
+        " 7",
+        " 6",
+        " 8"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "sqrt_49",
+      "category": "roots",
+      "prompt": "The positive square root of 49 is",
+      "choices": [
+        " 7",
+        " 6",
+        " 9",
+        " 8"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "sqrt_64",
+      "category": "roots",
+      "prompt": "The positive square root of 64 is",
+      "choices": [
+        " 7",
+        " 10",
+        " 9",
+        " 8"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sqrt_100",
+      "category": "roots",
+      "prompt": "The positive square root of 100 is",
+      "choices": [
+        " 11",
+        " 9",
+        " 10",
+        " 12"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "sqrt_121",
+      "category": "roots",
+      "prompt": "The positive square root of 121 is",
+      "choices": [
+        " 12",
+        " 11",
+        " 10",
+        " 13"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "sqrt_169",
+      "category": "roots",
+      "prompt": "The positive square root of 169 is",
+      "choices": [
+        " 14",
+        " 12",
+        " 15",
+        " 13"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "sqrt_196",
+      "category": "roots",
+      "prompt": "The positive square root of 196 is",
+      "choices": [
+        " 14",
+        " 16",
+        " 13",
+        " 15"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "parity_3",
+      "category": "number_theory",
+      "prompt": "The integer 3 has parity",
+      "choices": [
+        " negative",
+        " even",
+        " odd",
+        " prime"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "parity_5",
+      "category": "number_theory",
+      "prompt": "The integer 5 has parity",
+      "choices": [
+        " negative",
+        " prime",
+        " odd",
+        " even"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "parity_7",
+      "category": "number_theory",
+      "prompt": "The integer 7 has parity",
+      "choices": [
+        " odd",
+        " negative",
+        " even",
+        " prime"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "parity_9",
+      "category": "number_theory",
+      "prompt": "The integer 9 has parity",
+      "choices": [
+        " negative",
+        " even",
+        " odd",
+        " prime"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "parity_12",
+      "category": "number_theory",
+      "prompt": "The integer 12 has parity",
+      "choices": [
+        " even",
+        " prime",
+        " negative",
+        " odd"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "parity_17",
+      "category": "number_theory",
+      "prompt": "The integer 17 has parity",
+      "choices": [
+        " odd",
+        " prime",
+        " negative",
+        " even"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "parity_22",
+      "category": "number_theory",
+      "prompt": "The integer 22 has parity",
+      "choices": [
+        " negative",
+        " prime",
+        " odd",
+        " even"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "parity_31",
+      "category": "number_theory",
+      "prompt": "The integer 31 has parity",
+      "choices": [
+        " prime",
+        " negative",
+        " even",
+        " odd"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "square_3",
+      "category": "powers",
+      "prompt": "The square of the integer 3 is",
+      "choices": [
+        " 9",
+        " 10",
+        " 8",
+        " 6"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "square_4",
+      "category": "powers",
+      "prompt": "The square of the integer 4 is",
+      "choices": [
+        " 8",
+        " 15",
+        " 17",
+        " 16"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "square_5",
+      "category": "powers",
+      "prompt": "The square of the integer 5 is",
+      "choices": [
+        " 26",
+        " 24",
+        " 10",
+        " 25"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "square_6",
+      "category": "powers",
+      "prompt": "The square of the integer 6 is",
+      "choices": [
+        " 35",
+        " 36",
+        " 12",
+        " 37"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "square_7",
+      "category": "powers",
+      "prompt": "The square of the integer 7 is",
+      "choices": [
+        " 50",
+        " 49",
+        " 14",
+        " 48"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "square_8",
+      "category": "powers",
+      "prompt": "The square of the integer 8 is",
+      "choices": [
+        " 63",
+        " 16",
+        " 64",
+        " 65"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "square_9",
+      "category": "powers",
+      "prompt": "The square of the integer 9 is",
+      "choices": [
+        " 81",
+        " 18",
+        " 80",
+        " 82"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "linear_2",
+      "category": "algebra",
+      "prompt": "If x = 2, then 2x + 3 =",
+      "choices": [
+        " 5",
+        " 9",
+        " 10",
+        " 7"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "linear_3",
+      "category": "algebra",
+      "prompt": "If x = 3, then 2x + 3 =",
+      "choices": [
+        " 9",
+        " 11",
+        " 7",
+        " 12"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "linear_4",
+      "category": "algebra",
+      "prompt": "If x = 4, then 2x + 3 =",
+      "choices": [
+        " 11",
+        " 13",
+        " 14",
+        " 9"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "linear_5",
+      "category": "algebra",
+      "prompt": "If x = 5, then 2x + 3 =",
+      "choices": [
+        " 15",
+        " 16",
+        " 11",
+        " 13"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "linear_6",
+      "category": "algebra",
+      "prompt": "If x = 6, then 2x + 3 =",
+      "choices": [
+        " 13",
+        " 18",
+        " 15",
+        " 17"
+      ],
+      "answer": 2
+    }
+  ]
+}

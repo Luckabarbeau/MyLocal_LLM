@@ -1,0 +1,9 @@
+{
+  "version": 1, "family": "terminal", "tasks": [
+    {"id":"list_py", "prompt":"# List Python files recursively from the current directory.\n$ ", "choices":["find . -type f -name '*.py'", "rm -rf .", "git status"], "answer":0, "accepted_patterns":["find \\. -type f -name ['\\\"]\\*\\.py['\\\"]", "find \\. -name ['\\\"]\\*\\.py['\\\"]"]},
+    {"id":"git_status", "prompt":"# Show the working-tree status of the current Git repository.\n$ ", "choices":["git status", "git init", "git clone ."], "answer":0, "accepted_patterns":["git status(?: --short)?", "git status -s"]},
+    {"id":"current_dir", "prompt":"# Display the current working directory.\n$ ", "choices":["pwd", "cd ..", "mkdir test"], "answer":0, "accepted_patterns":["pwd"]},
+    {"id":"mkdir", "prompt":"# Create a directory named results.\n$ ", "choices":["mkdir results", "rm -r results", "cat results"], "answer":0, "accepted_patterns":["mkdir (?:-p )?results"]},
+    {"id":"git_new_branch", "prompt":"# Create and switch to a new Git branch named feature.\n$ ", "choices":["git switch -c feature", "git branch -d feature", "git status"], "answer":0, "accepted_patterns":["git switch -c feature", "git checkout -b feature"]}
+  ]
+}

@@ -124,6 +124,10 @@ class HistoricalReadMemory:
             BACKEND_NAME == 'cupy'
             and _env_enabled('MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD')
         )
+        self.triton_block_backward = (
+            self.triton_block_forward
+            and _env_enabled('MINI_LLM_TRITON_HISTORICAL_BLOCK_BACKWARD')
+        )
         self.memory_audit = (BACKEND_NAME == 'cupy' and
                              os.environ.get('MINI_LLM_HISTORY_MEMORY_AUDIT', '0') == '1')
         self.name = name
@@ -171,6 +175,7 @@ class HistoricalReadMemory:
                 history_length=int(cfg.distant_memory_length),
                 phase=block_slot.phase,
                 period=block_slot.period,
+                backward=self.triton_block_backward,
             )
 
     def parameters(self):
@@ -515,7 +520,7 @@ class HistoricalReadMemory:
                             from mini_llm.ops.triton_historical_block import (
                                 deterministic_block_read_forward,
                             )
-                            read = deterministic_block_read_forward(
+                            result = deterministic_block_read_forward(
                                 query,
                                 state.k,
                                 state.v,
@@ -524,7 +529,14 @@ class HistoricalReadMemory:
                                 period=slot.period,
                                 source_offset=state.source_offset,
                                 source_length=state.source_length,
+                                return_cache=(
+                                    return_cache and self.triton_block_backward
+                                ),
                             )
+                            if return_cache and self.triton_block_backward:
+                                read, selection = result
+                            else:
+                                read = result
                         else:
                             read, _ = self._read(
                                 query, state.k[:, idx, :], state.v[:, idx, :],
@@ -609,6 +621,28 @@ class HistoricalReadMemory:
         b, w = q.shape[:2]
         route_grad = (xp.zeros_like(routes[2]) if routes is not None else None)
         for sidx, (slot, selection, active) in enumerate(entries):
+            if slot.kind == 'block' and self.triton_block_backward:
+                from mini_llm.ops.triton_historical_block import (
+                    DeterministicBlockReadCache,
+                    deterministic_block_read_backward,
+                )
+                if isinstance(selection, DeterministicBlockReadCache):
+                    with performance_scope('historical.backward.block_read'):
+                        deterministic_block_read_backward(
+                            dcontext[:, :, slot.head, :],
+                            q[:, :, slot.head, :],
+                            state.k,
+                            state.v,
+                            state.valid,
+                            active.reshape(-1),
+                            self.head_gates[layer_idx].data[sidx:sidx + 1],
+                            self.head_gates[layer_idx].grad[sidx:sidx + 1],
+                            selection,
+                            dquery=dq[:, :, slot.head, :],
+                            dkey=state.dk,
+                            dvalue=state.dv,
+                        )
+                    continue
             upstream = _f32(dcontext[:, :, slot.head, :]) * active
             dcontext[:, :, slot.head, :] = xp.where(active, 0., dcontext[:, :, slot.head, :])
             query = _f32(q[:, :, slot.head, :])

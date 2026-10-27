@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from mini_llm.backend import xp, asnumpy
+from benchmarks.reference_diagnostics import token_kind, summarize_rows
 
 
 def load_references(path):
@@ -51,7 +52,7 @@ def _distribution(logits, true_id, top_k):
     }
 
 
-def analyze_reference(model, tokenizer, text, *, top_k=10, max_context=4096,
+def analyze_reference(model, tokenizer, text, *, top_k=10, max_context=4096, category=None,
                       cutoffs=(0.25, 0.5, 0.75), max_new_tokens=128,
                       generator=None, seeds=(42,), strategy='top-k', temperature=0.8,
                       sampling_top_k=40, use_kv_cache=True, branches=0):
@@ -68,7 +69,9 @@ def analyze_reference(model, tokenizer, text, *, top_k=10, max_context=4096,
     all_logits = np.asarray(asnumpy(logits[0]), dtype=np.float64)
     for pos, true_id in enumerate(ids[1:]):
         rec = _distribution(all_logits[pos], true_id, top_k)
-        rec.update(position=pos + 1, actual_text=tokenizer.decode([true_id]),
+        decoded = tokenizer.decode([true_id])
+        rec.update(position=pos + 1, actual_text=decoded,
+                   token_kind=token_kind(decoded, category=category),
                    top=[{**c, 'text': tokenizer.decode([c['token_id']])} for c in rec['top']])
         rows.append(rec)
     del logits, inputs
@@ -80,6 +83,7 @@ def analyze_reference(model, tokenizer, text, *, top_k=10, max_context=4096,
         'top10_accuracy': float(np.mean([r['actual_rank'] <= 10 for r in rows])),
         'mean_target_rank': float(np.mean([r['actual_rank'] for r in rows])),
         'cutoff_generations': [],
+        'diagnostics': summarize_rows(rows, category=category),
     }
     if generator is None:
         return result
@@ -107,11 +111,27 @@ def analyze_reference(model, tokenizer, text, *, top_k=10, max_context=4096,
                 temperature=temperature, top_k=sampling_top_k if strategy == 'top-k' else None,
                 seed=seed, use_kv_cache=use_kv_cache, return_token_ids=True,
             )
+            generated_ids = [int(v) for v in timing.get('generated_token_ids', [])]
+            expected_ids = ids[index:]
+            shared = 0
+            for predicted, expected in zip(generated_ids, expected_ids):
+                if predicted != expected:
+                    break
+                shared += 1
+            from benchmarks.generation_metrics import repetition_metrics
             result['cutoff_generations'].append({
                 'token_cutoff': index, 'prefix': prefix, 'prefix_contract': note,
                 'seed': int(seed), 'strategy': strategy, 'generated_text': text_out,
-                'generated_token_ids': timing.get('generated_token_ids', []),
-                'reference_suffix': tokenizer.decode(ids[index:]),
+                'generated_token_ids': generated_ids,
+                'reference_suffix': tokenizer.decode(expected_ids),
+                'reference_next_token_rank': rows[index-1]['actual_rank'],
+                'reference_next_token_probability': rows[index-1]['actual_probability'],
+                'reference_suffix_mean_nll': float(np.mean(
+                    [row['nll'] for row in rows[index-1:]])),
+                'matched_reference_prefix_tokens': shared,
+                'matched_reference_next_token': bool(shared),
+                'generation_repetition': repetition_metrics(generated_ids),
+                'matching_note': 'Exact token-ID overlap with one reference; not a coherence or correctness score.',
             })
         if branches:
             # Teacher-forced top candidates at the precise cutoff. A separate

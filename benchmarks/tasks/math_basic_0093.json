@@ -1,0 +1,10 @@
+{
+  "version": 1, "family": "math", "tasks": [
+    {"id":"sum_small", "prompt":"In arithmetic, 7 + 5 =", "choices":[" 11", " 12", " 13", " 14"], "answer":1},
+    {"id":"prime_exception", "prompt":"The only even prime number is", "choices":[" 1", " 2", " 4", " 6"], "answer":1},
+    {"id":"multiplication", "prompt":"In arithmetic, 6 multiplied by 7 equals", "choices":[" 36", " 42", " 48", " 56"], "answer":1},
+    {"id":"square_root", "prompt":"The positive square root of 81 is", "choices":[" 8", " 9", " 7", " 10"], "answer":1},
+    {"id":"factor", "prompt":"An integer divisor of 15 greater than 3 and less than 10 is", "choices":[" 4", " 5", " 6", " 7"], "answer":1},
+    {"id":"parity", "prompt":"The integer 24 is an example of an", "choices":[" odd number", " even number", " irrational number", " prime number"], "answer":1}
+  ]
+}

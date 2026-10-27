@@ -1,0 +1,487 @@
+{
+  "version": 1,
+  "family": "terminal",
+  "purpose": "Static candidate choice and safe literal command-form checks only; never execute commands.",
+  "tasks": [
+    {
+      "id": "terminal_advanced_show_directory",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Display the current directory.\n$ ",
+      "choices": [
+        " pwd",
+        " find . -type f -name '*.py'",
+        " git remote -v",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "pwd"
+      ]
+    },
+    {
+      "id": "terminal_advanced_list_hidden",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# List hidden files along with other files.\n$ ",
+      "choices": [
+        " find . -type f -name '*.py' | wc -l",
+        " ls -la",
+        " git stash list",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "ls -(?:la|al|a)"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_status",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Show a concise Git working-tree status.\n$ ",
+      "choices": [
+        " grep -Rn 'TODO' src",
+        " git fetch --all",
+        " git status --short",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git status (?:--short|-s)"
+      ]
+    },
+    {
+      "id": "terminal_advanced_branch_create",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Create and switch to a new Git branch named experiment.\n$ ",
+      "choices": [
+        " python3 -m venv .venv",
+        " sort -u data.txt",
+        " ls",
+        " git switch -c experiment"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "git (?:switch -c|checkout -b) experiment"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_changes",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Show unstaged changes in working files.\n$ ",
+      "choices": [
+        " git diff",
+        " python3 -m py_compile main.py",
+        " tail -n 50 server.log",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "git diff"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_cached",
+      "category": "git",
+      "difficulty": "expert",
+      "prompt": "# List names of staged files.\n$ ",
+      "choices": [
+        " git branch --show-current",
+        " git diff --cached --name-only",
+        " df -h",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git diff --cached --name-only"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_head",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Show the last five commits as one-line summaries.\n$ ",
+      "choices": [
+        " git remote -v",
+        " free -h",
+        " git log -5 --oneline",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git log (?:-5 --oneline|--oneline -5)"
+      ]
+    },
+    {
+      "id": "terminal_advanced_find_py",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Find Python files recursively under the current directory.\n$ ",
+      "choices": [
+        " git stash list",
+        " git show HEAD",
+        " ls",
+        " find . -type f -name '*.py'"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "find \\. -type f -name ['\\\"]\\*\\.py['\\\"]"
+      ]
+    },
+    {
+      "id": "terminal_advanced_count_py",
+      "category": "linux",
+      "difficulty": "expert",
+      "prompt": "# Count Python files recursively in the current directory.\n$ ",
+      "choices": [
+        " find . -type f -name '*.py' | wc -l",
+        " git fetch --all",
+        " git rev-parse HEAD",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "find \\. -type f -name ['\\\"]\\*\\.py['\\\"] \\| wc -l"
+      ]
+    },
+    {
+      "id": "terminal_advanced_grep_todo",
+      "category": "linux",
+      "difficulty": "expert",
+      "prompt": "# Find occurrences of TODO recursively under src.\n$ ",
+      "choices": [
+        " sort -u data.txt",
+        " grep -Rn 'TODO' src",
+        " find data -type f -size +100M",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "grep -Rn ['\\\"]TODO['\\\"] src"
+      ]
+    },
+    {
+      "id": "terminal_advanced_venv",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Create an isolated Python environment named .venv.\n$ ",
+      "choices": [
+        " tail -n 50 server.log",
+        " grep -F 'a.b' notes.txt",
+        " python3 -m venv .venv",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "python3 -m venv \\.venv"
+      ]
+    },
+    {
+      "id": "terminal_advanced_py_compile",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Check main.py for Python syntax errors without running it.\n$ ",
+      "choices": [
+        " df -h",
+        " git worktree list",
+        " ls",
+        " python3 -m py_compile main.py"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "python3 -m py_compile main\\.py"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_branch",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Show the current Git branch name.\n$ ",
+      "choices": [
+        " git branch --show-current",
+        " free -h",
+        " sha256sum model.bin",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "git branch --show-current"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_remote",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# List the configured Git remote URLs.\n$ ",
+      "choices": [
+        " git show HEAD",
+        " git remote -v",
+        " file checkpoint.bin",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git remote -v"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_stash",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# List existing Git stashes without applying them.\n$ ",
+      "choices": [
+        " git rev-parse HEAD",
+        " ps aux",
+        " git stash list",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git stash list"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_fetch",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Download remote refs without merging changes.\n$ ",
+      "choices": [
+        " find data -type f -size +100M",
+        " printf \"%s\\n\" \"$PATH\"",
+        " ls",
+        " git fetch --all"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "git fetch --all"
+      ]
+    },
+    {
+      "id": "terminal_advanced_sort_unique",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Sort lines in data.txt and remove adjacent duplicate lines.\n$ ",
+      "choices": [
+        " sort -u data.txt",
+        " grep -F 'a.b' notes.txt",
+        " ss -ltn",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "sort -u data\\.txt"
+      ]
+    },
+    {
+      "id": "terminal_advanced_tail_logs",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Print the last 50 lines of server.log.\n$ ",
+      "choices": [
+        " git worktree list",
+        " tail -n 50 server.log",
+        " pwd",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "tail -n 50 server\\.log"
+      ]
+    },
+    {
+      "id": "terminal_advanced_disk_usage",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Show human-readable available filesystem space.\n$ ",
+      "choices": [
+        " sha256sum model.bin",
+        " ls -la",
+        " df -h",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "df -h"
+      ]
+    },
+    {
+      "id": "terminal_advanced_memory_usage",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Show human-readable available system RAM.\n$ ",
+      "choices": [
+        " file checkpoint.bin",
+        " git status --short",
+        " ls",
+        " free -h"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "free -h"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_show",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Show the patch of the most recent Git commit.\n$ ",
+      "choices": [
+        " git show HEAD",
+        " ps aux",
+        " git switch -c experiment",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "git show (?:HEAD)?"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_ref",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# Resolve the current Git HEAD commit hash.\n$ ",
+      "choices": [
+        " printf \"%s\\n\" \"$PATH\"",
+        " git rev-parse HEAD",
+        " git diff",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git rev-parse HEAD"
+      ]
+    },
+    {
+      "id": "terminal_advanced_find_large",
+      "category": "linux",
+      "difficulty": "expert",
+      "prompt": "# Find files larger than 100 megabytes under data.\n$ ",
+      "choices": [
+        " ss -ltn",
+        " git diff --cached --name-only",
+        " find data -type f -size +100M",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "find data -type f -size \\+100M"
+      ]
+    },
+    {
+      "id": "terminal_advanced_grep_fixed",
+      "category": "linux",
+      "difficulty": "expert",
+      "prompt": "# Search for the literal text a.b in notes.txt.\n$ ",
+      "choices": [
+        " pwd",
+        " git log -5 --oneline",
+        " ls",
+        " grep -F 'a.b' notes.txt"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "grep -F ['\\\"]a\\.b['\\\"] notes\\.txt"
+      ]
+    },
+    {
+      "id": "terminal_advanced_git_worktree",
+      "category": "git",
+      "difficulty": "intermediate",
+      "prompt": "# List existing Git worktrees.\n$ ",
+      "choices": [
+        " git worktree list",
+        " ls -la",
+        " find . -type f -name '*.py'",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "git worktree list"
+      ]
+    },
+    {
+      "id": "terminal_advanced_sha",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Compute SHA-256 checksum of model.bin.\n$ ",
+      "choices": [
+        " git status --short",
+        " sha256sum model.bin",
+        " find . -type f -name '*.py' | wc -l",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "sha256sum model\\.bin"
+      ]
+    },
+    {
+      "id": "terminal_advanced_file_type",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Identify the file type of checkpoint.bin.\n$ ",
+      "choices": [
+        " git switch -c experiment",
+        " grep -Rn 'TODO' src",
+        " file checkpoint.bin",
+        " ls"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "file checkpoint\\.bin"
+      ]
+    },
+    {
+      "id": "terminal_advanced_process",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Show running processes in full format.\n$ ",
+      "choices": [
+        " git diff",
+        " python3 -m venv .venv",
+        " ls",
+        " ps aux"
+      ],
+      "answer": 3,
+      "accepted_patterns": [
+        "ps aux"
+      ]
+    },
+    {
+      "id": "terminal_advanced_print_env",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Print PATH environment variable.\n$ ",
+      "choices": [
+        " printf \"%s\\n\" \"$PATH\"",
+        " git diff --cached --name-only",
+        " python3 -m py_compile main.py",
+        " ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "printf .*"
+      ]
+    },
+    {
+      "id": "terminal_advanced_list_ports",
+      "category": "linux",
+      "difficulty": "intermediate",
+      "prompt": "# Show listening TCP sockets.\n$ ",
+      "choices": [
+        " git log -5 --oneline",
+        " ss -ltn",
+        " git branch --show-current",
+        " ls"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "ss -ltn"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,347 @@
+{
+  "version": 1,
+  "family": "narrative",
+  "purpose": "Controlled entity/location recall + free narration, anchor rate not coherence measure.",
+  "tasks": [
+    {
+      "id": "mira_key",
+      "prompt": "Mira placed the copper key in the blue drawer. She closed the drawer and went outside to fetch the lantern. Later that evening, ",
+      "recall_prompt": "Mira placed the copper key in the blue drawer. She closed the drawer and went outside to fetch the lantern. The object was in the",
+      "choices": [
+        " front porch",
+        " kitchen sink",
+        " blue drawer",
+        " coat pocket"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Mira",
+        "copper key",
+        "drawer"
+      ]
+    },
+    {
+      "id": "sam_note",
+      "prompt": "Sam placed the folded note in the green box. He closed the lid and walked down the hall. Later that evening, ",
+      "recall_prompt": "Sam placed the folded note in the green box. He closed the lid and walked down the hall. The object was in the",
+      "choices": [
+        " green box",
+        " kitchen sink",
+        " front porch",
+        " coat pocket"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Sam",
+        "folded note",
+        "box"
+      ]
+    },
+    {
+      "id": "nora_book",
+      "prompt": "Nora placed the old book in the wooden chest. She locked the chest and left the room. Later that evening, ",
+      "recall_prompt": "Nora placed the old book in the wooden chest. She locked the chest and left the room. The object was in the",
+      "choices": [
+        " wooden chest",
+        " kitchen sink",
+        " coat pocket",
+        " front porch"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Nora",
+        "old book",
+        "chest"
+      ]
+    },
+    {
+      "id": "leo_watch",
+      "prompt": "Leo placed the pocket watch in the red cupboard. He finished breakfast and went to work. Later that evening, ",
+      "recall_prompt": "Leo placed the pocket watch in the red cupboard. He finished breakfast and went to work. The object was in the",
+      "choices": [
+        " coat pocket",
+        " red cupboard",
+        " front porch",
+        " kitchen sink"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Leo",
+        "pocket watch",
+        "cupboard"
+      ]
+    },
+    {
+      "id": "ada_map",
+      "prompt": "Ada placed the paper map in the black briefcase. She packed her equipment before the train departed. Later that evening, ",
+      "recall_prompt": "Ada placed the paper map in the black briefcase. She packed her equipment before the train departed. The object was in the",
+      "choices": [
+        " front porch",
+        " coat pocket",
+        " kitchen sink",
+        " black briefcase"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ada",
+        "paper map",
+        "briefcase"
+      ]
+    },
+    {
+      "id": "ivy_ring",
+      "prompt": "Ivy placed the silver ring in the small pouch. She tied the pouch and entered the garden. Later that evening, ",
+      "recall_prompt": "Ivy placed the silver ring in the small pouch. She tied the pouch and entered the garden. The object was in the",
+      "choices": [
+        " small pouch",
+        " kitchen sink",
+        " front porch",
+        " coat pocket"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Ivy",
+        "silver ring",
+        "pouch"
+      ]
+    },
+    {
+      "id": "omar_photo",
+      "prompt": "Omar placed the photograph in the brown envelope. He placed it beside the desk lamp. Later that evening, ",
+      "recall_prompt": "Omar placed the photograph in the brown envelope. He placed it beside the desk lamp. The object was in the",
+      "choices": [
+        " brown envelope",
+        " coat pocket",
+        " front porch",
+        " kitchen sink"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Omar",
+        "photograph",
+        "envelope"
+      ]
+    },
+    {
+      "id": "ella_ticket",
+      "prompt": "Ella placed the train ticket in the yellow folder. She carried the folder into the station. Later that evening, ",
+      "recall_prompt": "Ella placed the train ticket in the yellow folder. She carried the folder into the station. The object was in the",
+      "choices": [
+        " coat pocket",
+        " front porch",
+        " kitchen sink",
+        " yellow folder"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ella",
+        "train ticket",
+        "folder"
+      ]
+    },
+    {
+      "id": "jay_coin",
+      "prompt": "Jay placed the gold coin in the glass jar. He screwed the lid on and returned to the workshop. Later that evening, ",
+      "recall_prompt": "Jay placed the gold coin in the glass jar. He screwed the lid on and returned to the workshop. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " glass jar",
+        " coat pocket",
+        " front porch"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Jay",
+        "gold coin",
+        "jar"
+      ]
+    },
+    {
+      "id": "zoe_letter",
+      "prompt": "Zoe placed the letter in the blue backpack. She zipped the backpack before crossing the bridge. Later that evening, ",
+      "recall_prompt": "Zoe placed the letter in the blue backpack. She zipped the backpack before crossing the bridge. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " front porch",
+        " coat pocket",
+        " blue backpack"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Zoe",
+        "letter",
+        "backpack"
+      ]
+    },
+    {
+      "id": "june_card",
+      "prompt": "June placed the postcard in the orange box. She left the box on the top shelf. Later that evening, ",
+      "recall_prompt": "June placed the postcard in the orange box. She left the box on the top shelf. The object was in the",
+      "choices": [
+        " orange box",
+        " coat pocket",
+        " front porch",
+        " kitchen sink"
+      ],
+      "answer": 0,
+      "anchors": [
+        "June",
+        "postcard",
+        "box"
+      ]
+    },
+    {
+      "id": "kai_compass",
+      "prompt": "Kai placed the compass in the leather satchel. He strapped the satchel to his bicycle. Later that evening, ",
+      "recall_prompt": "Kai placed the compass in the leather satchel. He strapped the satchel to his bicycle. The object was in the",
+      "choices": [
+        " leather satchel",
+        " front porch",
+        " kitchen sink",
+        " coat pocket"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Kai",
+        "compass",
+        "satchel"
+      ]
+    },
+    {
+      "id": "rea_pencil",
+      "prompt": "Rea placed the pencil in the red drawer. She closed the drawer before answering the phone. Later that evening, ",
+      "recall_prompt": "Rea placed the pencil in the red drawer. She closed the drawer before answering the phone. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " red drawer",
+        " coat pocket",
+        " front porch"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Rea",
+        "pencil",
+        "drawer"
+      ]
+    },
+    {
+      "id": "max_usb",
+      "prompt": "Max placed the USB drive in the metal case. He put the case on the bookshelf. Later that evening, ",
+      "recall_prompt": "Max placed the USB drive in the metal case. He put the case on the bookshelf. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " front porch",
+        " metal case",
+        " coat pocket"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Max",
+        "USB drive",
+        "case"
+      ]
+    },
+    {
+      "id": "fay_glasses",
+      "prompt": "Fay placed the glasses in the brown bag. She hung the bag by the front door. Later that evening, ",
+      "recall_prompt": "Fay placed the glasses in the brown bag. She hung the bag by the front door. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " coat pocket",
+        " front porch",
+        " brown bag"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Fay",
+        "glasses",
+        "bag"
+      ]
+    },
+    {
+      "id": "lena_disk",
+      "prompt": "Lena placed the disk in the white envelope. She sealed the envelope and walked to the office. Later that evening, ",
+      "recall_prompt": "Lena placed the disk in the white envelope. She sealed the envelope and walked to the office. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " white envelope",
+        " coat pocket",
+        " front porch"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Lena",
+        "disk",
+        "envelope"
+      ]
+    },
+    {
+      "id": "ben_knife",
+      "prompt": "Ben placed the pocketknife in the green toolbox. He closed the toolbox and checked the bicycle tires. Later that evening, ",
+      "recall_prompt": "Ben placed the pocketknife in the green toolbox. He closed the toolbox and checked the bicycle tires. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " coat pocket",
+        " green toolbox",
+        " front porch"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ben",
+        "pocketknife",
+        "toolbox"
+      ]
+    },
+    {
+      "id": "eva_receipt",
+      "prompt": "Eva placed the receipt in the purple folder. She put the folder in the cabinet. Later that evening, ",
+      "recall_prompt": "Eva placed the receipt in the purple folder. She put the folder in the cabinet. The object was in the",
+      "choices": [
+        " purple folder",
+        " front porch",
+        " coat pocket",
+        " kitchen sink"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Eva",
+        "receipt",
+        "folder"
+      ]
+    },
+    {
+      "id": "nia_seed",
+      "prompt": "Nia placed the seed packet in the blue basket. She carried the basket across the garden. Later that evening, ",
+      "recall_prompt": "Nia placed the seed packet in the blue basket. She carried the basket across the garden. The object was in the",
+      "choices": [
+        " front porch",
+        " coat pocket",
+        " blue basket",
+        " kitchen sink"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Nia",
+        "seed packet",
+        "basket"
+      ]
+    },
+    {
+      "id": "eli_glove",
+      "prompt": "Eli placed the work glove in the yellow locker. He closed the locker and went back onto the field. Later that evening, ",
+      "recall_prompt": "Eli placed the work glove in the yellow locker. He closed the locker and went back onto the field. The object was in the",
+      "choices": [
+        " kitchen sink",
+        " front porch",
+        " yellow locker",
+        " coat pocket"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Eli",
+        "work glove",
+        "locker"
+      ]
+    }
+  ]
+}

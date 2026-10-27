@@ -1,0 +1,2257 @@
+{
+  "version": 1,
+  "family": "logic",
+  "purpose": "30 scenarios, 5 steps each: from direct order to six swaps and a reversal.",
+  "tasks": [
+    {
+      "id": "logic_queue_00_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_00",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Faye, Uma, Lena, Sam, Eli, Hana, Dara, Quinn. The first person is",
+      "choices": [
+        " Uma",
+        " Faye",
+        " Lena",
+        " Sam"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_00_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_00",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Faye, Uma, Lena, Sam, Eli, Hana, Dara, Quinn. The sixth person is",
+      "choices": [
+        " Faye",
+        " Uma",
+        " Hana",
+        " Lena"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_00_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_00",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Faye, Uma, Lena, Sam, Eli, Hana, Dara, Quinn. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Faye",
+        " Uma",
+        " Lena",
+        " Eli"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_00_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_00",
+      "stage": 4,
+      "prompt": "The original queue is Faye, Uma, Lena, Sam, Eli, Hana, Dara, Quinn. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Hana",
+        " Faye",
+        " Uma",
+        " Lena"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_00_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_00",
+      "stage": 5,
+      "prompt": "Start with queue Faye, Uma, Lena, Sam, Eli, Hana, Dara, Quinn. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Faye",
+        " Lena",
+        " Uma",
+        " Sam"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_01_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_01",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Uma, Zane, Rhea, Niko, Will, Lena, Dara, Ben. The first person is",
+      "choices": [
+        " Zane",
+        " Rhea",
+        " Uma",
+        " Niko"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_01_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_01",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Uma, Zane, Rhea, Niko, Will, Lena, Dara, Ben. The sixth person is",
+      "choices": [
+        " Uma",
+        " Zane",
+        " Rhea",
+        " Lena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_01_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_01",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Uma, Zane, Rhea, Niko, Will, Lena, Dara, Ben. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Will",
+        " Uma",
+        " Zane",
+        " Rhea"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_01_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_01",
+      "stage": 4,
+      "prompt": "The original queue is Uma, Zane, Rhea, Niko, Will, Lena, Dara, Ben. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Uma",
+        " Lena",
+        " Zane",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_01_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_01",
+      "stage": 5,
+      "prompt": "Start with queue Uma, Zane, Rhea, Niko, Will, Lena, Dara, Ben. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Uma",
+        " Zane",
+        " Rhea",
+        " Niko"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_02_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_02",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Kira, Lena, Ivan, Uma, Gus, Cleo, Vera, Rhea. The first person is",
+      "choices": [
+        " Lena",
+        " Ivan",
+        " Uma",
+        " Kira"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_02_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_02",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Kira, Lena, Ivan, Uma, Gus, Cleo, Vera, Rhea. The sixth person is",
+      "choices": [
+        " Cleo",
+        " Kira",
+        " Lena",
+        " Ivan"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_02_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_02",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Kira, Lena, Ivan, Uma, Gus, Cleo, Vera, Rhea. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Kira",
+        " Gus",
+        " Lena",
+        " Ivan"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_02_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_02",
+      "stage": 4,
+      "prompt": "The original queue is Kira, Lena, Ivan, Uma, Gus, Cleo, Vera, Rhea. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Kira",
+        " Lena",
+        " Cleo",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_02_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_02",
+      "stage": 5,
+      "prompt": "Start with queue Kira, Lena, Ivan, Uma, Gus, Cleo, Vera, Rhea. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Kira",
+        " Lena",
+        " Uma",
+        " Ivan"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_03_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_03",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Vera, Ada, Rhea, Hana, Cleo, Uma, Omar, Yara. The first person is",
+      "choices": [
+        " Vera",
+        " Ada",
+        " Rhea",
+        " Hana"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_03_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_03",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Vera, Ada, Rhea, Hana, Cleo, Uma, Omar, Yara. The sixth person is",
+      "choices": [
+        " Vera",
+        " Uma",
+        " Ada",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_03_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_03",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Vera, Ada, Rhea, Hana, Cleo, Uma, Omar, Yara. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Vera",
+        " Ada",
+        " Cleo",
+        " Rhea"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_03_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_03",
+      "stage": 4,
+      "prompt": "The original queue is Vera, Ada, Rhea, Hana, Cleo, Uma, Omar, Yara. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Vera",
+        " Ada",
+        " Rhea",
+        " Uma"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_03_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_03",
+      "stage": 5,
+      "prompt": "Start with queue Vera, Ada, Rhea, Hana, Cleo, Uma, Omar, Yara. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Rhea",
+        " Vera",
+        " Ada",
+        " Hana"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_04_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_04",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Yara, Will, Rhea, Mira, Kira, Zane, Vera, Ada. The first person is",
+      "choices": [
+        " Will",
+        " Yara",
+        " Rhea",
+        " Mira"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_04_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_04",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Yara, Will, Rhea, Mira, Kira, Zane, Vera, Ada. The sixth person is",
+      "choices": [
+        " Yara",
+        " Will",
+        " Zane",
+        " Rhea"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_04_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_04",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Yara, Will, Rhea, Mira, Kira, Zane, Vera, Ada. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Yara",
+        " Will",
+        " Rhea",
+        " Kira"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_04_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_04",
+      "stage": 4,
+      "prompt": "The original queue is Yara, Will, Rhea, Mira, Kira, Zane, Vera, Ada. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Zane",
+        " Yara",
+        " Will",
+        " Rhea"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_04_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_04",
+      "stage": 5,
+      "prompt": "Start with queue Yara, Will, Rhea, Mira, Kira, Zane, Vera, Ada. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Yara",
+        " Rhea",
+        " Will",
+        " Mira"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_05_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_05",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Tara, Yara, Ben, Mira, Lena, Omar, Vera, Uma. The first person is",
+      "choices": [
+        " Yara",
+        " Ben",
+        " Tara",
+        " Mira"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_05_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_05",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Tara, Yara, Ben, Mira, Lena, Omar, Vera, Uma. The sixth person is",
+      "choices": [
+        " Tara",
+        " Yara",
+        " Ben",
+        " Omar"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_05_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_05",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Tara, Yara, Ben, Mira, Lena, Omar, Vera, Uma. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Lena",
+        " Tara",
+        " Yara",
+        " Ben"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_05_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_05",
+      "stage": 4,
+      "prompt": "The original queue is Tara, Yara, Ben, Mira, Lena, Omar, Vera, Uma. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Tara",
+        " Omar",
+        " Yara",
+        " Ben"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_05_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_05",
+      "stage": 5,
+      "prompt": "Start with queue Tara, Yara, Ben, Mira, Lena, Omar, Vera, Uma. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Tara",
+        " Yara",
+        " Ben",
+        " Mira"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_06_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_06",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Rhea, Uma, Eli, Lena, Omar, Cleo, Jules, Dara. The first person is",
+      "choices": [
+        " Uma",
+        " Eli",
+        " Lena",
+        " Rhea"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_06_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_06",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Rhea, Uma, Eli, Lena, Omar, Cleo, Jules, Dara. The sixth person is",
+      "choices": [
+        " Cleo",
+        " Rhea",
+        " Uma",
+        " Eli"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_06_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_06",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Rhea, Uma, Eli, Lena, Omar, Cleo, Jules, Dara. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Rhea",
+        " Omar",
+        " Uma",
+        " Eli"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_06_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_06",
+      "stage": 4,
+      "prompt": "The original queue is Rhea, Uma, Eli, Lena, Omar, Cleo, Jules, Dara. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Rhea",
+        " Uma",
+        " Cleo",
+        " Eli"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_06_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_06",
+      "stage": 5,
+      "prompt": "Start with queue Rhea, Uma, Eli, Lena, Omar, Cleo, Jules, Dara. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Rhea",
+        " Uma",
+        " Lena",
+        " Eli"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_07_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_07",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Tara, Faye, Rhea, Ben, Jules, Will, Mira, Yara. The first person is",
+      "choices": [
+        " Tara",
+        " Faye",
+        " Rhea",
+        " Ben"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_07_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_07",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Tara, Faye, Rhea, Ben, Jules, Will, Mira, Yara. The sixth person is",
+      "choices": [
+        " Tara",
+        " Will",
+        " Faye",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_07_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_07",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Tara, Faye, Rhea, Ben, Jules, Will, Mira, Yara. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Tara",
+        " Faye",
+        " Jules",
+        " Rhea"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_07_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_07",
+      "stage": 4,
+      "prompt": "The original queue is Tara, Faye, Rhea, Ben, Jules, Will, Mira, Yara. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Tara",
+        " Faye",
+        " Rhea",
+        " Will"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_07_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_07",
+      "stage": 5,
+      "prompt": "Start with queue Tara, Faye, Rhea, Ben, Jules, Will, Mira, Yara. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Rhea",
+        " Tara",
+        " Faye",
+        " Ben"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_08_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_08",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Cleo, Eli, Kira, Ada, Xena, Lena, Will, Jules. The first person is",
+      "choices": [
+        " Eli",
+        " Cleo",
+        " Kira",
+        " Ada"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_08_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_08",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Cleo, Eli, Kira, Ada, Xena, Lena, Will, Jules. The sixth person is",
+      "choices": [
+        " Cleo",
+        " Eli",
+        " Lena",
+        " Kira"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_08_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_08",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Cleo, Eli, Kira, Ada, Xena, Lena, Will, Jules. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Cleo",
+        " Eli",
+        " Kira",
+        " Xena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_08_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_08",
+      "stage": 4,
+      "prompt": "The original queue is Cleo, Eli, Kira, Ada, Xena, Lena, Will, Jules. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Lena",
+        " Cleo",
+        " Eli",
+        " Kira"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_08_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_08",
+      "stage": 5,
+      "prompt": "Start with queue Cleo, Eli, Kira, Ada, Xena, Lena, Will, Jules. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Cleo",
+        " Kira",
+        " Eli",
+        " Ada"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_09_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_09",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Ben, Yara, Omar, Ada, Lena, Ivan, Will, Quinn. The first person is",
+      "choices": [
+        " Yara",
+        " Omar",
+        " Ben",
+        " Ada"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_09_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_09",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Ben, Yara, Omar, Ada, Lena, Ivan, Will, Quinn. The sixth person is",
+      "choices": [
+        " Ben",
+        " Yara",
+        " Omar",
+        " Ivan"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_09_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_09",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Ben, Yara, Omar, Ada, Lena, Ivan, Will, Quinn. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Lena",
+        " Ben",
+        " Yara",
+        " Omar"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_09_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_09",
+      "stage": 4,
+      "prompt": "The original queue is Ben, Yara, Omar, Ada, Lena, Ivan, Will, Quinn. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Ben",
+        " Ivan",
+        " Yara",
+        " Omar"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_09_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_09",
+      "stage": 5,
+      "prompt": "Start with queue Ben, Yara, Omar, Ada, Lena, Ivan, Will, Quinn. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Ben",
+        " Yara",
+        " Omar",
+        " Ada"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_10_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_10",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Lena, Sam, Kira, Mira, Rhea, Tara, Zane, Uma. The first person is",
+      "choices": [
+        " Sam",
+        " Kira",
+        " Mira",
+        " Lena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_10_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_10",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Lena, Sam, Kira, Mira, Rhea, Tara, Zane, Uma. The sixth person is",
+      "choices": [
+        " Tara",
+        " Lena",
+        " Sam",
+        " Kira"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_10_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_10",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Lena, Sam, Kira, Mira, Rhea, Tara, Zane, Uma. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Lena",
+        " Rhea",
+        " Sam",
+        " Kira"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_10_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_10",
+      "stage": 4,
+      "prompt": "The original queue is Lena, Sam, Kira, Mira, Rhea, Tara, Zane, Uma. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Lena",
+        " Sam",
+        " Tara",
+        " Kira"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_10_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_10",
+      "stage": 5,
+      "prompt": "Start with queue Lena, Sam, Kira, Mira, Rhea, Tara, Zane, Uma. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Lena",
+        " Sam",
+        " Mira",
+        " Kira"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_11_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_11",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Mira, Jules, Ivan, Dara, Niko, Lena, Vera, Rhea. The first person is",
+      "choices": [
+        " Mira",
+        " Jules",
+        " Ivan",
+        " Dara"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_11_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_11",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Mira, Jules, Ivan, Dara, Niko, Lena, Vera, Rhea. The sixth person is",
+      "choices": [
+        " Mira",
+        " Lena",
+        " Jules",
+        " Ivan"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_11_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_11",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Mira, Jules, Ivan, Dara, Niko, Lena, Vera, Rhea. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Mira",
+        " Jules",
+        " Niko",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_11_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_11",
+      "stage": 4,
+      "prompt": "The original queue is Mira, Jules, Ivan, Dara, Niko, Lena, Vera, Rhea. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Mira",
+        " Jules",
+        " Ivan",
+        " Lena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_11_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_11",
+      "stage": 5,
+      "prompt": "Start with queue Mira, Jules, Ivan, Dara, Niko, Lena, Vera, Rhea. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Ivan",
+        " Mira",
+        " Jules",
+        " Dara"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_12_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_12",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Tara, Hana, Yara, Zane, Faye, Uma, Cleo, Omar. The first person is",
+      "choices": [
+        " Hana",
+        " Tara",
+        " Yara",
+        " Zane"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_12_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_12",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Tara, Hana, Yara, Zane, Faye, Uma, Cleo, Omar. The sixth person is",
+      "choices": [
+        " Tara",
+        " Hana",
+        " Uma",
+        " Yara"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_12_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_12",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Tara, Hana, Yara, Zane, Faye, Uma, Cleo, Omar. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Tara",
+        " Hana",
+        " Yara",
+        " Faye"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_12_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_12",
+      "stage": 4,
+      "prompt": "The original queue is Tara, Hana, Yara, Zane, Faye, Uma, Cleo, Omar. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Uma",
+        " Tara",
+        " Hana",
+        " Yara"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_12_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_12",
+      "stage": 5,
+      "prompt": "Start with queue Tara, Hana, Yara, Zane, Faye, Uma, Cleo, Omar. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Tara",
+        " Yara",
+        " Hana",
+        " Zane"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_13_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_13",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Faye, Tara, Sam, Zane, Eli, Vera, Hana, Rhea. The first person is",
+      "choices": [
+        " Tara",
+        " Sam",
+        " Faye",
+        " Zane"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_13_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_13",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Faye, Tara, Sam, Zane, Eli, Vera, Hana, Rhea. The sixth person is",
+      "choices": [
+        " Faye",
+        " Tara",
+        " Sam",
+        " Vera"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_13_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_13",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Faye, Tara, Sam, Zane, Eli, Vera, Hana, Rhea. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Eli",
+        " Faye",
+        " Tara",
+        " Sam"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_13_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_13",
+      "stage": 4,
+      "prompt": "The original queue is Faye, Tara, Sam, Zane, Eli, Vera, Hana, Rhea. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Faye",
+        " Vera",
+        " Tara",
+        " Sam"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_13_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_13",
+      "stage": 5,
+      "prompt": "Start with queue Faye, Tara, Sam, Zane, Eli, Vera, Hana, Rhea. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Faye",
+        " Tara",
+        " Sam",
+        " Zane"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_14_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_14",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Xena, Yara, Gus, Dara, Omar, Kira, Rhea, Cleo. The first person is",
+      "choices": [
+        " Yara",
+        " Gus",
+        " Dara",
+        " Xena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_14_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_14",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Xena, Yara, Gus, Dara, Omar, Kira, Rhea, Cleo. The sixth person is",
+      "choices": [
+        " Kira",
+        " Xena",
+        " Yara",
+        " Gus"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_14_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_14",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Xena, Yara, Gus, Dara, Omar, Kira, Rhea, Cleo. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Xena",
+        " Omar",
+        " Yara",
+        " Gus"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_14_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_14",
+      "stage": 4,
+      "prompt": "The original queue is Xena, Yara, Gus, Dara, Omar, Kira, Rhea, Cleo. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Xena",
+        " Yara",
+        " Kira",
+        " Gus"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_14_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_14",
+      "stage": 5,
+      "prompt": "Start with queue Xena, Yara, Gus, Dara, Omar, Kira, Rhea, Cleo. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Xena",
+        " Yara",
+        " Dara",
+        " Gus"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_15_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_15",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Rhea, Pia, Ivan, Uma, Ben, Gus, Jules, Lena. The first person is",
+      "choices": [
+        " Rhea",
+        " Pia",
+        " Ivan",
+        " Uma"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_15_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_15",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Rhea, Pia, Ivan, Uma, Ben, Gus, Jules, Lena. The sixth person is",
+      "choices": [
+        " Rhea",
+        " Gus",
+        " Pia",
+        " Ivan"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_15_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_15",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Rhea, Pia, Ivan, Uma, Ben, Gus, Jules, Lena. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Rhea",
+        " Pia",
+        " Ben",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_15_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_15",
+      "stage": 4,
+      "prompt": "The original queue is Rhea, Pia, Ivan, Uma, Ben, Gus, Jules, Lena. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Rhea",
+        " Pia",
+        " Ivan",
+        " Gus"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_15_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_15",
+      "stage": 5,
+      "prompt": "Start with queue Rhea, Pia, Ivan, Uma, Ben, Gus, Jules, Lena. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Ivan",
+        " Rhea",
+        " Pia",
+        " Uma"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_16_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_16",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Hana, Uma, Kira, Cleo, Yara, Mira, Eli, Tara. The first person is",
+      "choices": [
+        " Uma",
+        " Hana",
+        " Kira",
+        " Cleo"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_16_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_16",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Hana, Uma, Kira, Cleo, Yara, Mira, Eli, Tara. The sixth person is",
+      "choices": [
+        " Hana",
+        " Uma",
+        " Mira",
+        " Kira"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_16_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_16",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Hana, Uma, Kira, Cleo, Yara, Mira, Eli, Tara. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Hana",
+        " Uma",
+        " Kira",
+        " Yara"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_16_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_16",
+      "stage": 4,
+      "prompt": "The original queue is Hana, Uma, Kira, Cleo, Yara, Mira, Eli, Tara. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Mira",
+        " Hana",
+        " Uma",
+        " Kira"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_16_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_16",
+      "stage": 5,
+      "prompt": "Start with queue Hana, Uma, Kira, Cleo, Yara, Mira, Eli, Tara. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Hana",
+        " Kira",
+        " Uma",
+        " Cleo"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_17_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_17",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Niko, Eli, Vera, Ada, Mira, Xena, Pia, Dara. The first person is",
+      "choices": [
+        " Eli",
+        " Vera",
+        " Niko",
+        " Ada"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_17_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_17",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Niko, Eli, Vera, Ada, Mira, Xena, Pia, Dara. The sixth person is",
+      "choices": [
+        " Niko",
+        " Eli",
+        " Vera",
+        " Xena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_17_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_17",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Niko, Eli, Vera, Ada, Mira, Xena, Pia, Dara. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Mira",
+        " Niko",
+        " Eli",
+        " Vera"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_17_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_17",
+      "stage": 4,
+      "prompt": "The original queue is Niko, Eli, Vera, Ada, Mira, Xena, Pia, Dara. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Niko",
+        " Xena",
+        " Eli",
+        " Vera"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_17_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_17",
+      "stage": 5,
+      "prompt": "Start with queue Niko, Eli, Vera, Ada, Mira, Xena, Pia, Dara. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Niko",
+        " Eli",
+        " Vera",
+        " Ada"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_18_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_18",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Niko, Faye, Zane, Omar, Kira, Will, Ben, Gus. The first person is",
+      "choices": [
+        " Faye",
+        " Zane",
+        " Omar",
+        " Niko"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_18_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_18",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Niko, Faye, Zane, Omar, Kira, Will, Ben, Gus. The sixth person is",
+      "choices": [
+        " Will",
+        " Niko",
+        " Faye",
+        " Zane"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_18_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_18",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Niko, Faye, Zane, Omar, Kira, Will, Ben, Gus. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Niko",
+        " Kira",
+        " Faye",
+        " Zane"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_18_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_18",
+      "stage": 4,
+      "prompt": "The original queue is Niko, Faye, Zane, Omar, Kira, Will, Ben, Gus. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Niko",
+        " Faye",
+        " Will",
+        " Zane"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_18_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_18",
+      "stage": 5,
+      "prompt": "Start with queue Niko, Faye, Zane, Omar, Kira, Will, Ben, Gus. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Niko",
+        " Faye",
+        " Omar",
+        " Zane"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_19_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_19",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Vera, Quinn, Faye, Ada, Xena, Ben, Will, Zane. The first person is",
+      "choices": [
+        " Vera",
+        " Quinn",
+        " Faye",
+        " Ada"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_19_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_19",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Vera, Quinn, Faye, Ada, Xena, Ben, Will, Zane. The sixth person is",
+      "choices": [
+        " Vera",
+        " Ben",
+        " Quinn",
+        " Faye"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_19_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_19",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Vera, Quinn, Faye, Ada, Xena, Ben, Will, Zane. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Vera",
+        " Quinn",
+        " Xena",
+        " Faye"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_19_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_19",
+      "stage": 4,
+      "prompt": "The original queue is Vera, Quinn, Faye, Ada, Xena, Ben, Will, Zane. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Vera",
+        " Quinn",
+        " Faye",
+        " Ben"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_19_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_19",
+      "stage": 5,
+      "prompt": "Start with queue Vera, Quinn, Faye, Ada, Xena, Ben, Will, Zane. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Faye",
+        " Vera",
+        " Quinn",
+        " Ada"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_20_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_20",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Kira, Eli, Omar, Ada, Ben, Zane, Ivan, Cleo. The first person is",
+      "choices": [
+        " Eli",
+        " Kira",
+        " Omar",
+        " Ada"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_20_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_20",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Kira, Eli, Omar, Ada, Ben, Zane, Ivan, Cleo. The sixth person is",
+      "choices": [
+        " Kira",
+        " Eli",
+        " Zane",
+        " Omar"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_20_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_20",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Kira, Eli, Omar, Ada, Ben, Zane, Ivan, Cleo. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Kira",
+        " Eli",
+        " Omar",
+        " Ben"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_20_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_20",
+      "stage": 4,
+      "prompt": "The original queue is Kira, Eli, Omar, Ada, Ben, Zane, Ivan, Cleo. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Zane",
+        " Kira",
+        " Eli",
+        " Omar"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_20_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_20",
+      "stage": 5,
+      "prompt": "Start with queue Kira, Eli, Omar, Ada, Ben, Zane, Ivan, Cleo. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Kira",
+        " Omar",
+        " Eli",
+        " Ada"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_21_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_21",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Tara, Mira, Rhea, Ivan, Jules, Uma, Gus, Lena. The first person is",
+      "choices": [
+        " Mira",
+        " Rhea",
+        " Tara",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_21_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_21",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Tara, Mira, Rhea, Ivan, Jules, Uma, Gus, Lena. The sixth person is",
+      "choices": [
+        " Tara",
+        " Mira",
+        " Rhea",
+        " Uma"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_21_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_21",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Tara, Mira, Rhea, Ivan, Jules, Uma, Gus, Lena. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Jules",
+        " Tara",
+        " Mira",
+        " Rhea"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_21_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_21",
+      "stage": 4,
+      "prompt": "The original queue is Tara, Mira, Rhea, Ivan, Jules, Uma, Gus, Lena. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Tara",
+        " Uma",
+        " Mira",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_21_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_21",
+      "stage": 5,
+      "prompt": "Start with queue Tara, Mira, Rhea, Ivan, Jules, Uma, Gus, Lena. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Tara",
+        " Mira",
+        " Rhea",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_22_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_22",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Niko, Quinn, Faye, Mira, Ada, Yara, Zane, Will. The first person is",
+      "choices": [
+        " Quinn",
+        " Faye",
+        " Mira",
+        " Niko"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_22_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_22",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Niko, Quinn, Faye, Mira, Ada, Yara, Zane, Will. The sixth person is",
+      "choices": [
+        " Yara",
+        " Niko",
+        " Quinn",
+        " Faye"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_22_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_22",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Niko, Quinn, Faye, Mira, Ada, Yara, Zane, Will. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Niko",
+        " Ada",
+        " Quinn",
+        " Faye"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_22_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_22",
+      "stage": 4,
+      "prompt": "The original queue is Niko, Quinn, Faye, Mira, Ada, Yara, Zane, Will. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Niko",
+        " Quinn",
+        " Yara",
+        " Faye"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_22_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_22",
+      "stage": 5,
+      "prompt": "Start with queue Niko, Quinn, Faye, Mira, Ada, Yara, Zane, Will. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Niko",
+        " Quinn",
+        " Mira",
+        " Faye"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_23_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_23",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Kira, Will, Ivan, Omar, Dara, Ben, Sam, Uma. The first person is",
+      "choices": [
+        " Kira",
+        " Will",
+        " Ivan",
+        " Omar"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_23_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_23",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Kira, Will, Ivan, Omar, Dara, Ben, Sam, Uma. The sixth person is",
+      "choices": [
+        " Kira",
+        " Ben",
+        " Will",
+        " Ivan"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_23_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_23",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Kira, Will, Ivan, Omar, Dara, Ben, Sam, Uma. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Kira",
+        " Will",
+        " Dara",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_23_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_23",
+      "stage": 4,
+      "prompt": "The original queue is Kira, Will, Ivan, Omar, Dara, Ben, Sam, Uma. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Kira",
+        " Will",
+        " Ivan",
+        " Ben"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_23_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_23",
+      "stage": 5,
+      "prompt": "Start with queue Kira, Will, Ivan, Omar, Dara, Ben, Sam, Uma. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Ivan",
+        " Kira",
+        " Will",
+        " Omar"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_24_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_24",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Omar, Hana, Ivan, Kira, Mira, Jules, Faye, Cleo. The first person is",
+      "choices": [
+        " Hana",
+        " Omar",
+        " Ivan",
+        " Kira"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_24_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_24",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Omar, Hana, Ivan, Kira, Mira, Jules, Faye, Cleo. The sixth person is",
+      "choices": [
+        " Omar",
+        " Hana",
+        " Jules",
+        " Ivan"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_24_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_24",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Omar, Hana, Ivan, Kira, Mira, Jules, Faye, Cleo. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Omar",
+        " Hana",
+        " Ivan",
+        " Mira"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_24_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_24",
+      "stage": 4,
+      "prompt": "The original queue is Omar, Hana, Ivan, Kira, Mira, Jules, Faye, Cleo. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Jules",
+        " Omar",
+        " Hana",
+        " Ivan"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_24_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_24",
+      "stage": 5,
+      "prompt": "Start with queue Omar, Hana, Ivan, Kira, Mira, Jules, Faye, Cleo. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Omar",
+        " Ivan",
+        " Hana",
+        " Kira"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_25_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_25",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Quinn, Ben, Eli, Uma, Ada, Gus, Will, Mira. The first person is",
+      "choices": [
+        " Ben",
+        " Eli",
+        " Quinn",
+        " Uma"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_25_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_25",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Quinn, Ben, Eli, Uma, Ada, Gus, Will, Mira. The sixth person is",
+      "choices": [
+        " Quinn",
+        " Ben",
+        " Eli",
+        " Gus"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_25_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_25",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Quinn, Ben, Eli, Uma, Ada, Gus, Will, Mira. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Ada",
+        " Quinn",
+        " Ben",
+        " Eli"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_25_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_25",
+      "stage": 4,
+      "prompt": "The original queue is Quinn, Ben, Eli, Uma, Ada, Gus, Will, Mira. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Quinn",
+        " Gus",
+        " Ben",
+        " Eli"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_25_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_25",
+      "stage": 5,
+      "prompt": "Start with queue Quinn, Ben, Eli, Uma, Ada, Gus, Will, Mira. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Quinn",
+        " Ben",
+        " Eli",
+        " Uma"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_26_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_26",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Uma, Will, Vera, Yara, Omar, Zane, Ben, Kira. The first person is",
+      "choices": [
+        " Will",
+        " Vera",
+        " Yara",
+        " Uma"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_26_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_26",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Uma, Will, Vera, Yara, Omar, Zane, Ben, Kira. The sixth person is",
+      "choices": [
+        " Zane",
+        " Uma",
+        " Will",
+        " Vera"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_26_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_26",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Uma, Will, Vera, Yara, Omar, Zane, Ben, Kira. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Uma",
+        " Omar",
+        " Will",
+        " Vera"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_26_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_26",
+      "stage": 4,
+      "prompt": "The original queue is Uma, Will, Vera, Yara, Omar, Zane, Ben, Kira. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Uma",
+        " Will",
+        " Zane",
+        " Vera"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_26_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_26",
+      "stage": 5,
+      "prompt": "Start with queue Uma, Will, Vera, Yara, Omar, Zane, Ben, Kira. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Uma",
+        " Will",
+        " Yara",
+        " Vera"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_27_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_27",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Zane, Ivan, Vera, Sam, Pia, Uma, Niko, Eli. The first person is",
+      "choices": [
+        " Zane",
+        " Ivan",
+        " Vera",
+        " Sam"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_27_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_27",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Zane, Ivan, Vera, Sam, Pia, Uma, Niko, Eli. The sixth person is",
+      "choices": [
+        " Zane",
+        " Uma",
+        " Ivan",
+        " Vera"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_27_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_27",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Zane, Ivan, Vera, Sam, Pia, Uma, Niko, Eli. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Zane",
+        " Ivan",
+        " Pia",
+        " Vera"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_27_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_27",
+      "stage": 4,
+      "prompt": "The original queue is Zane, Ivan, Vera, Sam, Pia, Uma, Niko, Eli. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Zane",
+        " Ivan",
+        " Vera",
+        " Uma"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_27_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_27",
+      "stage": 5,
+      "prompt": "Start with queue Zane, Ivan, Vera, Sam, Pia, Uma, Niko, Eli. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Vera",
+        " Zane",
+        " Ivan",
+        " Sam"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_28_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_28",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Sam, Ada, Quinn, Rhea, Will, Eli, Jules, Zane. The first person is",
+      "choices": [
+        " Ada",
+        " Sam",
+        " Quinn",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_28_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_28",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Sam, Ada, Quinn, Rhea, Will, Eli, Jules, Zane. The sixth person is",
+      "choices": [
+        " Sam",
+        " Ada",
+        " Eli",
+        " Quinn"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_28_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_28",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Sam, Ada, Quinn, Rhea, Will, Eli, Jules, Zane. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Sam",
+        " Ada",
+        " Quinn",
+        " Will"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_28_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_28",
+      "stage": 4,
+      "prompt": "The original queue is Sam, Ada, Quinn, Rhea, Will, Eli, Jules, Zane. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Eli",
+        " Sam",
+        " Ada",
+        " Quinn"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_28_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_28",
+      "stage": 5,
+      "prompt": "Start with queue Sam, Ada, Quinn, Rhea, Will, Eli, Jules, Zane. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Sam",
+        " Quinn",
+        " Ada",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_29_s1",
+      "category": "direct_order",
+      "difficulty": "basic",
+      "scenario_id": "logic_queue_29",
+      "stage": 1,
+      "prompt": "The left-to-right queue is Uma, Vera, Rhea, Faye, Niko, Lena, Kira, Pia. The first person is",
+      "choices": [
+        " Vera",
+        " Rhea",
+        " Uma",
+        " Faye"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "logic_queue_29_s2",
+      "category": "indexed_position",
+      "difficulty": "intermediate",
+      "scenario_id": "logic_queue_29",
+      "stage": 2,
+      "prompt": "The left-to-right queue is Uma, Vera, Rhea, Faye, Niko, Lena, Kira, Pia. The sixth person is",
+      "choices": [
+        " Uma",
+        " Vera",
+        " Rhea",
+        " Lena"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "logic_queue_29_s3",
+      "category": "one_swap",
+      "difficulty": "hard",
+      "scenario_id": "logic_queue_29",
+      "stage": 3,
+      "prompt": "The left-to-right queue starts as Uma, Vera, Rhea, Faye, Niko, Lena, Kira, Pia. Swap the people at positions 2 and 5 (numbering from 1). The person now second is",
+      "choices": [
+        " Niko",
+        " Uma",
+        " Vera",
+        " Rhea"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "logic_queue_29_s4",
+      "category": "multi_swap",
+      "difficulty": "expert",
+      "scenario_id": "logic_queue_29",
+      "stage": 4,
+      "prompt": "The original queue is Uma, Vera, Rhea, Faye, Niko, Lena, Kira, Pia. Swap 1-based positions 2 and 5, then 3 and 7, then 1 and 8, then 4 and 6, then 1 and 3, then 6 and 7. The person fourth is",
+      "choices": [
+        " Uma",
+        " Lena",
+        " Vera",
+        " Rhea"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "logic_queue_29_s5",
+      "category": "reverse_and_swap",
+      "difficulty": "extreme",
+      "scenario_id": "logic_queue_29",
+      "stage": 5,
+      "prompt": "Start with queue Uma, Vera, Rhea, Faye, Niko, Lena, Kira, Pia. Swap 1-based positions 2 with 5, 3 with 7, 1 with 8, 4 with 6, 1 with 3, and 6 with 7, in that order. Now reverse the entire queue. The third person is",
+      "choices": [
+        " Uma",
+        " Vera",
+        " Rhea",
+        " Faye"
+      ],
+      "answer": 2
+    }
+  ]
+}

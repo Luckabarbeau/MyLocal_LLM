@@ -1,0 +1,631 @@
+{
+  "version": 1,
+  "family": "logic",
+  "purpose": "Simple relation and memory choices: carefully constructed, not an external dataset.",
+  "tasks": [
+    {
+      "id": "compare_4_9",
+      "category": "comparison",
+      "prompt": "Of the integers 4 and 9, the larger is the",
+      "choices": [
+        " both",
+        " neither",
+        " second number",
+        " first"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "compare_7_3",
+      "category": "comparison",
+      "prompt": "Of the integers 7 and 3, the larger is the",
+      "choices": [
+        " both",
+        " second",
+        " neither",
+        " first number"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "compare_12_14",
+      "category": "comparison",
+      "prompt": "Of the integers 12 and 14, the larger is the",
+      "choices": [
+        " second number",
+        " first",
+        " both",
+        " neither"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "compare_8_2",
+      "category": "comparison",
+      "prompt": "Of the integers 8 and 2, the larger is the",
+      "choices": [
+        " second",
+        " first number",
+        " both",
+        " neither"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "compare_18_11",
+      "category": "comparison",
+      "prompt": "Of the integers 18 and 11, the larger is the",
+      "choices": [
+        " first number",
+        " both",
+        " neither",
+        " second"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "compare_6_5",
+      "category": "comparison",
+      "prompt": "Of the integers 6 and 5, the larger is the",
+      "choices": [
+        " first number",
+        " both",
+        " neither",
+        " second"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "compare_10_21",
+      "category": "comparison",
+      "prompt": "Of the integers 10 and 21, the larger is the",
+      "choices": [
+        " neither",
+        " first",
+        " second number",
+        " both"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "compare_15_13",
+      "category": "comparison",
+      "prompt": "Of the integers 15 and 13, the larger is the",
+      "choices": [
+        " first number",
+        " both",
+        " neither",
+        " second"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "coins_3",
+      "category": "counting",
+      "prompt": "A person has 3 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 1",
+        " 3",
+        " 4",
+        " 2 coins"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "coins_4",
+      "category": "counting",
+      "prompt": "A person has 4 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 3 coins",
+        " 5",
+        " 2",
+        " 4"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "coins_5",
+      "category": "counting",
+      "prompt": "A person has 5 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 5",
+        " 4 coins",
+        " 6",
+        " 3"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "coins_6",
+      "category": "counting",
+      "prompt": "A person has 6 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 4",
+        " 5 coins",
+        " 6",
+        " 7"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "coins_7",
+      "category": "counting",
+      "prompt": "A person has 7 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 8",
+        " 5",
+        " 7",
+        " 6 coins"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "coins_8",
+      "category": "counting",
+      "prompt": "A person has 8 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 6",
+        " 8",
+        " 9",
+        " 7 coins"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "coins_9",
+      "category": "counting",
+      "prompt": "A person has 9 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 9",
+        " 7",
+        " 8 coins",
+        " 10"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "coins_10",
+      "category": "counting",
+      "prompt": "A person has 10 coins and gives away one coin without receiving any. They have",
+      "choices": [
+        " 10",
+        " 9 coins",
+        " 8",
+        " 11"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "height_Ada",
+      "category": "transitivity",
+      "prompt": "Ada is taller than Ben and Ben is taller than Cleo. The tallest is",
+      "choices": [
+        " none",
+        " Cleo",
+        " Ben",
+        " Ada"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "height_small_Ada",
+      "category": "transitivity",
+      "prompt": "Ada is taller than Ben and Ben is taller than Cleo. The shortest is",
+      "choices": [
+        " none",
+        " Ada",
+        " Cleo",
+        " Ben"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "height_Nora",
+      "category": "transitivity",
+      "prompt": "Nora is taller than Mika and Mika is taller than Theo. The tallest is",
+      "choices": [
+        " Nora",
+        " Mika",
+        " none",
+        " Theo"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "height_small_Nora",
+      "category": "transitivity",
+      "prompt": "Nora is taller than Mika and Mika is taller than Theo. The shortest is",
+      "choices": [
+        " Theo",
+        " Nora",
+        " Mika",
+        " none"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "height_Sara",
+      "category": "transitivity",
+      "prompt": "Sara is taller than Leo and Leo is taller than Omar. The tallest is",
+      "choices": [
+        " Omar",
+        " Leo",
+        " none",
+        " Sara"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "height_small_Sara",
+      "category": "transitivity",
+      "prompt": "Sara is taller than Leo and Leo is taller than Omar. The shortest is",
+      "choices": [
+        " Omar",
+        " Sara",
+        " none",
+        " Leo"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "height_Ivy",
+      "category": "transitivity",
+      "prompt": "Ivy is taller than Noah and Noah is taller than Ella. The tallest is",
+      "choices": [
+        " Noah",
+        " none",
+        " Ella",
+        " Ivy"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "height_small_Ivy",
+      "category": "transitivity",
+      "prompt": "Ivy is taller than Noah and Noah is taller than Ella. The shortest is",
+      "choices": [
+        " Ivy",
+        " Noah",
+        " Ella",
+        " none"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "location_blue",
+      "category": "fact_recall",
+      "prompt": "The notebook was placed in the blue drawer. Its location is the",
+      "choices": [
+        " red drawer",
+        " blue drawer",
+        " coat pocket",
+        " front door"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "location_red",
+      "category": "fact_recall",
+      "prompt": "The notebook was placed in the red cupboard. Its location is the",
+      "choices": [
+        " front door",
+        " red cupboard",
+        " coat pocket",
+        " blue drawer"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "location_green",
+      "category": "fact_recall",
+      "prompt": "The notebook was placed in the green box. Its location is the",
+      "choices": [
+        " coat pocket",
+        " red drawer",
+        " front door",
+        " green box"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "location_yellow",
+      "category": "fact_recall",
+      "prompt": "The notebook was placed in the yellow bag. Its location is the",
+      "choices": [
+        " yellow bag",
+        " red drawer",
+        " front door",
+        " coat pocket"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "location_black",
+      "category": "fact_recall",
+      "prompt": "The notebook was placed in the black shelf. Its location is the",
+      "choices": [
+        " black shelf",
+        " coat pocket",
+        " front door",
+        " red drawer"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "order_bus",
+      "category": "ordering",
+      "prompt": "The bus arrived before the train, and the train arrived before the taxi. The last arrival was the",
+      "choices": [
+        " train",
+        " first vehicle",
+        " taxi",
+        " bus"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "order_bike",
+      "category": "ordering",
+      "prompt": "The bike arrived before the car, and the car arrived before the truck. The last arrival was the",
+      "choices": [
+        " first vehicle",
+        " bike",
+        " truck",
+        " car"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "order_ferry",
+      "category": "ordering",
+      "prompt": "The ferry arrived before the bus, and the bus arrived before the plane. The last arrival was the",
+      "choices": [
+        " ferry",
+        " plane",
+        " bus",
+        " first vehicle"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "order_van",
+      "category": "ordering",
+      "prompt": "The van arrived before the tram, and the tram arrived before the subway. The last arrival was the",
+      "choices": [
+        " first vehicle",
+        " subway",
+        " tram",
+        " van"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "category_robin",
+      "category": "taxonomy",
+      "prompt": "Every robin is a bird. Therefore a robin is a",
+      "choices": [
+        " bird",
+        " fish",
+        " building",
+        " river"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "category_whale",
+      "category": "taxonomy",
+      "prompt": "Every whale is a mammal. Therefore a whale is a",
+      "choices": [
+        " river",
+        " building",
+        " bird",
+        " mammal"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "category_ant",
+      "category": "taxonomy",
+      "prompt": "Every ant is a insect. Therefore a ant is a",
+      "choices": [
+        " reptile",
+        " building",
+        " river",
+        " insect"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "category_bicycle",
+      "category": "taxonomy",
+      "prompt": "Every bicycle is a vehicle. Therefore a bicycle is a",
+      "choices": [
+        " river",
+        " tree",
+        " building",
+        " vehicle"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "category_apple",
+      "category": "taxonomy",
+      "prompt": "Every apple is a fruit. Therefore a apple is a",
+      "choices": [
+        " river",
+        " tool",
+        " fruit",
+        " building"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "category_copper",
+      "category": "taxonomy",
+      "prompt": "Every copper is a metal. Therefore a copper is a",
+      "choices": [
+        " river",
+        " building",
+        " metal",
+        " wood"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "opposite_east",
+      "category": "relations",
+      "prompt": "The opposite of east is",
+      "choices": [
+        " west",
+        " same",
+        " east",
+        " neither"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "opposite_north",
+      "category": "relations",
+      "prompt": "The opposite of north is",
+      "choices": [
+        " same",
+        " neither",
+        " south",
+        " north"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "opposite_up",
+      "category": "relations",
+      "prompt": "The opposite of up is",
+      "choices": [
+        " down",
+        " same",
+        " up",
+        " neither"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "opposite_inside",
+      "category": "relations",
+      "prompt": "The opposite of inside is",
+      "choices": [
+        " neither",
+        " same",
+        " outside",
+        " inside"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "opposite_before",
+      "category": "relations",
+      "prompt": "The opposite of before is",
+      "choices": [
+        " after",
+        " neither",
+        " before",
+        " same"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "odd_even_2",
+      "category": "classification",
+      "prompt": "A basket holds 2 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 1",
+        " 3",
+        " 4",
+        " 2"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "odd_even_3",
+      "category": "classification",
+      "prompt": "A basket holds 3 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 2",
+        " 3",
+        " 5",
+        " 4"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "odd_even_4",
+      "category": "classification",
+      "prompt": "A basket holds 4 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 3",
+        " 4",
+        " 5",
+        " 6"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "odd_even_5",
+      "category": "classification",
+      "prompt": "A basket holds 5 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 4",
+        " 5",
+        " 6",
+        " 7"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "odd_even_6",
+      "category": "classification",
+      "prompt": "A basket holds 6 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 8",
+        " 6",
+        " 5",
+        " 7"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "odd_even_7",
+      "category": "classification",
+      "prompt": "A basket holds 7 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 7",
+        " 9",
+        " 8",
+        " 6"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "odd_even_8",
+      "category": "classification",
+      "prompt": "A basket holds 8 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 10",
+        " 8",
+        " 9",
+        " 7"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "odd_even_9",
+      "category": "classification",
+      "prompt": "A basket holds 9 stones. If one stone is added, the number of stones becomes",
+      "choices": [
+        " 9",
+        " 11",
+        " 8",
+        " 10"
+      ],
+      "answer": 3
+    }
+  ]
+}

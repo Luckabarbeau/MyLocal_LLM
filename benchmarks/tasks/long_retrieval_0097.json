@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "family": "long_retrieval",
+  "purpose": "Synthetic fact retrieval at exact distances 1000/4000/16000 tokens; real historical-memory inference.",
+  "tasks": [
+    {
+      "id": "archive_00",
+      "category": "single_fact",
+      "project": "Orion",
+      "answer": "red"
+    },
+    {
+      "id": "archive_01",
+      "category": "single_fact",
+      "project": "Cedar",
+      "answer": "blue"
+    },
+    {
+      "id": "archive_02",
+      "category": "single_fact",
+      "project": "Lotus",
+      "answer": "green"
+    },
+    {
+      "id": "archive_03",
+      "category": "single_fact",
+      "project": "Quartz",
+      "answer": "white"
+    },
+    {
+      "id": "archive_04",
+      "category": "single_fact",
+      "project": "Harbor",
+      "answer": "black"
+    },
+    {
+      "id": "archive_05",
+      "category": "single_fact",
+      "project": "Falcon",
+      "answer": "orange"
+    },
+    {
+      "id": "archive_06",
+      "category": "single_fact",
+      "project": "Maple",
+      "answer": "yellow"
+    },
+    {
+      "id": "archive_07",
+      "category": "single_fact",
+      "project": "Nimbus",
+      "answer": "gold"
+    }
+  ]
+}

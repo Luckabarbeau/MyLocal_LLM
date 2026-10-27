@@ -1,0 +1,7 @@
+{
+  "version": 1, "family": "cpp", "tasks": [
+    {"id":"dot_product", "prompt":"#include <vector>\n#include <stdexcept>\ndouble dot_product(const std::vector<double>& a, const std::vector<double>& b) {\n    if (a.size() != b.size()) throw std::invalid_argument(\"size mismatch\");\n    double result = 0.0;\n", "test_harness":"#include <cmath>\nint main() { std::vector<double> a{1.0,2.0,3.0}, b{4.0,5.0,6.0}; return std::fabs(dot_product(a,b)-32.0) < 1e-8 ? 0 : 1; }"},
+    {"id":"count_positive", "prompt":"#include <vector>\n#include <cstddef>\nstd::size_t count_positive(const std::vector<int>& values) {\n", "test_harness":"int main() { return count_positive({-1,0,2,3})==2 && count_positive({})==0 ? 0 : 1; }"},
+    {"id":"squared_norm", "prompt":"#include <vector>\ndouble squared_norm(const std::vector<double>& values) {\n", "test_harness":"#include <cmath>\nint main() { return std::fabs(squared_norm({3.0,4.0})-25.0) < 1e-8 ? 0 : 1; }"}
+  ]
+}

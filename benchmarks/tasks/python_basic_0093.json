@@ -1,0 +1,9 @@
+{
+  "version": 1, "family": "python", "tasks": [
+    {"id":"prime", "function":"is_prime", "prompt":"def is_prime(n: int) -> bool:\n    \"\"\"Return True when n is a prime number.\"\"\"\n", "tests":[{"args":[0],"expected":false},{"args":[1],"expected":false},{"args":[2],"expected":true},{"args":[3],"expected":true},{"args":[9],"expected":false},{"args":[29],"expected":true}]},
+    {"id":"sum_squares", "function":"sum_squares", "prompt":"def sum_squares(values: list[int]) -> int:\n    \"\"\"Return the sum of the squares of all values.\"\"\"\n", "tests":[{"args":[[]],"expected":0},{"args":[[2,3]],"expected":13},{"args":[[-2,1]],"expected":5}]},
+    {"id":"reverse_string", "function":"reverse_string", "prompt":"def reverse_string(text: str) -> str:\n    \"\"\"Return the characters of text in reverse order.\"\"\"\n", "tests":[{"args":["abc"],"expected":"cba"},{"args":[""],"expected":""}]},
+    {"id":"count_even", "function":"count_even", "prompt":"def count_even(numbers: list[int]) -> int:\n    \"\"\"Count the even numbers in the list.\"\"\"\n", "tests":[{"args":[[1,2,3,4]],"expected":2},{"args":[[]],"expected":0},{"args":[[0,8,10]],"expected":3}]},
+    {"id":"clamp", "function":"clamp", "prompt":"def clamp(value: int, minimum: int, maximum: int) -> int:\n    \"\"\"Restrict value to the inclusive interval [minimum, maximum].\"\"\"\n", "tests":[{"args":[4,0,10],"expected":4},{"args":[-2,0,10],"expected":0},{"args":[12,0,10],"expected":10}]}
+  ]
+}

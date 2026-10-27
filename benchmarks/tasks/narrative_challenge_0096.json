@@ -1,0 +1,2419 @@
+{
+  "version": 1,
+  "family": "narrative",
+  "purpose": "Hard deterministic factual-context probes. Choices and answers are local, not external. Group by challenge_type. Generation disabled by default for efficiency.",
+  "tasks": [
+    {
+      "id": "delayed_01",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Mira placed the copper key in the station locker. Ada stored a spare umbrella in the porch drawer. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. The copper key was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Mira placed the copper key in the station locker. Ada stored a spare umbrella in the porch drawer. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. The copper key was not moved afterward. The copper key was stored in the",
+      "choices": [
+        " blue suitcase",
+        " station locker",
+        " porch drawer",
+        " storage shelf"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Mira",
+        "copper key"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_02",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Ada placed the paper map in the kitchen cabinet. Leo stored a spare umbrella in the green cupboard. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. The paper map was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Ada placed the paper map in the kitchen cabinet. Leo stored a spare umbrella in the green cupboard. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. The paper map was not moved afterward. The paper map was stored in the",
+      "choices": [
+        " market stall",
+        " hall closet",
+        " kitchen cabinet",
+        " green cupboard"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ada",
+        "paper map"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_03",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Leo placed the silver compass in the garden shed. Nora stored a spare umbrella in the office safe. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. The silver compass was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Leo placed the silver compass in the garden shed. Nora stored a spare umbrella in the office safe. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. The silver compass was not moved afterward. The silver compass was stored in the",
+      "choices": [
+        " office safe",
+        " back room",
+        " garden shed",
+        " garage cabinet"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Leo",
+        "silver compass"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_04",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Nora placed the blue notebook in the attic trunk. Sam stored a spare umbrella in the wooden chest. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. The blue notebook was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Nora placed the blue notebook in the attic trunk. Sam stored a spare umbrella in the wooden chest. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. The blue notebook was not moved afterward. The blue notebook was stored in the",
+      "choices": [
+        " workshop bench",
+        " wooden chest",
+        " blue suitcase",
+        " attic trunk"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Nora",
+        "blue notebook"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_05",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Sam placed the folded letter in the library desk. Ivy stored a spare umbrella in the storage shelf. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The folded letter was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Sam placed the folded letter in the library desk. Ivy stored a spare umbrella in the storage shelf. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The folded letter was not moved afterward. The folded letter was stored in the",
+      "choices": [
+        " hall closet",
+        " living room shelf",
+        " storage shelf",
+        " library desk"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Sam",
+        "folded letter"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_06",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Ivy placed the small lantern in the porch drawer. Omar stored a spare umbrella in the market stall. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. The small lantern was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Ivy placed the small lantern in the porch drawer. Omar stored a spare umbrella in the market stall. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. The small lantern was not moved afterward. The small lantern was stored in the",
+      "choices": [
+        " market stall",
+        " garage cabinet",
+        " porch drawer",
+        " train compartment"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ivy",
+        "small lantern"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_07",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Omar placed the red scarf in the green cupboard. Tessa stored a spare umbrella in the back room. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. The red scarf was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Omar placed the red scarf in the green cupboard. Tessa stored a spare umbrella in the back room. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. The red scarf was not moved afterward. The red scarf was stored in the",
+      "choices": [
+        " back room",
+        " station locker",
+        " green cupboard",
+        " workshop bench"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Omar",
+        "red scarf"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_08",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Tessa placed the wooden box in the office safe. Felix stored a spare umbrella in the blue suitcase. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. The wooden box was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Tessa placed the wooden box in the office safe. Felix stored a spare umbrella in the blue suitcase. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. The wooden box was not moved afterward. The wooden box was stored in the",
+      "choices": [
+        " blue suitcase",
+        " office safe",
+        " kitchen cabinet",
+        " living room shelf"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Tessa",
+        "wooden box"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_09",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Felix placed the brass watch in the wooden chest. Arun stored a spare umbrella in the hall closet. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. The brass watch was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Felix placed the brass watch in the wooden chest. Arun stored a spare umbrella in the hall closet. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. The brass watch was not moved afterward. The brass watch was stored in the",
+      "choices": [
+        " wooden chest",
+        " garden shed",
+        " hall closet",
+        " train compartment"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Felix",
+        "brass watch"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_10",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Arun placed the black umbrella in the storage shelf. Elena stored a spare umbrella in the garage cabinet. A bicycle was left near the front gate. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The black umbrella was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Arun placed the black umbrella in the storage shelf. Elena stored a spare umbrella in the garage cabinet. A bicycle was left near the front gate. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The black umbrella was not moved afterward. The black umbrella was stored in the",
+      "choices": [
+        " garage cabinet",
+        " attic trunk",
+        " station locker",
+        " storage shelf"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Arun",
+        "black umbrella"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_11",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Elena placed the glass marble in the market stall. Jonah stored a spare umbrella in the workshop bench. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. The glass marble was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Elena placed the glass marble in the market stall. Jonah stored a spare umbrella in the workshop bench. A storm passed through the village before noon. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. The glass marble was not moved afterward. The glass marble was stored in the",
+      "choices": [
+        " workshop bench",
+        " market stall",
+        " kitchen cabinet",
+        " library desk"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Elena",
+        "glass marble"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_12",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Jonah placed the yellow ticket in the back room. Priya stored a spare umbrella in the living room shelf. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. The yellow ticket was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Jonah placed the yellow ticket in the back room. Priya stored a spare umbrella in the living room shelf. At midday the clock in the square stopped for a minute. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. The yellow ticket was not moved afterward. The yellow ticket was stored in the",
+      "choices": [
+        " porch drawer",
+        " living room shelf",
+        " garden shed",
+        " back room"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Jonah",
+        "yellow ticket"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_13",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Priya placed the green folder in the blue suitcase. Noah stored a spare umbrella in the train compartment. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. The green folder was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Priya placed the green folder in the blue suitcase. Noah stored a spare umbrella in the train compartment. An old friend brought a basket of apples. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. The green folder was not moved afterward. The green folder was stored in the",
+      "choices": [
+        " green cupboard",
+        " blue suitcase",
+        " attic trunk",
+        " train compartment"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Priya",
+        "green folder"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_14",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Noah placed the leather wallet in the hall closet. Lina stored a spare umbrella in the station locker. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. The leather wallet was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Noah placed the leather wallet in the hall closet. Lina stored a spare umbrella in the station locker. The bus reached the village an hour late. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. The leather wallet was not moved afterward. The leather wallet was stored in the",
+      "choices": [
+        " library desk",
+        " station locker",
+        " office safe",
+        " hall closet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Noah",
+        "leather wallet"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_15",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Lina placed the iron badge in the garage cabinet. Ravi stored a spare umbrella in the kitchen cabinet. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The iron badge was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Lina placed the iron badge in the garage cabinet. Ravi stored a spare umbrella in the kitchen cabinet. A shopkeeper repainted the sign on the corner. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The iron badge was not moved afterward. The iron badge was stored in the",
+      "choices": [
+        " porch drawer",
+        " kitchen cabinet",
+        " wooden chest",
+        " garage cabinet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Lina",
+        "iron badge"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_16",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Ravi placed the striped ribbon in the workshop bench. Clara stored a spare umbrella in the garden shed. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. The striped ribbon was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Ravi placed the striped ribbon in the workshop bench. Clara stored a spare umbrella in the garden shed. A cat slept beside the open window. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. The striped ribbon was not moved afterward. The striped ribbon was stored in the",
+      "choices": [
+        " workshop bench",
+        " storage shelf",
+        " green cupboard",
+        " garden shed"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Ravi",
+        "striped ribbon"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_17",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Clara placed the canvas bag in the living room shelf. Emil stored a spare umbrella in the attic trunk. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. The canvas bag was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Clara placed the canvas bag in the living room shelf. Emil stored a spare umbrella in the attic trunk. A musician rehearsed in the next building. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. The canvas bag was not moved afterward. The canvas bag was stored in the",
+      "choices": [
+        " office safe",
+        " living room shelf",
+        " market stall",
+        " attic trunk"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Clara",
+        "canvas bag"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "delayed_18",
+      "challenge_type": "delayed_recall",
+      "difficulty": "hard",
+      "prompt": "Emil placed the ceramic cup in the train compartment. Mira stored a spare umbrella in the library desk. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. The ceramic cup was not moved afterward. Later that afternoon, ",
+      "recall_prompt": "Emil placed the ceramic cup in the train compartment. Mira stored a spare umbrella in the library desk. Several people gathered to repair the bridge. The baker closed the shop early. A bicycle was left near the front gate. A storm passed through the village before noon. The ceramic cup was not moved afterward. The ceramic cup was stored in the",
+      "choices": [
+        " wooden chest",
+        " back room",
+        " library desk",
+        " train compartment"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Emil",
+        "ceramic cup"
+      ],
+      "delay_sentences": 5
+    },
+    {
+      "id": "update_01",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Mira put the copper key in the station locker. On Tuesday, Mira moved the copper key to the attic trunk. A shopkeeper repainted the sign on the corner. On Wednesday, Mira took it from the attic trunk and placed it in the office safe. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Mira put the copper key in the station locker. On Tuesday, Mira moved the copper key to the attic trunk. A shopkeeper repainted the sign on the corner. On Wednesday, Mira took it from the attic trunk and placed it in the office safe. Nobody touched the object after Wednesday. On Thursday, the copper key was in the",
+      "choices": [
+        " office safe",
+        " station locker",
+        " attic trunk",
+        " back room"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Mira",
+        "copper key"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_02",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Ada put the paper map in the kitchen cabinet. On Tuesday, Ada moved the paper map to the library desk. A cat slept beside the open window. On Wednesday, Ada took it from the library desk and placed it in the wooden chest. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Ada put the paper map in the kitchen cabinet. On Tuesday, Ada moved the paper map to the library desk. A cat slept beside the open window. On Wednesday, Ada took it from the library desk and placed it in the wooden chest. Nobody touched the object after Wednesday. On Monday, before any move, the paper map was in the",
+      "choices": [
+        " wooden chest",
+        " blue suitcase",
+        " library desk",
+        " kitchen cabinet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ada",
+        "paper map"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_03",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Leo put the silver compass in the garden shed. On Tuesday, Leo moved the silver compass to the porch drawer. A musician rehearsed in the next building. On Wednesday, Leo took it from the porch drawer and placed it in the storage shelf. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Leo put the silver compass in the garden shed. On Tuesday, Leo moved the silver compass to the porch drawer. A musician rehearsed in the next building. On Wednesday, Leo took it from the porch drawer and placed it in the storage shelf. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the silver compass was in the",
+      "choices": [
+        " hall closet",
+        " garden shed",
+        " storage shelf",
+        " porch drawer"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Leo",
+        "silver compass"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "update_04",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Nora put the blue notebook in the attic trunk. On Tuesday, Nora moved the blue notebook to the green cupboard. Several people gathered to repair the bridge. On Wednesday, Nora took it from the green cupboard and placed it in the market stall. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Nora put the blue notebook in the attic trunk. On Tuesday, Nora moved the blue notebook to the green cupboard. Several people gathered to repair the bridge. On Wednesday, Nora took it from the green cupboard and placed it in the market stall. Nobody touched the object after Wednesday. On Thursday, the blue notebook was in the",
+      "choices": [
+        " attic trunk",
+        " garage cabinet",
+        " green cupboard",
+        " market stall"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Nora",
+        "blue notebook"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_05",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Sam put the folded letter in the library desk. On Tuesday, Sam moved the folded letter to the office safe. The baker closed the shop early. On Wednesday, Sam took it from the office safe and placed it in the back room. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Sam put the folded letter in the library desk. On Tuesday, Sam moved the folded letter to the office safe. The baker closed the shop early. On Wednesday, Sam took it from the office safe and placed it in the back room. Nobody touched the object after Wednesday. On Monday, before any move, the folded letter was in the",
+      "choices": [
+        " back room",
+        " workshop bench",
+        " office safe",
+        " library desk"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Sam",
+        "folded letter"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_06",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Ivy put the small lantern in the porch drawer. On Tuesday, Ivy moved the small lantern to the wooden chest. A bicycle was left near the front gate. On Wednesday, Ivy took it from the wooden chest and placed it in the blue suitcase. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Ivy put the small lantern in the porch drawer. On Tuesday, Ivy moved the small lantern to the wooden chest. A bicycle was left near the front gate. On Wednesday, Ivy took it from the wooden chest and placed it in the blue suitcase. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the small lantern was in the",
+      "choices": [
+        " living room shelf",
+        " porch drawer",
+        " blue suitcase",
+        " wooden chest"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ivy",
+        "small lantern"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "update_07",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Omar put the red scarf in the green cupboard. On Tuesday, Omar moved the red scarf to the storage shelf. A storm passed through the village before noon. On Wednesday, Omar took it from the storage shelf and placed it in the hall closet. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Omar put the red scarf in the green cupboard. On Tuesday, Omar moved the red scarf to the storage shelf. A storm passed through the village before noon. On Wednesday, Omar took it from the storage shelf and placed it in the hall closet. Nobody touched the object after Wednesday. On Thursday, the red scarf was in the",
+      "choices": [
+        " green cupboard",
+        " hall closet",
+        " storage shelf",
+        " train compartment"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Omar",
+        "red scarf"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_08",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Tessa put the wooden box in the office safe. On Tuesday, Tessa moved the wooden box to the market stall. At midday the clock in the square stopped for a minute. On Wednesday, Tessa took it from the market stall and placed it in the garage cabinet. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Tessa put the wooden box in the office safe. On Tuesday, Tessa moved the wooden box to the market stall. At midday the clock in the square stopped for a minute. On Wednesday, Tessa took it from the market stall and placed it in the garage cabinet. Nobody touched the object after Wednesday. On Monday, before any move, the wooden box was in the",
+      "choices": [
+        " garage cabinet",
+        " market stall",
+        " office safe",
+        " station locker"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Tessa",
+        "wooden box"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_09",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Felix put the brass watch in the wooden chest. On Tuesday, Felix moved the brass watch to the back room. An old friend brought a basket of apples. On Wednesday, Felix took it from the back room and placed it in the workshop bench. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Felix put the brass watch in the wooden chest. On Tuesday, Felix moved the brass watch to the back room. An old friend brought a basket of apples. On Wednesday, Felix took it from the back room and placed it in the workshop bench. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the brass watch was in the",
+      "choices": [
+        " back room",
+        " wooden chest",
+        " kitchen cabinet",
+        " workshop bench"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Felix",
+        "brass watch"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "update_10",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Arun put the black umbrella in the storage shelf. On Tuesday, Arun moved the black umbrella to the blue suitcase. The bus reached the village an hour late. On Wednesday, Arun took it from the blue suitcase and placed it in the living room shelf. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Arun put the black umbrella in the storage shelf. On Tuesday, Arun moved the black umbrella to the blue suitcase. The bus reached the village an hour late. On Wednesday, Arun took it from the blue suitcase and placed it in the living room shelf. Nobody touched the object after Wednesday. On Thursday, the black umbrella was in the",
+      "choices": [
+        " garden shed",
+        " storage shelf",
+        " living room shelf",
+        " blue suitcase"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Arun",
+        "black umbrella"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_11",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Elena put the glass marble in the market stall. On Tuesday, Elena moved the glass marble to the hall closet. A shopkeeper repainted the sign on the corner. On Wednesday, Elena took it from the hall closet and placed it in the train compartment. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Elena put the glass marble in the market stall. On Tuesday, Elena moved the glass marble to the hall closet. A shopkeeper repainted the sign on the corner. On Wednesday, Elena took it from the hall closet and placed it in the train compartment. Nobody touched the object after Wednesday. On Monday, before any move, the glass marble was in the",
+      "choices": [
+        " attic trunk",
+        " market stall",
+        " train compartment",
+        " hall closet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Elena",
+        "glass marble"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_12",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Jonah put the yellow ticket in the back room. On Tuesday, Jonah moved the yellow ticket to the garage cabinet. A cat slept beside the open window. On Wednesday, Jonah took it from the garage cabinet and placed it in the station locker. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Jonah put the yellow ticket in the back room. On Tuesday, Jonah moved the yellow ticket to the garage cabinet. A cat slept beside the open window. On Wednesday, Jonah took it from the garage cabinet and placed it in the station locker. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the yellow ticket was in the",
+      "choices": [
+        " station locker",
+        " back room",
+        " garage cabinet",
+        " library desk"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Jonah",
+        "yellow ticket"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "update_13",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Priya put the green folder in the blue suitcase. On Tuesday, Priya moved the green folder to the workshop bench. A musician rehearsed in the next building. On Wednesday, Priya took it from the workshop bench and placed it in the kitchen cabinet. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Priya put the green folder in the blue suitcase. On Tuesday, Priya moved the green folder to the workshop bench. A musician rehearsed in the next building. On Wednesday, Priya took it from the workshop bench and placed it in the kitchen cabinet. Nobody touched the object after Wednesday. On Thursday, the green folder was in the",
+      "choices": [
+        " blue suitcase",
+        " porch drawer",
+        " workshop bench",
+        " kitchen cabinet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Priya",
+        "green folder"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_14",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Noah put the leather wallet in the hall closet. On Tuesday, Noah moved the leather wallet to the living room shelf. Several people gathered to repair the bridge. On Wednesday, Noah took it from the living room shelf and placed it in the garden shed. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Noah put the leather wallet in the hall closet. On Tuesday, Noah moved the leather wallet to the living room shelf. Several people gathered to repair the bridge. On Wednesday, Noah took it from the living room shelf and placed it in the garden shed. Nobody touched the object after Wednesday. On Monday, before any move, the leather wallet was in the",
+      "choices": [
+        " living room shelf",
+        " garden shed",
+        " hall closet",
+        " green cupboard"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Noah",
+        "leather wallet"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_15",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Lina put the iron badge in the garage cabinet. On Tuesday, Lina moved the iron badge to the train compartment. The baker closed the shop early. On Wednesday, Lina took it from the train compartment and placed it in the attic trunk. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Lina put the iron badge in the garage cabinet. On Tuesday, Lina moved the iron badge to the train compartment. The baker closed the shop early. On Wednesday, Lina took it from the train compartment and placed it in the attic trunk. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the iron badge was in the",
+      "choices": [
+        " attic trunk",
+        " office safe",
+        " train compartment",
+        " garage cabinet"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Lina",
+        "iron badge"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "update_16",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Ravi put the striped ribbon in the workshop bench. On Tuesday, Ravi moved the striped ribbon to the station locker. A bicycle was left near the front gate. On Wednesday, Ravi took it from the station locker and placed it in the library desk. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Ravi put the striped ribbon in the workshop bench. On Tuesday, Ravi moved the striped ribbon to the station locker. A bicycle was left near the front gate. On Wednesday, Ravi took it from the station locker and placed it in the library desk. Nobody touched the object after Wednesday. On Thursday, the striped ribbon was in the",
+      "choices": [
+        " wooden chest",
+        " workshop bench",
+        " station locker",
+        " library desk"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ravi",
+        "striped ribbon"
+      ],
+      "query_time": "current"
+    },
+    {
+      "id": "update_17",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Clara put the canvas bag in the living room shelf. On Tuesday, Clara moved the canvas bag to the kitchen cabinet. A storm passed through the village before noon. On Wednesday, Clara took it from the kitchen cabinet and placed it in the porch drawer. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Clara put the canvas bag in the living room shelf. On Tuesday, Clara moved the canvas bag to the kitchen cabinet. A storm passed through the village before noon. On Wednesday, Clara took it from the kitchen cabinet and placed it in the porch drawer. Nobody touched the object after Wednesday. On Monday, before any move, the canvas bag was in the",
+      "choices": [
+        " porch drawer",
+        " kitchen cabinet",
+        " storage shelf",
+        " living room shelf"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Clara",
+        "canvas bag"
+      ],
+      "query_time": "original"
+    },
+    {
+      "id": "update_18",
+      "challenge_type": "state_update",
+      "difficulty": "hard",
+      "prompt": "On Monday, Emil put the ceramic cup in the train compartment. On Tuesday, Emil moved the ceramic cup to the garden shed. At midday the clock in the square stopped for a minute. On Wednesday, Emil took it from the garden shed and placed it in the green cupboard. Nobody touched the object after Wednesday. Later that afternoon, ",
+      "recall_prompt": "On Monday, Emil put the ceramic cup in the train compartment. On Tuesday, Emil moved the ceramic cup to the garden shed. At midday the clock in the square stopped for a minute. On Wednesday, Emil took it from the garden shed and placed it in the green cupboard. Nobody touched the object after Wednesday. On Tuesday, before the Wednesday move, the ceramic cup was in the",
+      "choices": [
+        " train compartment",
+        " market stall",
+        " garden shed",
+        " green cupboard"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Emil",
+        "ceramic cup"
+      ],
+      "query_time": "middle"
+    },
+    {
+      "id": "binding_01",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Mira stored the copper key in the garden shed, while Ivy put the folded letter in the office safe. A storm passed through the village before noon. Later, Ivy moved the folded letter from the office safe into the back room. Mira did not move the copper key. Later that afternoon, ",
+      "recall_prompt": "Mira stored the copper key in the garden shed, while Ivy put the folded letter in the office safe. A storm passed through the village before noon. Later, Ivy moved the folded letter from the office safe into the back room. Mira did not move the copper key. At the end, Mira left the copper key in the",
+      "choices": [
+        " garden shed",
+        " back room",
+        " office safe",
+        " garage cabinet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Mira",
+        "Ivy",
+        "copper key",
+        "folded letter"
+      ]
+    },
+    {
+      "id": "binding_02",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Ada stored the paper map in the attic trunk, while Omar put the small lantern in the wooden chest. At midday the clock in the square stopped for a minute. Later, Omar moved the small lantern from the wooden chest into the blue suitcase. Ada did not move the paper map. Later that afternoon, ",
+      "recall_prompt": "Ada stored the paper map in the attic trunk, while Omar put the small lantern in the wooden chest. At midday the clock in the square stopped for a minute. Later, Omar moved the small lantern from the wooden chest into the blue suitcase. Ada did not move the paper map. At the end, Omar left the small lantern in the",
+      "choices": [
+        " blue suitcase",
+        " attic trunk",
+        " wooden chest",
+        " workshop bench"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Ada",
+        "Omar",
+        "paper map",
+        "small lantern"
+      ]
+    },
+    {
+      "id": "binding_03",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Leo stored the silver compass in the library desk, while Tessa put the red scarf in the storage shelf. An old friend brought a basket of apples. Later, Tessa moved the red scarf from the storage shelf into the hall closet. Leo did not move the silver compass. Later that afternoon, ",
+      "recall_prompt": "Leo stored the silver compass in the library desk, while Tessa put the red scarf in the storage shelf. An old friend brought a basket of apples. Later, Tessa moved the red scarf from the storage shelf into the hall closet. Leo did not move the silver compass. At the end, Leo left the silver compass in the",
+      "choices": [
+        " library desk",
+        " living room shelf",
+        " storage shelf",
+        " hall closet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Leo",
+        "Tessa",
+        "silver compass",
+        "red scarf"
+      ]
+    },
+    {
+      "id": "binding_04",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Nora stored the blue notebook in the porch drawer, while Felix put the wooden box in the market stall. The bus reached the village an hour late. Later, Felix moved the wooden box from the market stall into the garage cabinet. Nora did not move the blue notebook. Later that afternoon, ",
+      "recall_prompt": "Nora stored the blue notebook in the porch drawer, while Felix put the wooden box in the market stall. The bus reached the village an hour late. Later, Felix moved the wooden box from the market stall into the garage cabinet. Nora did not move the blue notebook. At the end, Felix left the wooden box in the",
+      "choices": [
+        " market stall",
+        " garage cabinet",
+        " train compartment",
+        " porch drawer"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Nora",
+        "Felix",
+        "blue notebook",
+        "wooden box"
+      ]
+    },
+    {
+      "id": "binding_05",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Sam stored the folded letter in the green cupboard, while Arun put the brass watch in the back room. A shopkeeper repainted the sign on the corner. Later, Arun moved the brass watch from the back room into the workshop bench. Sam did not move the folded letter. Later that afternoon, ",
+      "recall_prompt": "Sam stored the folded letter in the green cupboard, while Arun put the brass watch in the back room. A shopkeeper repainted the sign on the corner. Later, Arun moved the brass watch from the back room into the workshop bench. Sam did not move the folded letter. At the end, Sam left the folded letter in the",
+      "choices": [
+        " green cupboard",
+        " station locker",
+        " workshop bench",
+        " back room"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Sam",
+        "Arun",
+        "folded letter",
+        "brass watch"
+      ]
+    },
+    {
+      "id": "binding_06",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Ivy stored the small lantern in the office safe, while Elena put the black umbrella in the blue suitcase. A cat slept beside the open window. Later, Elena moved the black umbrella from the blue suitcase into the living room shelf. Ivy did not move the small lantern. Later that afternoon, ",
+      "recall_prompt": "Ivy stored the small lantern in the office safe, while Elena put the black umbrella in the blue suitcase. A cat slept beside the open window. Later, Elena moved the black umbrella from the blue suitcase into the living room shelf. Ivy did not move the small lantern. At the end, Elena left the black umbrella in the",
+      "choices": [
+        " kitchen cabinet",
+        " office safe",
+        " blue suitcase",
+        " living room shelf"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ivy",
+        "Elena",
+        "small lantern",
+        "black umbrella"
+      ]
+    },
+    {
+      "id": "binding_07",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Omar stored the red scarf in the wooden chest, while Jonah put the glass marble in the hall closet. A musician rehearsed in the next building. Later, Jonah moved the glass marble from the hall closet into the train compartment. Omar did not move the red scarf. Later that afternoon, ",
+      "recall_prompt": "Omar stored the red scarf in the wooden chest, while Jonah put the glass marble in the hall closet. A musician rehearsed in the next building. Later, Jonah moved the glass marble from the hall closet into the train compartment. Omar did not move the red scarf. At the end, Omar left the red scarf in the",
+      "choices": [
+        " garden shed",
+        " train compartment",
+        " wooden chest",
+        " hall closet"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Omar",
+        "Jonah",
+        "red scarf",
+        "glass marble"
+      ]
+    },
+    {
+      "id": "binding_08",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Tessa stored the wooden box in the storage shelf, while Priya put the yellow ticket in the garage cabinet. Several people gathered to repair the bridge. Later, Priya moved the yellow ticket from the garage cabinet into the station locker. Tessa did not move the wooden box. Later that afternoon, ",
+      "recall_prompt": "Tessa stored the wooden box in the storage shelf, while Priya put the yellow ticket in the garage cabinet. Several people gathered to repair the bridge. Later, Priya moved the yellow ticket from the garage cabinet into the station locker. Tessa did not move the wooden box. At the end, Priya left the yellow ticket in the",
+      "choices": [
+        " attic trunk",
+        " station locker",
+        " garage cabinet",
+        " storage shelf"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Tessa",
+        "Priya",
+        "wooden box",
+        "yellow ticket"
+      ]
+    },
+    {
+      "id": "binding_09",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Felix stored the brass watch in the market stall, while Noah put the green folder in the workshop bench. The baker closed the shop early. Later, Noah moved the green folder from the workshop bench into the kitchen cabinet. Felix did not move the brass watch. Later that afternoon, ",
+      "recall_prompt": "Felix stored the brass watch in the market stall, while Noah put the green folder in the workshop bench. The baker closed the shop early. Later, Noah moved the green folder from the workshop bench into the kitchen cabinet. Felix did not move the brass watch. At the end, Felix left the brass watch in the",
+      "choices": [
+        " library desk",
+        " market stall",
+        " workshop bench",
+        " kitchen cabinet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Felix",
+        "Noah",
+        "brass watch",
+        "green folder"
+      ]
+    },
+    {
+      "id": "binding_10",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Arun stored the black umbrella in the back room, while Lina put the leather wallet in the living room shelf. A bicycle was left near the front gate. Later, Lina moved the leather wallet from the living room shelf into the garden shed. Arun did not move the black umbrella. Later that afternoon, ",
+      "recall_prompt": "Arun stored the black umbrella in the back room, while Lina put the leather wallet in the living room shelf. A bicycle was left near the front gate. Later, Lina moved the leather wallet from the living room shelf into the garden shed. Arun did not move the black umbrella. At the end, Lina left the leather wallet in the",
+      "choices": [
+        " porch drawer",
+        " garden shed",
+        " back room",
+        " living room shelf"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Arun",
+        "Lina",
+        "black umbrella",
+        "leather wallet"
+      ]
+    },
+    {
+      "id": "binding_11",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Elena stored the glass marble in the blue suitcase, while Ravi put the iron badge in the train compartment. A storm passed through the village before noon. Later, Ravi moved the iron badge from the train compartment into the attic trunk. Elena did not move the glass marble. Later that afternoon, ",
+      "recall_prompt": "Elena stored the glass marble in the blue suitcase, while Ravi put the iron badge in the train compartment. A storm passed through the village before noon. Later, Ravi moved the iron badge from the train compartment into the attic trunk. Elena did not move the glass marble. At the end, Elena left the glass marble in the",
+      "choices": [
+        " blue suitcase",
+        " train compartment",
+        " green cupboard",
+        " attic trunk"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Elena",
+        "Ravi",
+        "glass marble",
+        "iron badge"
+      ]
+    },
+    {
+      "id": "binding_12",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Jonah stored the yellow ticket in the hall closet, while Clara put the striped ribbon in the station locker. At midday the clock in the square stopped for a minute. Later, Clara moved the striped ribbon from the station locker into the library desk. Jonah did not move the yellow ticket. Later that afternoon, ",
+      "recall_prompt": "Jonah stored the yellow ticket in the hall closet, while Clara put the striped ribbon in the station locker. At midday the clock in the square stopped for a minute. Later, Clara moved the striped ribbon from the station locker into the library desk. Jonah did not move the yellow ticket. At the end, Clara left the striped ribbon in the",
+      "choices": [
+        " hall closet",
+        " office safe",
+        " station locker",
+        " library desk"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Jonah",
+        "Clara",
+        "yellow ticket",
+        "striped ribbon"
+      ]
+    },
+    {
+      "id": "binding_13",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Priya stored the green folder in the garage cabinet, while Emil put the canvas bag in the kitchen cabinet. An old friend brought a basket of apples. Later, Emil moved the canvas bag from the kitchen cabinet into the porch drawer. Priya did not move the green folder. Later that afternoon, ",
+      "recall_prompt": "Priya stored the green folder in the garage cabinet, while Emil put the canvas bag in the kitchen cabinet. An old friend brought a basket of apples. Later, Emil moved the canvas bag from the kitchen cabinet into the porch drawer. Priya did not move the green folder. At the end, Priya left the green folder in the",
+      "choices": [
+        " kitchen cabinet",
+        " wooden chest",
+        " porch drawer",
+        " garage cabinet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Priya",
+        "Emil",
+        "green folder",
+        "canvas bag"
+      ]
+    },
+    {
+      "id": "binding_14",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Noah stored the leather wallet in the workshop bench, while Mira put the ceramic cup in the garden shed. The bus reached the village an hour late. Later, Mira moved the ceramic cup from the garden shed into the green cupboard. Noah did not move the leather wallet. Later that afternoon, ",
+      "recall_prompt": "Noah stored the leather wallet in the workshop bench, while Mira put the ceramic cup in the garden shed. The bus reached the village an hour late. Later, Mira moved the ceramic cup from the garden shed into the green cupboard. Noah did not move the leather wallet. At the end, Mira left the ceramic cup in the",
+      "choices": [
+        " garden shed",
+        " workshop bench",
+        " storage shelf",
+        " green cupboard"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Noah",
+        "Mira",
+        "leather wallet",
+        "ceramic cup"
+      ]
+    },
+    {
+      "id": "binding_15",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Lina stored the iron badge in the living room shelf, while Ada put the copper key in the attic trunk. A shopkeeper repainted the sign on the corner. Later, Ada moved the copper key from the attic trunk into the office safe. Lina did not move the iron badge. Later that afternoon, ",
+      "recall_prompt": "Lina stored the iron badge in the living room shelf, while Ada put the copper key in the attic trunk. A shopkeeper repainted the sign on the corner. Later, Ada moved the copper key from the attic trunk into the office safe. Lina did not move the iron badge. At the end, Lina left the iron badge in the",
+      "choices": [
+        " office safe",
+        " living room shelf",
+        " attic trunk",
+        " market stall"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Lina",
+        "Ada",
+        "iron badge",
+        "copper key"
+      ]
+    },
+    {
+      "id": "binding_16",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Ravi stored the striped ribbon in the train compartment, while Leo put the paper map in the library desk. A cat slept beside the open window. Later, Leo moved the paper map from the library desk into the wooden chest. Ravi did not move the striped ribbon. Later that afternoon, ",
+      "recall_prompt": "Ravi stored the striped ribbon in the train compartment, while Leo put the paper map in the library desk. A cat slept beside the open window. Later, Leo moved the paper map from the library desk into the wooden chest. Ravi did not move the striped ribbon. At the end, Leo left the paper map in the",
+      "choices": [
+        " back room",
+        " train compartment",
+        " library desk",
+        " wooden chest"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ravi",
+        "Leo",
+        "striped ribbon",
+        "paper map"
+      ]
+    },
+    {
+      "id": "binding_17",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Clara stored the canvas bag in the station locker, while Nora put the silver compass in the porch drawer. A musician rehearsed in the next building. Later, Nora moved the silver compass from the porch drawer into the storage shelf. Clara did not move the canvas bag. Later that afternoon, ",
+      "recall_prompt": "Clara stored the canvas bag in the station locker, while Nora put the silver compass in the porch drawer. A musician rehearsed in the next building. Later, Nora moved the silver compass from the porch drawer into the storage shelf. Clara did not move the canvas bag. At the end, Clara left the canvas bag in the",
+      "choices": [
+        " station locker",
+        " porch drawer",
+        " storage shelf",
+        " blue suitcase"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Clara",
+        "Nora",
+        "canvas bag",
+        "silver compass"
+      ]
+    },
+    {
+      "id": "binding_18",
+      "challenge_type": "entity_binding",
+      "difficulty": "hard",
+      "prompt": "Emil stored the ceramic cup in the kitchen cabinet, while Sam put the blue notebook in the green cupboard. Several people gathered to repair the bridge. Later, Sam moved the blue notebook from the green cupboard into the market stall. Emil did not move the ceramic cup. Later that afternoon, ",
+      "recall_prompt": "Emil stored the ceramic cup in the kitchen cabinet, while Sam put the blue notebook in the green cupboard. Several people gathered to repair the bridge. Later, Sam moved the blue notebook from the green cupboard into the market stall. Emil did not move the ceramic cup. At the end, Sam left the blue notebook in the",
+      "choices": [
+        " green cupboard",
+        " hall closet",
+        " market stall",
+        " kitchen cabinet"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Emil",
+        "Sam",
+        "ceramic cup",
+        "blue notebook"
+      ]
+    },
+    {
+      "id": "belief_01",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Ada guessed that the copper key was inside the storage shelf, but did not check. Mira opened the storage room and personally found the copper key in the garden shed. An old friend brought a basket of apples. Ada repeated the old guess, but Mira explained that the inspection confirmed the garden shed. Later that afternoon, ",
+      "recall_prompt": "Ada guessed that the copper key was inside the storage shelf, but did not check. Mira opened the storage room and personally found the copper key in the garden shed. An old friend brought a basket of apples. Ada repeated the old guess, but Mira explained that the inspection confirmed the garden shed. According to the verified inspection, the copper key was in the",
+      "choices": [
+        " storage shelf",
+        " porch drawer",
+        " garden shed",
+        " blue suitcase"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Mira",
+        "Ada",
+        "copper key"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_02",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Leo guessed that the paper map was inside the market stall, but did not check. Ada opened the storage room and personally found the paper map in the attic trunk. The bus reached the village an hour late. Leo repeated the old guess, but Ada explained that the inspection confirmed the attic trunk. Later that afternoon, ",
+      "recall_prompt": "Leo guessed that the paper map was inside the market stall, but did not check. Ada opened the storage room and personally found the paper map in the attic trunk. The bus reached the village an hour late. Leo repeated the old guess, but Ada explained that the inspection confirmed the attic trunk. According to Leo's mistaken guess, the paper map was in the",
+      "choices": [
+        " market stall",
+        " green cupboard",
+        " attic trunk",
+        " hall closet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Ada",
+        "Leo",
+        "paper map"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_03",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Nora guessed that the silver compass was inside the back room, but did not check. Leo opened the storage room and personally found the silver compass in the library desk. A shopkeeper repainted the sign on the corner. Nora repeated the old guess, but Leo explained that the inspection confirmed the library desk. Later that afternoon, ",
+      "recall_prompt": "Nora guessed that the silver compass was inside the back room, but did not check. Leo opened the storage room and personally found the silver compass in the library desk. A shopkeeper repainted the sign on the corner. Nora repeated the old guess, but Leo explained that the inspection confirmed the library desk. According to the verified inspection, the silver compass was in the",
+      "choices": [
+        " back room",
+        " library desk",
+        " garage cabinet",
+        " office safe"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Leo",
+        "Nora",
+        "silver compass"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_04",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Sam guessed that the blue notebook was inside the blue suitcase, but did not check. Nora opened the storage room and personally found the blue notebook in the porch drawer. A cat slept beside the open window. Sam repeated the old guess, but Nora explained that the inspection confirmed the porch drawer. Later that afternoon, ",
+      "recall_prompt": "Sam guessed that the blue notebook was inside the blue suitcase, but did not check. Nora opened the storage room and personally found the blue notebook in the porch drawer. A cat slept beside the open window. Sam repeated the old guess, but Nora explained that the inspection confirmed the porch drawer. According to Sam's mistaken guess, the blue notebook was in the",
+      "choices": [
+        " workshop bench",
+        " porch drawer",
+        " wooden chest",
+        " blue suitcase"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Nora",
+        "Sam",
+        "blue notebook"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_05",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Ivy guessed that the folded letter was inside the hall closet, but did not check. Sam opened the storage room and personally found the folded letter in the green cupboard. A musician rehearsed in the next building. Ivy repeated the old guess, but Sam explained that the inspection confirmed the green cupboard. Later that afternoon, ",
+      "recall_prompt": "Ivy guessed that the folded letter was inside the hall closet, but did not check. Sam opened the storage room and personally found the folded letter in the green cupboard. A musician rehearsed in the next building. Ivy repeated the old guess, but Sam explained that the inspection confirmed the green cupboard. According to the verified inspection, the folded letter was in the",
+      "choices": [
+        " living room shelf",
+        " storage shelf",
+        " green cupboard",
+        " hall closet"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Sam",
+        "Ivy",
+        "folded letter"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_06",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Omar guessed that the small lantern was inside the garage cabinet, but did not check. Ivy opened the storage room and personally found the small lantern in the office safe. Several people gathered to repair the bridge. Omar repeated the old guess, but Ivy explained that the inspection confirmed the office safe. Later that afternoon, ",
+      "recall_prompt": "Omar guessed that the small lantern was inside the garage cabinet, but did not check. Ivy opened the storage room and personally found the small lantern in the office safe. Several people gathered to repair the bridge. Omar repeated the old guess, but Ivy explained that the inspection confirmed the office safe. According to Omar's mistaken guess, the small lantern was in the",
+      "choices": [
+        " train compartment",
+        " office safe",
+        " garage cabinet",
+        " market stall"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ivy",
+        "Omar",
+        "small lantern"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_07",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Tessa guessed that the red scarf was inside the workshop bench, but did not check. Omar opened the storage room and personally found the red scarf in the wooden chest. The baker closed the shop early. Tessa repeated the old guess, but Omar explained that the inspection confirmed the wooden chest. Later that afternoon, ",
+      "recall_prompt": "Tessa guessed that the red scarf was inside the workshop bench, but did not check. Omar opened the storage room and personally found the red scarf in the wooden chest. The baker closed the shop early. Tessa repeated the old guess, but Omar explained that the inspection confirmed the wooden chest. According to the verified inspection, the red scarf was in the",
+      "choices": [
+        " workshop bench",
+        " wooden chest",
+        " station locker",
+        " back room"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Omar",
+        "Tessa",
+        "red scarf"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_08",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Felix guessed that the wooden box was inside the living room shelf, but did not check. Tessa opened the storage room and personally found the wooden box in the storage shelf. A bicycle was left near the front gate. Felix repeated the old guess, but Tessa explained that the inspection confirmed the storage shelf. Later that afternoon, ",
+      "recall_prompt": "Felix guessed that the wooden box was inside the living room shelf, but did not check. Tessa opened the storage room and personally found the wooden box in the storage shelf. A bicycle was left near the front gate. Felix repeated the old guess, but Tessa explained that the inspection confirmed the storage shelf. According to Felix's mistaken guess, the wooden box was in the",
+      "choices": [
+        " storage shelf",
+        " blue suitcase",
+        " kitchen cabinet",
+        " living room shelf"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Tessa",
+        "Felix",
+        "wooden box"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_09",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Arun guessed that the brass watch was inside the train compartment, but did not check. Felix opened the storage room and personally found the brass watch in the market stall. A storm passed through the village before noon. Arun repeated the old guess, but Felix explained that the inspection confirmed the market stall. Later that afternoon, ",
+      "recall_prompt": "Arun guessed that the brass watch was inside the train compartment, but did not check. Felix opened the storage room and personally found the brass watch in the market stall. A storm passed through the village before noon. Arun repeated the old guess, but Felix explained that the inspection confirmed the market stall. According to the verified inspection, the brass watch was in the",
+      "choices": [
+        " hall closet",
+        " market stall",
+        " garden shed",
+        " train compartment"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Felix",
+        "Arun",
+        "brass watch"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_10",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Elena guessed that the black umbrella was inside the station locker, but did not check. Arun opened the storage room and personally found the black umbrella in the back room. At midday the clock in the square stopped for a minute. Elena repeated the old guess, but Arun explained that the inspection confirmed the back room. Later that afternoon, ",
+      "recall_prompt": "Elena guessed that the black umbrella was inside the station locker, but did not check. Arun opened the storage room and personally found the black umbrella in the back room. At midday the clock in the square stopped for a minute. Elena repeated the old guess, but Arun explained that the inspection confirmed the back room. According to Elena's mistaken guess, the black umbrella was in the",
+      "choices": [
+        " attic trunk",
+        " station locker",
+        " garage cabinet",
+        " back room"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Arun",
+        "Elena",
+        "black umbrella"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_11",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Jonah guessed that the glass marble was inside the kitchen cabinet, but did not check. Elena opened the storage room and personally found the glass marble in the blue suitcase. An old friend brought a basket of apples. Jonah repeated the old guess, but Elena explained that the inspection confirmed the blue suitcase. Later that afternoon, ",
+      "recall_prompt": "Jonah guessed that the glass marble was inside the kitchen cabinet, but did not check. Elena opened the storage room and personally found the glass marble in the blue suitcase. An old friend brought a basket of apples. Jonah repeated the old guess, but Elena explained that the inspection confirmed the blue suitcase. According to the verified inspection, the glass marble was in the",
+      "choices": [
+        " workshop bench",
+        " library desk",
+        " kitchen cabinet",
+        " blue suitcase"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Elena",
+        "Jonah",
+        "glass marble"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_12",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Priya guessed that the yellow ticket was inside the garden shed, but did not check. Jonah opened the storage room and personally found the yellow ticket in the hall closet. The bus reached the village an hour late. Priya repeated the old guess, but Jonah explained that the inspection confirmed the hall closet. Later that afternoon, ",
+      "recall_prompt": "Priya guessed that the yellow ticket was inside the garden shed, but did not check. Jonah opened the storage room and personally found the yellow ticket in the hall closet. The bus reached the village an hour late. Priya repeated the old guess, but Jonah explained that the inspection confirmed the hall closet. According to Priya's mistaken guess, the yellow ticket was in the",
+      "choices": [
+        " garden shed",
+        " living room shelf",
+        " porch drawer",
+        " hall closet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Jonah",
+        "Priya",
+        "yellow ticket"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_13",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Noah guessed that the green folder was inside the attic trunk, but did not check. Priya opened the storage room and personally found the green folder in the garage cabinet. A shopkeeper repainted the sign on the corner. Noah repeated the old guess, but Priya explained that the inspection confirmed the garage cabinet. Later that afternoon, ",
+      "recall_prompt": "Noah guessed that the green folder was inside the attic trunk, but did not check. Priya opened the storage room and personally found the green folder in the garage cabinet. A shopkeeper repainted the sign on the corner. Noah repeated the old guess, but Priya explained that the inspection confirmed the garage cabinet. According to the verified inspection, the green folder was in the",
+      "choices": [
+        " garage cabinet",
+        " train compartment",
+        " green cupboard",
+        " attic trunk"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Priya",
+        "Noah",
+        "green folder"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_14",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Lina guessed that the leather wallet was inside the library desk, but did not check. Noah opened the storage room and personally found the leather wallet in the workshop bench. A cat slept beside the open window. Lina repeated the old guess, but Noah explained that the inspection confirmed the workshop bench. Later that afternoon, ",
+      "recall_prompt": "Lina guessed that the leather wallet was inside the library desk, but did not check. Noah opened the storage room and personally found the leather wallet in the workshop bench. A cat slept beside the open window. Lina repeated the old guess, but Noah explained that the inspection confirmed the workshop bench. According to Lina's mistaken guess, the leather wallet was in the",
+      "choices": [
+        " station locker",
+        " library desk",
+        " workshop bench",
+        " office safe"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Noah",
+        "Lina",
+        "leather wallet"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_15",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Ravi guessed that the iron badge was inside the porch drawer, but did not check. Lina opened the storage room and personally found the iron badge in the living room shelf. A musician rehearsed in the next building. Ravi repeated the old guess, but Lina explained that the inspection confirmed the living room shelf. Later that afternoon, ",
+      "recall_prompt": "Ravi guessed that the iron badge was inside the porch drawer, but did not check. Lina opened the storage room and personally found the iron badge in the living room shelf. A musician rehearsed in the next building. Ravi repeated the old guess, but Lina explained that the inspection confirmed the living room shelf. According to the verified inspection, the iron badge was in the",
+      "choices": [
+        " kitchen cabinet",
+        " wooden chest",
+        " living room shelf",
+        " porch drawer"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Lina",
+        "Ravi",
+        "iron badge"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_16",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Clara guessed that the striped ribbon was inside the green cupboard, but did not check. Ravi opened the storage room and personally found the striped ribbon in the train compartment. Several people gathered to repair the bridge. Clara repeated the old guess, but Ravi explained that the inspection confirmed the train compartment. Later that afternoon, ",
+      "recall_prompt": "Clara guessed that the striped ribbon was inside the green cupboard, but did not check. Ravi opened the storage room and personally found the striped ribbon in the train compartment. Several people gathered to repair the bridge. Clara repeated the old guess, but Ravi explained that the inspection confirmed the train compartment. According to Clara's mistaken guess, the striped ribbon was in the",
+      "choices": [
+        " garden shed",
+        " train compartment",
+        " green cupboard",
+        " storage shelf"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ravi",
+        "Clara",
+        "striped ribbon"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "belief_17",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Emil guessed that the canvas bag was inside the office safe, but did not check. Clara opened the storage room and personally found the canvas bag in the station locker. The baker closed the shop early. Emil repeated the old guess, but Clara explained that the inspection confirmed the station locker. Later that afternoon, ",
+      "recall_prompt": "Emil guessed that the canvas bag was inside the office safe, but did not check. Clara opened the storage room and personally found the canvas bag in the station locker. The baker closed the shop early. Emil repeated the old guess, but Clara explained that the inspection confirmed the station locker. According to the verified inspection, the canvas bag was in the",
+      "choices": [
+        " market stall",
+        " station locker",
+        " office safe",
+        " attic trunk"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Clara",
+        "Emil",
+        "canvas bag"
+      ],
+      "query_kind": "verified"
+    },
+    {
+      "id": "belief_18",
+      "challenge_type": "belief_vs_fact",
+      "difficulty": "hard",
+      "prompt": "Mira guessed that the ceramic cup was inside the wooden chest, but did not check. Emil opened the storage room and personally found the ceramic cup in the kitchen cabinet. A bicycle was left near the front gate. Mira repeated the old guess, but Emil explained that the inspection confirmed the kitchen cabinet. Later that afternoon, ",
+      "recall_prompt": "Mira guessed that the ceramic cup was inside the wooden chest, but did not check. Emil opened the storage room and personally found the ceramic cup in the kitchen cabinet. A bicycle was left near the front gate. Mira repeated the old guess, but Emil explained that the inspection confirmed the kitchen cabinet. According to Mira's mistaken guess, the ceramic cup was in the",
+      "choices": [
+        " kitchen cabinet",
+        " back room",
+        " library desk",
+        " wooden chest"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Emil",
+        "Mira",
+        "ceramic cup"
+      ],
+      "query_kind": "reported"
+    },
+    {
+      "id": "order_01",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Mira lit the lantern. Next, Mira checked the gate. The bus reached the village an hour late. After that, Mira signed the form. Finally, Mira opened the parcel. Ivy wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Mira lit the lantern. Next, Mira checked the gate. The bus reached the village an hour late. After that, Mira signed the form. Finally, Mira opened the parcel. Ivy wrote down the sequence in a logbook. The action Mira performed first was to",
+      "choices": [
+        " open the parcel",
+        " check the gate",
+        " light the lantern",
+        " sign the form"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Mira"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_02",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Ada lit the lantern. Next, Ada signed the form. A shopkeeper repainted the sign on the corner. After that, Ada opened the parcel. Finally, Ada checked the gate. Omar wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Ada lit the lantern. Next, Ada signed the form. A shopkeeper repainted the sign on the corner. After that, Ada opened the parcel. Finally, Ada checked the gate. Omar wrote down the sequence in a logbook. The action immediately after Ada lit the lantern was to",
+      "choices": [
+        " open the parcel",
+        " light the lantern",
+        " sign the form",
+        " check the gate"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ada"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_03",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Leo signed the form. Next, Leo lit the lantern. A cat slept beside the open window. After that, Leo checked the gate. Finally, Leo opened the parcel. Tessa wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Leo signed the form. Next, Leo lit the lantern. A cat slept beside the open window. After that, Leo checked the gate. Finally, Leo opened the parcel. Tessa wrote down the sequence in a logbook. The action immediately before Leo opened the parcel was to",
+      "choices": [
+        " open the parcel",
+        " light the lantern",
+        " sign the form",
+        " check the gate"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Leo"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "order_04",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Nora opened the parcel. Next, Nora signed the form. A musician rehearsed in the next building. After that, Nora lit the lantern. Finally, Nora checked the gate. Felix wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Nora opened the parcel. Next, Nora signed the form. A musician rehearsed in the next building. After that, Nora lit the lantern. Finally, Nora checked the gate. Felix wrote down the sequence in a logbook. The action Nora performed first was to",
+      "choices": [
+        " check the gate",
+        " sign the form",
+        " open the parcel",
+        " light the lantern"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Nora"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_05",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Sam checked the gate. Next, Sam lit the lantern. Several people gathered to repair the bridge. After that, Sam opened the parcel. Finally, Sam signed the form. Arun wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Sam checked the gate. Next, Sam lit the lantern. Several people gathered to repair the bridge. After that, Sam opened the parcel. Finally, Sam signed the form. Arun wrote down the sequence in a logbook. The action immediately after Sam checked the gate was to",
+      "choices": [
+        " check the gate",
+        " sign the form",
+        " open the parcel",
+        " light the lantern"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Sam"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_06",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Ivy checked the gate. Next, Ivy signed the form. The baker closed the shop early. After that, Ivy lit the lantern. Finally, Ivy opened the parcel. Elena wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Ivy checked the gate. Next, Ivy signed the form. The baker closed the shop early. After that, Ivy lit the lantern. Finally, Ivy opened the parcel. Elena wrote down the sequence in a logbook. The action immediately before Ivy opened the parcel was to",
+      "choices": [
+        " check the gate",
+        " open the parcel",
+        " sign the form",
+        " light the lantern"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ivy"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "order_07",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Omar signed the form. Next, Omar checked the gate. A bicycle was left near the front gate. After that, Omar lit the lantern. Finally, Omar opened the parcel. Jonah wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Omar signed the form. Next, Omar checked the gate. A bicycle was left near the front gate. After that, Omar lit the lantern. Finally, Omar opened the parcel. Jonah wrote down the sequence in a logbook. The action Omar performed first was to",
+      "choices": [
+        " open the parcel",
+        " light the lantern",
+        " sign the form",
+        " check the gate"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Omar"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_08",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Tessa opened the parcel. Next, Tessa signed the form. A storm passed through the village before noon. After that, Tessa checked the gate. Finally, Tessa lit the lantern. Priya wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Tessa opened the parcel. Next, Tessa signed the form. A storm passed through the village before noon. After that, Tessa checked the gate. Finally, Tessa lit the lantern. Priya wrote down the sequence in a logbook. The action immediately after Tessa opened the parcel was to",
+      "choices": [
+        " sign the form",
+        " open the parcel",
+        " light the lantern",
+        " check the gate"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Tessa"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_09",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Felix checked the gate. Next, Felix opened the parcel. At midday the clock in the square stopped for a minute. After that, Felix signed the form. Finally, Felix lit the lantern. Noah wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Felix checked the gate. Next, Felix opened the parcel. At midday the clock in the square stopped for a minute. After that, Felix signed the form. Finally, Felix lit the lantern. Noah wrote down the sequence in a logbook. The action immediately before Felix lit the lantern was to",
+      "choices": [
+        " sign the form",
+        " light the lantern",
+        " check the gate",
+        " open the parcel"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Felix"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "order_10",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Arun checked the gate. Next, Arun signed the form. An old friend brought a basket of apples. After that, Arun lit the lantern. Finally, Arun opened the parcel. Lina wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Arun checked the gate. Next, Arun signed the form. An old friend brought a basket of apples. After that, Arun lit the lantern. Finally, Arun opened the parcel. Lina wrote down the sequence in a logbook. The action Arun performed first was to",
+      "choices": [
+        " light the lantern",
+        " check the gate",
+        " open the parcel",
+        " sign the form"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Arun"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_11",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Elena checked the gate. Next, Elena opened the parcel. The bus reached the village an hour late. After that, Elena lit the lantern. Finally, Elena signed the form. Ravi wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Elena checked the gate. Next, Elena opened the parcel. The bus reached the village an hour late. After that, Elena lit the lantern. Finally, Elena signed the form. Ravi wrote down the sequence in a logbook. The action immediately after Elena checked the gate was to",
+      "choices": [
+        " check the gate",
+        " light the lantern",
+        " open the parcel",
+        " sign the form"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Elena"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_12",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Jonah checked the gate. Next, Jonah opened the parcel. A shopkeeper repainted the sign on the corner. After that, Jonah signed the form. Finally, Jonah lit the lantern. Clara wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Jonah checked the gate. Next, Jonah opened the parcel. A shopkeeper repainted the sign on the corner. After that, Jonah signed the form. Finally, Jonah lit the lantern. Clara wrote down the sequence in a logbook. The action immediately before Jonah lit the lantern was to",
+      "choices": [
+        " check the gate",
+        " sign the form",
+        " open the parcel",
+        " light the lantern"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Jonah"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "order_13",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Priya opened the parcel. Next, Priya checked the gate. A cat slept beside the open window. After that, Priya lit the lantern. Finally, Priya signed the form. Emil wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Priya opened the parcel. Next, Priya checked the gate. A cat slept beside the open window. After that, Priya lit the lantern. Finally, Priya signed the form. Emil wrote down the sequence in a logbook. The action Priya performed first was to",
+      "choices": [
+        " open the parcel",
+        " light the lantern",
+        " check the gate",
+        " sign the form"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Priya"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_14",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Noah signed the form. Next, Noah lit the lantern. A musician rehearsed in the next building. After that, Noah checked the gate. Finally, Noah opened the parcel. Mira wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Noah signed the form. Next, Noah lit the lantern. A musician rehearsed in the next building. After that, Noah checked the gate. Finally, Noah opened the parcel. Mira wrote down the sequence in a logbook. The action immediately after Noah signed the form was to",
+      "choices": [
+        " light the lantern",
+        " check the gate",
+        " open the parcel",
+        " sign the form"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Noah"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_15",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Lina signed the form. Next, Lina checked the gate. Several people gathered to repair the bridge. After that, Lina opened the parcel. Finally, Lina lit the lantern. Ada wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Lina signed the form. Next, Lina checked the gate. Several people gathered to repair the bridge. After that, Lina opened the parcel. Finally, Lina lit the lantern. Ada wrote down the sequence in a logbook. The action immediately before Lina lit the lantern was to",
+      "choices": [
+        " light the lantern",
+        " sign the form",
+        " check the gate",
+        " open the parcel"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Lina"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "order_16",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Ravi signed the form. Next, Ravi lit the lantern. The baker closed the shop early. After that, Ravi opened the parcel. Finally, Ravi checked the gate. Leo wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Ravi signed the form. Next, Ravi lit the lantern. The baker closed the shop early. After that, Ravi opened the parcel. Finally, Ravi checked the gate. Leo wrote down the sequence in a logbook. The action Ravi performed first was to",
+      "choices": [
+        " light the lantern",
+        " sign the form",
+        " check the gate",
+        " open the parcel"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Ravi"
+      ],
+      "query_kind": "0"
+    },
+    {
+      "id": "order_17",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Clara signed the form. Next, Clara checked the gate. A bicycle was left near the front gate. After that, Clara opened the parcel. Finally, Clara lit the lantern. Nora wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Clara signed the form. Next, Clara checked the gate. A bicycle was left near the front gate. After that, Clara opened the parcel. Finally, Clara lit the lantern. Nora wrote down the sequence in a logbook. The action immediately after Clara signed the form was to",
+      "choices": [
+        " sign the form",
+        " light the lantern",
+        " open the parcel",
+        " check the gate"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Clara"
+      ],
+      "query_kind": "1"
+    },
+    {
+      "id": "order_18",
+      "challenge_type": "event_order",
+      "difficulty": "hard",
+      "prompt": "On the morning of the inspection, Emil opened the parcel. Next, Emil lit the lantern. A storm passed through the village before noon. After that, Emil checked the gate. Finally, Emil signed the form. Sam wrote down the sequence in a logbook. Later that afternoon, ",
+      "recall_prompt": "On the morning of the inspection, Emil opened the parcel. Next, Emil lit the lantern. A storm passed through the village before noon. After that, Emil checked the gate. Finally, Emil signed the form. Sam wrote down the sequence in a logbook. The action immediately before Emil signed the form was to",
+      "choices": [
+        " light the lantern",
+        " open the parcel",
+        " check the gate",
+        " sign the form"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Emil"
+      ],
+      "query_kind": "2"
+    },
+    {
+      "id": "twohop_01",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Mira put the copper key inside the red satchel. At first the red satchel sat on the office safe. A shopkeeper repainted the sign on the corner. Omar carried the closed red satchel to the library desk. The copper key stayed inside the red satchel throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Mira put the copper key inside the red satchel. At first the red satchel sat on the office safe. A shopkeeper repainted the sign on the corner. Omar carried the closed red satchel to the library desk. The copper key stayed inside the red satchel throughout the trip. At the end of the day, the copper key was at the",
+      "choices": [
+        " market stall",
+        " library desk",
+        " office safe",
+        " hall closet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Mira",
+        "copper key",
+        "red satchel"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_02",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Ada put the paper map inside the blue crate. At first the blue crate sat on the wooden chest. A cat slept beside the open window. Tessa carried the closed blue crate to the porch drawer. The paper map stayed inside the blue crate throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Ada put the paper map inside the blue crate. At first the blue crate sat on the wooden chest. A cat slept beside the open window. Tessa carried the closed blue crate to the porch drawer. The paper map stayed inside the blue crate throughout the trip. At the end of the day, the paper map was at the",
+      "choices": [
+        " garage cabinet",
+        " wooden chest",
+        " back room",
+        " porch drawer"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Ada",
+        "paper map",
+        "blue crate"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_03",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Leo put the silver compass inside the metal case. At first the metal case sat on the storage shelf. A musician rehearsed in the next building. Felix carried the closed metal case to the green cupboard. The silver compass stayed inside the metal case throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Leo put the silver compass inside the metal case. At first the metal case sat on the storage shelf. A musician rehearsed in the next building. Felix carried the closed metal case to the green cupboard. The silver compass stayed inside the metal case throughout the trip. At the end of the day, the silver compass was at the",
+      "choices": [
+        " storage shelf",
+        " green cupboard",
+        " workshop bench",
+        " blue suitcase"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Leo",
+        "silver compass",
+        "metal case"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_04",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Nora put the blue notebook inside the wooden basket. At first the wooden basket sat on the market stall. Several people gathered to repair the bridge. Arun carried the closed wooden basket to the office safe. The blue notebook stayed inside the wooden basket throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Nora put the blue notebook inside the wooden basket. At first the wooden basket sat on the market stall. Several people gathered to repair the bridge. Arun carried the closed wooden basket to the office safe. The blue notebook stayed inside the wooden basket throughout the trip. At the end of the day, the blue notebook was at the",
+      "choices": [
+        " hall closet",
+        " living room shelf",
+        " office safe",
+        " market stall"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Nora",
+        "blue notebook",
+        "wooden basket"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_05",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Sam put the folded letter inside the red satchel. At first the red satchel sat on the back room. The baker closed the shop early. Elena carried the closed red satchel to the wooden chest. The folded letter stayed inside the red satchel throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Sam put the folded letter inside the red satchel. At first the red satchel sat on the back room. The baker closed the shop early. Elena carried the closed red satchel to the wooden chest. The folded letter stayed inside the red satchel throughout the trip. At the end of the day, the folded letter was at the",
+      "choices": [
+        " wooden chest",
+        " back room",
+        " garage cabinet",
+        " train compartment"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Sam",
+        "folded letter",
+        "red satchel"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_06",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Ivy put the small lantern inside the blue crate. At first the blue crate sat on the blue suitcase. A bicycle was left near the front gate. Jonah carried the closed blue crate to the storage shelf. The small lantern stayed inside the blue crate throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Ivy put the small lantern inside the blue crate. At first the blue crate sat on the blue suitcase. A bicycle was left near the front gate. Jonah carried the closed blue crate to the storage shelf. The small lantern stayed inside the blue crate throughout the trip. At the end of the day, the small lantern was at the",
+      "choices": [
+        " station locker",
+        " workshop bench",
+        " storage shelf",
+        " blue suitcase"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ivy",
+        "small lantern",
+        "blue crate"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_07",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Omar put the red scarf inside the metal case. At first the metal case sat on the hall closet. A storm passed through the village before noon. Priya carried the closed metal case to the market stall. The red scarf stayed inside the metal case throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Omar put the red scarf inside the metal case. At first the metal case sat on the hall closet. A storm passed through the village before noon. Priya carried the closed metal case to the market stall. The red scarf stayed inside the metal case throughout the trip. At the end of the day, the red scarf was at the",
+      "choices": [
+        " living room shelf",
+        " kitchen cabinet",
+        " hall closet",
+        " market stall"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Omar",
+        "red scarf",
+        "metal case"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_08",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Tessa put the wooden box inside the wooden basket. At first the wooden basket sat on the garage cabinet. At midday the clock in the square stopped for a minute. Noah carried the closed wooden basket to the back room. The wooden box stayed inside the wooden basket throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Tessa put the wooden box inside the wooden basket. At first the wooden basket sat on the garage cabinet. At midday the clock in the square stopped for a minute. Noah carried the closed wooden basket to the back room. The wooden box stayed inside the wooden basket throughout the trip. At the end of the day, the wooden box was at the",
+      "choices": [
+        " back room",
+        " train compartment",
+        " garage cabinet",
+        " garden shed"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Tessa",
+        "wooden box",
+        "wooden basket"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_09",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Felix put the brass watch inside the red satchel. At first the red satchel sat on the workshop bench. An old friend brought a basket of apples. Lina carried the closed red satchel to the blue suitcase. The brass watch stayed inside the red satchel throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Felix put the brass watch inside the red satchel. At first the red satchel sat on the workshop bench. An old friend brought a basket of apples. Lina carried the closed red satchel to the blue suitcase. The brass watch stayed inside the red satchel throughout the trip. At the end of the day, the brass watch was at the",
+      "choices": [
+        " blue suitcase",
+        " station locker",
+        " workshop bench",
+        " attic trunk"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Felix",
+        "brass watch",
+        "red satchel"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_10",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Arun put the black umbrella inside the blue crate. At first the blue crate sat on the living room shelf. The bus reached the village an hour late. Ravi carried the closed blue crate to the hall closet. The black umbrella stayed inside the blue crate throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Arun put the black umbrella inside the blue crate. At first the blue crate sat on the living room shelf. The bus reached the village an hour late. Ravi carried the closed blue crate to the hall closet. The black umbrella stayed inside the blue crate throughout the trip. At the end of the day, the black umbrella was at the",
+      "choices": [
+        " hall closet",
+        " library desk",
+        " living room shelf",
+        " kitchen cabinet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Arun",
+        "black umbrella",
+        "blue crate"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_11",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Elena put the glass marble inside the metal case. At first the metal case sat on the train compartment. A shopkeeper repainted the sign on the corner. Clara carried the closed metal case to the garage cabinet. The glass marble stayed inside the metal case throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Elena put the glass marble inside the metal case. At first the metal case sat on the train compartment. A shopkeeper repainted the sign on the corner. Clara carried the closed metal case to the garage cabinet. The glass marble stayed inside the metal case throughout the trip. At the end of the day, the glass marble was at the",
+      "choices": [
+        " porch drawer",
+        " train compartment",
+        " garden shed",
+        " garage cabinet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Elena",
+        "glass marble",
+        "metal case"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_12",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Jonah put the yellow ticket inside the wooden basket. At first the wooden basket sat on the station locker. A cat slept beside the open window. Emil carried the closed wooden basket to the workshop bench. The yellow ticket stayed inside the wooden basket throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Jonah put the yellow ticket inside the wooden basket. At first the wooden basket sat on the station locker. A cat slept beside the open window. Emil carried the closed wooden basket to the workshop bench. The yellow ticket stayed inside the wooden basket throughout the trip. At the end of the day, the yellow ticket was at the",
+      "choices": [
+        " workshop bench",
+        " green cupboard",
+        " station locker",
+        " attic trunk"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Jonah",
+        "yellow ticket",
+        "wooden basket"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_13",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Priya put the green folder inside the red satchel. At first the red satchel sat on the kitchen cabinet. A musician rehearsed in the next building. Mira carried the closed red satchel to the living room shelf. The green folder stayed inside the red satchel throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Priya put the green folder inside the red satchel. At first the red satchel sat on the kitchen cabinet. A musician rehearsed in the next building. Mira carried the closed red satchel to the living room shelf. The green folder stayed inside the red satchel throughout the trip. At the end of the day, the green folder was at the",
+      "choices": [
+        " library desk",
+        " office safe",
+        " kitchen cabinet",
+        " living room shelf"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Priya",
+        "green folder",
+        "red satchel"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_14",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Noah put the leather wallet inside the blue crate. At first the blue crate sat on the garden shed. Several people gathered to repair the bridge. Ada carried the closed blue crate to the train compartment. The leather wallet stayed inside the blue crate throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Noah put the leather wallet inside the blue crate. At first the blue crate sat on the garden shed. Several people gathered to repair the bridge. Ada carried the closed blue crate to the train compartment. The leather wallet stayed inside the blue crate throughout the trip. At the end of the day, the leather wallet was at the",
+      "choices": [
+        " garden shed",
+        " train compartment",
+        " porch drawer",
+        " wooden chest"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Noah",
+        "leather wallet",
+        "blue crate"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_15",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Lina put the iron badge inside the metal case. At first the metal case sat on the attic trunk. The baker closed the shop early. Leo carried the closed metal case to the station locker. The iron badge stayed inside the metal case throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Lina put the iron badge inside the metal case. At first the metal case sat on the attic trunk. The baker closed the shop early. Leo carried the closed metal case to the station locker. The iron badge stayed inside the metal case throughout the trip. At the end of the day, the iron badge was at the",
+      "choices": [
+        " attic trunk",
+        " green cupboard",
+        " station locker",
+        " storage shelf"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Lina",
+        "iron badge",
+        "metal case"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_16",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Ravi put the striped ribbon inside the wooden basket. At first the wooden basket sat on the library desk. A bicycle was left near the front gate. Nora carried the closed wooden basket to the kitchen cabinet. The striped ribbon stayed inside the wooden basket throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Ravi put the striped ribbon inside the wooden basket. At first the wooden basket sat on the library desk. A bicycle was left near the front gate. Nora carried the closed wooden basket to the kitchen cabinet. The striped ribbon stayed inside the wooden basket throughout the trip. At the end of the day, the striped ribbon was at the",
+      "choices": [
+        " office safe",
+        " kitchen cabinet",
+        " market stall",
+        " library desk"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Ravi",
+        "striped ribbon",
+        "wooden basket"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_17",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Clara put the canvas bag inside the red satchel. At first the red satchel sat on the porch drawer. A storm passed through the village before noon. Sam carried the closed red satchel to the garden shed. The canvas bag stayed inside the red satchel throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Clara put the canvas bag inside the red satchel. At first the red satchel sat on the porch drawer. A storm passed through the village before noon. Sam carried the closed red satchel to the garden shed. The canvas bag stayed inside the red satchel throughout the trip. At the end of the day, the canvas bag was at the",
+      "choices": [
+        " wooden chest",
+        " back room",
+        " porch drawer",
+        " garden shed"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Clara",
+        "canvas bag",
+        "red satchel"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "twohop_18",
+      "challenge_type": "two_hop",
+      "difficulty": "hard",
+      "prompt": "Emil put the ceramic cup inside the blue crate. At first the blue crate sat on the green cupboard. At midday the clock in the square stopped for a minute. Ivy carried the closed blue crate to the attic trunk. The ceramic cup stayed inside the blue crate throughout the trip. Later that afternoon, ",
+      "recall_prompt": "Emil put the ceramic cup inside the blue crate. At first the blue crate sat on the green cupboard. At midday the clock in the square stopped for a minute. Ivy carried the closed blue crate to the attic trunk. The ceramic cup stayed inside the blue crate throughout the trip. At the end of the day, the ceramic cup was at the",
+      "choices": [
+        " storage shelf",
+        " attic trunk",
+        " blue suitcase",
+        " green cupboard"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Emil",
+        "ceramic cup",
+        "blue crate"
+      ],
+      "infer": "object-in-container-at-place"
+    },
+    {
+      "id": "negation_01",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Mira searched the office safe, but the copper key was not there. The copper key was not in the market stall either. A musician rehearsed in the next building. After looking behind a curtain, Mira finally discovered the copper key in the library desk. The earlier guesses about the office safe and market stall were wrong. Later that afternoon, ",
+      "recall_prompt": "Mira searched the office safe, but the copper key was not there. The copper key was not in the market stall either. A musician rehearsed in the next building. After looking behind a curtain, Mira finally discovered the copper key in the library desk. The earlier guesses about the office safe and market stall were wrong. The location where Mira actually found the copper key was the",
+      "choices": [
+        " office safe",
+        " library desk",
+        " market stall",
+        " hall closet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Mira",
+        "copper key"
+      ]
+    },
+    {
+      "id": "negation_02",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Ada searched the wooden chest, but the paper map was not there. The paper map was not in the back room either. Several people gathered to repair the bridge. After looking behind a curtain, Ada finally discovered the paper map in the porch drawer. The earlier guesses about the wooden chest and back room were wrong. Later that afternoon, ",
+      "recall_prompt": "Ada searched the wooden chest, but the paper map was not there. The paper map was not in the back room either. Several people gathered to repair the bridge. After looking behind a curtain, Ada finally discovered the paper map in the porch drawer. The earlier guesses about the wooden chest and back room were wrong. The location where Ada actually found the paper map was the",
+      "choices": [
+        " back room",
+        " porch drawer",
+        " garage cabinet",
+        " wooden chest"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Ada",
+        "paper map"
+      ]
+    },
+    {
+      "id": "negation_03",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Leo searched the storage shelf, but the silver compass was not there. The silver compass was not in the blue suitcase either. The baker closed the shop early. After looking behind a curtain, Leo finally discovered the silver compass in the green cupboard. The earlier guesses about the storage shelf and blue suitcase were wrong. Later that afternoon, ",
+      "recall_prompt": "Leo searched the storage shelf, but the silver compass was not there. The silver compass was not in the blue suitcase either. The baker closed the shop early. After looking behind a curtain, Leo finally discovered the silver compass in the green cupboard. The earlier guesses about the storage shelf and blue suitcase were wrong. The location where Leo actually found the silver compass was the",
+      "choices": [
+        " green cupboard",
+        " blue suitcase",
+        " workshop bench",
+        " storage shelf"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Leo",
+        "silver compass"
+      ]
+    },
+    {
+      "id": "negation_04",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Nora searched the market stall, but the blue notebook was not there. The blue notebook was not in the hall closet either. A bicycle was left near the front gate. After looking behind a curtain, Nora finally discovered the blue notebook in the office safe. The earlier guesses about the market stall and hall closet were wrong. Later that afternoon, ",
+      "recall_prompt": "Nora searched the market stall, but the blue notebook was not there. The blue notebook was not in the hall closet either. A bicycle was left near the front gate. After looking behind a curtain, Nora finally discovered the blue notebook in the office safe. The earlier guesses about the market stall and hall closet were wrong. The location where Nora actually found the blue notebook was the",
+      "choices": [
+        " living room shelf",
+        " office safe",
+        " market stall",
+        " hall closet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Nora",
+        "blue notebook"
+      ]
+    },
+    {
+      "id": "negation_05",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Sam searched the back room, but the folded letter was not there. The folded letter was not in the garage cabinet either. A storm passed through the village before noon. After looking behind a curtain, Sam finally discovered the folded letter in the wooden chest. The earlier guesses about the back room and garage cabinet were wrong. Later that afternoon, ",
+      "recall_prompt": "Sam searched the back room, but the folded letter was not there. The folded letter was not in the garage cabinet either. A storm passed through the village before noon. After looking behind a curtain, Sam finally discovered the folded letter in the wooden chest. The earlier guesses about the back room and garage cabinet were wrong. The location where Sam actually found the folded letter was the",
+      "choices": [
+        " wooden chest",
+        " back room",
+        " train compartment",
+        " garage cabinet"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Sam",
+        "folded letter"
+      ]
+    },
+    {
+      "id": "negation_06",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Ivy searched the blue suitcase, but the small lantern was not there. The small lantern was not in the workshop bench either. At midday the clock in the square stopped for a minute. After looking behind a curtain, Ivy finally discovered the small lantern in the storage shelf. The earlier guesses about the blue suitcase and workshop bench were wrong. Later that afternoon, ",
+      "recall_prompt": "Ivy searched the blue suitcase, but the small lantern was not there. The small lantern was not in the workshop bench either. At midday the clock in the square stopped for a minute. After looking behind a curtain, Ivy finally discovered the small lantern in the storage shelf. The earlier guesses about the blue suitcase and workshop bench were wrong. The location where Ivy actually found the small lantern was the",
+      "choices": [
+        " station locker",
+        " storage shelf",
+        " blue suitcase",
+        " workshop bench"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Ivy",
+        "small lantern"
+      ]
+    },
+    {
+      "id": "negation_07",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Omar searched the hall closet, but the red scarf was not there. The red scarf was not in the living room shelf either. An old friend brought a basket of apples. After looking behind a curtain, Omar finally discovered the red scarf in the market stall. The earlier guesses about the hall closet and living room shelf were wrong. Later that afternoon, ",
+      "recall_prompt": "Omar searched the hall closet, but the red scarf was not there. The red scarf was not in the living room shelf either. An old friend brought a basket of apples. After looking behind a curtain, Omar finally discovered the red scarf in the market stall. The earlier guesses about the hall closet and living room shelf were wrong. The location where Omar actually found the red scarf was the",
+      "choices": [
+        " living room shelf",
+        " market stall",
+        " kitchen cabinet",
+        " hall closet"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Omar",
+        "red scarf"
+      ]
+    },
+    {
+      "id": "negation_08",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Tessa searched the garage cabinet, but the wooden box was not there. The wooden box was not in the train compartment either. The bus reached the village an hour late. After looking behind a curtain, Tessa finally discovered the wooden box in the back room. The earlier guesses about the garage cabinet and train compartment were wrong. Later that afternoon, ",
+      "recall_prompt": "Tessa searched the garage cabinet, but the wooden box was not there. The wooden box was not in the train compartment either. The bus reached the village an hour late. After looking behind a curtain, Tessa finally discovered the wooden box in the back room. The earlier guesses about the garage cabinet and train compartment were wrong. The location where Tessa actually found the wooden box was the",
+      "choices": [
+        " garage cabinet",
+        " back room",
+        " garden shed",
+        " train compartment"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Tessa",
+        "wooden box"
+      ]
+    },
+    {
+      "id": "negation_09",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Felix searched the workshop bench, but the brass watch was not there. The brass watch was not in the station locker either. A shopkeeper repainted the sign on the corner. After looking behind a curtain, Felix finally discovered the brass watch in the blue suitcase. The earlier guesses about the workshop bench and station locker were wrong. Later that afternoon, ",
+      "recall_prompt": "Felix searched the workshop bench, but the brass watch was not there. The brass watch was not in the station locker either. A shopkeeper repainted the sign on the corner. After looking behind a curtain, Felix finally discovered the brass watch in the blue suitcase. The earlier guesses about the workshop bench and station locker were wrong. The location where Felix actually found the brass watch was the",
+      "choices": [
+        " workshop bench",
+        " blue suitcase",
+        " station locker",
+        " attic trunk"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Felix",
+        "brass watch"
+      ]
+    },
+    {
+      "id": "negation_10",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Arun searched the living room shelf, but the black umbrella was not there. The black umbrella was not in the kitchen cabinet either. A cat slept beside the open window. After looking behind a curtain, Arun finally discovered the black umbrella in the hall closet. The earlier guesses about the living room shelf and kitchen cabinet were wrong. Later that afternoon, ",
+      "recall_prompt": "Arun searched the living room shelf, but the black umbrella was not there. The black umbrella was not in the kitchen cabinet either. A cat slept beside the open window. After looking behind a curtain, Arun finally discovered the black umbrella in the hall closet. The earlier guesses about the living room shelf and kitchen cabinet were wrong. The location where Arun actually found the black umbrella was the",
+      "choices": [
+        " library desk",
+        " living room shelf",
+        " kitchen cabinet",
+        " hall closet"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Arun",
+        "black umbrella"
+      ]
+    },
+    {
+      "id": "negation_11",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Elena searched the train compartment, but the glass marble was not there. The glass marble was not in the garden shed either. A musician rehearsed in the next building. After looking behind a curtain, Elena finally discovered the glass marble in the garage cabinet. The earlier guesses about the train compartment and garden shed were wrong. Later that afternoon, ",
+      "recall_prompt": "Elena searched the train compartment, but the glass marble was not there. The glass marble was not in the garden shed either. A musician rehearsed in the next building. After looking behind a curtain, Elena finally discovered the glass marble in the garage cabinet. The earlier guesses about the train compartment and garden shed were wrong. The location where Elena actually found the glass marble was the",
+      "choices": [
+        " garage cabinet",
+        " train compartment",
+        " porch drawer",
+        " garden shed"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Elena",
+        "glass marble"
+      ]
+    },
+    {
+      "id": "negation_12",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Jonah searched the station locker, but the yellow ticket was not there. The yellow ticket was not in the attic trunk either. Several people gathered to repair the bridge. After looking behind a curtain, Jonah finally discovered the yellow ticket in the workshop bench. The earlier guesses about the station locker and attic trunk were wrong. Later that afternoon, ",
+      "recall_prompt": "Jonah searched the station locker, but the yellow ticket was not there. The yellow ticket was not in the attic trunk either. Several people gathered to repair the bridge. After looking behind a curtain, Jonah finally discovered the yellow ticket in the workshop bench. The earlier guesses about the station locker and attic trunk were wrong. The location where Jonah actually found the yellow ticket was the",
+      "choices": [
+        " attic trunk",
+        " green cupboard",
+        " station locker",
+        " workshop bench"
+      ],
+      "answer": 3,
+      "anchors": [
+        "Jonah",
+        "yellow ticket"
+      ]
+    },
+    {
+      "id": "negation_13",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Priya searched the kitchen cabinet, but the green folder was not there. The green folder was not in the library desk either. The baker closed the shop early. After looking behind a curtain, Priya finally discovered the green folder in the living room shelf. The earlier guesses about the kitchen cabinet and library desk were wrong. Later that afternoon, ",
+      "recall_prompt": "Priya searched the kitchen cabinet, but the green folder was not there. The green folder was not in the library desk either. The baker closed the shop early. After looking behind a curtain, Priya finally discovered the green folder in the living room shelf. The earlier guesses about the kitchen cabinet and library desk were wrong. The location where Priya actually found the green folder was the",
+      "choices": [
+        " library desk",
+        " kitchen cabinet",
+        " living room shelf",
+        " office safe"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Priya",
+        "green folder"
+      ]
+    },
+    {
+      "id": "negation_14",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Noah searched the garden shed, but the leather wallet was not there. The leather wallet was not in the porch drawer either. A bicycle was left near the front gate. After looking behind a curtain, Noah finally discovered the leather wallet in the train compartment. The earlier guesses about the garden shed and porch drawer were wrong. Later that afternoon, ",
+      "recall_prompt": "Noah searched the garden shed, but the leather wallet was not there. The leather wallet was not in the porch drawer either. A bicycle was left near the front gate. After looking behind a curtain, Noah finally discovered the leather wallet in the train compartment. The earlier guesses about the garden shed and porch drawer were wrong. The location where Noah actually found the leather wallet was the",
+      "choices": [
+        " porch drawer",
+        " train compartment",
+        " wooden chest",
+        " garden shed"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Noah",
+        "leather wallet"
+      ]
+    },
+    {
+      "id": "negation_15",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Lina searched the attic trunk, but the iron badge was not there. The iron badge was not in the green cupboard either. A storm passed through the village before noon. After looking behind a curtain, Lina finally discovered the iron badge in the station locker. The earlier guesses about the attic trunk and green cupboard were wrong. Later that afternoon, ",
+      "recall_prompt": "Lina searched the attic trunk, but the iron badge was not there. The iron badge was not in the green cupboard either. A storm passed through the village before noon. After looking behind a curtain, Lina finally discovered the iron badge in the station locker. The earlier guesses about the attic trunk and green cupboard were wrong. The location where Lina actually found the iron badge was the",
+      "choices": [
+        " storage shelf",
+        " station locker",
+        " attic trunk",
+        " green cupboard"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Lina",
+        "iron badge"
+      ]
+    },
+    {
+      "id": "negation_16",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Ravi searched the library desk, but the striped ribbon was not there. The striped ribbon was not in the office safe either. At midday the clock in the square stopped for a minute. After looking behind a curtain, Ravi finally discovered the striped ribbon in the kitchen cabinet. The earlier guesses about the library desk and office safe were wrong. Later that afternoon, ",
+      "recall_prompt": "Ravi searched the library desk, but the striped ribbon was not there. The striped ribbon was not in the office safe either. At midday the clock in the square stopped for a minute. After looking behind a curtain, Ravi finally discovered the striped ribbon in the kitchen cabinet. The earlier guesses about the library desk and office safe were wrong. The location where Ravi actually found the striped ribbon was the",
+      "choices": [
+        " office safe",
+        " market stall",
+        " kitchen cabinet",
+        " library desk"
+      ],
+      "answer": 2,
+      "anchors": [
+        "Ravi",
+        "striped ribbon"
+      ]
+    },
+    {
+      "id": "negation_17",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Clara searched the porch drawer, but the canvas bag was not there. The canvas bag was not in the wooden chest either. An old friend brought a basket of apples. After looking behind a curtain, Clara finally discovered the canvas bag in the garden shed. The earlier guesses about the porch drawer and wooden chest were wrong. Later that afternoon, ",
+      "recall_prompt": "Clara searched the porch drawer, but the canvas bag was not there. The canvas bag was not in the wooden chest either. An old friend brought a basket of apples. After looking behind a curtain, Clara finally discovered the canvas bag in the garden shed. The earlier guesses about the porch drawer and wooden chest were wrong. The location where Clara actually found the canvas bag was the",
+      "choices": [
+        " garden shed",
+        " porch drawer",
+        " back room",
+        " wooden chest"
+      ],
+      "answer": 0,
+      "anchors": [
+        "Clara",
+        "canvas bag"
+      ]
+    },
+    {
+      "id": "negation_18",
+      "challenge_type": "negation",
+      "difficulty": "hard",
+      "prompt": "Emil searched the green cupboard, but the ceramic cup was not there. The ceramic cup was not in the storage shelf either. The bus reached the village an hour late. After looking behind a curtain, Emil finally discovered the ceramic cup in the attic trunk. The earlier guesses about the green cupboard and storage shelf were wrong. Later that afternoon, ",
+      "recall_prompt": "Emil searched the green cupboard, but the ceramic cup was not there. The ceramic cup was not in the storage shelf either. The bus reached the village an hour late. After looking behind a curtain, Emil finally discovered the ceramic cup in the attic trunk. The earlier guesses about the green cupboard and storage shelf were wrong. The location where Emil actually found the ceramic cup was the",
+      "choices": [
+        " storage shelf",
+        " attic trunk",
+        " blue suitcase",
+        " green cupboard"
+      ],
+      "answer": 1,
+      "anchors": [
+        "Emil",
+        "ceramic cup"
+      ]
+    }
+  ]
+}

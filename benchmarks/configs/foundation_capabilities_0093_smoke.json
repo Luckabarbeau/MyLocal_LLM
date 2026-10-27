@@ -1,0 +1,101 @@
+{
+  "suite_name": "foundation_capabilities_0093_smoke",
+  "version": 1,
+  "output_root": "./benchmarks/results/foundation_capabilities_0093_smoke",
+  "on_error": "raise",
+  "benchmarks": [
+    {
+      "id": "python_syntax",
+      "type": "python_code",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/python_basic_0093.json",
+        "run_tests": false,
+        "max_new_tokens": 8,
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "python_correctness",
+      "type": "python_code",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/python_basic_0093.json",
+        "run_tests": false,
+        "max_new_tokens": 8,
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "cpp_code",
+      "type": "cpp_code",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/cpp_basic_0093.json",
+        "run_tests": false,
+        "max_new_tokens": 8,
+        "seeds": [
+          42
+        ],
+        "strategy": "greedy"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "math_basic",
+      "type": "math",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/math_basic_0093.json",
+        "scoring": "mean"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "logic_basic",
+      "type": "logic",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/logic_basic_0093.json",
+        "scoring": "mean"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "terminal_basic",
+      "type": "terminal",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/terminal_basic_0093.json",
+        "seeds": [
+          42
+        ],
+        "max_new_tokens": 8,
+        "strategy": "greedy"
+      },
+      "every_optimizer_steps": 1
+    },
+    {
+      "id": "narrative_basic",
+      "type": "narrative",
+      "enabled": true,
+      "parameters": {
+        "tasks": "benchmarks/tasks/narrative_basic_0093.json",
+        "seeds": [
+          42
+        ],
+        "max_new_tokens": 8,
+        "strategy": "top-k"
+      },
+      "every_optimizer_steps": 1
+    }
+  ]
+}

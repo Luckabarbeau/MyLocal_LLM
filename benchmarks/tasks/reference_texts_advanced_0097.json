@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "references": [
+    {
+      "id": "challenge_python_00",
+      "category": "python",
+      "difficulty": "hard",
+      "text": "The program uses a dictionary to track prefix sums. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nIn a Python implementation of prefix sums, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_01",
+      "category": "python",
+      "difficulty": "expert",
+      "text": "In a Python implementation of binary search, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe program uses a dictionary to track binary search. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_02",
+      "category": "python",
+      "difficulty": "hard",
+      "text": "The program uses a dictionary to track prime testing. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nIn a Python implementation of prime testing, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_03",
+      "category": "python",
+      "difficulty": "expert",
+      "text": "In a Python implementation of graph traversal, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe program uses a dictionary to track graph traversal. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_04",
+      "category": "python",
+      "difficulty": "hard",
+      "text": "The program uses a dictionary to track matrix multiplication. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nIn a Python implementation of matrix multiplication, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_05",
+      "category": "python",
+      "difficulty": "expert",
+      "text": "In a Python implementation of parsing, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe program uses a dictionary to track parsing. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_06",
+      "category": "python",
+      "difficulty": "hard",
+      "text": "The program uses a dictionary to track hash tables. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nIn a Python implementation of hash tables, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_python_07",
+      "category": "python",
+      "difficulty": "expert",
+      "text": "In a Python implementation of recursion, the function first checks the input shape and handles the empty input. An earlier version returned before completing a loop, so it processed only the first element. The corrected implementation accumulates intermediate results, then returns only after every item has been examined. A regression test specifically checks a list containing several different values.\n\nThe program uses a dictionary to track recursion. The keys are identifiers and the values are independent lists. When a new key is inserted, the program creates a fresh empty list instead of reusing a mutable default. This prevents changes made for one identifier from affecting another. Separate tests cover empty input, repeated keys, and unexpected values.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_00",
+      "category": "cpp",
+      "difficulty": "hard",
+      "text": "A C++ unit test for vector reduction distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nA C++ implementation of vector reduction accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_01",
+      "category": "cpp",
+      "difficulty": "expert",
+      "text": "A C++ implementation of pointer ownership accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nA C++ unit test for pointer ownership distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_02",
+      "category": "cpp",
+      "difficulty": "hard",
+      "text": "A C++ unit test for exception safety distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nA C++ implementation of exception safety accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_03",
+      "category": "cpp",
+      "difficulty": "expert",
+      "text": "A C++ implementation of sorting accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nA C++ unit test for sorting distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_04",
+      "category": "cpp",
+      "difficulty": "hard",
+      "text": "A C++ unit test for tree traversal distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nA C++ implementation of tree traversal accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_05",
+      "category": "cpp",
+      "difficulty": "expert",
+      "text": "A C++ implementation of matrix products accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nA C++ unit test for matrix products distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_06",
+      "category": "cpp",
+      "difficulty": "hard",
+      "text": "A C++ unit test for type conversion distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nA C++ implementation of type conversion accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_cpp_07",
+      "category": "cpp",
+      "difficulty": "expert",
+      "text": "A C++ implementation of template deduction accepts two vectors as const references. The function verifies compatible sizes before performing arithmetic and throws an appropriate exception for invalid dimensions. An earlier bug returned from inside the accumulation loop. The corrected function updates a local accumulator for every element pair and returns after the loop.\n\nA C++ unit test for template deduction distinguishes compilation from correctness. The generated function may compile while mishandling empty vectors or negative numbers. The test harness therefore includes a normal case, a boundary case, and an invalid-input case. The function must preserve the original interface and avoid introducing a second definition.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_00",
+      "category": "mathematics",
+      "difficulty": "hard",
+      "text": "For the integer operation modular arithmetic, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nTo analyze modular arithmetic, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_01",
+      "category": "mathematics",
+      "difficulty": "expert",
+      "text": "To analyze induction, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nFor the integer operation induction, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_02",
+      "category": "mathematics",
+      "difficulty": "hard",
+      "text": "For the integer operation factorization, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nTo analyze factorization, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_03",
+      "category": "mathematics",
+      "difficulty": "expert",
+      "text": "To analyze matrix rank, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nFor the integer operation matrix rank, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_04",
+      "category": "mathematics",
+      "difficulty": "hard",
+      "text": "For the integer operation polynomial evaluation, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nTo analyze polynomial evaluation, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_05",
+      "category": "mathematics",
+      "difficulty": "expert",
+      "text": "To analyze combinatorics, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nFor the integer operation combinatorics, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_06",
+      "category": "mathematics",
+      "difficulty": "hard",
+      "text": "For the integer operation prime divisibility, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nTo analyze prime divisibility, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_mathematics_07",
+      "category": "mathematics",
+      "difficulty": "expert",
+      "text": "To analyze number sequences, begin with the definitions and state the assumptions precisely. A tempting shortcut substitutes a numerical example for a proof, but one example does not establish a universal statement. The argument next separates the necessary condition from the sufficient condition, identifies where each is used, and checks a counterexample before drawing the conclusion.\n\nFor the integer operation number sequences, the intermediate computation should be checked before the final value is reported. Modular reduction preserves the remainder class but does not preserve ordinary integer magnitude. Multiplication and addition can be reduced modulo the same modulus; division requires additional conditions. These distinctions matter when constructing a correct algorithm.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_00",
+      "category": "science",
+      "difficulty": "hard",
+      "text": "The scientific report on pipe friction distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nAn analysis of pipe friction begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_01",
+      "category": "science",
+      "difficulty": "expert",
+      "text": "An analysis of star formation begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe scientific report on star formation distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_02",
+      "category": "science",
+      "difficulty": "hard",
+      "text": "The scientific report on heat transfer distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nAn analysis of heat transfer begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_03",
+      "category": "science",
+      "difficulty": "expert",
+      "text": "An analysis of diffusion begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe scientific report on diffusion distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_04",
+      "category": "science",
+      "difficulty": "hard",
+      "text": "The scientific report on fluid pressure distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nAn analysis of fluid pressure begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_05",
+      "category": "science",
+      "difficulty": "expert",
+      "text": "An analysis of chemical reaction begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe scientific report on chemical reaction distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_06",
+      "category": "science",
+      "difficulty": "hard",
+      "text": "The scientific report on measurement uncertainty distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nAn analysis of measurement uncertainty begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_science_07",
+      "category": "science",
+      "difficulty": "expert",
+      "text": "An analysis of turbulence begins by separating observation from proposed explanation. A measurement may be repeatable while the causal mechanism remains uncertain. The experiment therefore records the controlled variables, repeats the measurement, quantifies variation, and compares predictions from competing mechanisms. A correlation alone does not establish causation.\n\nThe scientific report on turbulence distinguishes the conservation law from the constitutive assumption. Conservation constrains the balance over a control volume, whereas a closure relation depends on a selected physical model. The author first verifies dimensions and boundary conditions, then tests whether the limiting cases agree with known results.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_00",
+      "category": "linux_git",
+      "difficulty": "hard",
+      "text": "A Linux workflow involving branch management distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nA developer diagnosing branch management first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_01",
+      "category": "linux_git",
+      "difficulty": "expert",
+      "text": "A developer diagnosing commit history first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nA Linux workflow involving commit history distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_02",
+      "category": "linux_git",
+      "difficulty": "hard",
+      "text": "A Linux workflow involving file permissions distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nA developer diagnosing file permissions first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_03",
+      "category": "linux_git",
+      "difficulty": "expert",
+      "text": "A developer diagnosing shell quoting first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nA Linux workflow involving shell quoting distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_04",
+      "category": "linux_git",
+      "difficulty": "hard",
+      "text": "A Linux workflow involving environment variables distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nA developer diagnosing environment variables first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_05",
+      "category": "linux_git",
+      "difficulty": "expert",
+      "text": "A developer diagnosing recursive search first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nA Linux workflow involving recursive search distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_06",
+      "category": "linux_git",
+      "difficulty": "hard",
+      "text": "A Linux workflow involving process inspection distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nA developer diagnosing process inspection first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_linux_git_07",
+      "category": "linux_git",
+      "difficulty": "expert",
+      "text": "A developer diagnosing dependency management first inspects the current state rather than immediately changing files. The incident log records the command, its exit code, and the relevant environment. For a shared Git repository, a reversible commit is preferable to silently rewriting a published branch. The team checks the diff and preserves a clear recovery path.\n\nA Linux workflow involving dependency management distinguishes filesystem permissions from missing paths. The technician inspects the process identity and the file owner before changing access settings. An isolated virtual environment affects installed Python packages but does not automatically modify operating-system file permissions. The final report lists each diagnostic step in order.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_00",
+      "category": "technical",
+      "difficulty": "hard",
+      "text": "In a performance study of finite elements, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe numerical solver for finite elements separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_01",
+      "category": "technical",
+      "difficulty": "expert",
+      "text": "The numerical solver for CFD residuals separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nIn a performance study of CFD residuals, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_02",
+      "category": "technical",
+      "difficulty": "hard",
+      "text": "In a performance study of preconditioners, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe numerical solver for preconditioners separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_03",
+      "category": "technical",
+      "difficulty": "expert",
+      "text": "The numerical solver for GPU memory use separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nIn a performance study of GPU memory use, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_04",
+      "category": "technical",
+      "difficulty": "hard",
+      "text": "In a performance study of attention inference, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe numerical solver for attention inference separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_05",
+      "category": "technical",
+      "difficulty": "expert",
+      "text": "The numerical solver for stability constraints separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nIn a performance study of stability constraints, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_06",
+      "category": "technical",
+      "difficulty": "hard",
+      "text": "In a performance study of time integration, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe numerical solver for time integration separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_technical_07",
+      "category": "technical",
+      "difficulty": "expert",
+      "text": "The numerical solver for Jacobian assembly separates discretization error from nonlinear-solver error. Refining the mesh can reduce spatial error without fixing an inconsistent boundary condition or an incorrect residual Jacobian. The verification plan compares residual norms, time-step convergence, and a manufactured solution. Each test isolates one source of uncertainty.\n\nIn a performance study of Jacobian assembly, peak throughput alone is not sufficient evidence of efficiency. The profiler also records memory traffic, kernel launch overhead, and end-to-end latency. A faster individual kernel can leave total runtime unchanged if another operation dominates. The final comparison uses matched inputs and reports uncertainty in timings.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_00",
+      "category": "storytelling",
+      "difficulty": "hard",
+      "text": "A detective entered the railway station looking for evidence about a missing ledger. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nMira carried a folded chart while investigating a missing ledger. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_01",
+      "category": "storytelling",
+      "difficulty": "expert",
+      "text": "Mira carried a folded chart while investigating an unusual timetable. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nA detective entered the railway station looking for evidence about an unusual timetable. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_02",
+      "category": "storytelling",
+      "difficulty": "hard",
+      "text": "A detective entered the railway station looking for evidence about a lost compass. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nMira carried a folded chart while investigating a lost compass. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_03",
+      "category": "storytelling",
+      "difficulty": "expert",
+      "text": "Mira carried a folded chart while investigating the old observatory. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nA detective entered the railway station looking for evidence about the old observatory. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_04",
+      "category": "storytelling",
+      "difficulty": "hard",
+      "text": "A detective entered the railway station looking for evidence about a forgotten city. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nMira carried a folded chart while investigating a forgotten city. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_05",
+      "category": "storytelling",
+      "difficulty": "expert",
+      "text": "Mira carried a folded chart while investigating the village bridge. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nA detective entered the railway station looking for evidence about the village bridge. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_06",
+      "category": "storytelling",
+      "difficulty": "hard",
+      "text": "A detective entered the railway station looking for evidence about a coded letter. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nMira carried a folded chart while investigating a coded letter. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_storytelling_07",
+      "category": "storytelling",
+      "difficulty": "expert",
+      "text": "Mira carried a folded chart while investigating the lighthouse. She passed a silent bridge and reached a storage building before sunset. Earlier, she had promised to return the chart to its owner, so she did not leave it with the guard. When the door opened, she inspected the room and noticed a second copy of the same map. The discovery complicated her original plan without changing her goal.\n\nA detective entered the railway station looking for evidence about the lighthouse. The platform was empty and the ticket window had been closed for years. A message taped behind the counter contradicted an earlier witness statement. Rather than assuming the witness had lied, the detective checked the date and discovered that the station records had been updated later. The investigation continued from that verified fact.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_00",
+      "category": "general_knowledge",
+      "difficulty": "hard",
+      "text": "An introductory lesson on local government distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nA museum exhibit describes local government by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_01",
+      "category": "general_knowledge",
+      "difficulty": "expert",
+      "text": "A museum exhibit describes time zones by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nAn introductory lesson on time zones distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_02",
+      "category": "general_knowledge",
+      "difficulty": "hard",
+      "text": "An introductory lesson on scientific notation distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nA museum exhibit describes scientific notation by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_03",
+      "category": "general_knowledge",
+      "difficulty": "expert",
+      "text": "A museum exhibit describes electricity safety by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nAn introductory lesson on electricity safety distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_04",
+      "category": "general_knowledge",
+      "difficulty": "hard",
+      "text": "An introductory lesson on maps distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nA museum exhibit describes maps by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_05",
+      "category": "general_knowledge",
+      "difficulty": "expert",
+      "text": "A museum exhibit describes agriculture by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nAn introductory lesson on agriculture distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_06",
+      "category": "general_knowledge",
+      "difficulty": "hard",
+      "text": "An introductory lesson on the water cycle distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nA museum exhibit describes the water cycle by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    },
+    {
+      "id": "challenge_general_knowledge_07",
+      "category": "general_knowledge",
+      "difficulty": "expert",
+      "text": "A museum exhibit describes public transit by giving a definition, an everyday example, and a common misconception. The first example shows how the concept applies in ordinary life. The misconception confuses two similar terms that have different meanings. The corrected explanation compares the terms and explains when each is appropriate.\n\nAn introductory lesson on public transit distinguishes reliable evidence from speculation. The instructor gives a straightforward observation and then a hypothetical exception. Students learn that an explanation must remain consistent with the conditions that have actually been established. A short summary restates the conclusion without adding unsupported details.\n\nThe conclusion emphasizes the difference between a plausible first guess and a result verified against all stated conditions."
+    }
+  ]
+}

@@ -1,0 +1,502 @@
+{
+  "version": 1,
+  "family": "terminal",
+  "purpose": "Safe local terminal knowledge probes; commands never executed.",
+  "tasks": [
+    {
+      "id": "pwd",
+      "category": "filesystem",
+      "prompt": "# Print the current working directory.\n$ ",
+      "choices": [
+        "pwd",
+        "mkdir test",
+        "cd .."
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "pwd"
+      ]
+    },
+    {
+      "id": "mkdir",
+      "category": "filesystem",
+      "prompt": "# Create a new directory named results.\n$ ",
+      "choices": [
+        "ls results",
+        "rm -r results",
+        "mkdir results"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "mkdir (?:-p )?results"
+      ]
+    },
+    {
+      "id": "list",
+      "category": "filesystem",
+      "prompt": "# List files in the current directory.\n$ ",
+      "choices": [
+        "cd ..",
+        "ls",
+        "pwd"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "ls(?: -[a-zA-Z]+)?"
+      ]
+    },
+    {
+      "id": "hidden",
+      "category": "filesystem",
+      "prompt": "# List hidden files along with ordinary files.\n$ ",
+      "choices": [
+        "ls -a",
+        "pwd",
+        "ls"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "ls -(?:a|la|al)"
+      ]
+    },
+    {
+      "id": "cd",
+      "category": "filesystem",
+      "prompt": "# Change to the src subdirectory.\n$ ",
+      "choices": [
+        "cd ..",
+        "ls src",
+        "cd src"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "cd src"
+      ]
+    },
+    {
+      "id": "touch",
+      "category": "filesystem",
+      "prompt": "# Create an empty file named example.txt.\n$ ",
+      "choices": [
+        "rm example.txt",
+        "touch example.txt",
+        "cat example.txt"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "touch example\\.txt"
+      ]
+    },
+    {
+      "id": "copy",
+      "category": "filesystem",
+      "prompt": "# Copy input.txt to backup.txt.\n$ ",
+      "choices": [
+        "cp input.txt backup.txt",
+        "mv input.txt backup.txt",
+        "rm input.txt"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "cp input\\.txt backup\\.txt"
+      ]
+    },
+    {
+      "id": "move",
+      "category": "filesystem",
+      "prompt": "# Rename old.txt to new.txt.\n$ ",
+      "choices": [
+        "rm old.txt",
+        "mv old.txt new.txt",
+        "cp old.txt new.txt"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "mv old\\.txt new\\.txt"
+      ]
+    },
+    {
+      "id": "cat",
+      "category": "filesystem",
+      "prompt": "# Display the contents of README.md.\n$ ",
+      "choices": [
+        "touch README.md",
+        "rm README.md",
+        "cat README.md"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "cat README\\.md"
+      ]
+    },
+    {
+      "id": "head",
+      "category": "filesystem",
+      "prompt": "# Display first 10 lines of report.txt.\n$ ",
+      "choices": [
+        "wc -l report.txt",
+        "tail -n 10 report.txt",
+        "head -n 10 report.txt"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "head (?:-n )?10 report\\.txt"
+      ]
+    },
+    {
+      "id": "tail",
+      "category": "filesystem",
+      "prompt": "# Display last 20 lines of report.txt.\n$ ",
+      "choices": [
+        "wc -c report.txt",
+        "head -n 20 report.txt",
+        "tail -n 20 report.txt"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "tail -n 20 report\\.txt"
+      ]
+    },
+    {
+      "id": "wc",
+      "category": "filesystem",
+      "prompt": "# Count lines in output.log.\n$ ",
+      "choices": [
+        "cat output.log",
+        "wc -l output.log",
+        "wc -c output.log"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "wc -l output\\.log"
+      ]
+    },
+    {
+      "id": "findpy",
+      "category": "filesystem",
+      "prompt": "# Find Python files recursively.\n$ ",
+      "choices": [
+        "rm -rf .",
+        "find . -type f -name '*.py'",
+        "git status"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "find \\. (?:-type f )?-name ['\\\"]\\*\\.py['\\\"]"
+      ]
+    },
+    {
+      "id": "grep",
+      "category": "search",
+      "prompt": "# Search recursively for TODO in this folder.\n$ ",
+      "choices": [
+        "grep -R -n TODO .",
+        "git add TODO",
+        "mkdir TODO"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "grep -R -n (?:'|\")?TODO(?:'|\")? \\."
+      ]
+    },
+    {
+      "id": "git_status",
+      "category": "git",
+      "prompt": "# Show current Git working tree status.\n$ ",
+      "choices": [
+        "git log",
+        "git status",
+        "git init"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git status(?: --short| -s)?"
+      ]
+    },
+    {
+      "id": "git_log",
+      "category": "git",
+      "prompt": "# Display recent Git commits with short hashes.\n$ ",
+      "choices": [
+        "git init",
+        "git log --oneline",
+        "git branch -d main"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git log --oneline"
+      ]
+    },
+    {
+      "id": "git_diff",
+      "category": "git",
+      "prompt": "# Show unstaged changes tracked by Git.\n$ ",
+      "choices": [
+        "git status",
+        "git diff --staged",
+        "git diff"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git diff"
+      ]
+    },
+    {
+      "id": "git_staged",
+      "category": "git",
+      "prompt": "# Show only staged changes tracked by Git.\n$ ",
+      "choices": [
+        "git clone .",
+        "git diff",
+        "git diff --staged"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git diff --(?:staged|cached)"
+      ]
+    },
+    {
+      "id": "git_branch",
+      "category": "git",
+      "prompt": "# List local Git branches.\n$ ",
+      "choices": [
+        "git init",
+        "git commit",
+        "git branch"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git branch(?: --list)?"
+      ]
+    },
+    {
+      "id": "git_switch",
+      "category": "git",
+      "prompt": "# Switch to an existing Git branch named develop.\n$ ",
+      "choices": [
+        "git init",
+        "git branch -d develop",
+        "git switch develop"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git switch develop",
+        "git checkout develop"
+      ]
+    },
+    {
+      "id": "git_new",
+      "category": "git",
+      "prompt": "# Create and switch to a branch named feature.\n$ ",
+      "choices": [
+        "git status",
+        "git switch -c feature",
+        "git branch feature"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "git switch -c feature",
+        "git checkout -b feature"
+      ]
+    },
+    {
+      "id": "git_add",
+      "category": "git",
+      "prompt": "# Stage src/main.py for the next Git commit.\n$ ",
+      "choices": [
+        "git reset src/main.py",
+        "git status",
+        "git add src/main.py"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git add src/main\\.py"
+      ]
+    },
+    {
+      "id": "git_show",
+      "category": "git",
+      "prompt": "# Display details of most recent Git commit.\n$ ",
+      "choices": [
+        "git init",
+        "git branch",
+        "git show HEAD"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "git show HEAD"
+      ]
+    },
+    {
+      "id": "git_restore",
+      "category": "git",
+      "prompt": "# Discard unstaged edits to readme.txt.\n$ ",
+      "choices": [
+        "git restore readme.txt",
+        "git log",
+        "git add readme.txt"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "git restore readme\\.txt"
+      ]
+    },
+    {
+      "id": "python_venv",
+      "category": "python",
+      "prompt": "# Create a Python virtual environment at .venv.\n$ ",
+      "choices": [
+        "python3 -m venv .venv",
+        "pip install venv",
+        "git init"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "python(?:3)? -m venv \\.venv"
+      ]
+    },
+    {
+      "id": "python_compile",
+      "category": "python",
+      "prompt": "# Check a Python file for syntax errors without running it.\n$ ",
+      "choices": [
+        "python3 script.py",
+        "python3 -m py_compile script.py",
+        "rm script.py"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "python(?:3)? -m py_compile script\\.py"
+      ]
+    },
+    {
+      "id": "python_pip",
+      "category": "python",
+      "prompt": "# List packages installed by pip.\n$ ",
+      "choices": [
+        "python3 -m pip list",
+        "python3 -m pip install all",
+        "pip uninstall"
+      ],
+      "answer": 0,
+      "accepted_patterns": [
+        "python(?:3)? -m pip list"
+      ]
+    },
+    {
+      "id": "chmod",
+      "category": "filesystem",
+      "prompt": "# Make run.sh executable by the file owner.\n$ ",
+      "choices": [
+        "chmod u-x run.sh",
+        "chmod u+x run.sh",
+        "rm run.sh"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "chmod u\\+x run\\.sh",
+        "chmod \\+x run\\.sh"
+      ]
+    },
+    {
+      "id": "du",
+      "category": "filesystem",
+      "prompt": "# Show disk usage of the current folder.\n$ ",
+      "choices": [
+        "git status",
+        "free -h",
+        "du -sh ."
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "du -sh \\."
+      ]
+    },
+    {
+      "id": "disk",
+      "category": "filesystem",
+      "prompt": "# Show free filesystem space.\n$ ",
+      "choices": [
+        "free -h",
+        "du -sh .",
+        "df -h"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "df -h"
+      ]
+    },
+    {
+      "id": "process",
+      "category": "process",
+      "prompt": "# List running processes.\n$ ",
+      "choices": [
+        "pwd",
+        "ps aux",
+        "git branch"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "ps aux",
+        "ps -ef"
+      ]
+    },
+    {
+      "id": "kill",
+      "category": "process",
+      "prompt": "# Send a termination signal to process ID 1234.\n$ ",
+      "choices": [
+        "ls 1234",
+        "git reset 1234",
+        "kill 1234"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "kill 1234"
+      ]
+    },
+    {
+      "id": "env",
+      "category": "process",
+      "prompt": "# Print environment variables.\n$ ",
+      "choices": [
+        "cd ..",
+        "pwd",
+        "env"
+      ],
+      "answer": 2,
+      "accepted_patterns": [
+        "env",
+        "printenv"
+      ]
+    },
+    {
+      "id": "whoami",
+      "category": "process",
+      "prompt": "# Print name of current user.\n$ ",
+      "choices": [
+        "hostname",
+        "whoami",
+        "pwd"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "whoami"
+      ]
+    },
+    {
+      "id": "hostname",
+      "category": "process",
+      "prompt": "# Print hostname of this computer.\n$ ",
+      "choices": [
+        "pwd",
+        "hostname",
+        "whoami"
+      ],
+      "answer": 1,
+      "accepted_patterns": [
+        "hostname"
+      ]
+    }
+  ]
+}

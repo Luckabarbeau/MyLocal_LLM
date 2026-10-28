@@ -41,13 +41,18 @@ def _sha256(path):
 
 @contextlib.contextmanager
 def _plain_4096_model(model):
-    """Temporarily bypass historical_read without allocating a second backbone.
+    """Temporarily bypass historical_read and independent full-history heads.
 
     Verified only for historical_read and dense models; do not silently alter
     other hierarchical architectures. Training mode is always restored.
     """
     memory = getattr(model, 'historical_memory', None)
     original_config = model.config
+    full_history_heads = [
+        (block, block.full_history_head)
+        for block in getattr(model, 'blocks', ())
+        if getattr(block, 'full_history_head', None) is not None
+    ]
     if getattr(model, 'hierarchical_memory_enabled', False):
         cfg = original_config.memory_context
         if not (memory is not None and cfg.integration_mode == 'historical_read'):
@@ -55,10 +60,19 @@ def _plain_4096_model(model):
     try:
         if memory is not None:
             model.historical_memory = None
-            model.config = dataclasses.replace(original_config,
-                memory_context=dataclasses.replace(original_config.memory_context, enabled=False))
+            for block, _ in full_history_heads:
+                block.full_history_head = None
+            model.config = dataclasses.replace(
+                original_config,
+                memory_context=dataclasses.replace(
+                    original_config.memory_context, enabled=False
+                ),
+                full_history_layers=(),
+            )
         yield
     finally:
+        for block, head in full_history_heads:
+            block.full_history_head = head
         model.historical_memory = memory
         model.config = original_config
 
@@ -181,7 +195,13 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
     if require_native_cuda_graph_decode and not use_kv_cache:
         raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     records = []
-    with _strict_graph_decode_for_generation(require_native_cuda_graph_decode), _preserve_global_rng():
+    plain_model = (
+        _plain_4096_model(model)
+        if getattr(getattr(model, 'config', None), 'full_history_layers', ())
+        else contextlib.nullcontext()
+    )
+    with (_strict_graph_decode_for_generation(require_native_cuda_graph_decode),
+          _preserve_global_rng(), plain_model):
         generator = _generator(model, tokenizer, max_context=max_context)
         for prompt in prompts:
             for seed in seeds:

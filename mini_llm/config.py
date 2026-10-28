@@ -94,7 +94,7 @@ class MemoryContextConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if self.recent_length > self.memory_length:
             raise ValueError("recent_length must not exceed memory_length")
-        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"} and self.target_length >= self.memory_length:
+        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read", "direct_full_history"} and self.target_length >= self.memory_length:
             raise ValueError(
                 f"{self.integration_mode} requires target_length < memory_length"
             )
@@ -107,11 +107,13 @@ class MemoryContextConfig:
         if self.read_heads % self.read_kv_heads != 0:
             raise ValueError("read_heads must be divisible by read_kv_heads")
         if self.integration_mode not in {
-            "pretransformer_read", "terminal_landmark", "routed_prefix", "historical_read"
+            "pretransformer_read", "terminal_landmark", "routed_prefix",
+            "historical_read", "direct_full_history",
         }:
             raise ValueError(
                 "integration_mode must be 'pretransformer_read', "
-                "'terminal_landmark', 'routed_prefix', or 'historical_read'"
+                "'terminal_landmark', 'routed_prefix', 'historical_read', "
+                "or 'direct_full_history'"
             )
         if self.routed_prefix_causal_policy not in {"legacy_full_window", "prewindow"}:
             raise ValueError("routed_prefix_causal_policy must be legacy_full_window or prewindow")
@@ -162,7 +164,10 @@ class MemoryContextConfig:
     @property
     def distant_memory_length(self) -> int:
         """Number of tokens physically stored outside the 4k working window."""
-        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"}:
+        if self.integration_mode in {
+            "terminal_landmark", "routed_prefix", "historical_read",
+            "direct_full_history",
+        }:
             return int(self.memory_length) - int(self.target_length)
         return int(self.memory_length)
 
@@ -190,7 +195,10 @@ class MemoryContextConfig:
         horizon*, including the current working window.  The sampler still reads
         one additional corpus token to provide the terminal next-token label.
         """
-        if self.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"}:
+        if self.integration_mode in {
+            "terminal_landmark", "routed_prefix", "historical_read",
+            "direct_full_history",
+        }:
             return int(self.memory_length)
         return int(self.memory_length) + int(self.target_length)
 
@@ -272,9 +280,20 @@ class ModelConfig:
             i < 0 or i >= self.n_layers for i in selected
         ):
             raise ValueError("full_history_layers must contain unique valid zero-based indices")
-        if selected and (not self.memory_context.enabled or
-                         self.memory_context.integration_mode != "historical_read"):
-            raise ValueError("full-history heads require historical_read memory context")
+        if selected and (
+            not self.memory_context.enabled
+            or self.memory_context.integration_mode not in {
+                "historical_read", "direct_full_history"
+            }
+        ):
+            raise ValueError(
+                "full-history heads require historical_read or direct_full_history memory context"
+            )
+        if (self.memory_context.integration_mode == "direct_full_history" and
+                selected != tuple(range(self.n_layers))):
+            raise ValueError(
+                "direct_full_history replaces head zero in every Transformer layer"
+            )
         object.__setattr__(self, "full_history_layers", selected)
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
@@ -412,11 +431,14 @@ class ModelConfig:
 
         memory = self.memory_context
         if memory.enabled:
-            if memory.integration_mode != "historical_read":
+            parameter_free_memory = memory.integration_mode in {
+                "historical_read", "direct_full_history"
+            }
+            if not parameter_free_memory:
                 total += 2 * d * int(memory.router_dim)
-            if memory.integration_mode != "historical_read" and memory.query_pooling == "learned":
+            if not parameter_free_memory and memory.query_pooling == "learned":
                 total += d
-            if memory.integration_mode != "historical_read" and memory.history_pooling == "learned":
+            if not parameter_free_memory and memory.history_pooling == "learned":
                 total += d
             read_q = int(memory.read_heads) * int(self.d_head)
             read_kv = int(memory.read_kv_heads) * int(self.d_head)
@@ -1095,6 +1117,20 @@ class ModelConfig:
     @classmethod
     def ensemble_1024_20l_dense_historical_hybrid_64k(cls):
         return cls._ensemble_1024_historical_hybrid_64k(n_layers=20,n_ffn=4096)
+
+    @classmethod
+    def ensemble_1024_20l_dense_direct_full_history_64k(cls):
+        """One 64K rectangular head plus 15 local-512 heads in every layer."""
+        base = cls.ensemble_1024_20l_dense_historical_hybrid_64k()
+        return replace(
+            base,
+            memory_context=replace(
+                base.memory_context,
+                integration_mode="direct_full_history",
+                memory_training="joint",
+            ),
+            full_history_layers=tuple(range(base.n_layers)),
+        )
 
     @classmethod
     def ensemble_1024_22l_dense_historical_hybrid_64k(cls):

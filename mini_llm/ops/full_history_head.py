@@ -71,7 +71,7 @@ class FullHistoryHead:
     """An additive head; W_o starts at zero for exact checkpoint parity."""
 
     def __init__(self, *, d_model, d_head, embedding, rng, init_std, rope_base,
-                 name, dtype):
+                 name, dtype, zero_output_init=True, output_init_std=None):
         self.d_model = int(d_model)
         self.width = int(d_head)
         self.embedding = embedding
@@ -83,8 +83,17 @@ class FullHistoryHead:
                                   name + ".Wk", dtype=dtype)
         self.v = matrix_parameter((d_model, d_head), init_std, rng,
                                   name + ".Wv", dtype=dtype)
-        self.o = Parameter(xp.zeros((d_head, d_model), dtype=dtype),
-                           name=name + ".Wo")
+        if zero_output_init:
+            self.o = Parameter(xp.zeros((d_head, d_model), dtype=dtype),
+                               name=name + ".Wo")
+        else:
+            self.o = matrix_parameter(
+                (d_head, d_model),
+                init_std if output_init_std is None else output_init_std,
+                rng,
+                name + ".Wo",
+                dtype=dtype,
+            )
         self.project_chunk = 4096
 
     def parameters(self):
@@ -235,7 +244,8 @@ class FullHistoryHead:
         return output, ((retrieved, rows) if return_cache else None)
 
     def backward(self, grad, cache, *, output_scale=None,
-                 return_output_scale_grad=False):
+                 return_output_scale_grad=False,
+                 accumulate_embedding_grad=True):
         if cache is None:
             raise ValueError("full history backward requires forward cache")
         retrieved, rows = cache
@@ -288,9 +298,11 @@ class FullHistoryHead:
                 raw = self.embedding.data[ids[start:stop]].astype(xp.float32)
                 self.k.grad += raw.T @ dhk[start:stop]
                 self.v.grad += raw.T @ dhv[start:stop]
-                d_emb = (dhk[start:stop] @ self.k.data.astype(xp.float32).T +
-                         dhv[start:stop] @ self.v.data.astype(xp.float32).T)
-                if self.embedding.grad is not None:
+                if accumulate_embedding_grad and self.embedding.grad is not None:
+                    d_emb = (
+                        dhk[start:stop] @ self.k.data.astype(xp.float32).T
+                        + dhv[start:stop] @ self.v.data.astype(xp.float32).T
+                    )
                     xp.add.at(self.embedding.grad, ids[start:stop], d_emb)
             dxs.append(dx)
         result = xp.stack(dxs, axis=0)

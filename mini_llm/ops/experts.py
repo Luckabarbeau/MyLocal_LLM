@@ -649,7 +649,8 @@ class ExpertFFN:
         return y, cache
 
     def backward(
-        self, dy, cache, *, x=None, route_weights=None, return_route_dweights=False
+        self, dy, cache, *, x=None, route_weights=None, return_route_dweights=False,
+        accumulate_parameter_grads=True,
     ):
         """Backward pass through the expert.
 
@@ -725,8 +726,9 @@ class ExpertFFN:
             route_weights_2d = None
             weighted_dy_2d = raw_dy_2d
 
-        with moe_detail_scope("moe.expert.down_wgrad"):
-            self.W_down.grad += h_2d.T @ weighted_dy_2d
+        if accumulate_parameter_grads:
+            with moe_detail_scope("moe.expert.down_wgrad"):
+                self.W_down.grad += h_2d.T @ weighted_dy_2d
 
         with moe_detail_scope("moe.expert.down_dx"):
             if route_weights_2d is None:
@@ -772,21 +774,23 @@ class ExpertFFN:
             # input-gradient GEMMs plus add into one GEMM.
             with moe_detail_scope("moe.expert.pack_dgate_up"):
                 dgate_up = xp.concatenate((dg, du), axis=-1)
-            with moe_detail_scope("moe.expert.gate_up_wgrad"):
-                dweight_gate_up = x_2d.T @ dgate_up
-                split = self.d_ff
-                self.W_gate.grad += dweight_gate_up[:, :split]
-                self.W_up.grad += dweight_gate_up[:, split:]
+            if accumulate_parameter_grads:
+                with moe_detail_scope("moe.expert.gate_up_wgrad"):
+                    dweight_gate_up = x_2d.T @ dgate_up
+                    split = self.d_ff
+                    self.W_gate.grad += dweight_gate_up[:, :split]
+                    self.W_up.grad += dweight_gate_up[:, split:]
 
             with moe_detail_scope("moe.expert.pack_weights_bwd"):
                 w_gate_up = xp.concatenate((self.W_gate.data, self.W_up.data), axis=1)
             with moe_detail_scope("moe.expert.gate_up_dx"):
                 dx = dgate_up @ w_gate_up.T
         else:
-            with moe_detail_scope("moe.expert.gate_wgrad"):
-                self.W_gate.grad += x_2d.T @ dg
-            with moe_detail_scope("moe.expert.up_wgrad"):
-                self.W_up.grad += x_2d.T @ du
+            if accumulate_parameter_grads:
+                with moe_detail_scope("moe.expert.gate_wgrad"):
+                    self.W_gate.grad += x_2d.T @ dg
+                with moe_detail_scope("moe.expert.up_wgrad"):
+                    self.W_up.grad += x_2d.T @ du
             if _expert_dx_accumulate_enabled(dg.dtype):
                 with moe_detail_scope("moe.expert.gate_dx"):
                     dx = dg @ self.W_gate.data.T

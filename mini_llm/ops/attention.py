@@ -454,6 +454,7 @@ class GQAAttention:
         self.terminal_memory = None
         self.historical_reader = None
         self.historical_layer = None
+        self.replace_full_head_with_history = False
         self._terminal_memory_head_indices = ()
         self._terminal_memory_group_name = None
 
@@ -745,6 +746,8 @@ class GQAAttention:
         group_caches = []
         routing = {}
         skipped = set(historical_skip_heads)
+        if self.replace_full_head_with_history:
+            skipped.add(0)
 
         if _triton_mixed_attention_requested():
             full_groups = [
@@ -809,6 +812,7 @@ class GQAAttention:
                             active_local_heads,
                             window=512,
                             scale=self.scale,
+                            include_full=not self.replace_full_head_with_history,
                         )
                     if return_cache:
                         group_caches.append({
@@ -1172,12 +1176,15 @@ class GQAAttention:
 
         return dq, dk, dv, drouter_input
 
-    def _projection_backward(self, x, dq, dk, dv, cache):
+    def _projection_backward(
+        self, x, dq, dk, dv, cache, *, accumulate_parameter_grads=True
+    ):
         b, t, _ = x.shape
         x2 = x.reshape(-1, self.d_model)
 
         if _packed_qkv_enabled():
-            self._ensure_packed_qkv_grad_views()
+            if accumulate_parameter_grads:
+                self._ensure_packed_qkv_grad_views()
             dqkv2 = None
             if is_bfloat16_dtype(x.dtype):
                 with performance_scope("attention.qkv_projection.backward.fused_rope_pack"):
@@ -1204,10 +1211,11 @@ class GQAAttention:
                 with performance_scope("attention.qkv_projection.backward.pack"):
                     dqkv2 = xp.concatenate((dq2, dk2, dv2), axis=1)
 
-            with performance_scope("attention.qkv_projection.backward.wgrad"):
-                dw_packed = x2.T @ dqkv2
-            with performance_scope("attention.qkv_projection.backward.grad_accumulate"):
-                self._packed_qkv_grad += dw_packed
+            if accumulate_parameter_grads:
+                with performance_scope("attention.qkv_projection.backward.wgrad"):
+                    dw_packed = x2.T @ dqkv2
+                with performance_scope("attention.qkv_projection.backward.grad_accumulate"):
+                    self._packed_qkv_grad += dw_packed
 
             with performance_scope("attention.qkv_projection.backward.dx"):
                 dx2 = dqkv2 @ self._get_packed_qkv_weight().T
@@ -1222,9 +1230,10 @@ class GQAAttention:
                 dk2 = dk2.astype(x.dtype, copy=False)
                 dv2 = dv2.astype(x.dtype, copy=False)
 
-            self.Wq.grad += x2.T @ dq2
-            self.Wk.grad += x2.T @ dk2
-            self.Wv.grad += x2.T @ dv2
+            if accumulate_parameter_grads:
+                self.Wq.grad += x2.T @ dq2
+                self.Wk.grad += x2.T @ dk2
+                self.Wv.grad += x2.T @ dv2
 
             dx2 = (
                 dq2 @ self.Wq.data.T
@@ -1645,6 +1654,7 @@ class GQAAttention:
     def backward(
         self, dy, cache, *, output_scale=None, return_output_scale_grad=False,
         shared_context_kv_grad=None, return_shared_context_kv_grad=False,
+        accumulate_parameter_grads=True,
     ):
         x = cache["x"]
         q, k, v = cache["q"], cache["k"], cache["v"]
@@ -1656,7 +1666,8 @@ class GQAAttention:
             dy2 = dy.reshape(-1, dy.shape[-1])
             output_scale_grad = None
             if output_scale is None:
-                self.Wo.grad += merged2.T @ dy2
+                if accumulate_parameter_grads:
+                    self.Wo.grad += merged2.T @ dy2
                 dmerged = (dy2 @ self.Wo.data.T).reshape(merged.shape)
             else:
                 # For y = alpha * (merged @ Wo), form the ungated output
@@ -1676,7 +1687,8 @@ class GQAAttention:
                         * self.Wo.data.astype(acc_dtype, copy=False),
                         dtype=acc_dtype,
                     )
-                self.Wo.grad += output_scale * raw_wgrad
+                if accumulate_parameter_grads:
+                    self.Wo.grad += output_scale * raw_wgrad
                 dmerged = (
                     (dy2 @ self.Wo.data.T) * output_scale
                 ).reshape(merged.shape)
@@ -1713,7 +1725,10 @@ class GQAAttention:
                     dv_context += dva[:, :c]
                     dk_active += dka[:, c:]
                     dv_active += dva[:, c:]
-            dx = self._projection_backward(x, dq, dk_active, dv_active, cache)
+            dx = self._projection_backward(
+                x, dq, dk_active, dv_active, cache,
+                accumulate_parameter_grads=accumulate_parameter_grads,
+            )
             if return_shared_context_kv_grad:
                 if return_output_scale_grad:
                     return dx, output_scale_grad, (dk_context, dv_context)
@@ -1743,7 +1758,10 @@ class GQAAttention:
                 dk += dk_a
                 dv += dv_a
             with performance_scope("attention.qkv_projection.backward"):
-                dx = self._projection_backward(x, dq, dk, dv, cache)
+                dx = self._projection_backward(
+                    x, dq, dk, dv, cache,
+                    accumulate_parameter_grads=accumulate_parameter_grads,
+                )
             if return_output_scale_grad:
                 return dx, output_scale_grad
             return dx
@@ -1765,7 +1783,10 @@ class GQAAttention:
                 dk += shared_context_kv_grad[0]
                 dv += shared_context_kv_grad[1]
             with performance_scope("attention.qkv_projection.backward"):
-                dx = self._projection_backward(x, dq, dk, dv, cache)
+                dx = self._projection_backward(
+                    x, dq, dk, dv, cache,
+                    accumulate_parameter_grads=accumulate_parameter_grads,
+                )
             if drouter_input is not None:
                 dx = dx + drouter_input.astype(dx.dtype, copy=False)
             if return_output_scale_grad:
@@ -1842,7 +1863,10 @@ class GQAAttention:
             dk += shared_context_kv_grad[0]
             dv += shared_context_kv_grad[1]
         with performance_scope("attention.qkv_projection.backward"):
-            dx = self._projection_backward(x, dq, dk, dv, cache)
+            dx = self._projection_backward(
+                x, dq, dk, dv, cache,
+                accumulate_parameter_grads=accumulate_parameter_grads,
+            )
         if return_output_scale_grad:
             return dx, output_scale_grad
         return dx

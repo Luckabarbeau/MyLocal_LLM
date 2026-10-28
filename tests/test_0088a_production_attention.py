@@ -23,8 +23,9 @@ def test_triton_backend_is_not_a_default_runtime_dependency(monkeypatch):
     reason="requires CuPy plus the isolated optional Triton environment",
 )
 @pytest.mark.parametrize("historical_skip_heads", ((), (2, 5, 7, 11, 14, 15)))
+@pytest.mark.parametrize("replace_full_head", (False, True))
 def test_production_mixed_dispatch_matches_grouped_forward_backward(
-    monkeypatch, historical_skip_heads
+    monkeypatch, historical_skip_heads, replace_full_head
 ):
     import cupy as cp
 
@@ -61,6 +62,7 @@ def test_production_mixed_dispatch_matches_grouped_forward_backward(
             )
         ),
     )
+    attention.replace_full_head_with_history = replace_full_head
     rng = np.random.default_rng(88021)
     q = cp.asarray(rng.normal(0.0, 0.2, (1, 129, 16, 64)), dtype="bfloat16")
     k = cp.asarray(rng.normal(0.0, 0.2, (1, 129, 4, 64)), dtype="bfloat16")
@@ -106,7 +108,9 @@ def test_production_mixed_dispatch_matches_grouped_forward_backward(
         metrics = error_metrics(cp.asnumpy(actual), cp.asnumpy(expected))
         assert metrics["relative_l2"] <= 0.02
         assert metrics["cosine"] >= 0.999
-    if historical_skip_heads:
-        inactive = list(historical_skip_heads)
+    inactive = list(historical_skip_heads)
+    if replace_full_head:
+        inactive.insert(0, 0)
+    if inactive:
         assert float(cp.max(cp.abs(triton_output[:, :, inactive, :]))) == 0.0
         assert float(cp.max(cp.abs(triton_gradients[0][:, :, inactive, :]))) == 0.0

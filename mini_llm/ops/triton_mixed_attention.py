@@ -528,13 +528,13 @@ def _ptr(array):
     return _Pointer(array, dtype)
 
 
-def _active_mask(active_local_heads: Iterable[int]) -> int:
+def _active_mask(active_local_heads: Iterable[int], *, include_full=True) -> int:
     heads = tuple(int(head) for head in active_local_heads)
     if len(set(heads)) != len(heads):
         raise ValueError("active local heads must be unique")
     if any(head < 1 or head >= N_Q_HEADS for head in heads):
         raise ValueError("active local heads must be original heads in [1, 15]")
-    mask = 1
+    mask = 1 if include_full else 0
     for head in heads:
         mask |= 1 << head
     return mask
@@ -574,13 +574,18 @@ class AttentionCache:
     scale: float
 
 
-def mixed_attention_forward(q, k, v, active_local_heads, *, window=512, scale=0.125):
+def mixed_attention_forward(
+    q, k, v, active_local_heads, *, window=512, scale=0.125,
+    include_full=True,
+):
     """Return FP32 mixed-attention output and the minimal backward cache."""
     import cupy as cp
 
     _validate(q, k, v, window)
     active_local_heads = tuple(int(head) for head in active_local_heads)
-    active_mask = _active_mask(active_local_heads)
+    active_mask = _active_mask(
+        active_local_heads, include_full=bool(include_full)
+    )
     local_head_indices = cp.asarray(active_local_heads, dtype=cp.int32)
     local_heads_indexed = active_local_heads != tuple(
         range(1, 1 + len(active_local_heads))
@@ -599,20 +604,21 @@ def mixed_attention_forward(q, k, v, active_local_heads, *, window=512, scale=0.
         l_s[0], l_s[1], l_s[2],
     )
     grid_m = triton.cdiv(length, 64)
-    _fwd_kernel[(grid_m, batch)](
-        *common,
-        n_ctx=length,
-        scale_log2=scale_log2,
-        active_mask=active_mask,
-        head_begin=0,
-        head_count=1,
-        use_head_indices=False,
-        window=length,
-        block_m=64,
-        block_n=64,
-        num_warps=4,
-        num_stages=3,
-    )
+    if include_full:
+        _fwd_kernel[(grid_m, batch)](
+            *common,
+            n_ctx=length,
+            scale_log2=scale_log2,
+            active_mask=active_mask,
+            head_begin=0,
+            head_count=1,
+            use_head_indices=False,
+            window=length,
+            block_m=64,
+            block_n=64,
+            num_warps=4,
+            num_stages=3,
+        )
     if active_local_heads:
         _fwd_kernel[(grid_m, batch * len(active_local_heads))](
             *common,
@@ -681,21 +687,22 @@ def mixed_attention_backward(d_out, cache: AttentionCache):
         l_s[0], l_s[1], l_s[2], d_s[0], d_s[1], d_s[2],
         dq_s[0], dq_s[1], dq_s[2],
     )
-    _dq_kernel[(grid_m, batch)](
-        *dq_common,
-        n_ctx=length,
-        scale=cache.scale,
-        scale_log2=cache.scale * _LOG2E,
-        active_mask=cache.active_mask,
-        head_begin=0,
-        head_count=1,
-        use_head_indices=False,
-        window=length,
-        block_m=64,
-        block_n=64,
-        num_warps=4,
-        num_stages=3,
-    )
+    if cache.active_mask & 1:
+        _dq_kernel[(grid_m, batch)](
+            *dq_common,
+            n_ctx=length,
+            scale=cache.scale,
+            scale_log2=cache.scale * _LOG2E,
+            active_mask=cache.active_mask,
+            head_begin=0,
+            head_count=1,
+            use_head_indices=False,
+            window=length,
+            block_m=64,
+            block_n=64,
+            num_warps=4,
+            num_stages=3,
+        )
     local_head_count = int(cache.active_local_heads.size)
     if local_head_count:
         _dq_kernel[(grid_m, batch * local_head_count)](

@@ -23,14 +23,23 @@ class Memory:
 class Config:
     memory_context: Memory = dataclasses.field(default_factory=Memory)
     context_length: int = 20
+    full_history_layers: tuple = ()
+
+    def __post_init__(self):
+        if self.full_history_layers and not self.memory_context.enabled:
+            raise ValueError('full-history heads require historical_read memory context')
 
 
 class FakeModel:
-    def __init__(self):
-        self.config = Config()
+    def __init__(self, full_history=False):
+        self.config = Config(full_history_layers=(0, 2) if full_history else ())
         self.historical_memory = object()
         self.historical = self.historical_memory
         self.calls = []
+        self.blocks = [SimpleNamespace(full_history_head=None) for _ in range(3)]
+        if full_history:
+            self.blocks[0].full_history_head = object()
+            self.blocks[2].full_history_head = object()
 
     @property
     def hierarchical_memory_enabled(self):
@@ -54,15 +63,36 @@ class SimpleTokenizer:
         return ''.join(map(chr, ids))
 
 
+def test_plain_model_disables_and_restores_full_history():
+    model = FakeModel(full_history=True)
+    original_config = model.config
+    original_heads = tuple(block.full_history_head for block in model.blocks)
+    with live_suite._plain_4096_model(model):
+        assert not model.hierarchical_memory_enabled
+        assert not model.config.memory_context.enabled
+        assert model.config.full_history_layers == ()
+        assert all(block.full_history_head is None for block in model.blocks)
+    assert model.historical_memory is model.historical
+    assert model.config is original_config
+    assert all(block.full_history_head is head
+               for block, head in zip(model.blocks, original_heads))
+
+
 def test_plain_model_restoration_on_error():
-    model = FakeModel()
+    model = FakeModel(full_history=True)
+    original_config = model.config
+    original_heads = tuple(block.full_history_head for block in model.blocks)
     with pytest.raises(RuntimeError):
         with live_suite._plain_4096_model(model):
             assert not model.hierarchical_memory_enabled
             assert not model.config.memory_context.enabled
+            assert model.config.full_history_layers == ()
+            assert all(block.full_history_head is None for block in model.blocks)
             raise RuntimeError('intentional')
     assert model.historical_memory is model.historical
-    assert model.config.memory_context.enabled
+    assert model.config is original_config
+    assert all(block.full_history_head is head
+               for block, head in zip(model.blocks, original_heads))
 
 
 def test_reference_ranks_and_cutoffs():

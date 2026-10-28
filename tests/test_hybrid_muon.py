@@ -114,6 +114,77 @@ def test_adam_subset_equivalent_to_standalone_adamw():
         np.testing.assert_array_equal(np_value(hybrid.adam.v[0]), np_value(pure.v[0]))
 
 
+def test_named_subset_freezes_weights_moments_and_adam_age():
+    old_muon = param('blocks.0.attention.Wq', (5, 7), seed=31)
+    old_adam = param('embedding.W', (4, 6), seed=32)
+    new_history = param('blocks.0.full_history.Wq', (5, 7), seed=33)
+    ref_muon = param('blocks.0.attention.Wq', (5, 7), seed=31)
+    ref_adam = param('embedding.W', (4, 6), seed=32)
+    opt = HybridMuonAdamW(
+        [old_muon, old_adam, new_history], lr=2e-4,
+        beta1=.9, beta2=.95, eps=1e-8, weight_decay=.1,
+    )
+    ref = HybridMuonAdamW(
+        [ref_muon, ref_adam], lr=2e-4,
+        beta1=.9, beta2=.95, eps=1e-8, weight_decay=.1,
+    )
+
+    for value, reference in ((old_muon, ref_muon), (old_adam, ref_adam)):
+        value.grad[...] = .01
+        reference.grad[...] = .01
+    new_history.grad[...] = .01
+    opt.step()
+    ref.step()
+
+    frozen_weight = [np_value(p.data).copy() for p in (old_muon, old_adam)]
+    frozen_muon_m = np_value(opt.muon.m[0]).copy()
+    frozen_adam_m = np_value(opt.adam.m[0]).copy()
+    frozen_adam_v = np_value(opt.adam.v[0]).copy()
+    active_name = {new_history.name}
+    for gradient in (.02, .03):
+        old_muon.grad[...] = gradient
+        old_adam.grad[...] = gradient
+        new_history.grad[...] = gradient
+        opt.step(active_parameter_names=active_name)
+
+    np.testing.assert_array_equal(np_value(old_muon.data), frozen_weight[0])
+    np.testing.assert_array_equal(np_value(old_adam.data), frozen_weight[1])
+    np.testing.assert_array_equal(np_value(opt.muon.m[0]), frozen_muon_m)
+    np.testing.assert_array_equal(np_value(opt.adam.m[0]), frozen_adam_m)
+    np.testing.assert_array_equal(np_value(opt.adam.v[0]), frozen_adam_v)
+    assert opt.adam.parameter_birth_steps[0] == 2
+    assert opt.step_index == 3
+
+    for value, reference in ((old_muon, ref_muon), (old_adam, ref_adam)):
+        value.grad[...] = .04
+        reference.grad[...] = .04
+    new_history.grad[...] = .04
+    opt.step()
+    ref.step()
+    np.testing.assert_array_equal(np_value(old_muon.data), np_value(ref_muon.data))
+    np.testing.assert_array_equal(np_value(old_adam.data), np_value(ref_adam.data))
+    np.testing.assert_array_equal(np_value(opt.muon.m[0]), np_value(ref.muon.m[0]))
+    np.testing.assert_array_equal(np_value(opt.adam.m[0]), np_value(ref.adam.m[0]))
+    np.testing.assert_array_equal(np_value(opt.adam.v[0]), np_value(ref.adam.v[0]))
+
+
+def test_full_history_only_parameter_boundary():
+    old = param('blocks.0.attention.Wq', (5, 7), seed=41)
+    history = param('blocks.0.full_history.Wq', (5, 7), seed=42)
+    trainer = object.__new__(ExtendedTrainer)
+    trainer.optimization_parameters = [old, history]
+    trainer.full_history_only_parameters = [history]
+    trainer.full_history_only_start_step = 16_900
+    trainer.full_history_only_until_step = 17_000
+
+    trainer.step = 16_900
+    assert trainer._optimizer_step_parameters() == [history]
+    trainer.step = 16_999
+    assert trainer._optimizer_step_parameters() == [history]
+    trainer.step = 17_000
+    assert trainer._optimizer_step_parameters() is trainer.optimization_parameters
+
+
 def test_muon_momentum_and_nesterov_full_float32():
     p = param('blocks.0.attention.Wq', (5, 7))
     opt = HybridMuonAdamW([p], lr=1e-3, beta1=.9, beta2=.95,
@@ -209,10 +280,12 @@ def test_training_small_model_saves_kind_and_state(tmp_path):
 
 def test_cli_options(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['train_model.py', '--optimizer', 'hybrid-muon',
-                                     '--muon-momentum', '0.96', '--muon-ns-steps', '4'])
+                                     '--muon-momentum', '0.96', '--muon-ns-steps', '4',
+                                     '--full-history-only-steps', '100'])
     args = train_model.parse_args()
     assert args.optimizer == 'hybrid-muon'
     assert args.muon_momentum == .96 and args.muon_ns_steps == 4
+    assert args.full_history_only_steps == 100
     monkeypatch.setattr(sys, 'argv', ['train_model.py'])
     assert train_model.parse_args().optimizer is None
 

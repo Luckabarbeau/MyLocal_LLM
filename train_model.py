@@ -76,6 +76,7 @@ def parse_args():
             "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
             "ensemble-1024-16l-dense-historical-hybrid-64k",
             "ensemble-1024-20l-dense-historical-hybrid-64k",
+            "ensemble-1024-20l-dense-direct-full-history-64k",
             "ensemble-1024-22l-dense-historical-hybrid-64k",
             "ensemble-1024-24l-dense-historical-hybrid-64k",
             "ensemble-large-1536-36l-dense-historical-hybrid-64k",
@@ -324,6 +325,15 @@ def parse_args():
     parser.add_argument(
         "--muon-matmul-precision", choices=["bf16", "fp32"], default=None,
         help="Muon orthogonalization GEMM precision (default: bf16 on GPU)",
+    )
+    parser.add_argument(
+        "--full-history-only-steps", type=int, default=None,
+        help=(
+            "On a full-history checkpoint resume, update only independent "
+            "full-history-head parameters for this many optimizer steps, then "
+            "automatically unfreeze the preserved backbone. The absolute phase "
+            "boundary is checkpointed for exact interrupted resume."
+        ),
     )
 
     # Checkpointing and logging
@@ -612,6 +622,8 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.ensemble_1024_16l_dense_historical_hybrid_64k()
     if name == "ensemble-1024-20l-dense-historical-hybrid-64k":
         return ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    if name == "ensemble-1024-20l-dense-direct-full-history-64k":
+        return ModelConfig.ensemble_1024_20l_dense_direct_full_history_64k()
     if name == "ensemble-1024-22l-dense-historical-hybrid-64k":
         return ModelConfig.ensemble_1024_22l_dense_historical_hybrid_64k()
     if name == "ensemble-1024-24l-dense-historical-hybrid-64k":
@@ -1310,6 +1322,7 @@ def main():
                 "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
                 "ensemble-1024-16l-dense-historical-hybrid-64k",
                 "ensemble-1024-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-20l-dense-direct-full-history-64k",
                 "ensemble-1024-22l-dense-historical-hybrid-64k",
                 "ensemble-1024-24l-dense-historical-hybrid-64k",
                 "ensemble-large-1536-36l-dense-historical-hybrid-64k",
@@ -1368,6 +1381,7 @@ def main():
                 "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
                 "ensemble-1024-16l-dense-historical-hybrid-64k",
                 "ensemble-1024-20l-dense-historical-hybrid-64k",
+                "ensemble-1024-20l-dense-direct-full-history-64k",
                 "ensemble-1024-22l-dense-historical-hybrid-64k",
                 "ensemble-1024-24l-dense-historical-hybrid-64k",
                 "ensemble-large-1536-36l-dense-historical-hybrid-64k",
@@ -1470,9 +1484,17 @@ def main():
         f"({estimated_params / 1e6:.1f}M)"
     )
     if config.memory_context.enabled:
-        disabled_memory = dataclasses.replace(config.memory_context, enabled=False)
+        disabled_memory = dataclasses.replace(
+            config.memory_context,
+            enabled=False,
+            integration_mode=(
+                "pretransformer_read"
+                if config.memory_context.integration_mode == "direct_full_history"
+                else config.memory_context.integration_mode
+            ),
+        )
         base_params = dataclasses.replace(
-            config, memory_context=disabled_memory
+            config, memory_context=disabled_memory, full_history_layers=()
         ).estimated_parameter_count()
         print(f"  Base Transformer parameters: {base_params:,}")
         print(f"  External-memory parameters: {estimated_params - base_params:,}")
@@ -1938,6 +1960,57 @@ def main():
         })
     print(f"Gradient accumulation weighting: {gradient_weighting}")
 
+    saved_phase_start = (training_state or {}).get("full_history_only_start_step")
+    saved_phase_end = (training_state or {}).get("full_history_only_until_step")
+    if (saved_phase_start is None) != (saved_phase_end is None):
+        raise ValueError("checkpoint contains an incomplete full-history-only schedule")
+    full_history_only_start_step = None
+    full_history_only_until_step = None
+    if args.full_history_only_steps is not None:
+        if args.full_history_only_steps <= 0:
+            raise ValueError("--full-history-only-steps must be positive")
+        if not args.resume_from:
+            raise ValueError("--full-history-only-steps requires --resume-from")
+        if not config.full_history_layers:
+            raise ValueError("--full-history-only-steps requires full-history heads")
+        if saved_phase_end is None:
+            full_history_only_start_step = int(start_step)
+            full_history_only_until_step = (
+                full_history_only_start_step + int(args.full_history_only_steps)
+            )
+        else:
+            assert saved_phase_start is not None
+            full_history_only_start_step = int(saved_phase_start)
+            full_history_only_until_step = int(saved_phase_end)
+            saved_duration = (
+                full_history_only_until_step - full_history_only_start_step
+            )
+            if saved_duration != int(args.full_history_only_steps):
+                raise ValueError(
+                    "--full-history-only-steps differs from the checkpointed "
+                    f"schedule ({args.full_history_only_steps} != {saved_duration})"
+                )
+    elif saved_phase_end is not None:
+        assert saved_phase_start is not None
+        full_history_only_start_step = int(saved_phase_start)
+        full_history_only_until_step = int(saved_phase_end)
+
+    if full_history_only_until_step is not None:
+        assert full_history_only_start_step is not None
+        if int(start_step) < full_history_only_start_step:
+            raise ValueError("checkpoint step precedes its full-history-only schedule")
+        if int(start_step) < full_history_only_until_step:
+            print(
+                "Full-history-only phase: steps "
+                f"{full_history_only_start_step + 1}-"
+                f"{full_history_only_until_step} update only the new heads"
+            )
+        else:
+            print(
+                "Full-history-only phase already complete at step "
+                f"{full_history_only_until_step}; all parameters will update"
+            )
+
     trainer = ExtendedTrainer(
         model=model,
         train_shard_paths=[str(p) for p in train_shards],
@@ -1989,6 +2062,8 @@ def main():
         muon_momentum=muon_momentum,
         muon_ns_steps=muon_ns_steps,
         muon_matmul_precision=muon_precision,
+        full_history_only_start_step=full_history_only_start_step,
+        full_history_only_until_step=full_history_only_until_step,
         stream_specs=stream_specs,
         stream_tokenizer=tokenizer if stream_specs else None,
         stream_segment_tokens=args.stream_segment_tokens,

@@ -41,7 +41,9 @@ from mini_llm.optim.adamw import (
     AdamW, DEFAULT_ADAM_BETA1, DEFAULT_ADAM_BETA2, DEFAULT_ADAM_EPS,
 )
 from mini_llm.optim.hybrid_muon import HybridMuonAdamW
-from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
+from mini_llm.optim.grad_clip import (
+    audit_gradients, clip_grad_global_norm, _array_to_float,
+)
 from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
 from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
@@ -128,6 +130,8 @@ class ExtendedTrainer:
         muon_momentum: float = 0.95,
         muon_ns_steps: int = 5,
         muon_matmul_precision: str = "bf16",
+        full_history_only_start_step: Optional[int] = None,
+        full_history_only_until_step: Optional[int] = None,
         stream_specs=None,
         stream_tokenizer=None,
         stream_segment_tokens: int = 524288,
@@ -205,10 +209,13 @@ class ExtendedTrainer:
         if self.ar_compact_target and (
             training_objective is not None
             or not model.config.memory_context.enabled
-            or model.config.memory_context.integration_mode not in {"routed_prefix", "historical_read"}
+            or model.config.memory_context.integration_mode not in {
+                "routed_prefix", "historical_read", "direct_full_history"
+            }
         ):
             raise ValueError(
-                "MINI_LLM_AR_COMPACT_TARGET requires AR with routed_prefix or historical_read memory"
+                "MINI_LLM_AR_COMPACT_TARGET requires AR with routed_prefix, "
+                "historical_read, or direct_full_history memory"
             )
         # 0080BR: pre-sample one optimizer step, then group same-source / same-
         # routing-mode AR rows by valid length. No rejected/re-drawn documents.
@@ -491,6 +498,30 @@ class ExtendedTrainer:
             model.optimization_parameters() if self.training_objective is None
             else self.training_objective.parameters()
         )
+        self.full_history_only_start_step = (
+            None if full_history_only_start_step is None
+            else int(full_history_only_start_step)
+        )
+        self.full_history_only_until_step = (
+            None if full_history_only_until_step is None
+            else int(full_history_only_until_step)
+        )
+        if ((self.full_history_only_start_step is None)
+                != (self.full_history_only_until_step is None)):
+            raise ValueError("full-history-only schedule requires both start and end steps")
+        self.full_history_only_parameters = [
+            p for p in self.optimization_parameters if ".full_history." in p.name
+        ]
+        phase_start = self.full_history_only_start_step
+        phase_end = self.full_history_only_until_step
+        if phase_end is not None:
+            assert phase_start is not None
+            if phase_start < 0:
+                raise ValueError("full-history-only start step must be nonnegative")
+            if phase_end <= phase_start:
+                raise ValueError("full-history-only end step must follow its start step")
+            if not self.full_history_only_parameters:
+                raise ValueError("full-history-only schedule requires full-history parameters")
         if optimizer_kind not in {"adamw", "hybrid-muon"}:
             raise ValueError("optimizer_kind must be adamw or hybrid-muon")
         if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
@@ -637,7 +668,12 @@ class ExtendedTrainer:
             cfg = self.memory_context
             print("  Causal external memory routing: enabled")
             print("  Document-aware sampling:       enabled (EOS-bounded)")
-            if cfg.integration_mode == "historical_read":
+            if cfg.integration_mode == "direct_full_history":
+                print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
+                print(f"  Raw history per sample:        {cfg.distant_memory_length:,} tokens")
+                print(f"  Supervised current window:     {cfg.target_length:,} tokens")
+                print("  Attention per layer:           1 direct 64K head + 15 local-512 heads")
+            elif cfg.integration_mode == "historical_read":
                 print(f"  Total causal horizon:          {cfg.memory_length:,} tokens")
                 print(f"  Searchable history:            {cfg.distant_memory_length:,} tokens")
                 print(f"  Supervised current window:     {cfg.target_length:,} tokens")
@@ -738,6 +774,21 @@ class ExtendedTrainer:
         print(f"  Checkpoint dir: {checkpoint_dir}")
         print(f"  Log file: {log_file}")
         
+    def _full_history_only_active(self):
+        phase_start = self.full_history_only_start_step
+        phase_end = self.full_history_only_until_step
+        return (
+            phase_start is not None
+            and phase_end is not None
+            and phase_start <= self.step < phase_end
+        )
+
+    def _optimizer_step_parameters(self):
+        """Parameters eligible for the current optimizer update."""
+        if self._full_history_only_active():
+            return self.full_history_only_parameters
+        return self.optimization_parameters
+
     def _refresh_parameter_partitions(self):
         """Refresh active/frozen parameter views after progressive growth."""
         self.optimization_parameters = list(self.optimizer.parameters)
@@ -1463,7 +1514,9 @@ class ExtendedTrainer:
             routed_prefix_retrieval = None
             min_history_tokens = 0
             sampling_policy = "legacy"
-            if self.memory_context.integration_mode in {"routed_prefix", "historical_read"}:
+            if self.memory_context.integration_mode in {
+                "routed_prefix", "historical_read", "direct_full_history"
+            }:
                 # 0078E: document length is an *outcome* of sampling, never
                 # a prerequisite. Keep router stochastic training probability
                 # independent of which document is selected.
@@ -1769,7 +1822,9 @@ class ExtendedTrainer:
                     sampling_policy_override
                     if sampling_policy_override is not None else
                     "document_first"
-                    if self.memory_context.integration_mode in {"routed_prefix", "historical_read"}
+                    if self.memory_context.integration_mode in {
+                        "routed_prefix", "historical_read", "direct_full_history"
+                    }
                     and (source_override is None or min_history_override is not None)
                     else "legacy"
                 ),
@@ -1925,10 +1980,14 @@ class ExtendedTrainer:
         if (
             metadata is None
             or self.memory_context is None
-            or self.memory_context.integration_mode not in {"routed_prefix", "historical_read"}
+            or self.memory_context.integration_mode not in {
+                "routed_prefix", "historical_read", "direct_full_history"
+            }
         ):
             return metadata
-        if self.memory_context.integration_mode == "historical_read":
+        if self.memory_context.integration_mode in {
+            "historical_read", "direct_full_history"
+        }:
             if self.ar_compact_target:
                 from mini_llm.data.compact_target import ar_compact_metadata
                 return ar_compact_metadata(
@@ -2409,6 +2468,7 @@ class ExtendedTrainer:
         memory_active = self._memory_profile_due()
         mode_memory_peaks = {}
         step_memory_token_stats = self._empty_memory_token_stats()
+        backbone_parameter_grads = not self._full_history_only_active()
         noise = self.gradient_noise
         noise_active = noise is not None and noise.begin(self.step)
         convergence = self.gradient_convergence
@@ -2784,12 +2844,17 @@ class ExtendedTrainer:
 
                 with performance_scope("train.loss_backward"):
                     dx_head = self.model.chunked_lm_head_backward(
-                        loss_cache, grad_scale=self.loss_scale * microbatch_weight
+                        loss_cache,
+                        grad_scale=self.loss_scale * microbatch_weight,
+                        frozen_output_projection=not backbone_parameter_grads,
                     )
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
                 with performance_scope("train.model_backward"):
-                    self.model.backward_body(dx_head, cache)
+                    self.model.backward_body(
+                        dx_head, cache,
+                        backbone_parameter_grads=backbone_parameter_grads,
+                    )
                 del dx_head
                 if target_slice is None:
                     del head_input
@@ -2880,15 +2945,41 @@ class ExtendedTrainer:
                 if p.grad is not None:
                     p.grad[...] = p.grad / accumulation_weight_sum
         
-        # Global gradient clipping - returns backend array norm, no sync
-        # Now returns (norm_backend, scale, is_finite) tuple
+        # During full-history settling, clipping and finite checks use only the
+        # parameters that can actually update. Backbone gradients are still
+        # computed to preserve every path into the attached history heads.
+        step_parameters = self._optimizer_step_parameters()
         with performance_scope("train.grad_clip"):
             grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
-                self.optimization_parameters, max_norm=self.grad_clip
+                step_parameters, max_norm=self.grad_clip
             )
         
         if not is_finite:
-            # Gradient contains Inf/NaN - skip this update
+            # The ordinary FP32 sum of squares can itself overflow. An opt-in
+            # audit runs before zero_grad so a rejected update can distinguish
+            # reduction overflow from actual nonfinite gradient elements.
+            if os.environ.get("MINI_LLM_GRAD_NORM_AUDIT", "0") == "1":
+                audit = audit_gradients(step_parameters)
+                stable_norm = audit["stable_norm"]
+                print(
+                    "Gradient audit: "
+                    f"parameters={audit['parameter_count']}, "
+                    f"elements={audit['element_count']:,}, "
+                    f"all_finite={audit['all_finite']}, "
+                    f"stable_norm={stable_norm if stable_norm is not None else 'undefined'}"
+                )
+                for row in audit["nonfinite"]:
+                    print(
+                        "  NONFINITE "
+                        f"{row['name']}: count={row['nonfinite']:,}, "
+                        f"nan={row['nan']:,}, inf={row['inf']:,}, "
+                        f"max_finite_abs={row['max_finite_abs']:.6e}"
+                    )
+                for row in audit["top"]:
+                    print(
+                        f"  TOP {row['name']}: norm={row['norm']:.6e}, "
+                        f"max_abs={row['max_abs']:.6e}"
+                    )
             self.optimizer.zero_grad()
             print(
                 f"WARNING: Nonfinite gradient at step {self.step}; "
@@ -2897,9 +2988,15 @@ class ExtendedTrainer:
             )
             return avg_loss, float(_array_to_float(grad_norm_backend)) if grad_norm_backend is not None else 0.0
         
-        # Update parameters (only once per accumulated batch)
+        # Update parameters (only once per accumulated batch). Passing names to
+        # the optimizer is required for a true freeze: zero gradients alone
+        # would still permit momentum and decoupled weight-decay updates.
+        active_names = (
+            None if step_parameters is self.optimization_parameters
+            else {p.name for p in step_parameters}
+        )
         with performance_scope("train.optimizer_step"):
-            self.optimizer.step(lr=lr)
+            self.optimizer.step(lr=lr, active_parameter_names=active_names)
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_optimizer_step")
         refresh_backbone_buffers = not (
@@ -3296,6 +3393,8 @@ class ExtendedTrainer:
                 getattr(self.model, "active_layers", len(self.model.blocks))
             ),
             "progressive_growth_steps": list(self.progressive_growth_steps),
+            "full_history_only_start_step": self.full_history_only_start_step,
+            "full_history_only_until_step": self.full_history_only_until_step,
             "optimizer_parameter_birth_steps": (
                 self.optimizer.parameter_birth_step_state()
             ),
@@ -3371,6 +3470,15 @@ class ExtendedTrainer:
         print(f"\nStarting training from step {start_step}...")
         print(f"Training for {num_steps} additional steps")
         print(f"Effective batch size: {self.effective_batch_size}")
+        if (
+            self.full_history_only_until_step is not None
+            and self.step < self.full_history_only_until_step
+        ):
+            remaining = self.full_history_only_until_step - self.step
+            print(
+                "Full-history-only settling: "
+                f"{remaining} optimizer step(s) remain; backbone updates are frozen"
+            )
         if getattr(self.model, "progressive_depth_enabled", False):
             print(
                 "Progressive depth: "
@@ -3428,6 +3536,15 @@ class ExtendedTrainer:
                 # train_step() can skip an update on non-finite gradients.
                 # Never count its sampled tokens or schedule an evaluation.
                 continue
+            if (
+                self.full_history_only_until_step is not None
+                and completed_before < self.full_history_only_until_step <= self.step
+            ):
+                print(
+                    "Full-history-only settling complete at step "
+                    f"{self.step}; restored updates for all parameters",
+                    flush=True,
+                )
             if self._last_step_expert_usage is not None:
                 self._write_expert_usage(self._last_step_expert_usage)
                 self._last_step_expert_usage = None

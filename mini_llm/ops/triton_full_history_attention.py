@@ -63,7 +63,7 @@ def _forward_kernel(
     query_length, key_length, history_length,
     scale_log2: tl.constexpr,
     block_m: tl.constexpr, block_n: tl.constexpr,
-    store_lse: tl.constexpr,
+    store_lse: tl.constexpr, fast_bf16: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     offs_m = pid_m * block_m + tl.arange(0, block_m)
@@ -73,19 +73,32 @@ def _forward_kernel(
     q_block = tl.load(
         q + offs_m[:, None] * q_st + offs_d[None, :],
         mask=query_mask, other=0.0,
-    ).to(tl.float32)
+    )
+    if not fast_bf16:
+        q_block = q_block.to(tl.float32)
 
     row_max = tl.full((block_m,), -float("inf"), tl.float32)
-    for key_start in tl.range(0, key_length, block_n, num_stages=2):
+    row_sum = tl.zeros((block_m,), tl.float32)
+    accumulator = tl.zeros((block_m, 64), tl.float32)
+    query_start = pid_m * block_m
+    key_end = tl.minimum(
+        key_length, history_length + query_start + block_m
+    )
+    for key_start in tl.range(0, key_end, block_n, num_stages=2):
         key_offsets = key_start + offs_n
         key_mask = key_offsets < key_length
         k_block = tl.load(
             k + key_offsets[:, None] * k_st + offs_d[None, :],
             mask=key_mask[:, None], other=0.0,
-        ).to(tl.float32)
-        scores = tl.dot(
-            q_block, tl.trans(k_block), input_precision="tf32x3"
-        ) * scale_log2
+        )
+        if not fast_bf16:
+            k_block = k_block.to(tl.float32)
+        if fast_bf16:
+            scores = tl.dot(q_block, tl.trans(k_block)) * scale_log2
+        else:
+            scores = tl.dot(
+                q_block, tl.trans(k_block), input_precision="tf32x3"
+            ) * scale_log2
         visible = (
             query_mask
             & key_mask[None, :]
@@ -94,36 +107,29 @@ def _forward_kernel(
         scores = tl.where(visible, scores, -float("inf"))
         tile_has_values = tl.sum(visible.to(tl.int32), axis=1) > 0
         tile_max = tl.max(scores, axis=1)
-        row_max = tl.where(tile_has_values, tl.maximum(row_max, tile_max), row_max)
-
-    row_sum = tl.zeros((block_m,), tl.float32)
-    accumulator = tl.zeros((block_m, 64), tl.float32)
-    for key_start in tl.range(0, key_length, block_n, num_stages=2):
-        key_offsets = key_start + offs_n
-        key_mask = key_offsets < key_length
-        k_block = tl.load(
-            k + key_offsets[:, None] * k_st + offs_d[None, :],
-            mask=key_mask[:, None], other=0.0,
-        ).to(tl.float32)
-        scores = tl.dot(
-            q_block, tl.trans(k_block), input_precision="tf32x3"
-        ) * scale_log2
-        visible = (
-            query_mask
-            & key_mask[None, :]
-            & (key_offsets[None, :] <= history_length + offs_m[:, None])
+        new_max = tl.where(
+            tile_has_values, tl.maximum(row_max, tile_max), row_max
         )
         probabilities = tl.where(
-            visible, tl.exp2(scores - row_max[:, None]), 0.0
+            visible, tl.exp2(scores - new_max[:, None]), 0.0
         )
-        row_sum += tl.sum(probabilities, axis=1)
+        alpha = tl.where(tile_has_values, tl.exp2(row_max - new_max), 1.0)
+        row_sum = row_sum * alpha + tl.sum(probabilities, axis=1)
+        accumulator *= alpha[:, None]
         v_block = tl.load(
             v + key_offsets[:, None] * v_st + offs_d[None, :],
             mask=key_mask[:, None], other=0.0,
-        ).to(tl.float32)
-        accumulator = tl.dot(
-            probabilities, v_block, accumulator, input_precision="tf32x3"
         )
+        if fast_bf16:
+            accumulator = tl.dot(
+                probabilities.to(tl.bfloat16), v_block, accumulator
+            )
+        else:
+            accumulator = tl.dot(
+                probabilities, v_block.to(tl.float32), accumulator,
+                input_precision="tf32x3",
+            )
+        row_max = new_max
 
     nonempty = row_sum > 0.0
     result = tl.where(nonempty[:, None], accumulator / row_sum[:, None], 0.0)
@@ -166,33 +172,45 @@ def _backward_dkdv_kernel(
     query_length, key_length, history_length,
     scale: tl.constexpr, scale_log2: tl.constexpr,
     block_m: tl.constexpr, block_n: tl.constexpr,
+    fast_bf16: tl.constexpr,
 ):
-    key_offsets = tl.program_id(0) * block_n + tl.arange(0, block_n)
+    key_start = tl.program_id(0) * block_n
+    key_offsets = key_start + tl.arange(0, block_n)
     offs_m_base = tl.arange(0, block_m)
     offs_d = tl.arange(0, 64)
     key_mask = key_offsets < key_length
     k_block = tl.load(
         k + key_offsets[:, None] * k_st + offs_d[None, :],
         mask=key_mask[:, None], other=0.0,
-    ).to(tl.float32)
+    )
     v_block = tl.load(
         v + key_offsets[:, None] * v_st + offs_d[None, :],
         mask=key_mask[:, None], other=0.0,
-    ).to(tl.float32)
+    )
+    if not fast_bf16:
+        k_block = k_block.to(tl.float32)
+        v_block = v_block.to(tl.float32)
     dk_acc = tl.zeros((block_n, 64), tl.float32)
     dv_acc = tl.zeros((block_n, 64), tl.float32)
 
-    for query_start in tl.range(0, query_length, block_m, num_stages=2):
+    query_begin = tl.maximum(0, key_start - history_length)
+    query_begin = (query_begin // block_m) * block_m
+    for query_start in tl.range(query_begin, query_length, block_m, num_stages=2):
         query_offsets = query_start + offs_m_base
         query_mask = query_offsets < query_length
         q_block = tl.load(
             q + query_offsets[:, None] * q_st + offs_d[None, :],
             mask=query_mask[:, None], other=0.0,
-        ).to(tl.float32)
+        )
         upstream = tl.load(
             doutput + query_offsets[:, None] * do_st + offs_d[None, :],
             mask=query_mask[:, None], other=0.0,
-        ).to(tl.float32)
+        )
+        if fast_bf16:
+            upstream = upstream.to(tl.bfloat16)
+        else:
+            q_block = q_block.to(tl.float32)
+            upstream = upstream.to(tl.float32)
         lse = tl.load(
             lse_log2 + query_offsets * lse_st,
             mask=query_mask, other=0.0,
@@ -206,22 +224,34 @@ def _backward_dkdv_kernel(
             & query_mask[None, :]
             & (key_offsets[:, None] <= history_length + query_offsets[None, :])
         )
-        scores_t = tl.dot(
-            k_block, tl.trans(q_block), input_precision="tf32x3"
-        ) * scale_log2
+        if fast_bf16:
+            scores_t = tl.dot(k_block, tl.trans(q_block)) * scale_log2
+        else:
+            scores_t = tl.dot(
+                k_block, tl.trans(q_block), input_precision="tf32x3"
+            ) * scale_log2
         probabilities_t = tl.where(
             visible, tl.exp2(scores_t - lse[None, :]), 0.0
         )
-        dv_acc = tl.dot(
-            probabilities_t, upstream, dv_acc, input_precision="tf32x3"
-        )
-        d_probabilities_t = tl.dot(
-            v_block, tl.trans(upstream), input_precision="tf32x3"
-        )
+        if fast_bf16:
+            dv_acc = tl.dot(
+                probabilities_t.to(tl.bfloat16), upstream, dv_acc
+            )
+            d_probabilities_t = tl.dot(v_block, tl.trans(upstream))
+        else:
+            dv_acc = tl.dot(
+                probabilities_t, upstream, dv_acc, input_precision="tf32x3"
+            )
+            d_probabilities_t = tl.dot(
+                v_block, tl.trans(upstream), input_precision="tf32x3"
+            )
         d_scores_t = probabilities_t * (d_probabilities_t - row_delta[None, :])
-        dk_acc = tl.dot(
-            d_scores_t, q_block, dk_acc, input_precision="tf32x3"
-        )
+        if fast_bf16:
+            dk_acc = tl.dot(d_scores_t.to(tl.bfloat16), q_block, dk_acc)
+        else:
+            dk_acc = tl.dot(
+                d_scores_t, q_block, dk_acc, input_precision="tf32x3"
+            )
 
     tl.store(
         dkey + key_offsets[:, None] * dk_st + offs_d[None, :],
@@ -240,6 +270,7 @@ def _backward_dq_kernel(
     query_length, key_length, history_length,
     scale: tl.constexpr, scale_log2: tl.constexpr,
     block_m: tl.constexpr, block_n: tl.constexpr,
+    fast_bf16: tl.constexpr,
 ):
     query_offsets = tl.program_id(0) * block_m + tl.arange(0, block_m)
     offs_n = tl.arange(0, block_n)
@@ -248,11 +279,16 @@ def _backward_dq_kernel(
     q_block = tl.load(
         q + query_offsets[:, None] * q_st + offs_d[None, :],
         mask=query_mask, other=0.0,
-    ).to(tl.float32)
+    )
     upstream = tl.load(
         doutput + query_offsets[:, None] * do_st + offs_d[None, :],
         mask=query_mask, other=0.0,
-    ).to(tl.float32)
+    )
+    if fast_bf16:
+        upstream = upstream.to(tl.bfloat16)
+    else:
+        q_block = q_block.to(tl.float32)
+        upstream = upstream.to(tl.float32)
     lse = tl.load(
         lse_log2 + query_offsets * lse_st,
         mask=query_offsets < query_length, other=0.0,
@@ -263,35 +299,51 @@ def _backward_dq_kernel(
     )
     dq_acc = tl.zeros((block_m, 64), tl.float32)
 
-    for key_start in tl.range(0, key_length, block_n, num_stages=2):
+    query_start = tl.program_id(0) * block_m
+    key_end = tl.minimum(
+        key_length, history_length + query_start + block_m
+    )
+    for key_start in tl.range(0, key_end, block_n, num_stages=2):
         key_offsets = key_start + offs_n
         key_mask = key_offsets < key_length
         k_block = tl.load(
             k + key_offsets[:, None] * k_st + offs_d[None, :],
             mask=key_mask[:, None], other=0.0,
-        ).to(tl.float32)
+        )
         v_block = tl.load(
             v + key_offsets[:, None] * v_st + offs_d[None, :],
             mask=key_mask[:, None], other=0.0,
-        ).to(tl.float32)
+        )
+        if not fast_bf16:
+            k_block = k_block.to(tl.float32)
+            v_block = v_block.to(tl.float32)
         visible = (
             query_mask
             & key_mask[None, :]
             & (key_offsets[None, :] <= history_length + query_offsets[:, None])
         )
-        scores = tl.dot(
-            q_block, tl.trans(k_block), input_precision="tf32x3"
-        ) * scale_log2
+        if fast_bf16:
+            scores = tl.dot(q_block, tl.trans(k_block)) * scale_log2
+        else:
+            scores = tl.dot(
+                q_block, tl.trans(k_block), input_precision="tf32x3"
+            ) * scale_log2
         probabilities = tl.where(
             visible, tl.exp2(scores - lse[:, None]), 0.0
         )
-        d_probabilities = tl.dot(
-            upstream, tl.trans(v_block), input_precision="tf32x3"
-        )
+        if fast_bf16:
+            d_probabilities = tl.dot(upstream, tl.trans(v_block))
+        else:
+            d_probabilities = tl.dot(
+                upstream, tl.trans(v_block), input_precision="tf32x3"
+            )
         d_scores = probabilities * (d_probabilities - row_delta[:, None])
-        dq_acc = tl.dot(
-            d_scores, k_block, dq_acc, input_precision="tf32x3"
-        )
+        if fast_bf16:
+            dq_acc = tl.dot(d_scores.to(tl.bfloat16), k_block, dq_acc)
+        else:
+            dq_acc = tl.dot(
+                d_scores, k_block, dq_acc, input_precision="tf32x3"
+            )
 
     tl.store(
         dquery + query_offsets[:, None] * dq_st + offs_d[None, :],
@@ -328,6 +380,9 @@ def full_history_attention_forward(query, key, value, *, return_cache=False):
             _strides, (query, key, value, output, lse_log2)
         )
         block_m = block_n = 64
+        fast_bf16 = all(
+            str(array.dtype) == "bfloat16" for array in (query, key, value)
+        )
         _forward_kernel[(triton.cdiv(query_length, block_m),)](
             _pointer(query), _pointer(key), _pointer(value),
             _pointer(output), _pointer(lse_log2),
@@ -336,7 +391,8 @@ def full_history_attention_forward(query, key, value, *, return_cache=False):
             history_length=history_length,
             scale_log2=(_HEAD_DIM ** -0.5) * _LOG2E,
             block_m=block_m, block_n=block_n,
-            store_lse=bool(return_cache), num_warps=4, num_stages=3,
+            store_lse=bool(return_cache), fast_bf16=fast_bf16,
+            num_warps=4, num_stages=3,
         )
     if not return_cache:
         return output
@@ -371,13 +427,15 @@ def full_history_attention_backward(doutput, cache):
          delta, dquery, dkey, dvalue),
     )
     block_m = block_n = 64
-    dkdv_block_n = 32
+    fast_bf16 = all(
+        str(array.dtype) == "bfloat16" for array in (query, key, value)
+    )
     _delta_kernel[(triton.cdiv(query_length, block_m),)](
         _pointer(cache.output), _pointer(doutput), _pointer(delta),
         out_s[0], do_s[0], delta_s[0], query_length=query_length,
         block_m=block_m, num_warps=4,
     )
-    _backward_dkdv_kernel[(triton.cdiv(key_length, dkdv_block_n),)](
+    _backward_dkdv_kernel[(triton.cdiv(key_length, block_n),)](
         _pointer(query), _pointer(key), _pointer(value), _pointer(doutput),
         _pointer(cache.lse_log2), _pointer(delta),
         _pointer(dkey), _pointer(dvalue),
@@ -386,7 +444,8 @@ def full_history_attention_backward(doutput, cache):
         query_length=query_length, key_length=key_length,
         history_length=int(cache.history_length), scale=_HEAD_DIM ** -0.5,
         scale_log2=(_HEAD_DIM ** -0.5) * _LOG2E,
-        block_m=32, block_n=dkdv_block_n, num_warps=4, num_stages=1,
+        block_m=block_m, block_n=block_n, fast_bf16=fast_bf16,
+        num_warps=4, num_stages=3,
     )
     _backward_dq_kernel[(triton.cdiv(query_length, block_m),)](
         _pointer(query), _pointer(key), _pointer(value), _pointer(doutput),
@@ -395,6 +454,7 @@ def full_history_attention_backward(doutput, cache):
         query_length=query_length, key_length=key_length,
         history_length=int(cache.history_length), scale=_HEAD_DIM ** -0.5,
         scale_log2=(_HEAD_DIM ** -0.5) * _LOG2E,
-        block_m=block_m, block_n=32, num_warps=4, num_stages=1,
+        block_m=block_m, block_n=block_n, fast_bf16=fast_bf16,
+        num_warps=4, num_stages=3,
     )
     return dquery, dkey, dvalue

@@ -387,9 +387,11 @@ class AdamW:
                     f"at step {self.step_index}"
                 )
 
-    def _step_device_moments(self, eta):
+    def _step_device_moments(self, eta, active_parameter_names=None):
         """Established all-device Adam path with per-parameter Adam age."""
         for i, p in enumerate(self.parameters):
+            if active_parameter_names is not None and p.name not in active_parameter_names:
+                continue
             step_size, eps_scaled = self._bias_correction(i, eta)
             g = p.grad.astype("float32", copy=False)
             self._debug_check_gradient(g, i, p)
@@ -424,7 +426,7 @@ class AdamW:
             self._debug_check_master(i, p)
             p.data[...] = self.master_weights[i].astype(p.data.dtype)
 
-    def _step_offloaded_moments(self, eta):
+    def _step_offloaded_moments(self, eta, active_parameter_names=None):
         """0055B/0055C streamed Adam with pinned host optimizer state."""
         stream = xp.cuda.get_current_stream()
         one_minus_b1 = 1.0 - self.beta1
@@ -432,6 +434,8 @@ class AdamW:
         decay_factor = 1.0 - eta * self.weight_decay
 
         for i, p in enumerate(self.parameters):
+            if active_parameter_names is not None and p.name not in active_parameter_names:
+                continue
             step_size, eps_scaled = self._bias_correction(i, eta)
             g_flat = p.grad.reshape(-1)
             p_flat = p.data.reshape(-1)
@@ -509,15 +513,31 @@ class AdamW:
                     )
             self._debug_check_master(i, p)
 
-    def step(self, lr=None):
-        """Perform one optimizer step with mixed precision."""
+    def step(self, lr=None, active_parameter_names=None):
+        """Perform one optimizer step, optionally updating a named subset."""
+        active = (
+            None if active_parameter_names is None
+            else frozenset(str(name) for name in active_parameter_names)
+        )
+        if active is not None:
+            known = {p.name for p in self.parameters}
+            unknown = active - known
+            if unknown:
+                raise ValueError(f"unknown active AdamW parameters: {sorted(unknown)}")
+
         self.step_index += 1
+        if active is not None:
+            for i, p in enumerate(self.parameters):
+                if p.name not in active:
+                    # Keep the parameter's effective Adam age unchanged while
+                    # global optimizer/checkpoint steps continue to advance.
+                    self.parameter_birth_steps[i] += 1
         eta = self.lr if lr is None else float(lr)
 
         if self.moments_offloaded:
-            self._step_offloaded_moments(eta)
+            self._step_offloaded_moments(eta, active)
         else:
-            self._step_device_moments(eta)
+            self._step_device_moments(eta, active)
 
     def zero_grad(self):
         """Zero out all gradients."""

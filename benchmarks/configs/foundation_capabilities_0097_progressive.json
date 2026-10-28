@@ -32,7 +32,7 @@
       "id": "generation_full",
       "type": "generation",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "prompt_suite": "benchmarks/generation_prompts_v1.json",
         "seeds": [
@@ -57,7 +57,7 @@
       "id": "reference_token_only_0095",
       "type": "reference_continuation",
       "enabled": true,
-      "every_supervised_tokens": 250000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "references": "benchmarks/tasks/reference_texts_v2.json",
         "top_k_predictions": 10,
@@ -76,7 +76,7 @@
       "id": "reference_full_0095",
       "type": "reference_continuation",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "references": "benchmarks/tasks/reference_texts_v2.json",
         "top_k_predictions": 10,
@@ -116,7 +116,7 @@
       "id": "python_correctness",
       "type": "python_code",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/python_basic_0095.json",
         "run_tests": true,
@@ -131,7 +131,7 @@
       "id": "cpp_code",
       "type": "cpp_code",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/cpp_basic_0095.json",
         "run_tests": true,
@@ -166,7 +166,7 @@
       "id": "terminal_basic",
       "type": "terminal",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/terminal_basic_0095.json",
         "seeds": [
@@ -180,7 +180,7 @@
       "id": "narrative_basic",
       "type": "narrative",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/narrative_basic_0095.json",
         "seeds": [
@@ -207,7 +207,7 @@
       "id": "narrative_challenge_generation_0096",
       "type": "narrative",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/narrative_challenge_0096.json",
         "scoring": "mean",
@@ -259,7 +259,7 @@
       "id": "reference_harder_branches_0096",
       "type": "reference_continuation",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "references": "benchmarks/tasks/reference_texts_harder_0096.json",
         "cutoffs": [
@@ -279,7 +279,7 @@
       "id": "math_ladders_0097",
       "type": "math",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/math_ladders_0097.json",
         "scoring": "mean"
@@ -289,7 +289,7 @@
       "id": "logic_ladders_0097",
       "type": "logic",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/logic_ladders_0097.json",
         "scoring": "mean"
@@ -299,7 +299,7 @@
       "id": "narrative_ladders_0097",
       "type": "narrative",
       "enabled": true,
-      "every_supervised_tokens": 1000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/narrative_ladders_0097.json",
         "scoring": "mean",
@@ -311,7 +311,7 @@
       "id": "terminal_advanced_0097",
       "type": "terminal",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/terminal_advanced_0097.json",
         "seeds": [
@@ -325,7 +325,7 @@
       "id": "python_advanced_0097",
       "type": "python_code",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/python_advanced_0097.json",
         "run_tests": true,
@@ -340,7 +340,7 @@
       "id": "cpp_advanced_0097",
       "type": "cpp_code",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/cpp_advanced_0097.json",
         "run_tests": true,
@@ -369,7 +369,7 @@
       "id": "reference_advanced_branches_0097",
       "type": "reference_continuation",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "references": "benchmarks/tasks/reference_texts_advanced_0097.json",
         "top_k_predictions": 10,
@@ -391,7 +391,7 @@
       "id": "long_retrieval_0097",
       "type": "long_retrieval",
       "enabled": true,
-      "every_supervised_tokens": 2000000000,
+      "every_supervised_tokens": 500000000,
       "parameters": {
         "tasks": "benchmarks/tasks/long_retrieval_0097.json",
         "distances": [

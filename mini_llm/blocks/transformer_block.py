@@ -330,7 +330,8 @@ class TransformerBlock:
         return y, cache
     
     def backward(self, dy, cache, *, shared_context_kv_grad=None,
-                 return_shared_context_kv_grad=False):
+                 return_shared_context_kv_grad=False,
+                 backbone_parameter_grads=True):
         """
         Backward pass through the Transformer block.
         
@@ -358,6 +359,11 @@ class TransformerBlock:
             dy.astype(self.compute_dtype, copy=False)
             if self.use_fp32_residual else dy
         )
+        moe_backward_kwargs = {}
+        if isinstance(self.moe, DenseFFN):
+            moe_backward_kwargs["accumulate_parameter_grads"] = bool(
+                backbone_parameter_grads
+            )
         
         # Backward through MoE.  With residual gating, MoE backward keeps the
         # ungated upstream gradient long enough to recover dL/d(alpha) from the
@@ -370,12 +376,16 @@ class TransformerBlock:
                     moe_cache,
                     output_scale=self.alpha_mlp.data,
                     return_output_scale_grad=True,
+                    **moe_backward_kwargs,
                 )
-                self.alpha_mlp.grad += dalpha_mlp.astype(
-                    self.alpha_mlp.grad.dtype, copy=False
-                )
+                if backbone_parameter_grads:
+                    self.alpha_mlp.grad += dalpha_mlp.astype(
+                        self.alpha_mlp.grad.dtype, copy=False
+                    )
             else:
-                dnorm2_out = self.moe.backward(dmoe_out, moe_cache)
+                dnorm2_out = self.moe.backward(
+                    dmoe_out, moe_cache, **moe_backward_kwargs
+                )
         
         # Backward through second RMSNorm - this gives gradient through FFN path.
         # Fused BF16 RMSNorm consumes the BF16 branch gradient directly and emits
@@ -411,13 +421,16 @@ class TransformerBlock:
                         dattn_out, cache["full_history_cache"],
                         output_scale=self.alpha_attn.data,
                         return_output_scale_grad=True,
+                        accumulate_embedding_grad=backbone_parameter_grads,
                     )
-                    self.alpha_attn.grad += full_history_gate_grad.astype(
-                        self.alpha_attn.grad.dtype, copy=False
-                    )
+                    if backbone_parameter_grads:
+                        self.alpha_attn.grad += full_history_gate_grad.astype(
+                            self.alpha_attn.grad.dtype, copy=False
+                        )
                 else:
                     full_history_dx = self.full_history_head.backward(
-                        dattn_out, cache["full_history_cache"]
+                        dattn_out, cache["full_history_cache"],
+                        accumulate_embedding_grad=backbone_parameter_grads,
                     )
 
         # Backward through attention.  The attention output projection can
@@ -427,6 +440,7 @@ class TransformerBlock:
             attn_kwargs = {
                 "shared_context_kv_grad": shared_context_kv_grad,
                 "return_shared_context_kv_grad": return_shared_context_kv_grad,
+                "accumulate_parameter_grads": backbone_parameter_grads,
             }
             if getattr(self, "residual_gates", False):
                 result = self.attention.backward(
@@ -438,9 +452,10 @@ class TransformerBlock:
                     dnorm1_out, dalpha_attn, context_kv_grad = result
                 else:
                     dnorm1_out, dalpha_attn = result
-                self.alpha_attn.grad += dalpha_attn.astype(
-                    self.alpha_attn.grad.dtype, copy=False
-                )
+                if backbone_parameter_grads:
+                    self.alpha_attn.grad += dalpha_attn.astype(
+                        self.alpha_attn.grad.dtype, copy=False
+                    )
             else:
                 result = self.attention.backward(
                     dattn_out, cache["attn_cache"], **attn_kwargs,

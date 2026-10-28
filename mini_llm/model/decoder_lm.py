@@ -1,6 +1,7 @@
 """Decoder-only language model built from Transformer blocks."""
 
 import os
+from types import SimpleNamespace
 
 from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloat16_dtype
 from mini_llm.config import ModelConfig
@@ -141,8 +142,14 @@ class DecoderLanguageModel:
         self.memory_reader = None
         self.memory_attention_layer = None
         self.historical_memory = None
+        self.direct_full_history = bool(
+            config.memory_context.enabled
+            and config.memory_context.integration_mode == "direct_full_history"
+        )
         if (config.memory_context.enabled and
-                config.memory_context.integration_mode != "historical_read"):
+                config.memory_context.integration_mode not in {
+                    "historical_read", "direct_full_history"
+                }):
             self.memory_router = HierarchicalMemoryRouter(
                 d_model=config.d_model,
                 config=config.memory_context,
@@ -195,7 +202,11 @@ class DecoderLanguageModel:
                     embedding=self.embedding.W, rng=rng,
                     init_std=config.init_std, rope_base=config.rope_base,
                     name=f"blocks.{layer_idx}.full_history", dtype=self.dtype,
+                    zero_output_init=not self.direct_full_history,
+                    output_init_std=config.residual_init_std,
                 )
+                if self.direct_full_history:
+                    self.blocks[layer_idx].attention.replace_full_head_with_history = True
     
     def parameters(self):
         """Return all trainable parameters."""
@@ -319,7 +330,8 @@ class DecoderLanguageModel:
     
     @property
     def hierarchical_memory_enabled(self):
-        return self.memory_router is not None or self.historical_memory is not None
+        return (self.memory_router is not None or self.historical_memory is not None
+                or self.direct_full_history)
 
     def _pretransformer_context_forward(self, token_ids, memory_metadata=None):
         """Build the dense window after one causal per-position memory read.
@@ -1111,11 +1123,76 @@ class DecoderLanguageModel:
         self.embedding.backward(dactive, {"token_ids": cache["working_ids"]})
         self.historical_memory.close(cache["state"])
 
+    def _direct_full_history_context_forward(self, token_ids, memory_metadata=None):
+        """Expose raw pre-window IDs only to the rectangular replacement heads."""
+        cfg = self.config.memory_context
+        source = xp.asarray(token_ids)
+        if source.ndim != 2 or source.shape[1] != cfg.source_input_length:
+            raise ValueError("direct_full_history requires the complete source horizon")
+        batch = int(source.shape[0])
+        history_length = int(cfg.distant_memory_length)
+        working_length = int(cfg.target_length)
+        if memory_metadata is not None and memory_metadata.get("compact_ar_target"):
+            working_length = int(memory_metadata["compact_working_length"])
+        starts = (xp.zeros((batch,), dtype=xp.int64) if memory_metadata is None
+                  else xp.asarray(memory_metadata.get(
+                      "history_valid_starts", xp.zeros((batch,), dtype=xp.int64)
+                  ), dtype=xp.int64))
+        valid_lengths = (xp.full((batch,), working_length, dtype=xp.int64)
+                         if memory_metadata is None else xp.asarray(
+                             memory_metadata.get(
+                                 "target_valid_lengths",
+                                 xp.full((batch,), working_length, dtype=xp.int64),
+                             ), dtype=xp.int64))
+        if starts.shape != (batch,) or valid_lengths.shape != (batch,):
+            raise ValueError("direct_full_history validity metadata must be per-sample")
+        history_valid = xp.arange(history_length)[None, :] >= starts[:, None]
+        if memory_metadata is not None and memory_metadata.get("history_valid_mask") is not None:
+            history_valid &= xp.asarray(
+                memory_metadata["history_valid_mask"], dtype=xp.bool_
+            )
+        current_valid = (
+            xp.arange(working_length)[None, :] < valid_lengths[:, None]
+        )
+        history_ids = source[:, :history_length]
+        working_ids = source[:, history_length:history_length + working_length]
+        current_positions = xp.broadcast_to(
+            xp.arange(
+                history_length, history_length + working_length, dtype=xp.int64
+            )[None, :],
+            (batch, working_length),
+        )
+        state = SimpleNamespace(
+            ids=history_ids,
+            valid=history_valid,
+            positions=xp.arange(history_length, dtype=xp.int64),
+        )
+        active = ActiveContext(
+            embeddings=self.embedding.W.data[working_ids], token_ids=working_ids,
+            position_ids=current_positions, source_indices=current_positions,
+            target_start=0, target_end=working_length, selected_blocks=None,
+            route_weights=None, selected_valid=None, route_valid=None,
+            terminal_memory=None,
+        )
+        return active, {
+            "mode": "direct_full_history", "working_ids": working_ids,
+            "state": state, "target_slice": (0, working_length),
+            "history_valid_starts": starts,
+            "current_valid_mask": current_valid,
+        }
+
+    def _direct_full_history_context_backward(self, dactive, cache):
+        self.embedding.backward(dactive, {"token_ids": cache["working_ids"]})
+
     def _hierarchical_context_forward(self, token_ids, memory_metadata=None, *, inference=False):
         mode = self.config.memory_context.integration_mode
         if mode == "historical_read":
             return self._historical_context_forward(
                 token_ids, memory_metadata=memory_metadata, inference=inference
+            )
+        if mode == "direct_full_history":
+            return self._direct_full_history_context_forward(
+                token_ids, memory_metadata=memory_metadata
             )
         if mode == "terminal_landmark":
             return self._terminal_landmark_context_forward(
@@ -1133,6 +1210,8 @@ class DecoderLanguageModel:
         mode = cache.pop("mode", None)
         if mode == "historical_read":
             return self._historical_context_backward(dactive, cache)
+        if mode == "direct_full_history":
+            return self._direct_full_history_context_backward(dactive, cache)
         if mode == "terminal_landmark":
             return self._terminal_landmark_context_backward(dactive, cache)
         if mode == "routed_prefix":
@@ -1310,7 +1389,7 @@ class DecoderLanguageModel:
                 # terminal vocabulary row whose loss is allowed to train memory.
                 target_slice = (active.target_end - 1, active.target_end)
             terminal_memory = active.terminal_memory
-            if self.historical_memory is not None:
+            if self.historical_memory is not None or self.direct_full_history:
                 historical_state = memory_context_cache["state"]
                 full_history_current_valid_mask = memory_context_cache.get(
                     "current_valid_mask"
@@ -1810,7 +1889,10 @@ class DecoderLanguageModel:
             )
         return dx, kv_grads
 
-    def backward_body(self, dx, cache, *, shared_context_kv_grads=None):
+    def backward_body(
+        self, dx, cache, *, shared_context_kv_grads=None,
+        backbone_parameter_grads=True,
+    ):
         """Backpropagate from the final-normalized hidden representation.
 
         In 0057 ``activation_checkpoint="block"`` stores only each block's
@@ -1886,6 +1968,7 @@ class DecoderLanguageModel:
                             None if shared_context_kv_grads is None
                             else shared_context_kv_grads[original_idx]
                         ),
+                        backbone_parameter_grads=backbone_parameter_grads,
                     )
                 del block_cache
                 if (
@@ -1909,6 +1992,7 @@ class DecoderLanguageModel:
                             None if shared_context_kv_grads is None
                             else shared_context_kv_grads[original_idx]
                         ),
+                        backbone_parameter_grads=backbone_parameter_grads,
                     )
                 del block_cache
                 if (
@@ -1927,16 +2011,18 @@ class DecoderLanguageModel:
         if memory_context_cache is not None:
             # target_slice is metadata for the LM-head path only.
             cache.pop("target_slice", None)
-            with performance_scope("memory_context.backward"):
-                self._hierarchical_context_backward(dx, memory_context_cache)
+            if backbone_parameter_grads:
+                with performance_scope("memory_context.backward"):
+                    self._hierarchical_context_backward(dx, memory_context_cache)
         else:
             embed_cache = cache.pop("embed_cache")
             if cache.pop("external_input_embeddings", False):
                 # The caller owns the gradient: soft positions backpropagate
                 # through QE; actual-token prefix positions use scatter-add.
                 return dx
-            with performance_scope("model.embedding.backward"):
-                self.embedding.backward(dx, embed_cache)
+            if backbone_parameter_grads:
+                with performance_scope("model.embedding.backward"):
+                    self.embedding.backward(dx, embed_cache)
             del embed_cache
         return None
 

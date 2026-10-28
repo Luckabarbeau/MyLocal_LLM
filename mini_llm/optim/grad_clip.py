@@ -1,4 +1,6 @@
-from ..backend import xp, scalar
+import math
+
+from ..backend import xp
 
 
 def global_grad_norm(parameters):
@@ -24,6 +26,66 @@ def _array_to_float(x):
     if hasattr(x, "get"):
         return x.get()
     return float(x)
+
+
+def audit_gradients(parameters, top_k=8):
+    """Read-only gradient health report using a scale-stable L2 norm.
+
+    This intentionally runs only when explicitly requested after a rejected
+    update. It distinguishes nonfinite gradient elements from overflow in the
+    normal FP32 sum-of-squares reduction.
+    """
+    rows = []
+    nonfinite = []
+    stable_norm = 0.0
+    parameter_count = 0
+    element_count = 0
+
+    for index, parameter in enumerate(parameters):
+        gradient = parameter.grad
+        if gradient is None:
+            continue
+        parameter_count += 1
+        element_count += int(gradient.size)
+        gradient32 = gradient.astype("float32", copy=False)
+        finite_mask = xp.isfinite(gradient32)
+        finite_count = int(_array_to_float(xp.sum(finite_mask)))
+        nonfinite_count = int(gradient32.size) - finite_count
+        name = parameter.name or f"parameter_{index}"
+
+        if nonfinite_count:
+            nan_count = int(_array_to_float(xp.sum(xp.isnan(gradient32))))
+            inf_count = int(_array_to_float(xp.sum(xp.isinf(gradient32))))
+            finite_abs = xp.where(finite_mask, xp.abs(gradient32), 0.0)
+            max_finite_abs = float(_array_to_float(xp.max(finite_abs)))
+            nonfinite.append({
+                "name": name,
+                "nonfinite": nonfinite_count,
+                "nan": nan_count,
+                "inf": inf_count,
+                "max_finite_abs": max_finite_abs,
+            })
+            continue
+
+        max_abs = float(_array_to_float(xp.max(xp.abs(gradient32))))
+        if max_abs == 0.0:
+            tensor_norm = 0.0
+        else:
+            scaled = gradient32 / max_abs
+            scaled_sum_squares = float(_array_to_float(xp.sum(scaled * scaled)))
+            tensor_norm = max_abs * math.sqrt(scaled_sum_squares)
+        stable_norm = math.hypot(stable_norm, tensor_norm)
+        rows.append({"name": name, "norm": tensor_norm, "max_abs": max_abs})
+
+    rows.sort(key=lambda row: row["norm"], reverse=True)
+    return {
+        "parameter_count": parameter_count,
+        "element_count": element_count,
+        "all_finite": not nonfinite,
+        "stable_norm": stable_norm if not nonfinite else None,
+        "nonfinite": nonfinite,
+        "top": rows[:max(0, int(top_k))],
+    }
 
 
 def _is_finite(x):

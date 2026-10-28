@@ -87,7 +87,7 @@ def audit_migration(source, destination, *, source_manifest=None):
         value = np.load(destination / "model_params" / f"{name}.npy", mmap_mode="r")
         if tuple(value.shape) != tuple(shape):
             raise ValueError(f"new parameter shape mismatch: {name}")
-        if name.endswith(".Wo") and np.any(value != 0):
+        if name.endswith(".Wo") and np.any(value.view(np.uint8) != 0):
             raise ValueError(f"new output projection is not exactly zero: {name}")
 
     source_state = _json(source / "training_state.json")

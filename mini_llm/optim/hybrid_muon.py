@@ -172,9 +172,20 @@ class _MuonMatrices:
             dst[...] = xp.asarray(value, dtype="float32")
         return True
 
-    def step(self, eta):
+    def step(self, eta, active_parameter_names=None):
+        active = (
+            None if active_parameter_names is None
+            else frozenset(str(name) for name in active_parameter_names)
+        )
+        if active is not None:
+            known = {p.name for p in self.parameters}
+            unknown = active - known
+            if unknown:
+                raise ValueError(f"unknown active Muon parameters: {sorted(unknown)}")
         self.step_index += 1
         for i, p in enumerate(self.parameters):
+            if active is not None and p.name not in active:
+                continue
             shape = p.data.shape
             g = p.grad.astype("float32", copy=False)
             if self.moments_offloaded:
@@ -270,11 +281,24 @@ class HybridMuonAdamW:
         self.adam.step_index = int(value)
         self.muon.step_index = int(value)
 
-    def step(self, lr=None):
+    def step(self, lr=None, active_parameter_names=None):
         if lr is not None:
             self.lr = float(lr)
-        self.adam.step(lr=self.lr)
-        self.muon.step(eta=self.lr)
+        active = (
+            None if active_parameter_names is None
+            else frozenset(str(name) for name in active_parameter_names)
+        )
+        if active is not None:
+            known = {p.name for p in self.parameters}
+            unknown = active - known
+            if unknown:
+                raise ValueError(f"unknown active optimizer parameters: {sorted(unknown)}")
+            adam_names = active & {p.name for p in self.adam.parameters}
+            muon_names = active & self.muon_names
+        else:
+            adam_names = muon_names = None
+        self.adam.step(lr=self.lr, active_parameter_names=adam_names)
+        self.muon.step(eta=self.lr, active_parameter_names=muon_names)
         self._step_index += 1
 
     def zero_grad(self):

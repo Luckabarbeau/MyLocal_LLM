@@ -35,12 +35,16 @@ class DenseFFN:
         return y_2d.reshape(original_shape), cache
 
     def backward(self, dy, cache, *, output_scale=None,
-                 return_output_scale_grad=False):
+                 return_output_scale_grad=False,
+                 accumulate_parameter_grads=True):
         if output_scale is not None or return_output_scale_grad:
             raise NotImplementedError("DenseFFN does not implement progressive gates")
         # The forward tape contains the flattened input.  Keep backward's
         # expert GEMMs rank-2 as well, and restore the Transformer shape.
         original_shape = dy.shape
         dy_2d = dy.reshape(-1, original_shape[-1])
-        dx_2d = self.expert.backward(dy_2d, cache)
+        dx_2d = self.expert.backward(
+            dy_2d, cache,
+            accumulate_parameter_grads=accumulate_parameter_grads,
+        )
         return dx_2d.reshape(original_shape)

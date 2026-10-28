@@ -51,7 +51,14 @@ class InferenceModel:
         """
         self.config = config
         self.dtype = dtype if dtype is not None else config.dtype
-        self.sparse_attention = config.attention_layers is not None
+        self.dual_resolution_config = getattr(config, "dual_resolution", None)
+        self.dual_resolution_enabled = bool(
+            self.dual_resolution_config is not None
+            and getattr(self.dual_resolution_config, "enabled", False)
+        )
+        self.sparse_attention = (
+            config.attention_layers is not None and not self.dual_resolution_enabled
+        )
         memory_cfg = getattr(config, "memory_context", None)
         self.historical_read_memory = bool(
             memory_cfg is not None
@@ -137,6 +144,7 @@ class InferenceModel:
                 attention_config=attention_config,
                 layer_idx=layer_idx,
                 rms_eps=config.rms_eps,
+                dual_resolution_config=self.dual_resolution_config,
             )
             self.blocks.append(block)
         
@@ -146,26 +154,39 @@ class InferenceModel:
         # LM head - will be set from training model
         self.lm_head = None
 
-    def create_generation_state(self, batch_size: int, max_length: int) -> GenerationState:
+    def create_generation_state(
+        self, batch_size: int, max_length: int, eos_token_id: int = None,
+    ) -> GenerationState:
         """
         Create a new generation state with preallocated K/V caches.
         
         Args:
             batch_size: Batch size for generation
             max_length: Maximum sequence length (context + generated tokens)
+            eos_token_id: Optional token ending a row's current document. The EOS
+                token remains in that document; its row resets before the next token.
             
         Returns:
             GenerationState with preallocated caches
         """
         max_length = int(max_length)
+        batch_size = int(batch_size)
+        if batch_size <= 0 or max_length <= 0:
+            raise ValueError("batch_size and max_length must be positive")
+        if eos_token_id is not None:
+            eos_token_id = int(eos_token_id)
+            if not 0 <= eos_token_id < self.vocab_size:
+                raise ValueError("eos_token_id lies outside the vocabulary")
         # Independent full-history heads require their own current K/V state even
         # for short prompts. Route those checkpoints through historical_read with
         # an empty historical prefix rather than silently omitting the branch.
         long_memory = bool(
-            self.full_history_enabled or (
-                (self.historical_read_memory or self.terminal_landmark_memory
-                 or self.routed_prefix_memory)
-                and max_length > int(self.config.memory_context.target_length)
+            not self.dual_resolution_enabled and (
+                self.full_history_enabled or (
+                    (self.historical_read_memory or self.terminal_landmark_memory
+                     or self.routed_prefix_memory)
+                    and max_length > int(self.config.memory_context.target_length)
+                )
             )
         )
         if long_memory and max_length > int(self.config.memory_context.memory_length):
@@ -173,7 +194,9 @@ class InferenceModel:
                 f"requested horizon {max_length:,} exceeds the checkpoint's "
                 f"trained memory horizon {self.config.memory_context.memory_length:,}"
             )
-        if long_memory and self.routed_prefix_memory:
+        if self.dual_resolution_enabled:
+            cache_length = int(self.dual_resolution_config.local_window)
+        elif long_memory and self.routed_prefix_memory:
             cache_length = int(self.memory_config.active_length)
         elif long_memory:
             cache_length = int(self.config.memory_context.target_length)
@@ -191,6 +214,32 @@ class InferenceModel:
                 dtype=self.dtype,
             )
 
+        dual_state = {}
+        if self.dual_resolution_enabled:
+            block_size = int(self.dual_resolution_config.block_size)
+            max_blocks = int(self.dual_resolution_config.max_blocks)
+            summary_shape = (
+                self.n_layers, batch_size, self.n_kv_heads,
+                max_blocks, self.head_dim,
+            )
+            layer_rows = (self.n_layers, batch_size)
+            dual_state = dict(
+                dual_resolution_enabled=True,
+                dual_summary_k_cache=xp.empty(summary_shape, dtype=self.dtype),
+                dual_summary_v_cache=xp.empty(summary_shape, dtype=self.dtype),
+                dual_incomplete_hidden=xp.empty(
+                    (self.n_layers, batch_size, block_size, self.d_model),
+                    dtype=self.dtype,
+                ),
+                dual_local_start=xp.zeros(layer_rows, dtype=xp.int32),
+                dual_local_count=xp.zeros(layer_rows, dtype=xp.int32),
+                dual_summary_start=xp.zeros(layer_rows, dtype=xp.int32),
+                dual_summary_count=xp.zeros(layer_rows, dtype=xp.int32),
+                dual_incomplete_count=xp.zeros(layer_rows, dtype=xp.int32),
+                dual_document_positions=xp.zeros((batch_size,), dtype=xp.int64),
+                dual_reset_pending=xp.zeros((batch_size,), dtype=xp.bool_),
+            )
+
         for block in self.blocks:
             block.attention.ensure_rope_capacity(max_length)
 
@@ -198,6 +247,7 @@ class InferenceModel:
             k_cache=k_cache, v_cache=v_cache, length=0, max_length=max_length,
             batch_size=batch_size, router_input_cache=router_input_cache,
             long_memory_enabled=long_memory, working_capacity=cache_length,
+            eos_token_id=eos_token_id, **dual_state,
         )
         if long_memory and self.routed_prefix_memory:
             state.working_capacity = int(self.memory_working_length)
@@ -796,6 +846,62 @@ class InferenceModel:
         state.length += 1
         return self._lm_head_forward(last_hidden)
 
+    def _dual_incremental_token(self, token_ids, state):
+        """Advance all dual-resolution rows by one token without prior recompute."""
+        if token_ids.ndim != 2 or tuple(token_ids.shape) != (state.batch_size, 1):
+            raise ValueError("dual-resolution token input must be [batch_size,1]")
+        if not state.has_capacity(1):
+            raise ValueError("No capacity remaining in generation cache.")
+
+        pending = state.dual_reset_pending
+        if bool(xp.any(pending)):
+            rows = xp.nonzero(pending)[0]
+            state.dual_local_start[:, rows] = 0
+            state.dual_local_count[:, rows] = 0
+            state.dual_summary_start[:, rows] = 0
+            state.dual_summary_count[:, rows] = 0
+            state.dual_incomplete_count[:, rows] = 0
+            state.dual_document_positions[rows] = 0
+            pending[rows] = False
+
+        x = self._embedding_lookup(token_ids)
+        chain_norms = bool(self.blocks) and self.blocks[0].use_fp32_residual
+        normalized_input = None
+        for i, block in enumerate(self.blocks):
+            next_norm = None
+            if chain_norms:
+                next_norm = (
+                    self.blocks[i + 1].norm1
+                    if i + 1 < len(self.blocks)
+                    else self.final_norm
+                )
+            block_output = block.decode_one(
+                x, state.k_cache[i], state.v_cache[i], state.length,
+                normalized_input=normalized_input, next_norm=next_norm,
+                dual_summary_k=state.dual_summary_k_cache[i],
+                dual_summary_v=state.dual_summary_v_cache[i],
+                dual_incomplete_hidden=state.dual_incomplete_hidden[i],
+                dual_local_start=state.dual_local_start[i],
+                dual_local_count=state.dual_local_count[i],
+                dual_summary_start=state.dual_summary_start[i],
+                dual_summary_count=state.dual_summary_count[i],
+                dual_incomplete_count=state.dual_incomplete_count[i],
+                dual_document_positions=state.dual_document_positions,
+            )
+            if chain_norms:
+                x, normalized_input = block_output
+            else:
+                x = block_output
+
+        x = normalized_input if chain_norms else self.final_norm.forward(x)
+        last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
+        logits = self._lm_head_forward(last_hidden)
+        state.dual_document_positions += 1
+        if state.eos_token_id is not None:
+            state.dual_reset_pending |= token_ids[:, 0] == int(state.eos_token_id)
+        state.length += 1
+        return logits
+
     def prefill(self, input_ids: xp.ndarray, state: GenerationState) -> xp.ndarray:
         """
         Prefill KV cache for prompt.
@@ -818,6 +924,23 @@ class InferenceModel:
             input_ids = input_ids.astype(xp.int32, copy=False)
         
         B, T_prompt = input_ids.shape
+        if B != state.batch_size:
+            raise ValueError("input batch size does not match generation state")
+        if T_prompt <= 0:
+            raise ValueError("prefill requires at least one token")
+
+        if state.dual_resolution_enabled:
+            if not state.has_capacity(T_prompt):
+                raise ValueError(
+                    f"Prompt length {T_prompt} exceeds remaining capacity "
+                    f"{state.remaining_capacity()}."
+                )
+            logits = None
+            for offset in range(T_prompt):
+                logits = self._dual_incremental_token(
+                    input_ids[:, offset:offset + 1], state
+                )
+            return logits
 
         if state.long_memory_enabled:
             if T_prompt > int(state.max_length):
@@ -970,6 +1093,11 @@ class InferenceModel:
         
         B, T_new = next_ids.shape
         assert T_new == 1, "decode_one processes exactly one token"
+        if B != state.batch_size:
+            raise ValueError("input batch size does not match generation state")
+
+        if state.dual_resolution_enabled:
+            return self._dual_incremental_token(next_ids, state)
 
         if state.long_memory_enabled:
             if self.historical_read_memory:

@@ -37,6 +37,22 @@ class GenerationState:
     # reused for routing_stride consecutive decode positions.
     retrieval_routes: dict = field(default_factory=dict)
 
+    # Dual-resolution inference keeps independent bounded rings for every layer
+    # and batch row.  ``k_cache``/``v_cache`` are the local rings; summaries and
+    # incomplete pre-attention normalized blocks live in the dedicated arrays.
+    dual_resolution_enabled: bool = False
+    dual_summary_k_cache: Optional[xp.ndarray] = None
+    dual_summary_v_cache: Optional[xp.ndarray] = None
+    dual_incomplete_hidden: Optional[xp.ndarray] = None
+    dual_local_start: Optional[xp.ndarray] = None
+    dual_local_count: Optional[xp.ndarray] = None
+    dual_summary_start: Optional[xp.ndarray] = None
+    dual_summary_count: Optional[xp.ndarray] = None
+    dual_incomplete_count: Optional[xp.ndarray] = None
+    dual_document_positions: Optional[xp.ndarray] = None
+    dual_reset_pending: Optional[xp.ndarray] = None
+    eos_token_id: Optional[int] = None
+
     # 0059I terminal-Landmark long-memory inference state.  The deep
     # Transformer cache remains bounded by ``working_capacity`` while
     # ``max_length`` is the total addressable horizon.  ``cache_start`` is the
@@ -86,6 +102,15 @@ class GenerationState:
         self.routed_prefix_route = None
         self.routed_prefix_tokens_since_refresh = 0
         self.routed_prefix_refresh_count = 0
+        if self.dual_resolution_enabled:
+            for values in (
+                self.dual_local_start, self.dual_local_count,
+                self.dual_summary_start, self.dual_summary_count,
+                self.dual_incomplete_count, self.dual_document_positions,
+                self.dual_reset_pending,
+            ):
+                if values is not None:
+                    values[...] = 0
     
     def remaining_capacity(self) -> int:
         """Remaining tokens that can be generated."""

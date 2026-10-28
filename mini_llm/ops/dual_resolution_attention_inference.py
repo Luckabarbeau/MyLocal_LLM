@@ -1,0 +1,521 @@
+"""Incremental dual-resolution attention for native NumPy/CuPy inference.
+
+The operator keeps exact token K/V only for a bounded local ring.  Completed
+same-document blocks are compressed once and their projected K/V are retained
+in a second bounded ring.  Compression happens after the completing token has
+attended, so a block summary first becomes visible to the following token.
+"""
+
+import math
+
+from mini_llm.backend import (
+    xp, BACKEND_NAME, is_bfloat16_dtype, is_low_precision_dtype,
+)
+from mini_llm.ops.rope import get_rope_cos_sin
+from mini_llm.ops.silu import sigmoid_stable
+
+
+def _data(value):
+    """Unwrap this repository's Parameter/Linear objects without copying."""
+    if value is None:
+        return None
+    if hasattr(value, "data"):
+        value = value.data
+    elif hasattr(value, "W"):
+        value = value.W
+        if hasattr(value, "data"):
+            value = value.data
+    if BACKEND_NAME == "cupy" and not hasattr(value, "__cuda_array_interface__"):
+        return xp.asarray(value)
+    return value
+
+
+def _first_attr(obj, names):
+    if obj is None:
+        return None
+    for name in names:
+        if hasattr(obj, name):
+            value = getattr(obj, name)
+            if value is not None:
+                return value
+    return None
+
+
+def _work_array(value):
+    return (
+        value.astype(xp.float32, copy=False)
+        if is_low_precision_dtype(value.dtype) else value
+    )
+
+
+def _softmax(scores, axis=-1):
+    scores = _work_array(scores)
+    scores = scores - xp.max(scores, axis=axis, keepdims=True)
+    probs = xp.exp(scores)
+    return probs / xp.sum(probs, axis=axis, keepdims=True)
+
+
+def _sigmoid(value):
+    work = _work_array(value)
+    magnitude = xp.exp(-xp.abs(work))
+    return xp.where(
+        work >= 0, 1.0 / (1.0 + magnitude), magnitude / (1.0 + magnitude)
+    )
+
+
+class DualResolutionAttentionInference:
+    """One-token dual-resolution GQA with per-row bounded rings."""
+
+    def __init__(
+        self, d_model, n_q_heads, n_kv_heads, d_head, *, dual_config,
+        rope_base=10_000.0, dtype="float32", rms_eps=1e-6,
+        rope_layout="interleaved",
+    ):
+        if n_q_heads * d_head != d_model:
+            raise ValueError("n_q_heads * d_head must equal d_model")
+        if n_q_heads % n_kv_heads:
+            raise ValueError("n_q_heads must be divisible by n_kv_heads")
+        if rope_layout not in {"interleaved", "half"}:
+            raise ValueError("rope_layout must be interleaved or half")
+        self.d_model = int(d_model)
+        self.n_q_heads = int(n_q_heads)
+        self.n_kv_heads = int(n_kv_heads)
+        self.d_head = int(d_head)
+        self.group_size = self.n_q_heads // self.n_kv_heads
+        self.scale = 1.0 / math.sqrt(self.d_head)
+        self.rope_base = float(rope_base)
+        self.dtype = dtype
+        self.rms_eps = float(rms_eps)
+        self.rope_layout = rope_layout
+        self.block_size = int(dual_config.block_size)
+        self.local_window = int(dual_config.local_window)
+        self.max_blocks = int(dual_config.max_blocks)
+        if not 1 <= self.block_size <= 128:
+            raise ValueError("dual-resolution block_size must be in [1, 128]")
+        if not 1 <= self.local_window <= 512:
+            raise ValueError("dual-resolution local_window must be in [1, 512]")
+        if not 1 <= self.max_blocks <= 512:
+            raise ValueError("dual-resolution max_blocks must be in [1, 512]")
+
+        self.Wq = self.Wk = self.Wv = self.Wo = None
+        self.Wqkv = None
+        self.Wg = self.bg = self.Wdown = None
+        self.W_global_k = self.W_global_v = self.W_gate = None
+        self.W_compress_in = self.W_compress_up = None
+        self.compression_layers = None
+        self.compression_heads = self.compression_head_dim = None
+        self.compression_scale = None
+        self.pool_norm_gamma = self.pool_query = None
+        self.W_pool_k = self.W_pool_v = self.W_pool_o = None
+        self.training_attention = None
+        self.compressor = None
+        self._compress_callable = None
+        self._compress_norm_gamma = None
+        self._compress_norm_eps = self.rms_eps
+        self._compress_attention = None
+        self._pool = None
+        self._up = None
+        self._rope_capacity = 0
+        self._rope_cos = self._rope_sin = None
+
+    def ensure_rope_capacity(self, length):
+        length = int(length)
+        if length <= self._rope_capacity:
+            return
+        self._rope_cos, self._rope_sin = get_rope_cos_sin(
+            length, self.d_head, self.rope_base, self.dtype
+        )
+        self._rope_capacity = length
+
+    def set_weights(self, training_attention):
+        """Attach a dual-resolution training attention object.
+
+        The base projections have a fixed public contract.  Compressor nesting
+        is deliberately discovered by capability because the training operator
+        is developed independently: an explicit ``compress_block_inference``
+        method is preferred, while common norm/self-attention/pool/up layouts
+        are supported by the native fallback below.
+        """
+        self.training_attention = training_attention
+        required = ("Wq", "Wk", "Wv", "Wo")
+        missing = [name for name in required if not hasattr(training_attention, name)]
+        if missing:
+            raise ValueError(f"dual-resolution attention is missing {missing}")
+        self.Wq = _data(training_attention.Wq)
+        self.Wk = _data(training_attention.Wk)
+        self.Wv = _data(training_attention.Wv)
+        self.Wo = _data(training_attention.Wo)
+        self.Wqkv = xp.concatenate((self.Wq, self.Wk, self.Wv), axis=1)
+        self.Wg = _data(getattr(training_attention, "Wg", None))
+        self.bg = _data(getattr(training_attention, "bg", None))
+        self.Wdown = _data(getattr(training_attention, "Wdown", None))
+
+        # Native layout of mini_llm.ops.dual_resolution_attention.  Keep the
+        # capability-based fallback below for independently developed variants.
+        self.W_global_k = _data(getattr(training_attention, "W_global_k", None))
+        self.W_global_v = _data(getattr(training_attention, "W_global_v", None))
+        self.W_gate = _data(getattr(training_attention, "W_gate", None))
+        self.W_compress_in = _data(getattr(training_attention, "W_compress_in", None))
+        self.W_compress_up = _data(getattr(training_attention, "W_compress_up", None))
+        raw_layers = getattr(training_attention, "compression_layers", None)
+        if raw_layers is not None:
+            self.compression_layers = [
+                {
+                    "norm": _data(layer["norm"]),
+                    "Wq": _data(layer["Wq"]),
+                    "Wk": _data(layer["Wk"]),
+                    "Wv": _data(layer["Wv"]),
+                    "Wo": _data(layer["Wo"]),
+                }
+                for layer in raw_layers
+            ]
+            self.compression_heads = int(training_attention.compression_heads)
+            self.compression_head_dim = int(training_attention.compression_head_dim)
+            self.compression_scale = float(training_attention.compression_scale)
+            self.pool_norm_gamma = _data(training_attention.pool_norm)
+            self.pool_query = _data(training_attention.pool_query)
+            self.W_pool_k = _data(training_attention.W_pool_k)
+            self.W_pool_v = _data(training_attention.W_pool_v)
+            self.W_pool_o = _data(training_attention.W_pool_o)
+
+        self.compressor = _first_attr(
+            training_attention,
+            ("compressor", "compression", "block_compressor", "summary_compressor"),
+        )
+        for owner in (training_attention, self.compressor):
+            method = _first_attr(
+                owner,
+                ("compress_block_inference", "inference_compress_block", "inference_forward"),
+            )
+            if callable(method):
+                self._compress_callable = method
+                break
+
+        norm = _first_attr(
+            self.compressor,
+            ("norm", "input_norm", "compressor_norm", "compression_norm"),
+        )
+        if norm is None:
+            norm = _first_attr(
+                training_attention, ("compressor_norm", "compression_norm")
+            )
+        self._compress_norm_gamma = _data(_first_attr(norm, ("gamma", "weight")))
+        if norm is not None:
+            self._compress_norm_eps = float(getattr(norm, "eps", self.rms_eps))
+        self._compress_attention = _first_attr(
+            self.compressor,
+            ("self_attention", "attention", "attn", "compression_attention"),
+        )
+        if self._compress_attention is None:
+            self._compress_attention = _first_attr(
+                training_attention,
+                ("compression_self_attention", "compressor_attention"),
+            )
+        self._pool = _first_attr(
+            self.compressor, ("pool", "pooling", "learned_pool", "pooler")
+        )
+        if self._pool is None:
+            self._pool = _first_attr(
+                training_attention, ("compression_pool", "learned_pool", "pooler")
+            )
+        self._up = _first_attr(
+            self.compressor, ("up", "up_projection", "Wup", "W_up")
+        )
+        if self._up is None:
+            self._up = _first_attr(
+                training_attention, ("compression_up", "Wup", "W_up")
+            )
+
+    def _apply_rope(self, x, position):
+        position = int(position)
+        self.ensure_rope_capacity(position + 1)
+        cos = self._rope_cos[:, position:position + 1]
+        sin = self._rope_sin[:, position:position + 1]
+        if self.rope_layout == "half":
+            half = self.d_head // 2
+            x0 = x[..., :half].copy()
+            x1 = x[..., half:]
+            x[..., :half] = x0 * cos - x1 * sin
+            x[..., half:] = x0 * sin + x1 * cos
+        else:
+            x0 = x[..., 0::2].copy()
+            x1 = x[..., 1::2]
+            x[..., 0::2] = x0 * cos - x1 * sin
+            x[..., 1::2] = x0 * sin + x1 * cos
+        return x
+
+    @staticmethod
+    def _ordered_ring(cache_row, start, count):
+        capacity = int(cache_row.shape[1])
+        if count == 0:
+            return cache_row[:, :0, :]
+        indices = (int(start) + xp.arange(int(count), dtype=xp.int64)) % capacity
+        return cache_row[:, indices, :]
+
+    @staticmethod
+    def _insert_ring(cache_row, value, start, count):
+        capacity = int(cache_row.shape[1])
+        if count < capacity:
+            slot = (int(start) + int(count)) % capacity
+            count += 1
+        else:
+            slot = int(start)
+            start = (int(start) + 1) % capacity
+        cache_row[:, slot, :] = value
+        return start, count
+
+    def _single_row_attention(self, q, keys, values):
+        # q [1,Hq,D], keys/values [Hkv,T,D]
+        t_key = int(keys.shape[1])
+        qg = q.reshape(self.n_kv_heads, self.group_size, self.d_head)
+        q_compute = _work_array(qg)
+        k_compute = _work_array(keys)
+        scores = xp.matmul(q_compute * self.scale, k_compute.swapaxes(-2, -1))
+        probs = _softmax(scores, axis=-1)
+        v_compute = _work_array(values)
+        context = xp.matmul(probs, v_compute).reshape(1, self.n_q_heads, self.d_head)
+        return context.astype(q.dtype, copy=False) if is_bfloat16_dtype(q.dtype) else context
+
+    def _generic_self_attention(self, x, attention):
+        wq = _data(_first_attr(attention, ("Wq", "wq", "query")))
+        wk = _data(_first_attr(attention, ("Wk", "wk", "key")))
+        wv = _data(_first_attr(attention, ("Wv", "wv", "value")))
+        wo = _data(_first_attr(attention, ("Wo", "wo", "output")))
+        if any(weight is None for weight in (wq, wk, wv, wo)):
+            raise RuntimeError(
+                "compressor self-attention needs Wq/Wk/Wv/Wo or an explicit "
+                "compress_block_inference method"
+            )
+        b, t, width = x.shape
+        q_width = int(wq.shape[1])
+        k_width = int(wk.shape[1])
+        heads = int(getattr(attention, "n_q_heads", 1))
+        kv_heads = int(getattr(attention, "n_kv_heads", heads))
+        if q_width % heads or k_width % kv_heads:
+            raise ValueError("invalid compressor attention projection shapes")
+        head_dim = q_width // heads
+        if k_width // kv_heads != head_dim or heads % kv_heads:
+            raise ValueError("compressor attention has incompatible GQA dimensions")
+        q = (x.reshape(-1, width) @ wq).reshape(b, t, heads, head_dim)
+        k = (x.reshape(-1, width) @ wk).reshape(b, t, kv_heads, head_dim)
+        v = (x.reshape(-1, width) @ wv).reshape(b, t, kv_heads, head_dim)
+        group = heads // kv_heads
+        qg = q.transpose(0, 2, 1, 3).reshape(b, kv_heads, group, t, head_dim)
+        kh = k.transpose(0, 2, 1, 3)
+        vh = v.transpose(0, 2, 1, 3)
+        scores = xp.matmul(
+            qg.astype(xp.float32, copy=False) / math.sqrt(head_dim),
+            kh[:, :, None].astype(xp.float32, copy=False).swapaxes(-2, -1),
+        )
+        probs = _softmax(scores, axis=-1)
+        context = xp.matmul(probs, vh[:, :, None].astype(xp.float32, copy=False))
+        merged = context.reshape(b, heads, t, head_dim).transpose(0, 2, 1, 3)
+        merged = merged.reshape(b * t, q_width).astype(x.dtype, copy=False)
+        return (merged @ wo).reshape(b, t, -1)
+
+    @staticmethod
+    def _rms_norm(value, gamma, eps=1e-6):
+        work = _work_array(value)
+        inverse = 1.0 / xp.sqrt(
+            xp.mean(work * work, axis=-1, keepdims=True) + float(eps)
+        )
+        return (work * inverse * _work_array(gamma)).astype(value.dtype, copy=False)
+
+    def _compress_repository_block(self, block):
+        """Exact no-backward form of DualResolutionAttention._compress_forward."""
+        hidden = block @ self.W_compress_in
+        batch, tokens, width = hidden.shape
+        heads = int(self.compression_heads)
+        head_dim = int(self.compression_head_dim)
+        for layer in self.compression_layers:
+            normalized = self._rms_norm(hidden, layer["norm"])
+            q = (normalized @ layer["Wq"]).reshape(
+                batch, tokens, heads, head_dim
+            ).transpose(0, 2, 1, 3)
+            k = (normalized @ layer["Wk"]).reshape(
+                batch, tokens, heads, head_dim
+            ).transpose(0, 2, 1, 3)
+            v = (normalized @ layer["Wv"]).reshape(
+                batch, tokens, heads, head_dim
+            ).transpose(0, 2, 1, 3)
+            scores = xp.matmul(
+                _work_array(q) * self.compression_scale,
+                _work_array(k).swapaxes(-2, -1),
+            )
+            probabilities = _softmax(scores, axis=-1)
+            context = xp.matmul(probabilities, _work_array(v))
+            merged = context.transpose(0, 2, 1, 3).reshape(batch, tokens, width)
+            attention_output = merged.astype(hidden.dtype, copy=False) @ layer["Wo"]
+            hidden = hidden + attention_output
+
+        pool_input = self._rms_norm(hidden, self.pool_norm_gamma)
+        pool_k = (pool_input @ self.W_pool_k).reshape(
+            batch, tokens, heads, head_dim
+        ).transpose(0, 2, 1, 3)
+        pool_v = (pool_input @ self.W_pool_v).reshape(
+            batch, tokens, heads, head_dim
+        ).transpose(0, 2, 1, 3)
+        pool_scores = xp.sum(
+            _work_array(pool_k)
+            * _work_array(self.pool_query)[None, :, None, :],
+            axis=-1,
+        ) * self.compression_scale
+        pool_probabilities = _softmax(pool_scores, axis=-1)
+        pool_context = xp.sum(
+            pool_probabilities[..., None] * _work_array(pool_v),
+            axis=2,
+        )
+        pool_merged = pool_context.reshape(batch, width).astype(hidden.dtype, copy=False)
+        pooled = pool_merged @ self.W_pool_o
+        return pooled @ self.W_compress_up
+
+    def _native_compress_block(self, block):
+        """Run a discovered gated-down/bidirectional/pool/up compressor."""
+        if self.compression_layers is not None:
+            return self._compress_repository_block(block)
+        z = block
+        if self.Wdown is not None and int(self.Wdown.shape[0]) == int(z.shape[-1]):
+            down = z @ self.Wdown
+            if (
+                self.Wg is not None
+                and int(self.Wg.shape[0]) == int(z.shape[-1])
+                and int(self.Wg.shape[1]) == int(down.shape[-1])
+            ):
+                gate = z @ self.Wg
+                if self.bg is not None:
+                    gate = gate + self.bg
+                down = down * sigmoid_stable(gate)
+            z = down
+        if self._compress_norm_gamma is not None:
+            work = z.astype(xp.float32, copy=False)
+            inv = 1.0 / xp.sqrt(
+                xp.mean(work * work, axis=-1, keepdims=True) + self._compress_norm_eps
+            )
+            z = (work * inv).astype(z.dtype, copy=False) * self._compress_norm_gamma
+        if self._compress_attention is None:
+            raise RuntimeError(
+                "dual-resolution compressor needs bidirectional self-attention or "
+                "compress_block_inference"
+            )
+        attended = self._generic_self_attention(z, self._compress_attention)
+        if attended.shape == z.shape:
+            z = z + attended
+        else:
+            z = attended
+
+        query = _data(_first_attr(
+            self._pool,
+            ("query", "pool_query", "score", "score_vector", "weight", "W"),
+        ))
+        if query is None:
+            raise RuntimeError(
+                "dual-resolution compressor needs a learned pooling query or "
+                "compress_block_inference"
+            )
+        query = query.reshape(-1, int(z.shape[-1]))
+        scores = xp.matmul(z.astype(xp.float32, copy=False), query.T.astype(xp.float32, copy=False))
+        scores = xp.mean(scores, axis=-1) / math.sqrt(int(z.shape[-1]))
+        weights = _softmax(scores, axis=1)
+        pooled = xp.sum(weights[..., None] * z.astype(xp.float32, copy=False), axis=1)
+        up = _data(self._up)
+        if up is not None:
+            pooled = pooled.astype(up.dtype, copy=False) @ up
+        if int(pooled.shape[-1]) != self.d_model:
+            raise ValueError("compressed summary must project back to d_model")
+        return pooled.astype(block.dtype, copy=False)
+
+    def _compress_block(self, block):
+        if self.compression_layers is not None:
+            return self._compress_repository_block(block)
+        if self._compress_callable is not None:
+            summary = self._compress_callable(block)
+            if isinstance(summary, tuple):
+                summary = summary[0]
+            if summary.ndim == 3 and int(summary.shape[1]) == 1:
+                summary = summary[:, 0, :]
+            if summary.ndim != 2 or tuple(summary.shape) != (int(block.shape[0]), self.d_model):
+                raise ValueError("compress_block_inference must return [B,d_model]")
+            return summary
+        return self._native_compress_block(block)
+
+    def decode_one(
+        self, x, local_k, local_v, summary_k, summary_v, incomplete_hidden,
+        local_start, local_count, summary_start, summary_count, incomplete_count,
+        document_positions,
+    ):
+        """Consume one normalized token for every independent batch row."""
+        if x.ndim != 3 or int(x.shape[1]) != 1 or int(x.shape[2]) != self.d_model:
+            raise ValueError("dual-resolution decode expects [B,1,d_model]")
+        batch = int(x.shape[0])
+        qkv = (x[:, 0, :] @ self.Wqkv)[:, None, :]
+        q_end = self.n_q_heads * self.d_head
+        k_end = q_end + self.n_kv_heads * self.d_head
+        q_pre = qkv[..., :q_end].reshape(batch, 1, self.n_q_heads, self.d_head)
+        k_pre = qkv[..., q_end:k_end].reshape(batch, 1, self.n_kv_heads, self.d_head)
+        values = qkv[..., k_end:].reshape(batch, 1, self.n_kv_heads, self.d_head)
+        output = xp.empty((batch, 1, self.d_model), dtype=x.dtype)
+        completed_rows = []
+
+        for row in range(batch):
+            position = int(document_positions[row].item())
+            q_row = self._apply_rope(q_pre[row:row + 1], position)
+            k_row = self._apply_rope(k_pre[row:row + 1], position)[0, 0]
+            v_row = values[row, 0]
+            ls, lc = self._insert_ring(
+                local_k[row], k_row, int(local_start[row].item()), int(local_count[row].item())
+            )
+            local_v[row, :, (ls + lc - 1) % self.local_window, :] = v_row
+            local_start[row], local_count[row] = ls, lc
+
+            lk = self._ordered_ring(local_k[row], ls, lc)
+            lv = self._ordered_ring(local_v[row], ls, lc)
+            ss, sc = int(summary_start[row].item()), int(summary_count[row].item())
+            local_context = self._single_row_attention(q_row, lk, lv)
+            if sc and self.W_gate is not None:
+                sk = self._ordered_ring(summary_k[row], ss, sc)
+                sv = self._ordered_ring(summary_v[row], ss, sc)
+                global_context = self._single_row_attention(q_row, sk, sv)
+                gate = _sigmoid(x[row, 0] @ self.W_gate).reshape(
+                    1, self.n_q_heads, 1
+                )
+                context = local_context + gate * (global_context - local_context)
+            elif sc:
+                sk = self._ordered_ring(summary_k[row], ss, sc)
+                sv = self._ordered_ring(summary_v[row], ss, sc)
+                context = self._single_row_attention(
+                    q_row, xp.concatenate((sk, lk), axis=1),
+                    xp.concatenate((sv, lv), axis=1),
+                )
+            else:
+                context = local_context
+            output[row:row + 1] = (
+                context.reshape(1, 1, self.d_model).astype(x.dtype, copy=False)
+                @ self.Wo
+            ).astype(output.dtype, copy=False)
+
+            offset = int(incomplete_count[row].item())
+            incomplete_hidden[row, offset, :] = x[row, 0, :]
+            offset += 1
+            incomplete_count[row] = offset
+            if offset == self.block_size:
+                completed_rows.append((row, position))
+
+        # Compression is intentionally after every row's current-token attention.
+        for row, position in completed_rows:
+            block = incomplete_hidden[row:row + 1, :self.block_size, :]
+            summary = self._compress_block(block)
+            summary_wk = self.W_global_k if self.W_global_k is not None else self.Wk
+            summary_wv = self.W_global_v if self.W_global_v is not None else self.Wv
+            key = (summary @ summary_wk).reshape(
+                1, 1, self.n_kv_heads, self.d_head
+            )
+            key = self._apply_rope(key, position)[0, 0]
+            value = (summary @ summary_wv).reshape(self.n_kv_heads, self.d_head)
+            ss, sc = self._insert_ring(
+                summary_k[row], key,
+                int(summary_start[row].item()), int(summary_count[row].item()),
+            )
+            summary_v[row, :, (ss + sc - 1) % self.max_blocks, :] = value
+            summary_start[row], summary_count[row] = ss, sc
+            incomplete_count[row] = 0
+        return output

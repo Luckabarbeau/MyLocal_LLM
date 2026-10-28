@@ -6,6 +6,9 @@ from mini_llm.backend import (
     xp, BACKEND_NAME, resolve_dtype, is_low_precision_dtype,
 )
 from mini_llm.ops.attention_inference import GQAAttentionInference
+from mini_llm.ops.dual_resolution_attention_inference import (
+    DualResolutionAttentionInference,
+)
 from mini_llm.ops.rmsnorm_inference import RMSNormInference
 
 
@@ -37,6 +40,7 @@ class TransformerBlockInference:
         ffn_mode: str = "moe",
         rms_eps: float = 1e-6,
         rope_layout: str = "interleaved",
+        dual_resolution_config=None,
     ):
         """
         Initialize inference Transformer block.
@@ -67,23 +71,41 @@ class TransformerBlockInference:
         self.alpha_attn = 1.0
         self.alpha_mlp = 1.0
         self.full_history_head = None
+        self.dual_resolution_enabled = bool(
+            dual_resolution_config is not None
+            and getattr(dual_resolution_config, "enabled", False)
+        )
         
         # RMSNorms (weights shared with training)
         self.norm1 = RMSNormInference(d_model, eps=rms_eps, dtype=dtype)
         self.norm2 = RMSNormInference(d_model, eps=rms_eps, dtype=dtype)
         
-        # Attention (weights shared with training)
-        self.attention = GQAAttentionInference(
-            d_model=d_model,
-            n_q_heads=n_q_heads,
-            n_kv_heads=n_kv_heads,
-            d_head=d_head,
-            rope_base=rope_base,
-            dtype=dtype,
-            max_context=max_context,
-            attention_config=attention_config,
-            rope_layout=rope_layout,
-        )
+        # Attention (weights shared with training). Dual-resolution checkpoints
+        # use a dedicated bounded-state operator rather than adapting dense GQA.
+        if self.dual_resolution_enabled:
+            self.attention = DualResolutionAttentionInference(
+                d_model=d_model,
+                n_q_heads=n_q_heads,
+                n_kv_heads=n_kv_heads,
+                d_head=d_head,
+                dual_config=dual_resolution_config,
+                rope_base=rope_base,
+                dtype=dtype,
+                rms_eps=rms_eps,
+                rope_layout=rope_layout,
+            )
+        else:
+            self.attention = GQAAttentionInference(
+                d_model=d_model,
+                n_q_heads=n_q_heads,
+                n_kv_heads=n_kv_heads,
+                d_head=d_head,
+                rope_base=rope_base,
+                dtype=dtype,
+                max_context=max_context,
+                attention_config=attention_config,
+                rope_layout=rope_layout,
+            )
         
         # MoE (weights shared with training)
         if ffn_mode == "dense":
@@ -106,13 +128,16 @@ class TransformerBlockInference:
         self.full_history_head = training_block.full_history_head
         self.norm1.set_weights(training_block.norm1.gamma.data)
         self.norm2.set_weights(training_block.norm2.gamma.data)
-        self.attention.set_weights(
-            training_block.attention.Wq.data,
-            training_block.attention.Wk.data,
-            training_block.attention.Wv.data,
-            training_block.attention.Wo.data,
-            training_attention=training_block.attention,
-        )
+        if self.dual_resolution_enabled:
+            self.attention.set_weights(training_block.attention)
+        else:
+            self.attention.set_weights(
+                training_block.attention.Wq.data,
+                training_block.attention.Wk.data,
+                training_block.attention.Wv.data,
+                training_block.attention.Wo.data,
+                training_attention=training_block.attention,
+            )
         self.moe.set_weights(training_block.moe)
         if getattr(training_block, "residual_gates", False):
             self.alpha_attn = training_block.alpha_attn.data
@@ -237,6 +262,10 @@ class TransformerBlockInference:
         historical_state=None, historical_routes=None, historical_clock=0,
         historical_refresh_id=None,
         normalized_input=None, next_norm=None, full_history_state=None,
+        dual_summary_k=None, dual_summary_v=None, dual_incomplete_hidden=None,
+        dual_local_start=None, dual_local_count=None, dual_summary_start=None,
+        dual_summary_count=None, dual_incomplete_count=None,
+        dual_document_positions=None,
     ):
         """
         Decode one token through this block.
@@ -264,22 +293,39 @@ class TransformerBlockInference:
         if BACKEND_NAME == "cupy" and isinstance(h, _np.ndarray):
             h = xp.asarray(h)
 
-        a = self.attention.decode_one(
-            h, k_cache, v_cache, start_pos,
-            router_input_cache=router_input_cache,
-            retrieval_route_cache=retrieval_route_cache,
-            layer_idx=self.layer_idx, cache_position=cache_position,
-            rope_position=rope_position, cache_start=cache_start,
-            working_count=working_count, route_clock=route_clock,
-            working_start_abs=working_start_abs,
-            fixed_prefix_length=fixed_prefix_length,
-            working_capacity=working_capacity,
-            terminal_memory_store=terminal_memory_store,
-            terminal_memory_route=terminal_memory_route,
-            historical_state=historical_state, historical_routes=historical_routes,
-            historical_clock=historical_clock,
-            historical_refresh_id=historical_refresh_id,
-        )
+        if self.dual_resolution_enabled:
+            dual_values = (
+                dual_summary_k, dual_summary_v, dual_incomplete_hidden,
+                dual_local_start, dual_local_count, dual_summary_start,
+                dual_summary_count, dual_incomplete_count,
+                dual_document_positions,
+            )
+            if any(value is None for value in dual_values):
+                raise ValueError("dual-resolution decode state is incomplete")
+            a = self.attention.decode_one(
+                h, k_cache, v_cache,
+                dual_summary_k, dual_summary_v, dual_incomplete_hidden,
+                dual_local_start, dual_local_count,
+                dual_summary_start, dual_summary_count,
+                dual_incomplete_count, dual_document_positions,
+            )
+        else:
+            a = self.attention.decode_one(
+                h, k_cache, v_cache, start_pos,
+                router_input_cache=router_input_cache,
+                retrieval_route_cache=retrieval_route_cache,
+                layer_idx=self.layer_idx, cache_position=cache_position,
+                rope_position=rope_position, cache_start=cache_start,
+                working_count=working_count, route_clock=route_clock,
+                working_start_abs=working_start_abs,
+                fixed_prefix_length=fixed_prefix_length,
+                working_capacity=working_capacity,
+                terminal_memory_store=terminal_memory_store,
+                terminal_memory_route=terminal_memory_route,
+                historical_state=historical_state, historical_routes=historical_routes,
+                historical_clock=historical_clock,
+                historical_refresh_id=historical_refresh_id,
+            )
         if self.full_history_head is not None:
             if full_history_state is None:
                 raise RuntimeError("full history inference decode state missing")

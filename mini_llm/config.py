@@ -214,6 +214,51 @@ def _coerce_memory_context(value):
 
 
 @dataclass(frozen=True)
+class DualResolutionConfig:
+    """Configuration for block-compressed dual-resolution self-attention."""
+
+    enabled: bool = False
+    block_size: int = 128
+    local_window: int = 512
+    compression_dim: int = 512
+    compression_heads: int = 8
+    compression_depth: int = 1
+    max_blocks: int = 512
+    global_query_chunk: int = 64
+
+    def __post_init__(self):
+        if not isinstance(self.enabled, bool):
+            raise TypeError("dual-resolution enabled must be a bool")
+        for name, value in {
+            "block_size": self.block_size,
+            "local_window": self.local_window,
+            "compression_dim": self.compression_dim,
+            "compression_heads": self.compression_heads,
+            "compression_depth": self.compression_depth,
+            "max_blocks": self.max_blocks,
+            "global_query_chunk": self.global_query_chunk,
+        }.items():
+            if int(value) != value or int(value) <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.local_window < self.block_size:
+            raise ValueError("local_window must be at least block_size")
+        if self.local_window % self.block_size != 0:
+            raise ValueError("local_window must be divisible by block_size")
+        if self.compression_dim % self.compression_heads != 0:
+            raise ValueError("compression_dim must be divisible by compression_heads")
+
+
+def _coerce_dual_resolution(value):
+    if value is None:
+        return DualResolutionConfig(enabled=False)
+    if isinstance(value, DualResolutionConfig):
+        return value
+    if isinstance(value, dict):
+        return DualResolutionConfig(**value)
+    raise TypeError("dual_resolution must be DualResolutionConfig-compatible")
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     # Tokenizer vocabulary size (separate from model vocab for flexibility)
     tokenizer_vocab_size: int = 16_384
@@ -271,9 +316,16 @@ class ModelConfig:
     # to a bounded active sequence *before* the expensive Transformer trunk.
     memory_context: MemoryContextConfig = field(default_factory=MemoryContextConfig)
 
+    # Optional block-compressed long-context attention. Disabled configurations
+    # preserve the historical attention implementation and parameter layout.
+    dual_resolution: DualResolutionConfig = field(default_factory=DualResolutionConfig)
+
     def __post_init__(self):
         object.__setattr__(
             self, "memory_context", _coerce_memory_context(self.memory_context)
+        )
+        object.__setattr__(
+            self, "dual_resolution", _coerce_dual_resolution(self.dual_resolution)
         )
         selected = tuple(int(i) for i in self.full_history_layers)
         if len(set(selected)) != len(selected) or any(
@@ -295,6 +347,29 @@ class ModelConfig:
                 "direct_full_history replaces head zero in every Transformer layer"
             )
         object.__setattr__(self, "full_history_layers", selected)
+        if self.dual_resolution.enabled:
+            if self.memory_context.enabled:
+                raise ValueError(
+                    "dual-resolution attention cannot be combined with hierarchical memory"
+                )
+            if self.attention_layers is not None:
+                raise ValueError(
+                    "dual-resolution attention cannot be combined with attention_layers"
+                )
+            if self.context_length % self.dual_resolution.block_size != 0:
+                raise ValueError(
+                    "dual-resolution context_length must be divisible by block_size"
+                )
+            if self.context_length > (
+                self.dual_resolution.block_size * self.dual_resolution.max_blocks
+            ):
+                raise ValueError(
+                    "dual-resolution context_length exceeds block_size * max_blocks"
+                )
+            if self.dual_resolution.local_window > self.context_length:
+                raise ValueError(
+                    "dual-resolution local_window must not exceed context_length"
+                )
         if self.n_q_heads * self.d_head != self.d_model:
             raise ValueError("n_q_heads * d_head must equal d_model.")
         if self.n_q_heads % self.n_kv_heads != 0:
@@ -403,6 +478,19 @@ class ModelConfig:
 
             # Q, K, V and output attention projections.  Q width equals d_model.
             total += 2 * d * d + 2 * d * kv_width
+
+            if self.dual_resolution.enabled:
+                dual = self.dual_resolution
+                dc = int(dual.compression_dim)
+                depth = int(dual.compression_depth)
+                # Wdown/Wup; compression-depth Q/K/V/O + norm; pooling query
+                # and pooling K/V/O. At depth=1 this is exactly
+                # 2*d*dc + 7*dc^2 + 2*dc.
+                total += 2 * d * dc
+                total += depth * (4 * dc * dc + dc)
+                total += 3 * dc * dc + dc
+                # Per-query-head gate Wg and bg.
+                total += d * int(self.n_q_heads) + int(self.n_q_heads)
 
             # Dense FFN has one SwiGLU and NO router; MoE retains old count.
             if self.ffn_mode == "dense":
@@ -1117,6 +1205,19 @@ class ModelConfig:
     @classmethod
     def ensemble_1024_20l_dense_historical_hybrid_64k(cls):
         return cls._ensemble_1024_historical_hybrid_64k(n_layers=20,n_ffn=4096)
+
+    @classmethod
+    def dual_resolution_1024_20l(cls):
+        """65,536-token dense 1024-wide dual-resolution decoder."""
+        base = cls.ensemble_1024_20l_dense_historical_hybrid_64k()
+        return replace(
+            base,
+            context_length=65_536,
+            attention_layers=None,
+            full_history_layers=(),
+            memory_context=MemoryContextConfig(enabled=False),
+            dual_resolution=DualResolutionConfig(enabled=True),
+        )
 
     @classmethod
     def ensemble_1024_20l_dense_direct_full_history_64k(cls):

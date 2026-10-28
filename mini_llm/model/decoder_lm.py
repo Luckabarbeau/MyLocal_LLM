@@ -107,6 +107,7 @@ class DecoderLanguageModel:
                 attention_config=attention_config,
                 residual_gates=self.progressive_depth_enabled,
                 ffn_mode=getattr(config, "ffn_mode", "moe"),
+                dual_resolution_config=config.dual_resolution,
                 residual_gate_init=(
                     1.0 if layer_idx < self.active_layers else 0.0
                 ),
@@ -1340,6 +1341,7 @@ class DecoderLanguageModel:
         activation_checkpoint=False, position_ids=None, memory_metadata=None,
         return_target_slice=False, input_embeddings=None, attention_allow_mask=None,
         block_context_length=None, block_valid_mask=None,
+        dual_resolution_metadata=None,
     ):
         """Run embedding/Transformer/final-norm without materializing logits.
 
@@ -1483,6 +1485,7 @@ class DecoderLanguageModel:
                         historical_state=historical_state,
                         full_history_positions=full_history_positions,
                         full_history_current_valid_mask=full_history_current_valid_mask,
+                        dual_resolution_metadata=dual_resolution_metadata,
                     )
             elif retain_block and not checkpoint_blocks:
                 if layer_memory_audit is not None:
@@ -1503,6 +1506,7 @@ class DecoderLanguageModel:
                             historical_state=historical_state,
                             full_history_positions=full_history_positions,
                             full_history_current_valid_mask=full_history_current_valid_mask,
+                            dual_resolution_metadata=dual_resolution_metadata,
                         )
                 except Exception as exc:
                     if layer_memory_audit is not None and (
@@ -1533,6 +1537,7 @@ class DecoderLanguageModel:
                         historical_state=historical_state,
                         full_history_positions=full_history_positions,
                         full_history_current_valid_mask=full_history_current_valid_mask,
+                        dual_resolution_metadata=dual_resolution_metadata,
                     )
 
         with performance_scope("model.final_norm.forward"):
@@ -1569,6 +1574,7 @@ class DecoderLanguageModel:
             cache["attention_allow_mask"] = attention_allow_mask
             cache["block_context_length"] = block_context_length
             cache["block_valid_mask"] = block_valid_mask
+            cache["dual_resolution_metadata"] = dual_resolution_metadata
         else:
             cache["block_caches"] = block_caches
 
@@ -1585,6 +1591,7 @@ class DecoderLanguageModel:
         activation_checkpoint=False, position_ids=None, memory_metadata=None,
         input_embeddings=None, attention_allow_mask=None,
         block_context_length=None, block_valid_mask=None,
+        dual_resolution_metadata=None,
     ):
         """Full decoder forward.
 
@@ -1602,6 +1609,7 @@ class DecoderLanguageModel:
                 attention_allow_mask=attention_allow_mask,
                 block_context_length=block_context_length,
                 block_valid_mask=block_valid_mask,
+                dual_resolution_metadata=dual_resolution_metadata,
             )
             target_slice = cache.get("target_slice")
         else:
@@ -1613,6 +1621,7 @@ class DecoderLanguageModel:
                 attention_allow_mask=attention_allow_mask,
                 block_context_length=block_context_length,
                 block_valid_mask=block_valid_mask,
+                dual_resolution_metadata=dual_resolution_metadata,
             )
 
         head_for_logits = head_input
@@ -1924,6 +1933,7 @@ class DecoderLanguageModel:
             attention_allow_mask = cache.pop("attention_allow_mask", None)
             block_context_length = cache.pop("block_context_length", None)
             block_valid_mask = cache.pop("block_valid_mask", None)
+            dual_resolution_metadata = cache.pop("dual_resolution_metadata", None)
             cache_start_layer = int(cache.pop("block_cache_start_layer", 0))
             expected = active_layers - cache_start_layer
             if len(block_checkpoints) != expected:
@@ -1954,6 +1964,7 @@ class DecoderLanguageModel:
                             historical_state=historical_state,
                             full_history_positions=full_history_positions,
                             full_history_current_valid_mask=full_history_current_valid_mask,
+                            dual_resolution_metadata=dual_resolution_metadata,
                         )
                 finally:
                     if replay_router is not None:

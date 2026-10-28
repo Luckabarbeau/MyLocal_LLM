@@ -76,6 +76,7 @@ def parse_args():
             "ensemble-intermediate-768-20l-dense-historical-hybrid-64k",
             "ensemble-1024-16l-dense-historical-hybrid-64k",
             "ensemble-1024-20l-dense-historical-hybrid-64k",
+            "dual-resolution-1024-20l",
             "ensemble-1024-20l-dense-direct-full-history-64k",
             "ensemble-1024-22l-dense-historical-hybrid-64k",
             "ensemble-1024-24l-dense-historical-hybrid-64k",
@@ -622,6 +623,8 @@ def model_config_from_name(name: str) -> ModelConfig:
         return ModelConfig.ensemble_1024_16l_dense_historical_hybrid_64k()
     if name == "ensemble-1024-20l-dense-historical-hybrid-64k":
         return ModelConfig.ensemble_1024_20l_dense_historical_hybrid_64k()
+    if name == "dual-resolution-1024-20l":
+        return ModelConfig.dual_resolution_1024_20l()
     if name == "ensemble-1024-20l-dense-direct-full-history-64k":
         return ModelConfig.ensemble_1024_20l_dense_direct_full_history_64k()
     if name == "ensemble-1024-22l-dense-historical-hybrid-64k":

@@ -293,6 +293,9 @@ class ExtendedTrainer:
         self.memory_context = (
             model.config.memory_context if model.config.memory_context.enabled else None
         )
+        self.dual_resolution_config = (
+            model.config.dual_resolution if model.config.dual_resolution.enabled else None
+        )
         self.eos_token_id = None if eos_token_id is None else int(eos_token_id)
         raw_growth_steps = [] if progressive_growth_steps is None else list(progressive_growth_steps)
         self.progressive_growth_steps = tuple(int(x) for x in raw_growth_steps)
@@ -313,6 +316,10 @@ class ExtendedTrainer:
                     "progressive growth schedule contains more activations than "
                     "the final model depth permits"
                 )
+        if self.dual_resolution_config is not None and self.eos_token_id is None:
+            raise ValueError(
+                "dual-resolution training requires eos_token_id for document boundaries"
+            )
         if self.memory_context is not None:
             if self.eos_token_id is None:
                 raise ValueError(
@@ -1507,6 +1514,7 @@ class ExtendedTrainer:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=self.train_rng
             )
+            metadata = self._dual_resolution_batch_metadata(inputs)
         else:
             document_index = self._get_document_index(
                 self.document_indices, cache_key, shard_path, shard_data
@@ -1784,6 +1792,7 @@ class ExtendedTrainer:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=rng
             )
+            metadata = self._dual_resolution_batch_metadata(inputs)
         else:
             document_index = self._get_document_index(
                 self.val_document_indices, cache_key, shard_path, shard_data
@@ -1975,6 +1984,27 @@ class ExtendedTrainer:
                 )
         print()
 
+    def _dual_resolution_batch_metadata(self, inputs):
+        """Build dual-resolution document/block metadata for packed AR windows."""
+        if self.dual_resolution_config is None:
+            return None
+        from mini_llm.ops.dual_resolution_attention import (
+            build_dual_resolution_metadata,
+            dual_resolution_loss_mask,
+        )
+        config = self.dual_resolution_config
+        return {
+            "dual_resolution_metadata": build_dual_resolution_metadata(
+                inputs,
+                eos_token_id=self.eos_token_id,
+                block_size=config.block_size,
+            ),
+            "target_loss_mask": dual_resolution_loss_mask(
+                inputs,
+                eos_token_id=self.eos_token_id,
+            ),
+        }
+
     def _configure_routed_prefix_metadata(self, metadata, *, training):
         """Attach 0060A routing mode without changing the sampler contract."""
         if (
@@ -2057,7 +2087,14 @@ class ExtendedTrainer:
         # the 65k-vocabulary model, so honor chunking for the new diagnostics.
         if self.lm_head_chunk_tokens > 0:
             head_input, target_slice = self.model.forward_body(
-                inputs, return_cache=False, memory_metadata=batch_metadata,
+                inputs, return_cache=False,
+                memory_metadata=(
+                    batch_metadata if self.memory_context is not None else None
+                ),
+                dual_resolution_metadata=(
+                    None if batch_metadata is None else
+                    batch_metadata.get("dual_resolution_metadata")
+                ),
                 return_target_slice=True,
             )
             loss, loss_cache = self.model.chunked_lm_head_loss_forward(
@@ -2068,7 +2105,14 @@ class ExtendedTrainer:
             del loss_cache, head_input
         else:
             logits = self.model.forward(
-                inputs, return_cache=False, memory_metadata=batch_metadata,
+                inputs, return_cache=False,
+                memory_metadata=(
+                    batch_metadata if self.memory_context is not None else None
+                ),
+                dual_resolution_metadata=(
+                    None if batch_metadata is None else
+                    batch_metadata.get("dual_resolution_metadata")
+                ),
             )
             loss, _ = self.model.compute_loss(
                 logits, targets, loss_mask=loss_mask,
@@ -2699,7 +2743,13 @@ class ExtendedTrainer:
                         activation_checkpoint=(
                             self.activation_checkpoint == "block"
                         ),
-                        memory_metadata=batch_metadata,
+                        memory_metadata=(
+                            batch_metadata if self.memory_context is not None else None
+                        ),
+                        dual_resolution_metadata=(
+                            None if batch_metadata is None else
+                            batch_metadata.get("dual_resolution_metadata")
+                        ),
                     )
             else:
                 with performance_scope("train.model_forward"):
@@ -2708,7 +2758,13 @@ class ExtendedTrainer:
                         activation_checkpoint=(
                             self.activation_checkpoint == "block"
                         ),
-                        memory_metadata=batch_metadata,
+                        memory_metadata=(
+                            batch_metadata if self.memory_context is not None else None
+                        ),
+                        dual_resolution_metadata=(
+                            None if batch_metadata is None else
+                            batch_metadata.get("dual_resolution_metadata")
+                        ),
                     )
             if memory_active:
                 memory_context_cache = cache.get("memory_context_cache") or {}

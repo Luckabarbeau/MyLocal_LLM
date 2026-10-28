@@ -1087,3 +1087,19 @@ Not every flag applies to every architecture. `MINI_LLM_FUSED_EXPERT_GEMM=0` and
 This project is licensed under the **GNU Lesser General Public License, Version 3 (LGPL-3.0)**.
 
 The full license text is provided in [`LICENSE`](LICENSE). Any use, modification, redistribution, or combination with other software must comply with the terms of the LGPL-3.0.
+
+---
+
+# 0102: dual-resolution long-context attention
+
+0102 adds the opt-in `dual-resolution-1024-20l` research preset: 20 layers, width 1,024, dense SwiGLU-4,096, 16 query heads / 4 KV heads / 64 dimensions, exact causal local-512 token attention, and learned summaries of complete 128-token same-document blocks. Summary visibility is strictly causal (`block_end_position < query_position`); EOS terminates its current document, resets positions/blocks for the following token, and masks the shifted cross-document target during training.
+
+This is currently a **correctness-first, unfused NumPy/CuPy implementation**, not a production-ready GPU claim. It does not allocate dense token `T × T` attention, but handwritten backward retains substantial chunked local/global/compressor probability state. Measure the target hardware before drawing performance conclusions.
+
+- Architecture, defaults, estimator counts (`dc=256/512/1024`), causality/EOS semantics, formulas, caveats, and commands: [`docs/DUAL_RESOLUTION_0102.md`](docs/DUAL_RESOLUTION_0102.md)
+- Batch-1 context sweep (`1,024` through `65,536`) with score-workload, timing, memory estimate, tokens/s, and optional native inference metrics: [`benchmarks/benchmark_dual_resolution_0102.py`](benchmarks/benchmark_dual_resolution_0102.py)
+
+```bash
+MINI_LLM_BACKEND=numpy python benchmarks/benchmark_dual_resolution_0102.py \
+    --validate-only --skip-backward --skip-inference
+```

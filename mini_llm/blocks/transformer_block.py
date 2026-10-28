@@ -45,6 +45,7 @@ class TransformerBlock:
         residual_gates: bool = False,
         residual_gate_init: float = 1.0,
         ffn_mode: str = "moe",
+        dual_resolution_config=None,
     ):
         """Initialize the Transformer block."""
         self.d_model = d_model
@@ -84,20 +85,39 @@ class TransformerBlock:
         self.norm1 = RMSNorm(d_model, eps=eps, name=f"{name}.norm1", dtype=dtype)
         
         # Attention sublayer
-        self.attention = GQAAttention(
-            d_model=d_model,
-            n_q_heads=n_q_heads,
-            n_kv_heads=n_kv_heads,
-            d_head=d_head,
-            input_std=input_std,
-            output_std=output_std,
-            rope_base=rope_base,
-            rng=rng,
-            name=f"{name}.attention",
-            dtype=dtype,
-            attention_config=attention_config,
-            terminal_memory_config=terminal_memory_config,
-        )
+        if (
+            dual_resolution_config is not None
+            and dual_resolution_config.enabled
+        ):
+            from mini_llm.ops.dual_resolution_attention import DualResolutionAttention
+            self.attention = DualResolutionAttention(
+                d_model=d_model,
+                n_q_heads=n_q_heads,
+                n_kv_heads=n_kv_heads,
+                d_head=d_head,
+                input_std=input_std,
+                output_std=output_std,
+                rope_base=rope_base,
+                rng=rng,
+                name=f"{name}.attention",
+                dtype=dtype,
+                dual_resolution_config=dual_resolution_config,
+            )
+        else:
+            self.attention = GQAAttention(
+                d_model=d_model,
+                n_q_heads=n_q_heads,
+                n_kv_heads=n_kv_heads,
+                d_head=d_head,
+                input_std=input_std,
+                output_std=output_std,
+                rope_base=rope_base,
+                rng=rng,
+                name=f"{name}.attention",
+                dtype=dtype,
+                attention_config=attention_config,
+                terminal_memory_config=terminal_memory_config,
+            )
         
         # Second RMSNorm (input to MoE)
         self.norm2 = RMSNorm(d_model, eps=eps, name=f"{name}.norm2", dtype=dtype)
@@ -148,6 +168,7 @@ class TransformerBlock:
         shared_context_retrieval_tasks=None, historical_state=None,
         full_history_positions=None, full_history_current_valid_mask=None,
         full_history_historical_allow_mask=None,
+        dual_resolution_metadata=None,
     ):
         """
         Forward pass through the Transformer block.
@@ -189,6 +210,8 @@ class TransformerBlock:
                 kwargs = {}
                 if position_ids is not None:
                     kwargs["position_ids"] = position_ids
+                if dual_resolution_metadata is not None:
+                    kwargs["dual_resolution_metadata"] = dual_resolution_metadata
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
                 if historical_state is not None:
@@ -214,6 +237,8 @@ class TransformerBlock:
                 kwargs = {"return_cache": False}
                 if position_ids is not None:
                     kwargs["position_ids"] = position_ids
+                if dual_resolution_metadata is not None:
+                    kwargs["dual_resolution_metadata"] = dual_resolution_metadata
                 if terminal_memory is not None:
                     kwargs["terminal_memory"] = terminal_memory
                 if historical_state is not None:

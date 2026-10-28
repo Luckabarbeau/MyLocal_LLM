@@ -14,12 +14,18 @@ import argparse
 import gc
 import json
 import math
+import os
 import statistics
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+
+# Support direct `python benchmarks/benchmark_dual_resolution_0102.py` from the
+# repository root, as documented, without requiring PYTHONPATH=.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 DEFAULT_CONTEXTS = (1024, 2048, 4096, 8192, 16384, 32768, 65536)
@@ -46,9 +52,23 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--compression-dim", type=int, default=512)
     parser.add_argument("--compression-heads", type=int, default=8)
     parser.add_argument("--compression-depth", type=int, default=1)
+    parser.add_argument("--compression-block-chunk", type=int, default=64)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--local-window", type=int, default=512)
     parser.add_argument("--global-query-chunk", type=int, default=64)
+    parser.add_argument(
+        "--local-kernel", choices=("cupy", "triton"), default="cupy",
+        help="0102B experimental Triton local attention only; global and compression remain CuPy",
+    )
+    parser.add_argument("--global-kernel", choices=("cupy", "triton"),
+                        default="cupy", help="0102C opt-in global-summary Triton")
+    parser.add_argument("--compression-kernel", choices=("cupy", "triton"),
+                        default="cupy", help="0102C opt-in block-compressor Triton")
+    parser.add_argument(
+        "--retain-attention-probs", action="store_true",
+        help="retain probability matrices for debugging (large VRAM cost); "
+             "default recomputes them in backward",
+    )
     parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=102)
@@ -86,6 +106,8 @@ def _parse_args() -> argparse.Namespace:
         parser.error("inference-decode-tokens must be positive")
     if args.compression_depth < 0:
         parser.error("compression-depth must be non-negative")
+    if args.compression_block_chunk < 1:
+        parser.error("compression-block-chunk must be positive")
     if args.compression_dim % args.compression_heads:
         parser.error("compression-dim must be divisible by compression-heads")
     if args.local_window < args.block_size or args.local_window % args.block_size:
@@ -156,8 +178,9 @@ def _score_workload(
         local_rectangles + global_rectangles + compressor + pooling
     )
     split["dense_token_square_not_allocated"] = int(heads * context * context)
-    # Forward caches retain softmax probabilities in FP32 for each score family.
-    split["score_probability_cache_lower_bound_bytes"] = int(
+    # Diagnostic: what the old retained-FP32 probability cache would cost.
+    # In the default recompute mode this is NOT retained across backward.
+    split["retained_probability_bytes_without_recompute"] = int(
         split["implementation_total"] * np.dtype(np.float32).itemsize
     )
     return split
@@ -181,16 +204,11 @@ def _parameter_counts(base, compression_heads: int) -> dict:
 
 
 def _operator_array_accounting(estimator_counts: dict) -> dict:
-    # The current operator owns dedicated summary K/V projections but no gate
-    # bias; ModelConfig.estimated_parameter_count() currently models the reverse.
-    delta_per_layer = 2 * 1024 * (4 * 64) - 16
+    """Parameter estimator now includes summary K/V and both pool scalars."""
     return {
-        "known_estimator_delta_per_layer": delta_per_layer,
-        "known_estimator_delta_20_layers": 20 * delta_per_layer,
-        "implied_trainable_array_count_by_compression_dim": {
-            dim: (None if count is None else count + 20 * delta_per_layer)
-            for dim, count in estimator_counts.items()
-        },
+        "known_estimator_delta_per_layer": 0,
+        "known_estimator_delta_20_layers": 0,
+        "implied_trainable_array_count_by_compression_dim": dict(estimator_counts),
     }
 
 
@@ -373,6 +391,7 @@ def _measure_context(args, *, context, config, dtype, backend_name, xp):
         "context": context,
         "batch_size": 1,
         "tokens": context,
+        "recompute_attention_probs": config.recompute_attention_probs,
         "score_workload": _score_workload(
             context, heads=16, compressor_heads=args.compression_heads,
             block_size=args.block_size, local_window=args.local_window,
@@ -429,7 +448,9 @@ def _print_summary(report: dict) -> None:
     print("0102 dual-resolution benchmark")
     print(
         f"backend={report['backend']} dtype={report['dtype']} "
-        "implementation=correctness-first-unfused"
+        f"local_kernel={report['local_kernel']} "
+        f"global_kernel={report['global_kernel']} "
+        f"compression_kernel={report['compression_kernel']}"
     )
     print("parameter counts (actual ModelConfig estimator):")
     for dim, count in report["parameter_counts_by_compression_dim"].items():
@@ -459,7 +480,17 @@ def _print_summary(report: dict) -> None:
 
 def main() -> None:
     args = _parse_args()
+    # Must be set before constructing the benchmarked attention operator.
+    os.environ["MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL"] = args.local_kernel
+    os.environ["MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL"] = args.global_kernel
+    os.environ["MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL"] = args.compression_kernel
     from mini_llm.backend import BACKEND_NAME, xp
+    if any(kernel == "triton" for kernel in
+           (args.local_kernel, args.global_kernel, args.compression_kernel)) \
+            and BACKEND_NAME != "cupy":
+        raise SystemExit("Triton kernels require MINI_LLM_BACKEND=cupy")
+    if args.compression_kernel == "triton" and args.compression_dim // args.compression_heads != 64:
+        raise SystemExit("Triton compression requires compression head dimension 64")
     from mini_llm.config import ModelConfig
 
     dtype = args.dtype or ("bfloat16" if BACKEND_NAME == "cupy" else "float32")
@@ -471,14 +502,24 @@ def main() -> None:
         compression_dim=args.compression_dim,
         compression_heads=args.compression_heads,
         compression_depth=args.compression_depth,
+        compression_block_chunk=args.compression_block_chunk,
         global_query_chunk=args.global_query_chunk,
+        recompute_attention_probs=not args.retain_attention_probs,
     )
     benchmark_config = replace(base, dual_resolution=dual)
     parameter_counts = _parameter_counts(base, args.compression_heads)
     report = {
         "schema": "dual-resolution-0102-benchmark-v1",
-        "implementation_status": "correctness-first-unfused-not-production-gpu-validated",
+        "implementation_status": (
+            "experimental-triton-partial-unvalidated"
+            if any(kernel == "triton" for kernel in
+                   (args.local_kernel, args.global_kernel, args.compression_kernel))
+            else "correctness-first-unfused"
+        ),
         "backend": BACKEND_NAME,
+        "local_kernel": args.local_kernel,
+        "global_kernel": args.global_kernel,
+        "compression_kernel": args.compression_kernel,
         "dtype": dtype,
         "batch_size": args.batch_size,
         "architecture": {
@@ -488,8 +529,10 @@ def main() -> None:
             "compression_dim": args.compression_dim,
             "compression_heads": args.compression_heads,
             "compression_depth": args.compression_depth,
+            "compression_block_chunk": args.compression_block_chunk,
             "max_blocks": dual.max_blocks,
             "global_query_chunk": args.global_query_chunk,
+            "recompute_attention_probs": dual.recompute_attention_probs,
         },
         "selected_parameter_count": int(benchmark_config.estimated_parameter_count()),
         "parameter_counts_by_compression_dim": parameter_counts,

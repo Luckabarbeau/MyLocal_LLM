@@ -71,8 +71,10 @@ Native incremental inference stores local K/V, summary K/V, and the incomplete n
 | `compression_dim` | 512 | positive; divisible by `compression_heads` |
 | `compression_heads` | 8 | positive; default compressor head dimension is 64 |
 | `compression_depth` | 1 | config validation requires positive; operator also accepts zero when constructed directly |
+| `compression_block_chunk` | 64 | maximum number of independent 128-token blocks handled per compressor attention GEMM; bounds temporary scores |
 | `max_blocks` | 512 | positive; context cannot exceed `block_size × max_blocks` |
 | `global_query_chunk` | 64 | positive; bounds token-query score rectangles |
+| `recompute_attention_probs` | `True` | recompute local/global/compressor softmax probabilities during backward; `False` retains them for debugging |
 
 When enabled through `ModelConfig`, dual resolution cannot be combined with `memory_context.enabled` or a non-`None` `attention_layers`. The preset also clears `full_history_layers`. Standard model fields such as vocabulary, layer count, widths, heads, RoPE, precision, and initialization remain configurable through `ModelConfig`; no dedicated CLI overrides are currently exposed for the dual-resolution subfields, so changing them programmatically requires `dataclasses.replace`.
 
@@ -80,26 +82,37 @@ Incremental inference currently imposes additional implementation bounds: `block
 
 ## Parameter counts
 
-The following are outputs of the repository's actual `ModelConfig.estimated_parameter_count()` for the 20-layer preset, changing only `compression_dim` and keeping 8 compressor heads:
+The parameter estimator has been corrected to count the actual registered
+arrays, including dedicated global K/V projections and the pooling query and
+normalization scale. The following counts correspond to the full 20-layer
+preset, holding the compression head count at 8:
 
-| `dc` | Estimator result |
+| Compression width `dc` | Trainable parameters |
 |---:|---:|
-| 256 | 357,682,496 |
-| 512 | 395,703,616 |
-| 1,024 | 526,796,096 |
+| 256 | **368,173,056** |
+| 512 (default) | **406,199,296** |
+| 1,024 | **537,302,016** |
 
-For each layer, the estimator starts with ordinary GQA projections and adds
+The estimates have been checked against model parameter-array counts at smaller
+instantiated widths by `tests/test_dual_resolution_0102.py`.
+The 512-wide compressor is approximately 406M parameters, **not 338M**.
+Width 256 is the closest of these presets to the original 338M parameter budget.
 
-```text
-2 d dc
-+ compression_depth × (4 dc² + dc)
-+ (3 dc² + dc)
-+ d Hq + Hq
-```
+`recompute_attention_probs=True` changes only the backward-cache strategy, not
+the trained parameters or attention equations. It does not change checkpoint
+shapes, and can be turned off for numerical debugging with a configuration
+replacement. Backward recomputes each masked local/global softmax from cached
+Q/K and compact document metadata, and each block compressor softmax from its
+cached Q/K. The two implementations are checked against each other for complete
+forward outputs, input gradients, and parameter gradients.
 
-At depth 1 this is `2 d dc + 7 dc² + 2 dc + d Hq + Hq` beyond ordinary attention.
-
-**Estimator audit caveat.** Inspection of the actual trainable arrays found a mismatch in the current estimator: the operator has dedicated `W_global_k` and `W_global_v` arrays (`2 d × (Hkv Dh)` elements per layer), while the estimator does not include them; conversely, the estimator includes an `Hq` gate-bias term although the operator currently has only `W_gate` and no bias. For the preset geometry, actual arrays therefore exceed the estimator by `2 × 1024 × (4 × 64) - 16 = 524,272` elements per layer, or 10,485,440 over 20 layers. The table intentionally reports the requested estimator values, not corrected values. The benchmark labels estimator counts and operator-array accounting separately; checkpoint sizing should account for this discrepancy until the estimator is corrected.
+The compressor attention GEMMs are further chunked by `compression_block_chunk`
+(default 64), rather than forming all 512 block score matrices at once. At
+65K, 8 compressor heads, block size 128, and FP32 probabilities, a 64-block
+chunk forms approximately **32 MiB** of score elements instead of **256 MiB**
+for all 512 blocks. Chunking affects neither attention semantics nor trainable
+parameters. Tests compare chunk size 3 versus 64 for both retained and
+recomputed probabilities, including every parameter gradient.
 
 ## Score workload and complexity
 
@@ -135,7 +148,7 @@ Total score work is
 O(Hq T W + Hq T²/S + D Hc T S + Hc T)
 ```
 
-so the summary branch is still quadratic in `T`, reduced by the block factor `S`; this is not linear attention. Query chunking bounds an individual local/global token score rectangle, and no dense token `Hq × T × T` tensor is allocated. The compressor currently processes all complete blocks together and materializes per-block `Hc × S × S` probabilities. Training caches retain local, global, and compressor/pooling probabilities for handwritten backward, so backward memory can be substantial even without dense `T × T` attention.
+so the summary branch is still quadratic in `T`, reduced by the block factor `S`; this is not linear attention. Query chunking bounds an individual local/global token score rectangle, and no dense token `Hq × T × T` tensor is allocated. The compressor processes at most `compression_block_chunk` completed blocks in each GEMM and materializes per-block `Hc × S × S` probabilities. With the default probability-rematerialization setting, the full local, global, and block self-attention probability arrays are **not retained** for backward; they are recomputed from cached Q/K when needed. Pooling probabilities are still retained because their memory cost is small. Other hidden activations and projections are still retained, and a full 20-layer 65K run may need block activation checkpointing.
 
 At `T=65,536`, defaults produce:
 
@@ -150,33 +163,36 @@ At `T=65,536`, defaults produce:
 | Implementation total | 1,205,084,160 |
 | Dense `16 × T × T` comparison (not allocated) | 68,719,476,736 |
 
-Retaining one FP32 probability per implementation score element alone is a roughly 4.82 GB lower bound for the single-layer forward cache at 65,536; it excludes projections, contexts, metadata, compressor hidden states, gradients, parameters, and allocator overhead. This explains why forward-only, backward, and full-model measurements should be staged separately.
+**Old retained-probability comparison:** storing one FP32 probability per implementation score element would require approximately 4.82 GB per attention layer at 65,536. The default rematerialization mode avoids that persistent probability cache, but still materializes chunk-sized probabilities and block-compressor matrices **transiently**, and retains other projections and activations for backward. Consequently, the 16 GB training-memory constraint is not yet resolved or GPU-validated. Measure peak VRAM under the actual training configuration, and prefer whole-block activation checkpointing for large contexts.
 
 ## Benchmark output and commands
 
-The benchmark defaults to batch 1 and contexts `1024,2048,4096,8192,16384,32768,65536`. It reports:
+The benchmark defaults to batch 1 and contexts `1024,2048,4096,8192,16384,32768,65536`. Use `--compression-block-chunk 64` to control the compressor's peak score allocation. Use `--retain-attention-probs` only for a debugging comparison on small contexts; it restores the old high-memory backward cache. The benchmark JSON reports `recompute_attention_probs` explicitly. It reports:
 
 - estimator parameter counts for `dc=256/512/1024` and the selected configuration;
 - local/global/compressor/pooling score workload split;
 - forward, backward, and end-to-end median/min/max time and tokens/s;
 - CuPy pool used/reserved bytes before and after phases, when available;
-- an explicit score-probability activation-cache lower bound;
+- the equivalent FP32 probability-cache size **if rematerialization were disabled** (a diagnostic comparison, not the default retained memory);
 - optional single-layer native sequential prefill, decode, and cache metrics.
 
 It never intentionally creates dense `T × T` storage. `--skip-backward` omits backward/end-to-end, and `--skip-inference` omits incremental metrics.
 
 ### Focused correctness and regression checks
 
-There is no dedicated 0102 pytest module in the current tree. The benchmark's focused validation exercises finite output, future-token perturbation, cross-EOS isolation, metadata positions, and the EOS loss mask using the real operator:
+A dedicated `tests/test_dual_resolution_0102.py` module now exercises
+parameter accounting, strict completed-block causality, packed EOS boundaries,
+compressor pooling gradients, full training/inference equivalence, checkpoint
+round trips, and rematerialization/chunking equivalence.
 
 ```bash
+MINI_LLM_BACKEND=numpy python -m pytest -q tests/test_dual_resolution_0102.py
 MINI_LLM_BACKEND=numpy python benchmarks/benchmark_dual_resolution_0102.py \
-    --validate-only --skip-backward --skip-inference
-
-python -m pytest -q tests/model/test_decoder_lm.py
+    --validate-only --skip-inference
 ```
 
-The second command is the existing decoder regression suite; it is not a substitute for adding a dedicated 0102 gradient/parity pytest module.
+These CPU tests do **not** replace GPU FP32/BF16 kernel validation or a
+full 20-layer peak-VRAM training run.
 
 ### CPU validation and small timing
 

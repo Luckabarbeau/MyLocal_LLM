@@ -17,7 +17,9 @@ from mini_llm.ops.dual_resolution_attention import (
 
 
 def _dual_config(*, block_size=4, local_window=8, compression_dim=8,
-                 compression_heads=2, compression_depth=1, max_blocks=8):
+                 compression_heads=2, compression_depth=1, max_blocks=8,
+                 compression_block_chunk=64,
+                 recompute_attention_probs=False):
     return DualResolutionConfig(
         enabled=True,
         block_size=block_size,
@@ -25,13 +27,16 @@ def _dual_config(*, block_size=4, local_window=8, compression_dim=8,
         compression_dim=compression_dim,
         compression_heads=compression_heads,
         compression_depth=compression_depth,
+        compression_block_chunk=compression_block_chunk,
         max_blocks=max_blocks,
         global_query_chunk=3,
+        recompute_attention_probs=recompute_attention_probs,
     )
 
 
 def _attention(seed=1, *, block_size=4, local_window=8, d_model=8,
-               compression_dim=8, compression_depth=1, max_blocks=8):
+               compression_dim=8, compression_depth=1, max_blocks=8,
+               recompute_attention_probs=False, compression_block_chunk=64):
     return DualResolutionAttention(
         d_model=d_model,
         n_q_heads=2,
@@ -47,7 +52,9 @@ def _attention(seed=1, *, block_size=4, local_window=8, d_model=8,
             compression_dim=compression_dim,
             compression_heads=2,
             compression_depth=compression_depth,
+            compression_block_chunk=compression_block_chunk,
             max_blocks=max_blocks,
+            recompute_attention_probs=recompute_attention_probs,
         ),
     )
 
@@ -394,3 +401,82 @@ def test_inference_summary_growth_local_bounds_and_eos_reset():
     assert int(state.dual_local_count[0, 0]) == 1
     assert int(state.dual_summary_count[0, 0]) == 0
     assert int(state.dual_incomplete_count[0, 0]) == 1
+
+
+def test_checkpointed_attention_probabilities_match_retained_backward_with_eos():
+    """Rematerialization must match both outputs and all parameter gradients."""
+    metadata = build_dual_resolution_metadata(
+        np.asarray([[1, 2, 3, 4, 5, 6, 7, 99, 9, 10, 11, 12],
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]),
+        eos_token_id=99, block_size=4,
+    )
+    x = np.random.default_rng(222).normal(size=(2, 12, 8)).astype(np.float64)
+    dy = np.random.default_rng(223).normal(size=x.shape).astype(np.float64)
+    results = []
+    for recompute in (False, True):
+        attention = _attention(seed=224, recompute_attention_probs=recompute)
+        attention.zero_grad()
+        y, cache = attention.forward(x, dual_resolution_metadata=metadata)
+        for entry in cache["local_cache"] + cache["global_cache"]:
+            assert (entry["probabilities"] is None) == recompute
+        for entry in cache["compressor_cache"]["layers"]:
+            assert (entry["probabilities"] is None) == recompute
+        dx = attention.backward(dy, cache)
+        grads = {param.name: np.array(param.grad, copy=True)
+                 for param in attention.parameters()}
+        results.append((y, dx, grads))
+    np.testing.assert_allclose(results[0][0], results[1][0], atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(results[0][1], results[1][1], atol=1e-12, rtol=1e-12)
+    assert results[0][2].keys() == results[1][2].keys()
+    for name in results[0][2]:
+        np.testing.assert_allclose(results[0][2][name], results[1][2][name],
+                                   atol=1e-12, rtol=1e-12, err_msg=name)
+
+
+def test_rematerialization_forward_without_cache_and_full_model_backward():
+    config = _tiny_model_config(n_layers=2)
+    config = replace(config, dual_resolution=replace(
+        config.dual_resolution, recompute_attention_probs=True))
+    model = DecoderLanguageModel(config, rng_seed=225, dtype="float64")
+    tokens = np.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=np.int64)
+    metadata = build_dual_resolution_metadata(tokens, eos_token_id=30, block_size=4)
+    logits, cache = model.forward(tokens, return_cache=True,
+                                  dual_resolution_metadata=metadata)
+    reference = model.forward(tokens, return_cache=False,
+                              dual_resolution_metadata=metadata)
+    np.testing.assert_allclose(logits, reference, atol=1e-11, rtol=1e-11)
+    # Exercise the public model backward API against the new operator.
+    grad = np.random.default_rng(226).normal(size=logits.shape)
+    model.zero_grad()
+    model.backward(grad, cache)
+    global_parameters = [p for p in model.parameters() if ".global." in p.name]
+    assert global_parameters
+    assert all(np.all(np.isfinite(np.asarray(p.grad))) for p in model.parameters())
+    assert any(np.any(np.asarray(p.grad) != 0) for p in global_parameters)
+
+
+@pytest.mark.parametrize("recompute", [False, True])
+def test_compressor_multiple_chunks_match_unchunked_forward_and_gradients(recompute):
+    """Chunking is exact, including parameter and source-token gradients."""
+    # 24 tokens / block_size 4 = six compression blocks (two chunks of 3).
+    metadata = build_dual_resolution_metadata(
+        np.arange(24, dtype=np.int64)[None, :], eos_token_id=99, block_size=4,
+    )
+    x = np.random.default_rng(240).normal(size=(1, 24, 8)).astype(np.float64)
+    dy = np.random.default_rng(241).normal(size=x.shape).astype(np.float64)
+    outcomes = []
+    for chunk in (3, 64):
+        attention = _attention(
+            seed=242, recompute_attention_probs=recompute,
+            compression_block_chunk=chunk,
+        )
+        attention.zero_grad()
+        output, cache = attention.forward(x, dual_resolution_metadata=metadata)
+        dx = attention.backward(dy, cache)
+        grads = {p.name: p.grad.copy() for p in attention.parameters()}
+        outcomes.append((output, dx, grads))
+    np.testing.assert_allclose(outcomes[0][0], outcomes[1][0], atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(outcomes[0][1], outcomes[1][1], atol=1e-12, rtol=1e-12)
+    for name in outcomes[0][2]:
+        np.testing.assert_allclose(outcomes[0][2][name], outcomes[1][2][name],
+                                   atol=1e-12, rtol=1e-12, err_msg=name)

@@ -1103,3 +1103,54 @@ This is currently a **correctness-first, unfused NumPy/CuPy implementation**, no
 MINI_LLM_BACKEND=numpy python benchmarks/benchmark_dual_resolution_0102.py \
     --validate-only --skip-backward --skip-inference
 ```
+
+
+## 0102A: dual-resolution correctness and attention-memory follow-up
+
+The incremental 0102A correction keeps the pure 20-layer dual-resolution
+Transformer unchanged architecturally. It fixes the trainable parameter-count
+estimator and defaults to recomputing local/global/compressor softmax
+probabilities during backward instead of retaining them across layers. The
+compressor also processes bounded groups of completed blocks (default 64) to
+limit transient full-block attention-score memory. Both mechanisms have CPU
+forward/backward equivalence tests. No convolution layers or new routing
+pathways are introduced. See [`docs/DUAL_RESOLUTION_0102.md`](docs/DUAL_RESOLUTION_0102.md)
+for the exact parameter counts, causality contract, tests, and outstanding
+GPU benchmarking requirements.
+
+### Experimental Triton local attention for dual-resolution models (0102B)
+
+Patch 0102B adds a **strictly opt-in** BF16 Triton implementation of the 512-token local attention subpath in `dual-resolution-1024-20l`. The complete-block bidirectional compressor and strict preceding-block global attention remain the original CuPy implementations. The original 338M model and other attention kernels are unchanged. See [`docs/PATCH_0102B_TRITON_LOCAL.md`](docs/PATCH_0102B_TRITON_LOCAL.md) for GPU parity tests, matched benchmark commands, activation-memory limitations, and instructions for enabling `MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL=triton`. It is experimental until tested on the RTX 5080.
+
+### Patch 0102C: opt-in Triton global and block-compression attention
+
+The 20-layer `dual-resolution-1024-20l` model can now independently select
+CuPy or experimental Triton kernels for local, global-summary, and per-block
+bidirectional compression self-attention. The model, pooling mechanism, strict
+completed-block causal mask and checkpoint tensors are unchanged. CuPy is still
+the default. See [Patch 0102C notes](docs/PATCH_0102C_TRITON_GLOBAL_AND_COMPRESSION.md)
+for commands, GPU parity tests and experimental limitations.
+
+### Patch 0102D — Full-model dual-resolution training and memory validation
+
+A reproducible training-path smoke benchmark is available at
+`benchmarks/benchmark_dual_resolution_full_model_0102d.py`. It exercises the
+actual 20-layer dual-resolution decoder, compact next-token LM head, backward
+propagation, and optional AdamW update (with CPU optimizer-state offload on
+consumer GPUs). This is **not** the single-attention-layer microbenchmark or a
+validated model-quality result. Run the corresponding CPU and GPU parity tests
+before attempting large contexts. Details and direct commands are in
+[`docs/PATCH_0102D_FULL_MODEL_TRAINING_AND_MEMORY.md`](docs/PATCH_0102D_FULL_MODEL_TRAINING_AND_MEMORY.md).
+
+### Patch 0102J — default packed BF16, optional fused learned pooling
+
+On CuPy GPU backends the dual-resolution model now defaults to the
+**packed BF16 projection path** validated by warmed 0102I benchmarks (explicit
+`MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS=0` restores the reference).
+NumPy keeps the reference default for high-precision gradient checks.
+An **experimental, opt-in** Triton fused learned-pooling forward/backward
+(`MINI_LLM_DUAL_RESOLUTION_FUSED_POOLING=1`) can eliminate CuPy broadcasted
+score/value-gradient intermediates; GPU parity and warmed A/B performance must
+be measured before enabling it permanently. The patch also adds separate
+local/global/compressor profiler regions. See
+[`docs/PATCH_0102J_DEFAULT_PACKED_AND_FUSED_POOLING.md`](docs/PATCH_0102J_DEFAULT_PACKED_AND_FUSED_POOLING.md).

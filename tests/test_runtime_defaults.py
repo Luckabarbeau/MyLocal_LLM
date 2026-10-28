@@ -89,6 +89,28 @@ def test_auto_large_cupy_training_uses_consumer_profile(monkeypatch):
     assert os.environ["MINI_LLM_AR_COMPACT_TARGET"] == "1"
 
 
+def test_dual_resolution_consumer_profile_uses_measured_lm_head_chunk(monkeypatch):
+    _clear(monkeypatch)
+    config = ModelConfig.dual_resolution_matrix_pool_1024_20l()
+    result = apply_runtime_defaults(
+        None, backend_name="cupy", config=config,
+        training=True, precision="bf16-mixed",
+    )
+    assert result.resolved == "consumer-gpu"
+    assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
+    assert os.environ["MINI_LLM_FUSED_SWIGLU"] == "1"
+    assert os.environ["MINI_LLM_SWIGLU_VEC2"] == "1"
+    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "512"
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "768")
+    apply_runtime_defaults(
+        "consumer-gpu", backend_name="cupy", config=config,
+        training=True, precision="bf16-mixed",
+    )
+    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "768"
+
+
 def test_explicit_override_wins_over_profile(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("MINI_LLM_LOCAL_ATTN_QUERY_CHUNK", "768")

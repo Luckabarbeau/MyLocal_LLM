@@ -196,6 +196,15 @@ class InferenceModel:
             )
         if self.dual_resolution_enabled:
             cache_length = int(self.dual_resolution_config.local_window)
+            if (
+                getattr(self.dual_resolution_config, "compression_mode", "transformer")
+                == "matrix_pool"
+                and int(getattr(self.dual_resolution_config, "long_local_heads", 0)) > 0
+            ):
+                cache_length = max(
+                    cache_length,
+                    int(self.dual_resolution_config.long_local_window),
+                )
         elif long_memory and self.routed_prefix_memory:
             cache_length = int(self.memory_config.active_length)
         elif long_memory:
@@ -218,9 +227,25 @@ class InferenceModel:
         if self.dual_resolution_enabled:
             block_size = int(self.dual_resolution_config.block_size)
             max_blocks = int(self.dual_resolution_config.max_blocks)
+            matrix_pool = (
+                getattr(self.dual_resolution_config, "compression_mode", "transformer")
+                == "matrix_pool"
+            )
+            summary_heads = (
+                int(self.dual_resolution_config.global_heads)
+                if matrix_pool else self.n_kv_heads
+            )
+            summary_width = (
+                int(self.dual_resolution_config.global_head_dim)
+                if matrix_pool else self.head_dim
+            )
+            summary_capacity = max_blocks * (
+                int(self.dual_resolution_config.summaries_per_block)
+                if matrix_pool else 1
+            )
             summary_shape = (
-                self.n_layers, batch_size, self.n_kv_heads,
-                max_blocks, self.head_dim,
+                self.n_layers, batch_size, summary_heads,
+                summary_capacity, summary_width,
             )
             layer_rows = (self.n_layers, batch_size)
             dual_state = dict(

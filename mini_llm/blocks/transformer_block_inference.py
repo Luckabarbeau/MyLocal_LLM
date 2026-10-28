@@ -308,6 +308,7 @@ class TransformerBlockInference:
                 dual_local_start, dual_local_count,
                 dual_summary_start, dual_summary_count,
                 dual_incomplete_count, dual_document_positions,
+                residual_input=residual1,
             )
         else:
             a = self.attention.decode_one(

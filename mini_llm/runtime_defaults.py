@@ -224,6 +224,16 @@ def _lm_head_chunk_default(
     integration = getattr(
         getattr(config, "memory_context", None), "integration_mode", None
     )
+    dual_resolution = getattr(config, "dual_resolution", None)
+    if (
+        width == 1024
+        and vocab == 32768
+        and bool(getattr(dual_resolution, "enabled", False))
+    ):
+        # PATCH 0102P: matched full-supervision RTX 5080 measurements selected
+        # 512 rows over 256 and 1024 for both dual-resolution architectures.
+        # This is also the lower-memory choice for variable-length long contexts.
+        return "512"
     if (
         width == 1024
         and active == 4096

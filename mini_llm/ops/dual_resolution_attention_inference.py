@@ -90,6 +90,19 @@ class DualResolutionAttentionInference:
         self.block_size = int(dual_config.block_size)
         self.local_window = int(dual_config.local_window)
         self.max_blocks = int(dual_config.max_blocks)
+        self.matrix_pool = (
+            getattr(dual_config, "compression_mode", "transformer") == "matrix_pool"
+        )
+        self.long_local_window = int(
+            getattr(dual_config, "long_local_window", self.local_window)
+        )
+        self.long_local_heads = int(getattr(dual_config, "long_local_heads", 0))
+        self.summaries_per_block = int(
+            getattr(dual_config, "summaries_per_block", 1)
+        )
+        self.global_heads = int(getattr(dual_config, "global_heads", n_q_heads))
+        self.global_head_dim = int(getattr(dual_config, "global_head_dim", d_head))
+        self.global_enabled = bool(getattr(dual_config, "global_enabled", True))
         if not 1 <= self.block_size <= 128:
             raise ValueError("dual-resolution block_size must be in [1, 128]")
         if not 1 <= self.local_window <= 512:
@@ -99,6 +112,8 @@ class DualResolutionAttentionInference:
 
         self.Wq = self.Wk = self.Wv = self.Wo = None
         self.Wqkv = None
+        self.W_pool_score = self.pool_position = None
+        self.W_global_q = self.W_global_o = None
         self.Wg = self.bg = self.Wdown = None
         self.W_global_k = self.W_global_v = self.W_gate = None
         self.W_compress_in = self.W_compress_up = None
@@ -146,6 +161,19 @@ class DualResolutionAttentionInference:
         self.Wv = _data(training_attention.Wv)
         self.Wo = _data(training_attention.Wo)
         self.Wqkv = xp.concatenate((self.Wq, self.Wk, self.Wv), axis=1)
+        if self.matrix_pool:
+            self.W_pool_score = _data(training_attention.W_pool_score)
+            self.pool_position = _data(getattr(training_attention, "pool_position", None))
+            self.W_global_q = _data(getattr(training_attention, "W_global_q", None))
+            self.W_global_k = _data(getattr(training_attention, "W_global_k", None))
+            self.W_global_v = _data(getattr(training_attention, "W_global_v", None))
+            self.W_global_o = _data(getattr(training_attention, "W_global_o", None))
+            if self.global_enabled and any(weight is None for weight in (
+                self.W_global_q, self.W_global_k,
+                self.W_global_v, self.W_global_o,
+            )):
+                raise ValueError("matrix-pool global attention weights are incomplete")
+            return
         self.Wg = _data(getattr(training_attention, "Wg", None))
         self.bg = _data(getattr(training_attention, "bg", None))
         self.Wdown = _data(getattr(training_attention, "Wdown", None))
@@ -438,14 +466,155 @@ class DualResolutionAttentionInference:
             return summary
         return self._native_compress_block(block)
 
+    def _matrix_local_attention(self, q, keys, values):
+        """Apply the configured window independently to each local query head."""
+        contexts = xp.empty_like(q)
+        available = int(keys.shape[1])
+        for head in range(self.n_q_heads):
+            window = (
+                self.long_local_window
+                if head < self.long_local_heads else self.local_window
+            )
+            count = min(available, window)
+            kv_head = head // self.group_size
+            qh = _work_array(q[:, :, head, :])
+            kh = _work_array(keys[kv_head, -count:, :])
+            vh = _work_array(values[kv_head, -count:, :])
+            scores = (qh * self.scale) @ kh.T
+            probabilities = _softmax(scores, axis=-1)
+            contexts[:, :, head, :] = (probabilities @ vh).astype(
+                q.dtype, copy=False
+            )
+        return contexts
+
+    def _matrix_global_attention(self, q, keys, values):
+        qh = _work_array(q[0]).transpose(1, 0, 2)
+        kh = _work_array(keys)
+        vh = _work_array(values)
+        scores = (qh * self.scale) @ kh.swapaxes(-2, -1)
+        probabilities = _softmax(scores, axis=-1)
+        context = probabilities @ vh
+        return context.transpose(1, 0, 2)[None].astype(q.dtype, copy=False)
+
+    def _matrix_pool_block(self, block):
+        work = _work_array(block)
+        scores = _work_array(
+            block.reshape(-1, self.d_model) @ self.W_pool_score
+        ).reshape(int(block.shape[0]), int(block.shape[1]), self.summaries_per_block)
+        if self.pool_position is not None:
+            scores = scores + _work_array(self.pool_position)[None, :, :]
+        probabilities = _softmax(scores, axis=1)
+        return probabilities.swapaxes(1, 2) @ work
+
+    def _matrix_decode_one(
+        self, x, residual_input, local_k, local_v, summary_k, summary_v,
+        incomplete_hidden, local_start, local_count, summary_start,
+        summary_count, incomplete_count, document_positions,
+    ):
+        if residual_input is None or residual_input.shape != x.shape:
+            raise ValueError("matrix-pool inference requires residual_input [B,1,d_model]")
+        batch = int(x.shape[0])
+        qkv = (x[:, 0, :] @ self.Wqkv)[:, None, :]
+        q_end = self.n_q_heads * self.d_head
+        k_end = q_end + self.n_kv_heads * self.d_head
+        q_pre = qkv[..., :q_end].reshape(batch, 1, self.n_q_heads, self.d_head)
+        k_pre = qkv[..., q_end:k_end].reshape(batch, 1, self.n_kv_heads, self.d_head)
+        values = qkv[..., k_end:].reshape(batch, 1, self.n_kv_heads, self.d_head)
+        output = xp.empty((batch, 1, self.d_model), dtype=x.dtype)
+        completed_rows = []
+
+        for row in range(batch):
+            position = int(document_positions[row].item())
+            q_row = self._apply_rope(q_pre[row:row + 1], position)
+            k_row = self._apply_rope(k_pre[row:row + 1], position)[0, 0]
+            v_row = values[row, 0]
+            ls, lc = self._insert_ring(
+                local_k[row], k_row,
+                int(local_start[row].item()), int(local_count[row].item()),
+            )
+            local_capacity = int(local_v[row].shape[1])
+            local_v[row, :, (ls + lc - 1) % local_capacity, :] = v_row
+            local_start[row], local_count[row] = ls, lc
+            lk = self._ordered_ring(local_k[row], ls, lc)
+            lv = self._ordered_ring(local_v[row], ls, lc)
+            local_context = self._matrix_local_attention(q_row, lk, lv)
+            local_delta = (
+                local_context.reshape(1, self.d_model).astype(x.dtype, copy=False)
+                @ self.Wo
+            ).reshape(1, 1, self.d_model)
+            local_state = (
+                _work_array(residual_input[row:row + 1])
+                + _work_array(local_delta)
+            )
+            global_delta = xp.zeros_like(local_delta)
+            ss = int(summary_start[row].item())
+            sc = int(summary_count[row].item())
+            if self.global_enabled and sc:
+                state_compute = local_state.astype(x.dtype, copy=False)
+                qg = (
+                    state_compute.reshape(1, self.d_model) @ self.W_global_q
+                ).reshape(1, 1, self.global_heads, self.global_head_dim)
+                qg = self._apply_rope(qg, position)
+                sk = self._ordered_ring(summary_k[row], ss, sc)
+                sv = self._ordered_ring(summary_v[row], ss, sc)
+                global_context = self._matrix_global_attention(qg, sk, sv)
+                global_delta = (
+                    global_context.reshape(1, -1).astype(x.dtype, copy=False)
+                    @ self.W_global_o
+                ).reshape(1, 1, self.d_model)
+            output[row:row + 1] = (
+                local_delta + global_delta.astype(local_delta.dtype, copy=False)
+            ).astype(output.dtype, copy=False)
+
+            if self.global_enabled:
+                offset = int(incomplete_count[row].item())
+                incomplete_hidden[row, offset, :] = local_state[0, 0].astype(
+                    incomplete_hidden.dtype, copy=False
+                )
+                offset += 1
+                incomplete_count[row] = offset
+                if offset == self.block_size:
+                    completed_rows.append((row, position))
+
+        for row, position in completed_rows:
+            block = incomplete_hidden[row:row + 1, :self.block_size, :]
+            summaries = self._matrix_pool_block(block).astype(x.dtype, copy=False)
+            summary_rows = summaries.reshape(-1, self.d_model)
+            keys = (summary_rows @ self.W_global_k).reshape(
+                1, self.summaries_per_block,
+                self.global_heads, self.global_head_dim,
+            )
+            keys = self._apply_rope(keys, position)[0]
+            values = (summary_rows @ self.W_global_v).reshape(
+                self.summaries_per_block, self.global_heads, self.global_head_dim
+            )
+            ss = int(summary_start[row].item())
+            sc = int(summary_count[row].item())
+            capacity = int(summary_k[row].shape[1])
+            for index in range(self.summaries_per_block):
+                ss, sc = self._insert_ring(
+                    summary_k[row], keys[index], ss, sc
+                )
+                slot = (ss + sc - 1) % capacity
+                summary_v[row, :, slot, :] = values[index]
+            summary_start[row], summary_count[row] = ss, sc
+            incomplete_count[row] = 0
+        return output
+
     def decode_one(
         self, x, local_k, local_v, summary_k, summary_v, incomplete_hidden,
         local_start, local_count, summary_start, summary_count, incomplete_count,
-        document_positions,
+        document_positions, residual_input=None,
     ):
         """Consume one normalized token for every independent batch row."""
         if x.ndim != 3 or int(x.shape[1]) != 1 or int(x.shape[2]) != self.d_model:
             raise ValueError("dual-resolution decode expects [B,1,d_model]")
+        if self.matrix_pool:
+            return self._matrix_decode_one(
+                x, residual_input, local_k, local_v, summary_k, summary_v,
+                incomplete_hidden, local_start, local_count, summary_start,
+                summary_count, incomplete_count, document_positions,
+            )
         batch = int(x.shape[0])
         qkv = (x[:, 0, :] @ self.Wqkv)[:, None, :]
         q_end = self.n_q_heads * self.d_head
@@ -464,7 +633,8 @@ class DualResolutionAttentionInference:
             ls, lc = self._insert_ring(
                 local_k[row], k_row, int(local_start[row].item()), int(local_count[row].item())
             )
-            local_v[row, :, (ls + lc - 1) % self.local_window, :] = v_row
+            local_capacity = int(local_v[row].shape[1])
+            local_v[row, :, (ls + lc - 1) % local_capacity, :] = v_row
             local_start[row], local_count[row] = ls, lc
 
             lk = self._ordered_ring(local_k[row], ls, lc)

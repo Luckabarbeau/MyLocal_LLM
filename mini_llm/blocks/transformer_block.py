@@ -59,6 +59,12 @@ class TransformerBlock:
         self.compute_dtype = resolve_dtype(dtype)
         self.use_fp32_residual = is_low_precision_dtype(self.compute_dtype)
         self.residual_gates = bool(residual_gates)
+        self.matrix_pool_dual = bool(
+            dual_resolution_config is not None
+            and dual_resolution_config.enabled
+            and getattr(dual_resolution_config, "compression_mode", "transformer")
+            == "matrix_pool"
+        )
         self.full_history_head = None  # Attached post-backbone for checkpoint RNG parity.
 
         # 0064A: optional learned residual gates used by progressive-depth
@@ -89,8 +95,15 @@ class TransformerBlock:
             dual_resolution_config is not None
             and dual_resolution_config.enabled
         ):
-            from mini_llm.ops.dual_resolution_attention import DualResolutionAttention
-            self.attention = DualResolutionAttention(
+            if self.matrix_pool_dual:
+                from mini_llm.ops.matrix_pool_dual_resolution_attention import (
+                    MatrixPoolDualResolutionAttention as AttentionOperator,
+                )
+            else:
+                from mini_llm.ops.dual_resolution_attention import (
+                    DualResolutionAttention as AttentionOperator,
+                )
+            self.attention = AttentionOperator(
                 d_model=d_model,
                 n_q_heads=n_q_heads,
                 n_kv_heads=n_kv_heads,
@@ -208,6 +221,8 @@ class TransformerBlock:
         if return_cache:
             with performance_scope("block.attention.forward"):
                 kwargs = {}
+                if self.matrix_pool_dual:
+                    kwargs["residual_input"] = residual1
                 if position_ids is not None:
                     kwargs["position_ids"] = position_ids
                 if dual_resolution_metadata is not None:
@@ -235,6 +250,8 @@ class TransformerBlock:
         else:
             with performance_scope("block.attention.forward"):
                 kwargs = {"return_cache": False}
+                if self.matrix_pool_dual:
+                    kwargs["residual_input"] = residual1
                 if position_ids is not None:
                     kwargs["position_ids"] = position_ids
                 if dual_resolution_metadata is not None:
@@ -439,6 +456,7 @@ class TransformerBlock:
         )
         
         full_history_dx = None
+        matrix_residual_dx = None
         if self.full_history_head is not None:
             with performance_scope("block.full_history.backward"):
                 if getattr(self, "residual_gates", False):
@@ -485,7 +503,9 @@ class TransformerBlock:
                 result = self.attention.backward(
                     dattn_out, cache["attn_cache"], **attn_kwargs,
                 )
-                if return_shared_context_kv_grad:
+                if self.matrix_pool_dual:
+                    dnorm1_out, matrix_residual_dx = result
+                elif return_shared_context_kv_grad:
                     dnorm1_out, context_kv_grad = result
                 else:
                     dnorm1_out = result
@@ -510,7 +530,9 @@ class TransformerBlock:
         
         # Combine gradients for residual1 and norm1 in the residual dtype.
         dx = dresidual1 + dx_norm1
-        
+        if matrix_residual_dx is not None:
+            dx = dx + matrix_residual_dx.astype(dx.dtype, copy=False)
+
         if return_shared_context_kv_grad:
             return dx, context_kv_grad
         return dx

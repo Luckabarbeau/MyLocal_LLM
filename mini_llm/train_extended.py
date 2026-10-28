@@ -25,7 +25,7 @@ try:
 except ImportError:
     np = None
 
-from mini_llm.backend import xp
+from mini_llm.backend import BACKEND_NAME, xp
 from mini_llm.checkpoint import save_checkpoint, load_checkpoint
 from mini_llm.config import ModelConfig
 from mini_llm.data.packed_dataset import PackedTokenDataset, DatasetManifest
@@ -34,6 +34,7 @@ from mini_llm.data.token_shards import (
     map_token_shard,
     create_minibatch,
     create_hierarchical_memory_minibatch,
+    create_dual_resolution_document_minibatch,
     load_or_build_packed_document_index,
 )
 from mini_llm.model.decoder_lm import DecoderLanguageModel
@@ -206,6 +207,18 @@ class ExtendedTrainer:
         if compact_env not in ("0", "1"):
             raise ValueError("MINI_LLM_AR_COMPACT_TARGET must be 0 or 1")
         self.ar_compact_target = compact_env == "1"
+        self.dual_document_first = bool(model.config.dual_resolution.enabled)
+        self.dual_shape_bucket = os.environ.get(
+            "MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET", "none"
+        ).strip().lower()
+        if self.dual_document_first and self.dual_shape_bucket not in {
+            "none", "geometric"
+        }:
+            raise ValueError("dual-resolution shape bucket must be none/geometric")
+        if self.dual_document_first and self.ar_compact_target:
+            print("Dual-resolution full-sequence sampling supersedes legacy "
+                  "AR_COMPACT_TARGET; disabling that historical-only optimization")
+            self.ar_compact_target = False
         if self.ar_compact_target and (
             training_objective is not None
             or not model.config.memory_context.enabled
@@ -223,6 +236,10 @@ class ExtendedTrainer:
         if length_bucket_env not in ("0", "1"):
             raise ValueError("MINI_LLM_AR_ACCUM_LENGTH_BUCKETS must be 0 or 1")
         self.ar_accum_length_buckets = length_bucket_env == "1"
+        if self.dual_document_first and self.ar_accum_length_buckets:
+            print("Dual-resolution variable-length document sampling is incompatible "
+                  "with legacy AR accumulation-length buckets; disabling buckets")
+            self.ar_accum_length_buckets = False
         if self.ar_accum_length_buckets and not self.ar_compact_target:
             raise ValueError("length bucketing requires MINI_LLM_AR_COMPACT_TARGET=1")
         self._last_step_ar_bucket = None
@@ -254,6 +271,7 @@ class ExtendedTrainer:
         self._source_metrics_interval = {}
         self._last_step_source_metrics = {}
         self._last_step_supervised_tokens = 0.0
+        self._last_step_executed_tokens = 0
         self._last_step_supervised_utilization = 0.0
         # 0078F: actual execution modes, read from the forward cache for every
         # accumulation microbatch (not one router-diagnostic snapshot).
@@ -671,6 +689,50 @@ class ExtendedTrainer:
             )
         if self.memory_context is None:
             print(f"  Sequence length: {self.seq_length}")
+            if self.dual_resolution_config is not None:
+                # Report actual attention backend and packed-GEMM selection;
+                # the legacy dense-FFN fast-path summary does not cover these.
+                dual_layers = [
+                    block.attention for block in self.model.blocks
+                    if hasattr(block.attention, "compression_kernel")
+                ]
+                if dual_layers:
+                    first = dual_layers[0]
+                    print(
+                        "  Dual-resolution kernels: "
+                        f"local={first.local_kernel}, global={first.global_kernel}, "
+                        f"compressor={first.compression_kernel}, "
+                        f"layers={len(dual_layers)}"
+                    )
+                    fast = os.environ.get(
+                        "MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS",
+                        "1" if BACKEND_NAME == "cupy" else "0"
+                    ).strip().lower() in {"1", "true", "yes"}
+                    bf16_grads = os.environ.get(
+                        "MINI_LLM_DUAL_RESOLUTION_BF16_PROJECTION_GRADS", "1"
+                    ).strip().lower() in {"1", "true", "yes"}
+                    print(
+                        "  Dual-resolution packed projections: "
+                        f"{fast}, native BF16 backward GEMMs: {fast and bf16_grads}"
+                    )
+                    print(
+                        "  Dual-resolution BF16 compressor QKV: "
+                        f"{fast and os.environ.get('MINI_LLM_DUAL_RESOLUTION_BF16_COMPRESSOR_QKV', '1').strip().lower() in ('1', 'true', 'yes')}; "
+                        "fused learned pooling (experimental): "
+                        f"{os.environ.get('MINI_LLM_DUAL_RESOLUTION_FUSED_POOLING', '0').strip().lower() in ('1', 'true', 'yes')}"
+                    )
+                    print(
+                        "  Dual-resolution fused compressor RMSNorm (experimental): "
+                        f"{os.environ.get('MINI_LLM_DUAL_RESOLUTION_FUSED_RMSNORM', '0').strip().lower() in ('1', 'true', 'yes') and BACKEND_NAME == 'cupy'}"
+                    )
+                    print(
+                        "  Dual-resolution fused local/global gate (experimental): "
+                        f"{os.environ.get('MINI_LLM_DUAL_RESOLUTION_FUSED_GATE', '0').strip().lower() in ('1', 'true', 'yes') and BACKEND_NAME == 'cupy'}"
+                    )
+                print("  Dual-resolution sampling: document-first, EOS-bounded")
+                print("  Active length: min(document pairs, context cap), "
+                      "no tail padding at batch=1")
+                print("  Supervision: all genuine next-token pairs throughout active context")
         else:
             cfg = self.memory_context
             print("  Causal external memory routing: enabled")
@@ -1510,7 +1572,30 @@ class ExtendedTrainer:
             ) % len(self.train_shard_paths)
 
         metadata = None
-        if self.memory_context is None:
+        if self.dual_resolution_config is not None:
+            document_index = self._get_document_index(
+                self.document_indices, cache_key, shard_path, shard_data
+            )
+            inputs, targets, metadata = create_dual_resolution_document_minibatch(
+                shard_data, self.batch_size, self.seq_length,
+                rng=self.train_rng, eos_token_id=self.eos_token_id,
+                document_index=document_index, return_metadata=True,
+                shape_bucket=self.dual_shape_bucket,
+            )
+            metadata.update(self._dual_resolution_batch_metadata(inputs))
+            # Geometric bucketing may append EOS padding. Those tokens must
+            # neither be supervised nor create visible compressed summaries.
+            dual_meta = metadata["dual_resolution_metadata"]
+            if dual_meta["block_indices"].shape[1]:
+                end_indices = dual_meta["block_indices"][:, :, -1]
+                dual_meta["block_valid"] &= (
+                    end_indices < metadata["target_valid_lengths"][:, None]
+                )
+            # Never undo the sampler's padding/valid-target mask.
+            metadata["target_loss_mask"] *= (
+                np.asarray(inputs) != self.eos_token_id
+            )
+        elif self.memory_context is None:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=self.train_rng
             )
@@ -1624,7 +1709,9 @@ class ExtendedTrainer:
                         audit.update(memoryview(array).cast("B"))
             self.sample_trace_sha256 = audit.hexdigest()
             self.sample_trace_microbatches += 1
-        self.tokens_processed += self.batch_size * self.seq_length
+        # Count actual processed positions, not padded capacity. The existing
+        # fixed-capacity denominator remains available from self.seq_length.
+        self.tokens_processed += int(np.prod(inputs.shape))
         if return_metadata:
             return inputs, targets, metadata
         return inputs, targets
@@ -1788,7 +1875,27 @@ class ExtendedTrainer:
             ) % len(self.val_shard_paths)
 
         metadata = None
-        if self.memory_context is None:
+        if self.dual_resolution_config is not None:
+            document_index = self._get_document_index(
+                self.val_document_indices, cache_key, shard_path, shard_data
+            )
+            inputs, targets, metadata = create_dual_resolution_document_minibatch(
+                shard_data, self.batch_size, self.seq_length,
+                rng=rng, eos_token_id=self.eos_token_id,
+                document_index=document_index, return_metadata=True,
+                shape_bucket=self.dual_shape_bucket,
+            )
+            metadata.update(self._dual_resolution_batch_metadata(inputs))
+            dual_meta = metadata["dual_resolution_metadata"]
+            if dual_meta["block_indices"].shape[1]:
+                end_indices = dual_meta["block_indices"][:, :, -1]
+                dual_meta["block_valid"] &= (
+                    end_indices < metadata["target_valid_lengths"][:, None]
+                )
+            metadata["target_loss_mask"] *= (
+                np.asarray(inputs) != self.eos_token_id
+            )
+        elif self.memory_context is None:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=rng
             )
@@ -2528,6 +2635,7 @@ class ExtendedTrainer:
         loss_sum_backend = xp.asarray(0.0, dtype="float32")
         accumulation_weight_sum = 0.0
         supervised_tokens_in_step = 0.0
+        executed_tokens_in_step = 0
         source_observations = []   # (source, CPU coverage, on-device CE scalar)
         block_step_metrics = None
         # 0080AA: deep audit is explicitly opt-in and never changes the normal
@@ -2616,6 +2724,7 @@ class ExtendedTrainer:
             batch_metadata = self._configure_routed_prefix_metadata(
                 batch_metadata, training=True
             )
+            executed_tokens_in_step += int(np.prod(inputs.shape))
             if self.ar_compact_target:
                 ar_compact_executed += int(batch_metadata.get(
                     "compact_working_length", self.target_seq_length,
@@ -2969,6 +3078,7 @@ class ExtendedTrainer:
             if self.ar_compact_target else None
         )
         self._last_step_supervised_tokens = supervised_tokens_in_step
+        self._last_step_executed_tokens = executed_tokens_in_step
         if live_block_audit is not None:
             print(live_block_audit.format_report(self.step, block_step_metrics), flush=True)
         if block_step_metrics is not None:
@@ -3728,6 +3838,22 @@ class ExtendedTrainer:
                         f"history/sample={history_mean:,.0f}, "
                         f"history_util={100.0 * history_utilization:.1f}%, "
                         f"source_tok/s_10={rolling_source_tokens_per_sec:,.0f}"
+                    )
+                elif self.dual_resolution_config is not None:
+                    # Variable-length doc-first sampling: report the measured
+                    # denominator, not fixed 4K/65K sequence capacity.
+                    supervised_rate = (
+                        self._last_step_supervised_tokens
+                        / max(precise_step_seconds, 1e-12)
+                    )
+                    executed_rate = (
+                        self._last_step_executed_tokens
+                        / max(precise_step_seconds, 1e-12)
+                    )
+                    throughput_text = (
+                        f"supervised_tok/s={supervised_rate:,.0f}, "
+                        f"executed_tok/s={executed_rate:,.0f}, "
+                        f"capacity_tok/s={precise_source_tokens_per_sec:,.0f}"
                     )
                 else:
                     throughput_text = (

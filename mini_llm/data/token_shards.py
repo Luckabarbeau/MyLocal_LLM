@@ -778,6 +778,123 @@ def _sample_document_span(
         previous = end
     raise ValueError("packed shard contains no document fragment with a next-token pair")
 
+def _dual_resolution_geometric_length(length: int, cap: int) -> int:
+    """Few reproducible execution shapes, bounded by the actual context cap.
+
+    The 1.5x ladder avoids specializing a new Triton program for every
+    randomly sampled document length. It never discards a genuine token.
+    """
+    length, cap = int(length), int(cap)
+    if length <= 0 or cap < length:
+        raise ValueError("invalid length or cap")
+    base = 1
+    while base < 32 and base < length:
+        base *= 2
+    if base >= length:
+        return min(base, cap)
+    base = 32
+    while True:
+        for candidate in (base, (3 * base) // 2):
+            if candidate >= length:
+                return min(candidate, cap)
+        base *= 2
+
+
+def create_dual_resolution_document_minibatch(
+    shard_data: np.ndarray,
+    batch_size: int,
+    max_context_length: int,
+    rng: Optional[np.random.Generator] = None,
+    *,
+    eos_token_id: int,
+    document_index: Optional[PackedDocumentIndex] = None,
+    return_metadata: bool = False,
+    shape_bucket: str = "none",
+):
+    """Length-weighted document-first AR sampler for full-resolution models.
+
+    Select the document *before* deciding its length, using the same packed
+    document distribution as the original 0078E historical model. Train on
+    every next-token pair in a coherent document window, up to the configured
+    context cap. Short documents run at their actual length; no unrelated
+    documents are appended to fill the window. Longer documents are sampled
+    using a random contiguous window of ``max_context_length + 1`` tokens.
+
+    For batch size >1, the shorter sampled sequences are EOS-padded to the
+    longest sequence in that microbatch; a loss mask excludes all padded rows.
+    Batch size 1 executes with zero sequence padding.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    batch_size = int(batch_size)
+    max_context_length = int(max_context_length)
+    if batch_size <= 0 or max_context_length <= 0:
+        raise ValueError("batch_size and max_context_length must be positive")
+    if shard_data.ndim != 1:
+        raise ValueError(
+            "dual-resolution document-first sampling requires 1D packed token shards"
+        )
+    if document_index is None:
+        document_index = build_packed_document_index(shard_data, eos_token_id)
+    if int(document_index.token_count) != len(shard_data):
+        raise ValueError("packed document index token count mismatch")
+    if int(document_index.eos_token_id) != int(eos_token_id):
+        raise ValueError("packed document index EOS mismatch")
+
+    windows = []
+    document_starts = np.empty(batch_size, dtype=np.int64)
+    document_ends = np.empty(batch_size, dtype=np.int64)
+    window_starts = np.empty(batch_size, dtype=np.int64)
+    valid_lengths = np.empty(batch_size, dtype=np.int64)
+    for row in range(batch_size):
+        doc_start, doc_end = _sample_document_span(document_index, rng)
+        pairs = min(int(doc_end - doc_start - 1), max_context_length)
+        # Do not reject short documents or force all samples to the cap.
+        last_start = int(doc_end - pairs - 1)
+        window_start = (
+            doc_start if last_start == doc_start
+            else int(rng.integers(doc_start, last_start + 1))
+        )
+        windows.append(np.asarray(shard_data[window_start:window_start + pairs + 1]))
+        document_starts[row] = doc_start
+        document_ends[row] = doc_end
+        window_starts[row] = window_start
+        valid_lengths[row] = pairs
+
+    executed_length = int(valid_lengths.max())
+    if shape_bucket == "geometric":
+        executed_length = _dual_resolution_geometric_length(
+            executed_length, max_context_length
+        )
+    elif shape_bucket != "none":
+        raise ValueError("shape_bucket must be 'none' or 'geometric'")
+    inputs = np.full(
+        (batch_size, executed_length), int(eos_token_id), dtype=shard_data.dtype
+    )
+    targets = np.full_like(inputs, int(eos_token_id))
+    mask = np.zeros(inputs.shape, dtype=np.float32)
+    for row, window in enumerate(windows):
+        length = int(valid_lengths[row])
+        inputs[row, :length] = window[:-1]
+        targets[row, :length] = window[1:]
+        mask[row, :length] = 1.0
+    metadata = {
+        "document_sampling_policy": "document_first_full_sequence",
+        "document_aware": True,
+        "document_starts": document_starts,
+        "document_ends": document_ends,
+        "target_source_starts": window_starts,
+        "target_valid_lengths": valid_lengths,
+        "target_loss_mask": mask,
+        "executed_sequence_length": executed_length,
+        "context_capacity": max_context_length,
+        "shape_bucket": shape_bucket,
+    }
+    if return_metadata:
+        return inputs, targets, metadata
+    return inputs, targets
+
+
 def create_hierarchical_memory_minibatch(
     shard_data: np.ndarray,
     batch_size: int,

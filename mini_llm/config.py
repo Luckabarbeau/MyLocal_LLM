@@ -223,27 +223,71 @@ class DualResolutionConfig:
     compression_dim: int = 512
     compression_heads: int = 8
     compression_depth: int = 1
+    compression_block_chunk: int = 64
     max_blocks: int = 512
     global_query_chunk: int = 64
+    # Rebuild attention probabilities during backward instead of retaining
+    # potentially multi-GiB per-layer score arrays at long contexts.
+    recompute_attention_probs: bool = True
+    compression_mode: str = "transformer"
+    long_local_window: int = 512
+    long_local_heads: int = 0
+    summaries_per_block: int = 1
+    global_heads: int = 16
+    global_head_dim: int = 64
+    global_enabled: bool = True
+    pool_position_bias: bool = True
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
             raise TypeError("dual-resolution enabled must be a bool")
+        if not isinstance(self.recompute_attention_probs, bool):
+            raise TypeError("recompute_attention_probs must be a bool")
+        if not isinstance(self.compression_mode, str):
+            raise TypeError("compression_mode must be a string")
+        if self.compression_mode not in {"transformer", "matrix_pool"}:
+            raise ValueError("compression_mode must be transformer or matrix_pool")
+        if not isinstance(self.global_enabled, bool):
+            raise TypeError("global_enabled must be a bool")
+        if not isinstance(self.pool_position_bias, bool):
+            raise TypeError("pool_position_bias must be a bool")
         for name, value in {
             "block_size": self.block_size,
             "local_window": self.local_window,
             "compression_dim": self.compression_dim,
             "compression_heads": self.compression_heads,
             "compression_depth": self.compression_depth,
+            "compression_block_chunk": self.compression_block_chunk,
             "max_blocks": self.max_blocks,
             "global_query_chunk": self.global_query_chunk,
         }.items():
             if int(value) != value or int(value) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        for name, value in {
+            "long_local_window": self.long_local_window,
+            "summaries_per_block": self.summaries_per_block,
+            "global_head_dim": self.global_head_dim,
+        }.items():
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer")
+            if value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        for name, value in {
+            "long_local_heads": self.long_local_heads,
+            "global_heads": self.global_heads,
+        }.items():
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
         if self.local_window < self.block_size:
             raise ValueError("local_window must be at least block_size")
         if self.local_window % self.block_size != 0:
             raise ValueError("local_window must be divisible by block_size")
+        if self.long_local_window < self.local_window:
+            raise ValueError("long_local_window must be at least local_window")
+        if self.global_enabled and self.global_heads <= 0:
+            raise ValueError("global_heads must be positive when global attention is enabled")
         if self.compression_dim % self.compression_heads != 0:
             raise ValueError("compression_dim must be divisible by compression_heads")
 
@@ -481,16 +525,29 @@ class ModelConfig:
 
             if self.dual_resolution.enabled:
                 dual = self.dual_resolution
-                dc = int(dual.compression_dim)
-                depth = int(dual.compression_depth)
-                # Wdown/Wup; compression-depth Q/K/V/O + norm; pooling query
-                # and pooling K/V/O. At depth=1 this is exactly
-                # 2*d*dc + 7*dc^2 + 2*dc.
-                total += 2 * d * dc
-                total += depth * (4 * dc * dc + dc)
-                total += 3 * dc * dc + dc
-                # Per-query-head gate Wg and bg.
-                total += d * int(self.n_q_heads) + int(self.n_q_heads)
+                if dual.compression_mode == "transformer":
+                    dc = int(dual.compression_dim)
+                    depth = int(dual.compression_depth)
+                    # Wdown/Wup; compression-depth Q/K/V/O + norm; pooling query
+                    # and pooling K/V/O. At depth=1 (before summary K/V/gate)
+                    # this is 2*d*dc + 7*dc^2 + 3*dc.
+                    total += 2 * d * dc
+                    total += depth * (4 * dc * dc + dc)
+                    # Pool: K/V/O matrices, norm gamma AND pooling query.
+                    total += 3 * dc * dc + 2 * dc
+                    # Dedicated summary K/V projections plus bias-free head gates.
+                    # The trainable operator registers no gate bias.
+                    total += 2 * d * kv_width
+                    total += d * int(self.n_q_heads)
+                else:
+                    summaries = int(dual.summaries_per_block)
+                    total += d * summaries
+                    if dual.pool_position_bias:
+                        total += int(dual.block_size) * summaries
+                    if dual.global_enabled:
+                        total += (
+                            4 * d * int(dual.global_heads) * int(dual.global_head_dim)
+                        )
 
             # Dense FFN has one SwiGLU and NO router; MoE retains old count.
             if self.ffn_mode == "dense":
@@ -1217,6 +1274,25 @@ class ModelConfig:
             full_history_layers=(),
             memory_context=MemoryContextConfig(enabled=False),
             dual_resolution=DualResolutionConfig(enabled=True),
+        )
+
+    @classmethod
+    def dual_resolution_matrix_pool_1024_20l(cls):
+        """65,536-token dual-resolution decoder with matrix-pooled summaries."""
+        base = cls.dual_resolution_1024_20l()
+        return replace(
+            base,
+            dual_resolution=replace(
+                base.dual_resolution,
+                compression_mode="matrix_pool",
+                local_window=512,
+                long_local_window=4_096,
+                long_local_heads=1,
+                summaries_per_block=4,
+                global_heads=2,
+                global_head_dim=64,
+                global_enabled=True,
+            ),
         )
 
     @classmethod

@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "description": "Pinned Common Pile v0.1 filtered long-form sources for the existing 32,768-token ensemble tokenizer.",
+  "tokenizer_sha256": "20781a3078c60fd5a7634fba801b0a76943e5f993f0b1eaa61b0a4238922f2ba",
+  "vocab_size": 32768,
+  "eos_token_id": 1,
+  "validation_ratio": 0.01,
+  "split_seed": 42,
+  "stages": {
+    "priority1": {
+      "long_form_fraction": 0.10,
+      "weights": {
+        "long_project_gutenberg": 0.030,
+        "long_doab": 0.030,
+        "long_pressbooks": 0.015,
+        "long_uk_hansard": 0.025
+      }
+    },
+    "full": {
+      "long_form_fraction": 0.12,
+      "weights": {
+        "long_project_gutenberg": 0.030,
+        "long_doab": 0.030,
+        "long_pressbooks": 0.015,
+        "long_uk_hansard": 0.025,
+        "long_pre_1929_books": 0.015,
+        "long_usgpo": 0.005
+      }
+    }
+  },
+  "sources": {
+    "long_project_gutenberg": {
+      "priority": 1,
+      "dataset": "common-pile/project_gutenberg_filtered",
+      "revision": "3cdf6879c807f4e4e063f2ceb23bc268d8c29ab7",
+      "raw_subdir": "common_pile_v01_filtered/project_gutenberg_filtered",
+      "files": [
+        "project_gutenberg-dolma-0000.json.gz", "project_gutenberg-dolma-0001.json.gz", "project_gutenberg-dolma-0002.json.gz", "project_gutenberg-dolma-0003.json.gz", "project_gutenberg-dolma-0004.json.gz", "project_gutenberg-dolma-0005.json.gz", "project_gutenberg-dolma-0006.json.gz", "project_gutenberg-dolma-0007.json.gz", "project_gutenberg-dolma-0008.json.gz", "project_gutenberg-dolma-0009.json.gz", "project_gutenberg-dolma-0010.json.gz", "project_gutenberg-dolma-0011.json.gz", "project_gutenberg-dolma-0012.json.gz", "project_gutenberg-dolma-0013.json.gz", "project_gutenberg-dolma-0014.json.gz"
+      ],
+      "repository_bytes": 10723506149,
+      "utf8_bytes": 20100000000,
+      "reported_documents": 55454,
+      "reconstruction": "row",
+      "license": "Public Domain per document metadata; see dataset card licensing caveat"
+    },
+    "long_doab": {
+      "priority": 1,
+      "dataset": "common-pile/doab_filtered",
+      "revision": "defb24ca72ef6aba6ce0228b669eec06dcfbffbc",
+      "raw_subdir": "common_pile_v01_filtered/doab_filtered",
+      "files": ["doab-0000.json.gz", "doab-0001.json.gz", "doab-0002.json.gz", "doab-0003.json.gz", "doab-0004.json.gz"],
+      "repository_bytes": 5644913037,
+      "utf8_bytes": 12000000000,
+      "reported_documents": 403992,
+      "reconstruction": "doab_book_sections",
+      "license": "CC BY and CC BY-SA per document metadata; whitelist-validated by dataset authors"
+    },
+    "long_pressbooks": {
+      "priority": 1,
+      "dataset": "common-pile/pressbooks_filtered",
+      "revision": "1a1d3b50d77f834370f8eb4c0d174668dd1676bb",
+      "raw_subdir": "common_pile_v01_filtered/pressbooks_filtered",
+      "files": ["pressbooks-0000.json.gz"],
+      "repository_bytes": 501679101,
+      "utf8_bytes": 600000000,
+      "reported_documents": 54455,
+      "reconstruction": "pressbooks_chapters",
+      "license": "Public Domain, CC BY, or CC BY-SA per document metadata"
+    },
+    "long_uk_hansard": {
+      "priority": 1,
+      "dataset": "common-pile/uk_hansard_filtered",
+      "revision": "c88adc44309aa255a41b51cef93ba783f775fe23",
+      "raw_subdir": "common_pile_v01_filtered/uk_hansard_filtered",
+      "files": ["uk_hansard-0000.json.gz", "uk_hansard-0001.json.gz", "uk_hansard-0002.json.gz", "uk_hansard-0003.json.gz"],
+      "repository_bytes": 8152591141,
+      "utf8_bytes": 9600000000,
+      "reported_documents": 47909,
+      "reconstruction": "row",
+      "license": "Open Parliament Licence"
+    },
+    "long_pre_1929_books": {
+      "priority": 2,
+      "dataset": "common-pile/pre_1929_books_filtered",
+      "revision": "23f9d96dbb1db3324bbc9fbfe1f8299cc799c4d1",
+      "raw_subdir": "common_pile_v01_filtered/pre_1929_books_filtered",
+      "files": [
+        "public_library_1929_dolma-0000.json.gz", "public_library_1929_dolma-0001.json.gz", "public_library_1929_dolma-0002.json.gz", "public_library_1929_dolma-0003.json.gz", "public_library_1929_dolma-0004.json.gz", "public_library_1929_dolma-0005.json.gz", "public_library_1929_dolma-0006.json.gz", "public_library_1929_dolma-0007.json.gz", "public_library_1929_dolma-0008.json.gz", "public_library_1929_dolma-0009.json.gz", "public_library_1929_dolma-0010.json.gz", "public_library_1929_dolma-0011.json.gz", "public_library_1929_dolma-0012.json.gz", "public_library_1929_dolma-0013.json.gz", "public_library_1929_dolma-0014.json.gz", "public_library_1929_dolma-0015.json.gz", "public_library_1929_dolma-0016.json.gz", "public_library_1929_dolma-0017.json.gz", "public_library_1929_dolma-0018.json.gz", "public_library_1929_dolma-0019.json.gz", "public_library_1929_dolma-0020.json.gz", "public_library_1929_dolma-0021.json.gz", "public_library_1929_dolma-0022.json.gz", "public_library_1929_dolma-0023.json.gz", "public_library_1929_dolma-0024.json.gz", "public_library_1929_dolma-0025.json.gz"
+      ],
+      "repository_bytes": 19528332555,
+      "utf8_bytes": 46300000000,
+      "reported_documents": 124898,
+      "reconstruction": "row",
+      "license": "Public Domain (US pre-1929 publication filter); see dataset card licensing caveat"
+    },
+    "long_usgpo": {
+      "priority": 2,
+      "dataset": "common-pile/usgpo_filtered",
+      "revision": "b150cc22211de4d57f1b7f570097a00e65042424",
+      "raw_subdir": "common_pile_v01_filtered/usgpo_filtered",
+      "files": ["usgpo-0000.json.gz", "usgpo-0001.json.gz", "usgpo-0002.json.gz", "usgpo-0003.json.gz", "usgpo-0004.json.gz", "usgpo-0005.json.gz", "usgpo-0006.json.gz", "usgpo-0007.json.gz", "usgpo-0008.json.gz", "usgpo-0009.json.gz", "usgpo-0010.json.gz", "usgpo-0011.json.gz", "usgpo-0012.json.gz", "usgpo-0013.json.gz", "usgpo-0014.json.gz", "usgpo-0015.json.gz", "usgpo-0016.json.gz", "usgpo-0017.json.gz", "usgpo-0018.json.gz"],
+      "repository_bytes": 12018024856,
+      "utf8_bytes": 36100000000,
+      "reported_documents": 2148548,
+      "reconstruction": "usgpo_parts",
+      "license": "Public Domain per document metadata"
+    }
+  }
+}

@@ -15,6 +15,19 @@ Experimental GPU code. The CuPy path remains the reference/default.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+
+
+def _skip_empty_tiles_enabled():
+    """Experimental exact short circuit for fully masked global tiles."""
+    return os.environ.get("MINI_LLM_DUAL_RESOLUTION_GLOBAL_SKIP_EMPTY_TILES", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bounded_global_enabled():
+    """Bound summary/query loops for validated contiguous Model B documents."""
+    return os.environ.get(
+        "MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 try:
     import triton
@@ -80,10 +93,12 @@ def _forward(
     asb: tl.constexpr, ast: tl.constexpr,
     NQ: tl.constexpr, NK: tl.constexpr, HQ: tl.constexpr,
     GROUP: tl.constexpr, SCALE_LOG2: tl.constexpr,
-    GLOBAL: tl.constexpr, BF16: tl.constexpr,
+    GLOBAL: tl.constexpr, BF16: tl.constexpr, SKIP_EMPTY: tl.constexpr,
+    BOUNDED: tl.constexpr, HISTORY_BLOCK: tl.constexpr,
+    SUMMARIES_PER_BLOCK: tl.constexpr, Q_TILE_OFFSET: tl.constexpr,
     BM: tl.constexpr, BN: tl.constexpr,
 ):
-    tile = tl.program_id(0)
+    tile = tl.program_id(0) + Q_TILE_OFFSET
     bh = tl.program_id(1)
     batch = bh // HQ
     head = bh % HQ
@@ -103,12 +118,14 @@ def _forward(
     denominator = tl.zeros((BM,), tl.float32)
     accumulator = tl.zeros((BM,64), tl.float32)
     ever_visible = tl.zeros((BM,), tl.int32)
-    for key_start in range(0, NK, BN):
+    key_stop = NK
+    if BOUNDED:
+        max_query = tl.minimum((tile + 1) * BM, NQ) - 1
+        key_stop = tl.minimum(
+            NK, (max_query // HISTORY_BLOCK) * SUMMARIES_PER_BLOCK
+        )
+    for key_start in tl.range(0, key_stop, BN):
         kn = key_start + n
-        k = tl.load(K + batch*ksb + kn[:,None]*kst + kvhead*ksh + d[None,:],
-                    mask=kn[:,None] < NK, other=0.)
-        v = tl.load(V + batch*vsb + kn[:,None]*vst + kvhead*vsh + d[None,:],
-                    mask=kn[:,None] < NK, other=0.)
         if GLOBAL:
             kdoc = tl.load(KDOC + batch*kdsb + kn*kdst, mask=kn < NK, other=-2)
             kend = tl.load(KEND + batch*kesb + kn*kest, mask=kn < NK, other=-2)
@@ -119,27 +136,38 @@ def _forward(
             kval = tl.full((BN,), 1, tl.int32)
         allowed = _visible(m, kn, qdoc, qpos, kdoc, kend, kval,
                            NQ, NK, GLOBAL)
-        if GLOBAL:
-            ever_visible = ever_visible | (tl.sum(allowed.to(tl.int32), axis=1) > 0).to(tl.int32)
-        if BF16:
-            scores = tl.dot(q, tl.trans(k)) * SCALE_LOG2
+        # A whole tile with no preceding completed summary contributes exactly
+        # zero to the online softmax. Do not load K/V or launch dot products.
+        if SKIP_EMPTY:
+            has_pairs = tl.sum(allowed.to(tl.int32)) > 0
         else:
-            scores = tl.dot(q.to(tl.float32), tl.trans(k.to(tl.float32)),
-                            input_precision='tf32x3') * SCALE_LOG2
-        scores = tl.where(allowed, scores, -float('inf'))
-        new_maximum = tl.maximum(maximum, tl.max(scores, axis=1))
-        safe_maximum = tl.where(new_maximum == -float('inf'), 0., new_maximum)
-        correction = tl.where(maximum == -float('inf'), 0.,
-                              tl.exp2(maximum - safe_maximum))
-        p = tl.exp2(scores - safe_maximum[:,None])
-        denominator = denominator * correction + tl.sum(p, axis=1)
-        accumulator = accumulator * correction[:,None]
-        if BF16:
-            accumulator = tl.dot(p.to(tl.bfloat16), v, accumulator)
-        else:
-            accumulator = tl.dot(p, v.to(tl.float32), accumulator,
-                                 input_precision='tf32x3')
-        maximum = new_maximum
+            has_pairs = True
+        if has_pairs:
+            if GLOBAL:
+                ever_visible = ever_visible | (tl.sum(allowed.to(tl.int32), axis=1) > 0).to(tl.int32)
+            k = tl.load(K + batch*ksb + kn[:,None]*kst + kvhead*ksh + d[None,:],
+                        mask=kn[:,None] < NK, other=0.)
+            v = tl.load(V + batch*vsb + kn[:,None]*vst + kvhead*vsh + d[None,:],
+                        mask=kn[:,None] < NK, other=0.)
+            if BF16:
+                scores = tl.dot(q, tl.trans(k)) * SCALE_LOG2
+            else:
+                scores = tl.dot(q.to(tl.float32), tl.trans(k.to(tl.float32)),
+                                input_precision='tf32x3') * SCALE_LOG2
+            scores = tl.where(allowed, scores, -float('inf'))
+            new_maximum = tl.maximum(maximum, tl.max(scores, axis=1))
+            safe_maximum = tl.where(new_maximum == -float('inf'), 0., new_maximum)
+            correction = tl.where(maximum == -float('inf'), 0.,
+                                  tl.exp2(maximum - safe_maximum))
+            p = tl.exp2(scores - safe_maximum[:,None])
+            denominator = denominator * correction + tl.sum(p, axis=1)
+            accumulator = accumulator * correction[:,None]
+            if BF16:
+                accumulator = tl.dot(p.to(tl.bfloat16), v, accumulator)
+            else:
+                accumulator = tl.dot(p, v.to(tl.float32), accumulator,
+                                     input_precision='tf32x3')
+            maximum = new_maximum
     nonempty = denominator > 0.
     result = accumulator / tl.where(nonempty[:,None], denominator[:,None], 1.)
     lse = tl.where(nonempty, maximum + tl.log2(tl.maximum(denominator,1e-30)),0.)
@@ -166,9 +194,11 @@ def _dq(
     kvsb:tl.constexpr,kvst:tl.constexpr,
     NQ:tl.constexpr,NK:tl.constexpr,HQ:tl.constexpr,GROUP:tl.constexpr,
     SCALE:tl.constexpr,SCALE_LOG2:tl.constexpr,GLOBAL:tl.constexpr,
-    BF16:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
+    BF16:tl.constexpr,SKIP_EMPTY:tl.constexpr,BOUNDED:tl.constexpr,
+    HISTORY_BLOCK:tl.constexpr,SUMMARIES_PER_BLOCK:tl.constexpr,
+    Q_TILE_OFFSET:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
 ):
-    tile=tl.program_id(0)
+    tile=tl.program_id(0)+Q_TILE_OFFSET
     bh=tl.program_id(1)
     batch=bh//HQ
     head=bh%HQ
@@ -188,10 +218,14 @@ def _dq(
         qdoc=tl.zeros((BM,),tl.int32)
         qpos=tl.zeros((BM,),tl.int32)
     acc=tl.zeros((BM,64),tl.float32)
-    for key_start in range(0,NK,BN):
+    key_stop=NK
+    if BOUNDED:
+        max_query=tl.minimum((tile+1)*BM,NQ)-1
+        key_stop=tl.minimum(
+            NK,(max_query//HISTORY_BLOCK)*SUMMARIES_PER_BLOCK
+        )
+    for key_start in tl.range(0,key_stop,BN):
         kn=key_start+n
-        k=tl.load(K+batch*ksb+kn[:,None]*kst+kvhead*ksh+d[None,:],mask=kn[:,None]<NK,other=0.)
-        v=tl.load(V+batch*vsb+kn[:,None]*vst+kvhead*vsh+d[None,:],mask=kn[:,None]<NK,other=0.)
         if GLOBAL:
             kdoc=tl.load(KDOC+batch*kdsb+kn*kdst,mask=kn<NK,other=-2)
             kend=tl.load(KEND+batch*kesb+kn*kest,mask=kn<NK,other=-2)
@@ -201,18 +235,25 @@ def _dq(
             kend=tl.zeros((BN,),tl.int32)
             kval=tl.full((BN,),1,tl.int32)
         valid=_visible(m,kn,qdoc,qpos,kdoc,kend,kval,NQ,NK,GLOBAL)
-        if BF16:
-            s=tl.dot(q,tl.trans(k))*SCALE_LOG2
-            dp=tl.dot(dout.to(tl.bfloat16),tl.trans(v))
+        if SKIP_EMPTY:
+            has_pairs = tl.sum(valid.to(tl.int32)) > 0
         else:
-            s=tl.dot(q.to(tl.float32),tl.trans(k.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
-            dp=tl.dot(dout.to(tl.float32),tl.trans(v.to(tl.float32)),input_precision='tf32x3')
-        p=tl.where(valid,tl.exp2(s-lse[:,None]),0.)
-        ds=p*(dp-delta[:,None])
-        if BF16:
-            acc=tl.dot(ds.to(tl.bfloat16),k,acc)
-        else:
-            acc=tl.dot(ds,k.to(tl.float32),acc,input_precision='tf32x3')
+            has_pairs = True
+        if has_pairs:
+            k=tl.load(K+batch*ksb+kn[:,None]*kst+kvhead*ksh+d[None,:],mask=kn[:,None]<NK,other=0.)
+            v=tl.load(V+batch*vsb+kn[:,None]*vst+kvhead*vsh+d[None,:],mask=kn[:,None]<NK,other=0.)
+            if BF16:
+                s=tl.dot(q,tl.trans(k))*SCALE_LOG2
+                dp=tl.dot(dout.to(tl.bfloat16),tl.trans(v))
+            else:
+                s=tl.dot(q.to(tl.float32),tl.trans(k.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
+                dp=tl.dot(dout.to(tl.float32),tl.trans(v.to(tl.float32)),input_precision='tf32x3')
+            p=tl.where(valid,tl.exp2(s-lse[:,None]),0.)
+            ds=p*(dp-delta[:,None])
+            if BF16:
+                acc=tl.dot(ds.to(tl.bfloat16),k,acc)
+            else:
+                acc=tl.dot(ds,k.to(tl.float32),acc,input_precision='tf32x3')
     tl.store(DQ+batch*dqsb+m[:,None]*dqst+head*dqsh+d[None,:],
              acc*SCALE,mask=m[:,None]<NQ)
 
@@ -233,7 +274,9 @@ def _dkdv(
     kvsb:tl.constexpr,kvst:tl.constexpr,
     NQ:tl.constexpr,NK:tl.constexpr,HK:tl.constexpr,GROUP:tl.constexpr,
     SCALE:tl.constexpr,SCALE_LOG2:tl.constexpr,GLOBAL:tl.constexpr,
-    BF16:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
+    BF16:tl.constexpr,SKIP_EMPTY:tl.constexpr,BOUNDED:tl.constexpr,
+    HISTORY_BLOCK:tl.constexpr,SUMMARIES_PER_BLOCK:tl.constexpr,
+    Q_TILE_OFFSET:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
 ):
     ktile=tl.program_id(0)
     bh=tl.program_id(1)
@@ -254,15 +297,14 @@ def _dkdv(
         kval=tl.full((BN,),1,tl.int32)
     dkacc=tl.zeros((BN,64),tl.float32)
     dvacc=tl.zeros((BN,64),tl.float32)
+    query_begin=0
+    if BOUNDED:
+        first_summary=ktile*BN
+        query_begin=(first_summary//SUMMARIES_PER_BLOCK+1)*HISTORY_BLOCK
     for group in range(GROUP):
         head=kvhead*GROUP+group
-        for query_start in range(0,NQ,BM):
+        for query_start in tl.range(query_begin,NQ,BM):
             m=query_start+mbase
-            q=tl.load(Q+batch*qsb+m[:,None]*qst+head*qsh+d[None,:],mask=m[:,None]<NQ,other=0.)
-            o=tl.load(O+batch*osb+m[:,None]*ost+head*osh+d[None,:],mask=m[:,None]<NQ,other=0.)
-            dout=tl.load(DO+batch*dosb+m[:,None]*dost+head*dosh+d[None,:],mask=m[:,None]<NQ,other=0.)
-            lse=tl.load(LSE+batch*lsb+m*lst+head*lsh,mask=m<NQ,other=0.)
-            delta=tl.sum(o.to(tl.float32)*dout.to(tl.float32),axis=1)
             if GLOBAL:
                 qdoc=tl.load(QDOC+batch*qdsb+m*qdst,mask=m<NQ,other=-1)
                 qpos=tl.load(QPOS+batch*qpsb+m*qpst,mask=m<NQ,other=-1)
@@ -270,20 +312,30 @@ def _dkdv(
                 qdoc=tl.zeros((BM,),tl.int32)
                 qpos=tl.zeros((BM,),tl.int32)
             valid=_visible(m,kn,qdoc,qpos,kdoc,kend,kval,NQ,NK,GLOBAL)
-            if BF16:
-                st=tl.dot(k,tl.trans(q))*SCALE_LOG2
-                dp=tl.dot(v,tl.trans(dout.to(tl.bfloat16)))
+            if SKIP_EMPTY:
+                has_pairs = tl.sum(valid.to(tl.int32)) > 0
             else:
-                st=tl.dot(k.to(tl.float32),tl.trans(q.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
-                dp=tl.dot(v.to(tl.float32),tl.trans(dout.to(tl.float32)),input_precision='tf32x3')
-            p=tl.where(tl.trans(valid),tl.exp2(st-lse[None,:]),0.)
-            ds=p*(dp-delta[None,:])
-            if BF16:
-                dvacc=tl.dot(p.to(tl.bfloat16),dout.to(tl.bfloat16),dvacc)
-                dkacc=tl.dot(ds.to(tl.bfloat16),q,dkacc)
-            else:
-                dvacc=tl.dot(p,dout.to(tl.float32),dvacc,input_precision='tf32x3')
-                dkacc=tl.dot(ds,q.to(tl.float32),dkacc,input_precision='tf32x3')
+                has_pairs = True
+            if has_pairs:
+                q=tl.load(Q+batch*qsb+m[:,None]*qst+head*qsh+d[None,:],mask=m[:,None]<NQ,other=0.)
+                o=tl.load(O+batch*osb+m[:,None]*ost+head*osh+d[None,:],mask=m[:,None]<NQ,other=0.)
+                dout=tl.load(DO+batch*dosb+m[:,None]*dost+head*dosh+d[None,:],mask=m[:,None]<NQ,other=0.)
+                lse=tl.load(LSE+batch*lsb+m*lst+head*lsh,mask=m<NQ,other=0.)
+                delta=tl.sum(o.to(tl.float32)*dout.to(tl.float32),axis=1)
+                if BF16:
+                    st=tl.dot(k,tl.trans(q))*SCALE_LOG2
+                    dp=tl.dot(v,tl.trans(dout.to(tl.bfloat16)))
+                else:
+                    st=tl.dot(k.to(tl.float32),tl.trans(q.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
+                    dp=tl.dot(v.to(tl.float32),tl.trans(dout.to(tl.float32)),input_precision='tf32x3')
+                p=tl.where(tl.trans(valid),tl.exp2(st-lse[None,:]),0.)
+                ds=p*(dp-delta[None,:])
+                if BF16:
+                    dvacc=tl.dot(p.to(tl.bfloat16),dout.to(tl.bfloat16),dvacc)
+                    dkacc=tl.dot(ds.to(tl.bfloat16),q,dkacc)
+                else:
+                    dvacc=tl.dot(p,dout.to(tl.float32),dvacc,input_precision='tf32x3')
+                    dkacc=tl.dot(ds,q.to(tl.float32),dkacc,input_precision='tf32x3')
     tl.store(DK+batch*dksb+kn[:,None]*dkst+kvhead*dksh+d[None,:],dkacc*SCALE,mask=kn[:,None]<NK)
     tl.store(DV+batch*dvsb+kn[:,None]*dvst+kvhead*dvsh+d[None,:],dvacc,mask=kn[:,None]<NK)
 
@@ -299,6 +351,10 @@ class TiledAttentionCache:
     metadata: tuple
     scale: float
     global_mask: bool
+    skip_empty: bool
+    bounded: bool
+    history_block_size: int
+    summaries_per_block: int
 
 
 def _validate(q, k, v, scale):
@@ -339,7 +395,8 @@ def _metadata(q, k, *, documents=None, positions=None, block_documents=None,
 
 
 def forward(q,k,v,*,scale,documents=None,positions=None,
-            block_documents=None,block_ends=None,block_valid=None):
+            block_documents=None,block_ends=None,block_valid=None,
+            bounded_causal=False,history_block_size=128,summaries_per_block=1):
     """FP32 output; full bidirectional attention if metadata is omitted."""
     import cupy as cp
     _validate(q,k,v,scale)
@@ -350,18 +407,32 @@ def forward(q,k,v,*,scale,documents=None,positions=None,
     out=cp.zeros(q.shape,dtype=cp.float32)
     lse=cp.zeros(q.shape[:3],dtype=cp.float32)
     availability=cp.zeros(q.shape[:2],dtype=cp.uint8)
-    cache=TiledAttentionCache(q,k,v,out,lse,availability.view(cp.bool_),meta,float(scale),global_mask)
-    if nk==0:
+    skip_empty = global_mask and _skip_empty_tiles_enabled()
+    bounded = bool(global_mask and bounded_causal and _bounded_global_enabled())
+    history_block_size = int(history_block_size)
+    summaries_per_block = int(summaries_per_block)
+    if bounded and (history_block_size <= 0 or summaries_per_block <= 0
+                    or history_block_size % _BM):
+        raise ValueError('bounded global attention requires a positive BM-aligned block and summary count')
+    cache=TiledAttentionCache(
+        q,k,v,out,lse,availability.view(cp.bool_),meta,float(scale),global_mask,
+        skip_empty,bounded,history_block_size,summaries_per_block,
+    )
+    if nk==0 or (bounded and nq<=history_block_size):
         return out,cache
     qstr,kstr,vstr,ostr,lstr=map(_strides,(q,k,v,out,lse))
+    q_tile_offset = history_block_size // _BM if bounded else 0
+    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * _BM), _BM)
     qds,qps,kds,kes,kvs=map(_strides,meta)
     astr=_strides(availability)
-    _forward[(triton.cdiv(nq,_BM),batch*hq)](
+    _forward[(q_tiles,batch*hq)](
         *map(_ptr,(q,k,v,*meta,out,lse,availability)),
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*lstr[:3],
         *qds[:2],*qps[:2],*kds[:2],*kes[:2],*kvs[:2],*astr[:2],
         NQ=nq,NK=nk,HQ=hq,GROUP=hq//k.shape[2],
-        SCALE_LOG2=float(scale)*_LOG2E,GLOBAL=global_mask,
+        SCALE_LOG2=float(scale)*_LOG2E,GLOBAL=global_mask,SKIP_EMPTY=skip_empty,
+        BOUNDED=bounded,HISTORY_BLOCK=history_block_size,
+        SUMMARIES_PER_BLOCK=summaries_per_block,Q_TILE_OFFSET=q_tile_offset,
         BF16=str(q.dtype)=='bfloat16',BM=_BM,BN=_BN,
         num_warps=4,num_stages=2,
     )
@@ -379,17 +450,22 @@ def backward(dout,cache):
     dq=cp.zeros(q.shape,dtype=cp.float32)
     dk=cp.zeros(k.shape,dtype=cp.float32)
     dv=cp.zeros(v.shape,dtype=cp.float32)
-    if nk==0:
+    if nk==0 or (cache.bounded and nq<=cache.history_block_size):
         return dq,dk,dv
     qstr,kstr,vstr,ostr,dostr,lstr,dqstr,dkstr,dvstr=map(
         _strides,(q,k,v,cache.output,dout,cache.lse,dq,dk,dv))
     qds,qps,kds,kes,kvs=map(_strides,cache.metadata)
     common=(*map(_ptr,(q,k,v,*cache.metadata,cache.output,dout,cache.lse)),)
+    q_tile_offset = cache.history_block_size // _BM if cache.bounded else 0
+    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * _BM), _BM)
     config=dict(NQ=nq,NK=nk,GROUP=q.shape[2]//k.shape[2],
                 SCALE=cache.scale,SCALE_LOG2=cache.scale*_LOG2E,
-                GLOBAL=cache.global_mask,BF16=str(q.dtype)=='bfloat16',
+                GLOBAL=cache.global_mask,SKIP_EMPTY=cache.skip_empty,
+                BOUNDED=cache.bounded,HISTORY_BLOCK=cache.history_block_size,
+                SUMMARIES_PER_BLOCK=cache.summaries_per_block,
+                Q_TILE_OFFSET=q_tile_offset,BF16=str(q.dtype)=='bfloat16',
                 BM=_BM,BN=_BN,num_warps=4,num_stages=2)
-    _dq[(triton.cdiv(nq,_BM),q.shape[0]*q.shape[2])](
+    _dq[(q_tiles,q.shape[0]*q.shape[2])](
         *common,_ptr(dq),
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*dostr[:3],*lstr[:3],
         *dqstr[:3],*qds[:2],*qps[:2],*kds[:2],*kes[:2],*kvs[:2],

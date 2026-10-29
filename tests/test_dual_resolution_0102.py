@@ -9,6 +9,7 @@ from mini_llm.checkpoint import load_checkpoint, save_checkpoint
 from mini_llm.config import DualResolutionConfig, ModelConfig
 from mini_llm.inference_model import InferenceModel
 from mini_llm.model.decoder_lm import DecoderLanguageModel
+from mini_llm.train_extended import ExtendedTrainer
 from mini_llm.ops.dual_resolution_attention import (
     DualResolutionAttention,
     build_dual_resolution_metadata,
@@ -32,6 +33,21 @@ def _dual_config(*, block_size=4, local_window=8, compression_dim=8,
         global_query_chunk=3,
         recompute_attention_probs=recompute_attention_probs,
     )
+
+
+def test_adaptive_checkpoint_policy_uses_physical_dual_resolution_length():
+    trainer = ExtendedTrainer.__new__(ExtendedTrainer)
+    trainer.activation_checkpoint = "block"
+    trainer.dual_resolution_config = _dual_config()
+    trainer.dual_resolution_checkpoint_threshold = 8
+
+    assert not trainer._use_block_activation_checkpoint(np.zeros((1, 8)))
+    assert trainer._use_block_activation_checkpoint(np.zeros((1, 9)))
+
+    trainer.dual_resolution_config = None
+    assert trainer._use_block_activation_checkpoint(np.zeros((1, 8)))
+    trainer.activation_checkpoint = "none"
+    assert not trainer._use_block_activation_checkpoint(np.zeros((1, 9)))
 
 
 def _attention(seed=1, *, block_size=4, local_window=8, d_model=8,

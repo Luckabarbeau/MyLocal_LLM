@@ -490,6 +490,13 @@ class ExtendedTrainer:
             raise ValueError(
                 "MINI_LLM_ACTIVATION_CHECKPOINT must be 'none' or 'block'"
             )
+        self.dual_resolution_checkpoint_threshold = int(os.environ.get(
+            "MINI_LLM_DUAL_RESOLUTION_CHECKPOINT_THRESHOLD", "0"
+        ))
+        if self.dual_resolution_checkpoint_threshold < 0:
+            raise ValueError(
+                "MINI_LLM_DUAL_RESOLUTION_CHECKPOINT_THRESHOLD must be >= 0"
+            )
         if self.training_objective is not None and self.activation_checkpoint == "block":
             raise ValueError(
                 "0080's single-pass block objective does not currently support "
@@ -828,6 +835,12 @@ class ExtendedTrainer:
                 "  Activations: block checkpoint/recompute "
                 f"({n_blocks} block inputs, ~{checkpoint_bytes / (1024 ** 3):.2f} GiB retained)"
             )
+            if (self.dual_resolution_config is not None and
+                    self.dual_resolution_checkpoint_threshold > 0):
+                print(
+                    "  Adaptive checkpointing: disabled at executed lengths <= "
+                    f"{self.dual_resolution_checkpoint_threshold:,} tokens"
+                )
         if getattr(self.optimizer, "moments_offloaded", False):
             label = (
                 "Optimizer state"
@@ -2091,6 +2104,15 @@ class ExtendedTrainer:
                 )
         print()
 
+    def _use_block_activation_checkpoint(self, inputs):
+        """Select block replay for this physical microbatch shape."""
+        if self.activation_checkpoint != "block":
+            return False
+        threshold = self.dual_resolution_checkpoint_threshold
+        if self.dual_resolution_config is not None and threshold > 0:
+            return int(inputs.shape[1]) > threshold
+        return True
+
     def _dual_resolution_batch_metadata(self, inputs):
         """Build dual-resolution document/block metadata for packed AR windows."""
         if self.dual_resolution_config is None:
@@ -2845,13 +2867,12 @@ class ExtendedTrainer:
             )
             finite_trace = [] if trace_active else None
             chunked_head = self.lm_head_chunk_tokens > 0
+            use_block_checkpoint = self._use_block_activation_checkpoint(inputs)
             if chunked_head:
                 with performance_scope("train.model_forward"):
                     head_input, cache = self.model.forward_body(
                         inputs, finite_trace=finite_trace,
-                        activation_checkpoint=(
-                            self.activation_checkpoint == "block"
-                        ),
+                        activation_checkpoint=use_block_checkpoint,
                         memory_metadata=(
                             batch_metadata if self.memory_context is not None else None
                         ),
@@ -2864,9 +2885,7 @@ class ExtendedTrainer:
                 with performance_scope("train.model_forward"):
                     logits, cache = self.model.forward(
                         inputs, finite_trace=finite_trace,
-                        activation_checkpoint=(
-                            self.activation_checkpoint == "block"
-                        ),
+                        activation_checkpoint=use_block_checkpoint,
                         memory_metadata=(
                             batch_metadata if self.memory_context is not None else None
                         ),

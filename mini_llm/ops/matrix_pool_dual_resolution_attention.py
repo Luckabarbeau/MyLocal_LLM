@@ -10,9 +10,9 @@ import numpy as np
 from ..backend import BACKEND_NAME, is_low_precision_dtype, resolve_dtype, xp
 from ..init import matrix_parameter
 from ..parameter import Parameter
-from ..performance_profiler import performance_scope
+from ..performance_profiler import matrix_pool_detail_scope, performance_scope
 from .attention import softmax_backward, softmax_forward
-from .rope import rope_backward, rope_forward
+from .rope import prepare_rope_positions, rope_backward, rope_forward
 from .dual_resolution_attention import (
     DualResolutionAttention,
     _PackedProjection,
@@ -242,40 +242,116 @@ class MatrixPoolDualResolutionAttention:
         return rows, slots, hidden[rows[:, None], indices]
 
     def _pool_forward(self, hidden, metadata, return_cache):
-        rows, slots, blocks = self._valid_blocks(hidden, metadata)
         block_count = metadata["block_valid"].shape[1]
+        contiguous = (bool(metadata.get("contiguous_pool_blocks", False))
+                      and os.environ.get(
+                          "MINI_LLM_MATRIX_POOL_CONTIGUOUS_VIEW", "1"
+                      ).strip().lower() in {"1", "true", "yes"})
+        if contiguous:
+            # View only: avoid gathering up to 256 MiB per 65K FP32 layer.
+            # Every row has the same complete initial blocks in this case.
+            rows = metadata.get("valid_block_rows")
+            slots = metadata.get("valid_block_slots")
+            if rows is None or slots is None:
+                rows = xp.repeat(xp.arange(hidden.shape[0]), block_count)
+                slots = xp.tile(xp.arange(block_count), hidden.shape[0])
+            blocks = hidden[:, :block_count * self.block_size, :].reshape(
+                hidden.shape[0] * block_count, self.block_size, self.d_model
+            )
+        else:
+            rows, slots, blocks = self._valid_blocks(hidden, metadata)
         summaries = xp.zeros(
             (hidden.shape[0], block_count, self.summaries_per_block, self.d_model),
             dtype=xp.float32 if is_low_precision_dtype(hidden.dtype) else hidden.dtype,
         )
         if blocks.shape[0] == 0:
             return summaries, ({"rows": rows, "slots": slots, "blocks": blocks,
+                                "contiguous": contiguous,
                                 "probabilities": None} if return_cache else None)
-        block_work = _work_array(blocks)
-        score_input = blocks.reshape(-1, self.d_model).astype(
-            self.W_pool_score.data.dtype, copy=False
-        )
-        scores = _work_array(score_input @ self.W_pool_score.data).reshape(
-            blocks.shape[0], self.block_size, self.summaries_per_block
-        )
-        if self.pool_position is not None:
-            scores = scores + _work_array(self.pool_position.data)[None, :, :]
-        probabilities = softmax_forward(scores, axis=1)
-        valid_summaries = probabilities.swapaxes(1, 2) @ block_work
+        use_fused = (BACKEND_NAME == "cupy" and os.environ.get(
+            "MINI_LLM_MATRIX_POOL_FUSED_FORWARD", "0"
+        ).strip().lower() in {"1", "true", "yes"})
+        if use_fused and blocks.flags.c_contiguous and self.W_pool_score.data.flags.c_contiguous:
+            from .triton_matrix_pool_0102s import forward as fused_pool_forward
+            valid_summaries, probabilities = fused_pool_forward(
+                blocks, self.W_pool_score.data,
+                self.pool_position.data if self.pool_position is not None else None,
+            )
+        else:
+            block_work = _work_array(blocks)
+            score_input = blocks.reshape(-1, self.d_model).astype(
+                self.W_pool_score.data.dtype, copy=False
+            )
+            scores = _work_array(score_input @ self.W_pool_score.data).reshape(
+                blocks.shape[0], self.block_size, self.summaries_per_block
+            )
+            if self.pool_position is not None:
+                scores = scores + _work_array(self.pool_position.data)[None, :, :]
+            probabilities = softmax_forward(scores, axis=1)
+            valid_summaries = probabilities.swapaxes(1, 2) @ block_work
         summaries[rows, slots] = valid_summaries
         cache = None
         if return_cache:
             cache = {"rows": rows, "slots": slots, "blocks": blocks,
-                     "probabilities": probabilities}
+                     "contiguous": contiguous, "probabilities": probabilities}
         return summaries, cache
 
     def _pool_backward(self, d_summaries, cache, hidden_shape,
-                       accumulate_parameter_grads):
-        dx = xp.zeros(hidden_shape, dtype=xp.float32)
+                       accumulate_parameter_grads, initial_dx=None):
+        """Backpropagate block summaries into the original token positions.
+
+        With ``initial_dx`` supplied, add directly into an existing FP32
+        gradient buffer.  The completed blocks occupy non-overlapping positions,
+        so no atomics or intermediate full-sequence zero tensor are necessary.
+        The default remains the isolated reference gradient for numerical tests.
+        """
+        if initial_dx is None:
+            dx = xp.zeros(hidden_shape, dtype=xp.float32)
+        else:
+            if (initial_dx.shape != hidden_shape or
+                    initial_dx.dtype not in (xp.dtype('float32'), xp.dtype('float64'))):
+                raise ValueError('initial_dx must be a matching FP32/FP64 gradient buffer')
+            dx = initial_dx
         probabilities = cache["probabilities"]
         if probabilities is None:
             return dx
         rows, slots = cache["rows"], cache["slots"]
+        # 0102U: fused exact FP32 backward on contiguous complete blocks.
+        # The reference remains the default and handles all irregular layouts.
+        use_triton_backward = (
+            BACKEND_NAME == "cupy"
+            and os.environ.get(
+                "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD", "1"
+            ).strip().lower() in {"1", "true", "yes"}
+            and bool(cache.get("contiguous", False))
+            and (hidden_shape[0] == 1 or
+                 hidden_shape[1] == cache["blocks"].shape[0]
+                 // hidden_shape[0] * self.block_size)
+        )
+        if use_triton_backward:
+            blocks_gpu = cache["blocks"]
+            # Direct reshape is a view for contiguous summaries; do not gather
+            # or allocate another full token-gradient tensor here.
+            ds_gpu = d_summaries.reshape(
+                -1, self.summaries_per_block, self.d_model
+            )
+            dest = dx[:, :ds_gpu.shape[0] * self.block_size // hidden_shape[0], :]
+            dest_blocks = dest.reshape(
+                ds_gpu.shape[0], self.block_size, self.d_model
+            )
+            weights = self.W_pool_score.data
+            if all(a.flags.c_contiguous for a in
+                   (blocks_gpu, probabilities, ds_gpu, dest_blocks, weights)):
+                from .triton_matrix_pool_backward_0102u import backward
+                dw, dbias = backward(
+                    blocks_gpu, probabilities, ds_gpu, weights, dest_blocks,
+                    add_initial=initial_dx is not None,
+                )
+                if accumulate_parameter_grads:
+                    _add_parameter_grad(self.W_pool_score, dw)
+                    if self.pool_position is not None:
+                        _add_parameter_grad(self.pool_position, dbias)
+                return dx
         blocks = _work_array(cache["blocks"])
         ds = _work_array(d_summaries[rows, slots])
         dprob = blocks @ ds.swapaxes(1, 2)
@@ -289,23 +365,78 @@ class MatrixPoolDualResolutionAttention:
             if self.pool_position is not None:
                 _add_parameter_grad(self.pool_position, xp.sum(dz, axis=0))
         dblocks = probabilities @ ds + dz @ _work_array(self.W_pool_score.data).T
+        if cache.get("contiguous", False):
+            # In the regular layout, pooling blocks are already contiguous.
+            # Keep the isolated-reference assignment and the in-place additive
+            # path numerically equivalent to their indexed-scatter variants.
+            destination = dx[:, :blocks.shape[0] // hidden_shape[0] * self.block_size, :]
+            shaped = dblocks.reshape(destination.shape).astype(xp.float32, copy=False)
+            if initial_dx is None:
+                destination[...] = shaped
+            else:
+                destination[...] += shaped
+            return dx
         indices = cache["rows"][:, None]
         token_indices = cache.get("token_indices")
         if token_indices is None:
             # Recover the non-overlapping token indices from the prepared metadata
             # supplied by the caller through an attached cache entry.
             token_indices = cache["block_indices"]
-        dx[indices, token_indices] = dblocks
+        if initial_dx is None:
+            dx[indices, token_indices] = dblocks
+        else:
+            # Exactly one complete block owns each destination token, so indexed
+            # addition is race-free even when the batch contains multiple docs.
+            # The original isolated scatter stores FP32 before adding to dQ;
+            # preserve that rounding, including in NumPy FP64 reference mode.
+            dx[indices, token_indices] += dblocks.astype(xp.float32, copy=False)
         return dx
 
     def _summary_metadata(self, metadata):
+        # _prepare_metadata returns one device-metadata object shared by all
+        # 20 layers and their checkpoint replays.  Four repeat/copy kernels
+        # per layer were doing the same work each time.  Store by summary
+        # count so future ablations using different heads stay independent.
         count = self.summaries_per_block
-        return {
-            "valid": xp.repeat(metadata["block_valid"], count, axis=1),
-            "documents": xp.repeat(metadata["block_document_ids"], count, axis=1),
-            "ends": xp.repeat(metadata["block_end_positions"], count, axis=1),
-            "positions": xp.repeat(metadata["block_rope_positions"], count, axis=1),
-        }
+        enabled = os.environ.get(
+            "MINI_LLM_MATRIX_POOL_REUSE_SUMMARY_METADATA", "1"
+        ).strip().lower() in {"1", "true", "yes"}
+        cache = metadata.setdefault("_matrix_pool_summary_meta_0102r", {})
+        if not enabled or count not in cache:
+            result = {
+                "valid": xp.repeat(metadata["block_valid"], count, axis=1),
+                "documents": xp.repeat(metadata["block_document_ids"], count, axis=1),
+                "ends": xp.repeat(metadata["block_end_positions"], count, axis=1),
+                "positions": xp.repeat(metadata["block_rope_positions"], count, axis=1),
+            }
+            if not enabled:
+                return result
+            cache[count] = result
+        return cache[count]
+
+    def _global_rope_positions(self, metadata, summary_metadata, dtype):
+        """Prepare immutable token/summary RoPE factors once per model pass."""
+        enabled = os.environ.get(
+            "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return metadata["position_ids"], summary_metadata["positions"]
+        key = (self.global_head_dim, self.rope_base, str(dtype),
+               tuple(metadata["position_ids"].shape),
+               tuple(summary_metadata["positions"].shape))
+        cache = metadata.setdefault("_matrix_pool_global_rope_0102x", {})
+        if key not in cache:
+            cache[key] = (
+                prepare_rope_positions(
+                    metadata["position_ids"], d_head=self.global_head_dim,
+                    base=self.rope_base, dtype=dtype,
+                ),
+                prepare_rope_positions(
+                    summary_metadata["positions"], d_head=self.global_head_dim,
+                    base=self.rope_base, dtype=dtype,
+                ),
+            )
+        return cache[key]
 
     def _global_forward(self, q, k, v, metadata, summary_metadata, return_cache):
         if self.global_kernel == "triton":
@@ -319,6 +450,9 @@ class MatrixPoolDualResolutionAttention:
                 block_documents=summary_metadata["documents"],
                 block_ends=summary_metadata["ends"],
                 block_valid=summary_metadata["valid"],
+                bounded_causal=bool(metadata.get("single_contiguous_document", False)),
+                history_block_size=self.block_size,
+                summaries_per_block=self.summaries_per_block,
             )
             return output, ({"triton": cache} if return_cache else None)
         batch, length = q.shape[:2]
@@ -417,41 +551,55 @@ class MatrixPoolDualResolutionAttention:
         local_state = (_work_array(residual_input)
                        + _work_array(local_delta))
 
-        global_delta = xp.zeros_like(local_delta)
+        # Global work is optional for short sequences and local-only ablations.
+        # Do not allocate a full [B,T,D] zero tensor just to add it to local_delta.
+        global_delta = None
         global_cache = None
         if self.global_enabled and length > self.block_size:
             with performance_scope("matrix_pool.pool.forward"):
-                summaries, pool_cache = self._pool_forward(
-                    local_state, metadata, return_cache
+                with matrix_pool_detail_scope("matrix_pool.pool.forward"):
+                    summaries, pool_cache = self._pool_forward(
+                        local_state, metadata, return_cache
+                    )
+            with matrix_pool_detail_scope("matrix_pool.metadata.forward"):
+                summary_meta = self._summary_metadata(metadata)
+                summary_flat = summaries.reshape(
+                    batch, -1, self.d_model
+                ).astype(x.dtype, copy=False)
+                state_compute = local_state.astype(x.dtype, copy=False)
+                qg_positions, kg_positions = self._global_rope_positions(
+                    metadata, summary_meta, x.dtype
                 )
-            summary_meta = self._summary_metadata(metadata)
-            summary_flat = summaries.reshape(
-                batch, -1, self.d_model
-            ).astype(x.dtype, copy=False)
-            state_compute = local_state.astype(x.dtype, copy=False)
-            qg_projection = _linear_forward(state_compute, self.W_global_q)
-            if _fast_projection_enabled():
-                kg_projection, vg_projection = self._packed_global_kv.forward(summary_flat)
-            else:
-                kg_projection = _linear_forward(summary_flat, self.W_global_k)
-                vg_projection = _linear_forward(summary_flat, self.W_global_v)
+            with matrix_pool_detail_scope("matrix_pool.global_q_projection.forward"):
+                qg_projection = _linear_forward(state_compute, self.W_global_q)
+            with matrix_pool_detail_scope("matrix_pool.global_kv_projection.forward"):
+                if _fast_projection_enabled():
+                    kg_projection, vg_projection = self._packed_global_kv.forward(summary_flat)
+                else:
+                    kg_projection = _linear_forward(summary_flat, self.W_global_k)
+                    vg_projection = _linear_forward(summary_flat, self.W_global_v)
             qg_pre = qg_projection.reshape(batch, length, self.global_heads,
                                            self.global_head_dim)
             kg_pre = kg_projection.reshape(batch, -1, self.global_heads,
                                            self.global_head_dim)
             vg = vg_projection.reshape(batch, -1, self.global_heads,
                                        self.global_head_dim)
-            qg, qg_rope_cache = rope_forward(qg_pre, self.rope_base, positions)
-            kg, kg_rope_cache = rope_forward(
-                kg_pre, self.rope_base, summary_meta["positions"]
-            )
-            with performance_scope("matrix_pool.global.forward"):
-                global_context, global_attention_cache = self._global_forward(
-                    qg, kg, vg, metadata, summary_meta, return_cache
+            with matrix_pool_detail_scope("matrix_pool.global_rope.forward"):
+                qg, qg_rope_cache = rope_forward(
+                    qg_pre, self.rope_base, qg_positions
                 )
-            global_merged = global_context.reshape(batch, length, self.global_width)
-            global_compute = global_merged.astype(x.dtype, copy=False)
-            global_delta = _linear_forward(global_compute, self.W_global_o)
+                kg, kg_rope_cache = rope_forward(
+                    kg_pre, self.rope_base, kg_positions
+                )
+            with performance_scope("matrix_pool.global.forward"):
+                with matrix_pool_detail_scope("matrix_pool.global_attention.forward"):
+                    global_context, global_attention_cache = self._global_forward(
+                        qg, kg, vg, metadata, summary_meta, return_cache
+                    )
+            with matrix_pool_detail_scope("matrix_pool.global_output_projection.forward"):
+                global_merged = global_context.reshape(batch, length, self.global_width)
+                global_compute = global_merged.astype(x.dtype, copy=False)
+                global_delta = _linear_forward(global_compute, self.W_global_o)
             if return_cache:
                 rows = pool_cache["rows"]
                 slots = pool_cache["slots"]
@@ -465,7 +613,9 @@ class MatrixPoolDualResolutionAttention:
                     "attention": global_attention_cache,
                     "global_compute": global_compute,
                 }
-        output = local_delta + global_delta.astype(local_delta.dtype, copy=False)
+        with matrix_pool_detail_scope("matrix_pool.integration.forward"):
+            output = (local_delta if global_delta is None else
+                      local_delta + global_delta.astype(local_delta.dtype, copy=False))
         if not return_cache:
             return output
         return output, {
@@ -487,58 +637,86 @@ class MatrixPoolDualResolutionAttention:
         dy_work = _work_array(dy)
         batch, length, _ = dy.shape
         d_local_delta = dy_work
-        d_residual_input = xp.zeros(cache["residual_input"].shape, dtype=xp.float32)
         global_cache = cache["global"]
+        d_residual_input = None
         if global_cache is not None:
             global_compute = global_cache["global_compute"]
             dy2 = dy_work.reshape(-1, self.d_model)
-            if accumulate_parameter_grads:
-                _add_parameter_grad(
-                    self.W_global_o,
-                    _work_array(global_compute.reshape(-1, self.global_width)).T @ dy2,
+            with matrix_pool_detail_scope("matrix_pool.global_output_projection.backward"):
+                if accumulate_parameter_grads:
+                    _add_parameter_grad(
+                        self.W_global_o,
+                        _work_array(global_compute.reshape(-1, self.global_width)).T @ dy2,
+                    )
+                dgc = (dy2 @ _work_array(self.W_global_o.data).T).reshape(
+                    batch, length, self.global_heads, self.global_head_dim
                 )
-            dgc = (dy2 @ _work_array(self.W_global_o.data).T).reshape(
-                batch, length, self.global_heads, self.global_head_dim
-            )
             with performance_scope("matrix_pool.global.backward"):
-                dqg, dkg, dvg = self._global_backward(
-                    dgc, global_cache["qg"], global_cache["kg"], global_cache["vg"],
-                    global_cache["attention"], cache["metadata"],
-                    global_cache["summary_meta"],
-                )
-            dqg_pre = rope_backward(dqg, global_cache["qg_rope_cache"])
-            dkg_pre = rope_backward(dkg, global_cache["kg_rope_cache"])
+                with matrix_pool_detail_scope("matrix_pool.global_attention.backward"):
+                    dqg, dkg, dvg = self._global_backward(
+                        dgc, global_cache["qg"], global_cache["kg"], global_cache["vg"],
+                        global_cache["attention"], cache["metadata"],
+                        global_cache["summary_meta"],
+                    )
+            with matrix_pool_detail_scope("matrix_pool.global_rope.backward"):
+                dqg_pre = rope_backward(dqg, global_cache["qg_rope_cache"])
+                dkg_pre = rope_backward(dkg, global_cache["kg_rope_cache"])
             dqg_flat = dqg_pre.reshape(batch, length, self.global_width)
             dkg_flat = dkg_pre.reshape(global_cache["summary_flat"].shape[:-1]
                                        + (self.global_width,))
             dvg_flat = dvg.reshape(dkg_flat.shape)
-            dx_q = _linear_backward(
-                dqg_flat, global_cache["state_compute"], self.W_global_q,
-                accumulate_parameter_grads,
-            )
-            if _fast_projection_enabled():
-                dsummary_flat = self._packed_global_kv.backward(
-                    (dkg_flat, dvg_flat), global_cache["summary_flat"],
+            with matrix_pool_detail_scope("matrix_pool.global_q_projection.backward"):
+                dx_q = _linear_backward(
+                    dqg_flat, global_cache["state_compute"], self.W_global_q,
                     accumulate_parameter_grads,
                 )
-            else:
-                dsummary_flat = _linear_backward(
-                    dkg_flat, global_cache["summary_flat"], self.W_global_k,
-                    accumulate_parameter_grads,
-                )
-                dsummary_flat += _linear_backward(
-                    dvg_flat, global_cache["summary_flat"], self.W_global_v,
-                    accumulate_parameter_grads,
-                )
+            with matrix_pool_detail_scope("matrix_pool.global_kv_projection.backward"):
+                if _fast_projection_enabled():
+                    dsummary_flat = self._packed_global_kv.backward(
+                        (dkg_flat, dvg_flat), global_cache["summary_flat"],
+                        accumulate_parameter_grads,
+                    )
+                else:
+                    dsummary_flat = _linear_backward(
+                        dkg_flat, global_cache["summary_flat"], self.W_global_k,
+                        accumulate_parameter_grads,
+                    )
+                    dsummary_flat += _linear_backward(
+                        dvg_flat, global_cache["summary_flat"], self.W_global_v,
+                        accumulate_parameter_grads,
+                    )
             dsummary = dsummary_flat.reshape(global_cache["summaries"].shape)
+            # Experimental 0102P: accumulate the non-overlapping block-pool
+            # gradients directly into the global-query input gradient, avoiding
+            # one full [B,T,D] zero allocation and a second full-tensor add.
+            inplace_pool_scatter = os.environ.get(
+                "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE", "0"
+            ).strip().lower() in ("1", "true", "yes")
             with performance_scope("matrix_pool.pool.backward"):
-                dx_pool = self._pool_backward(
-                    dsummary, global_cache["pool"], cache["residual_input"].shape,
-                    accumulate_parameter_grads,
-                )
-            dh = _work_array(dx_q) + dx_pool
-            d_residual_input += dh
-            d_local_delta = d_local_delta + dh
+                with matrix_pool_detail_scope("matrix_pool.pool.backward"):
+                    if inplace_pool_scatter:
+                        dh = self._pool_backward(
+                            dsummary, global_cache["pool"],
+                            cache["residual_input"].shape,
+                            accumulate_parameter_grads,
+                            initial_dx=_work_array(dx_q),
+                        )
+                    else:
+                        dx_pool = self._pool_backward(
+                            dsummary, global_cache["pool"],
+                            cache["residual_input"].shape,
+                            accumulate_parameter_grads,
+                        )
+                        dh = _work_array(dx_q) + dx_pool
+            # The reference residual-gradient buffer is FP32.  On GPU `dh`
+            # is already FP32, so this does not introduce a copy.
+            with matrix_pool_detail_scope("matrix_pool.integration.backward"):
+                d_residual_input = dh.astype(xp.float32, copy=False)
+                d_local_delta = d_local_delta + dh
+        if d_residual_input is None:
+            d_residual_input = xp.zeros(
+                cache["residual_input"].shape, dtype=xp.float32
+            )
 
         dl2 = d_local_delta.reshape(-1, self.d_model)
         local_compute = cache["local_compute"]

@@ -26,6 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--context', type=int, default=1024)
+    p.add_argument('--model-context', type=int, default=None,
+                   help='configured maximum context; defaults to --context. Use a larger '
+                        'block-aligned value to exercise shorter production buckets')
     p.add_argument('--architecture', choices=('dual-resolution', 'matrix-pool'),
                    default='dual-resolution')
     p.add_argument('--batch-size', type=int, default=1)
@@ -55,6 +58,15 @@ def parse_args(argv=None):
                    default='auto',
                    help='apply the same runtime defaults as train_model; explicit '
                         'MINI_LLM_* environment values still win')
+    p.add_argument('--profile-global-branch', action='store_true',
+                   help='record deferred CUDA-event and host timings for Model B '
+                        'pooling, global projections, attention, and integration')
+    p.add_argument('--alternate-fused-pool-backward', action='store_true',
+                   help='alternate the Model B fused pooling backward off/on within '
+                        'one initialized model and report per-mode timing medians')
+    p.add_argument('--alternate-bounded-global', action='store_true',
+                   help='alternate bounded Model B global attention off/on within '
+                        'one initialized model and report per-mode timing medians')
     p.add_argument('--optimizer-step', action='store_true',
                    help='also construct a real AdamW optimizer and apply one update; '
                         'use MINI_LLM_OPTIMIZER_OFFLOAD=full for a 16GB GPU')
@@ -73,13 +85,23 @@ def parse_args(argv=None):
         p.error('compression-block-chunk must be positive')
     if args.tiny and args.context > 128:
         p.error('tiny mode requires context <= 128')
-    if args.context > 65536:
-        p.error('context exceeds configured maximum (65536)')
+    if args.alternate_fused_pool_backward and args.architecture != 'matrix-pool':
+        p.error('--alternate-fused-pool-backward requires --architecture matrix-pool')
+    if args.alternate_bounded_global and args.architecture != 'matrix-pool':
+        p.error('--alternate-bounded-global requires --architecture matrix-pool')
+    if args.alternate_fused_pool_backward and args.alternate_bounded_global:
+        p.error('only one alternating Model B ablation may be selected')
+    model_context = args.context if args.model_context is None else args.model_context
+    if model_context > 65536:
+        p.error('model context exceeds configured maximum (65536)')
+    if args.context > model_context:
+        p.error('--context must not exceed --model-context')
     return args
 
 
 def build_config(args, *, backend_name):
     from mini_llm.config import ModelConfig
+    model_context = args.context if args.model_context is None else args.model_context
     base = (ModelConfig.dual_resolution_matrix_pool_1024_20l()
             if args.architecture == 'matrix-pool'
             else ModelConfig.dual_resolution_1024_20l())
@@ -89,8 +111,10 @@ def build_config(args, *, backend_name):
                      global_head_dim=(8 if args.architecture == 'matrix-pool' else 64),
                      compression_dim=16, compression_heads=2,
                      max_blocks=16, global_query_chunk=min(16, args.query_chunk),
-                     compression_block_chunk=min(16, args.compression_block_chunk))
-        return replace(base, context_length=args.context, n_layers=args.layers,
+                     compression_block_chunk=min(16, args.compression_block_chunk),
+                     global_enabled=(base.dual_resolution.global_enabled
+                                     and not args.disable_global))
+        return replace(base, context_length=model_context, n_layers=args.layers,
                        tokenizer_vocab_size=47, d_model=32, d_ff=64, n_q_heads=4,
                        n_kv_heads=2, d_head=8, dual_resolution=dr,
                        dtype='float32')
@@ -99,7 +123,7 @@ def build_config(args, *, backend_name):
                  global_query_chunk=args.query_chunk,
                  global_enabled=(base.dual_resolution.global_enabled
                                  and not args.disable_global))
-    return replace(base, context_length=args.context, n_layers=args.layers,
+    return replace(base, context_length=model_context, n_layers=args.layers,
                    dual_resolution=dr,
                    dtype='bfloat16' if backend_name == 'cupy' else 'float32')
 
@@ -113,9 +137,14 @@ def run(args):
     os.environ['MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL'] = args.local_kernel
     os.environ['MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL'] = args.global_kernel
     os.environ['MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL'] = args.compression_kernel
+    if args.profile_global_branch:
+        os.environ['MINI_LLM_MATRIX_POOL_DETAIL_PROFILE'] = '1'
     from mini_llm.backend import BACKEND_NAME, xp, synchronize
     from mini_llm.model.decoder_lm import DecoderLanguageModel
     from mini_llm.ops.dual_resolution_attention import build_dual_resolution_metadata
+    from mini_llm.performance_profiler import (
+        PERFORMANCE_PROFILER, configure_performance_profiler,
+    )
 
     if BACKEND_NAME != 'cupy' and not args.tiny:
         raise RuntimeError('Production-width smoke requires MINI_LLM_BACKEND=cupy; '
@@ -184,8 +213,21 @@ def run(args):
         model.refresh_compute_buffers()
     measured = []
     loss_value = None
+    configure_performance_profiler(False, reset=args.profile_global_branch)
     for iteration in range(args.warmup_iterations + args.repeat_iterations):
         record = iteration >= args.warmup_iterations
+        pool_backward_mode = None
+        bounded_global_mode = None
+        if args.alternate_fused_pool_backward:
+            pool_backward_mode = iteration % 2
+            os.environ['MINI_LLM_MATRIX_POOL_FUSED_BACKWARD'] = str(pool_backward_mode)
+        elif args.alternate_bounded_global:
+            bounded_global_mode = iteration % 2
+            os.environ['MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED'] = str(
+                bounded_global_mode
+            )
+        if args.profile_global_branch and record and not measured:
+            configure_performance_profiler(True, reset=True)
         model.zero_grad()
         synchronize()
         if record and not measured:
@@ -226,11 +268,41 @@ def run(args):
                 'loss_ms': round(loss_ms, 5),
                 'backward_ms': round(backward_ms, 5),
                 'total_ms': round(forward_ms + loss_ms + backward_ms, 5),
+                **({'fused_pool_backward': bool(pool_backward_mode)}
+                   if pool_backward_mode is not None else {}),
+                **({'bounded_global': bool(bounded_global_mode)}
+                   if bounded_global_mode is not None else {}),
             })
+    synchronize()
+    profile_rows = PERFORMANCE_PROFILER.rows() if args.profile_global_branch else []
+    configure_performance_profiler(False)
     forward_ms = median(row['forward_ms'] for row in measured)
     loss_ms = median(row['loss_ms'] for row in measured)
     backward_ms = median(row['backward_ms'] for row in measured)
     median_total_ms = median(row['total_ms'] for row in measured)
+    def alternating_summary(field):
+        summary = {}
+        for mode in (False, True):
+            selected = [row for row in measured if row[field] is mode]
+            summary[str(int(mode))] = {
+                'iterations': len(selected),
+                'forward_ms': median(row['forward_ms'] for row in selected),
+                'loss_ms': median(row['loss_ms'] for row in selected),
+                'backward_ms': median(row['backward_ms'] for row in selected),
+                'total_ms': median(row['total_ms'] for row in selected),
+                'supervised_tokens_per_second': args.context * args.batch_size * 1000.0
+                    / median(row['total_ms'] for row in selected),
+            }
+        return summary
+
+    alternating_pool_backward = (
+        alternating_summary('fused_pool_backward')
+        if args.alternate_fused_pool_backward else {}
+    )
+    alternating_bounded_global = (
+        alternating_summary('bounded_global')
+        if args.alternate_bounded_global else {}
+    )
     # Check representative parameters from the global/compressor/FFN paths,
     # rather than allocating a second flattened copy of every parameter.
     grads = {}
@@ -270,12 +342,25 @@ def run(args):
             'resolved': runtime_profile.resolved,
             'applied': dict(runtime_profile.applied),
         },
-        'layers': config.n_layers, 'context': args.context, 'batch_size': args.batch_size,
+        'layers': config.n_layers, 'context': args.context,
+        'model_context': config.context_length, 'batch_size': args.batch_size,
         'compression_dim': config.dual_resolution.compression_dim,
         'global_enabled': config.dual_resolution.global_enabled,
+        'matrix_pool_grad_scatter_inplace': os.environ.get(
+            'MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE', '0'
+        ).strip().lower() in ('1', 'true', 'yes'),
+        'matrix_pool_fused_forward': os.environ.get(
+            'MINI_LLM_MATRIX_POOL_FUSED_FORWARD', '0'
+        ).strip().lower() in ('1', 'true', 'yes'),
+        'matrix_pool_fused_backward': os.environ.get(
+            'MINI_LLM_MATRIX_POOL_FUSED_BACKWARD', '1'
+        ).strip().lower() in ('1', 'true', 'yes'),
         'activation_checkpoint': args.activation_checkpoint,
         'local_kernel': os.environ['MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL'],
         'global_kernel': os.environ['MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL'],
+        'bounded_global': os.environ.get(
+            'MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED', '1'
+        ).strip().lower() in ('1', 'true', 'yes', 'on'),
         'compression_kernel': os.environ['MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL'],
         'fast_projections': os.environ.get('MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS', '1' if BACKEND_NAME == 'cupy' else '0').strip().lower() in ('1', 'true', 'yes'),
         'bf16_projection_grads': os.environ.get('MINI_LLM_DUAL_RESOLUTION_BF16_PROJECTION_GRADS', '1').strip().lower() in ('1', 'true', 'yes'),
@@ -292,6 +377,10 @@ def run(args):
         'warmup_iterations': args.warmup_iterations,
         'repeat_iterations': args.repeat_iterations,
         'iteration_timings_ms': measured,
+        'global_branch_profile': profile_rows,
+        'alternating_fused_pool_backward': alternating_pool_backward,
+        'alternating_bounded_global': alternating_bounded_global,
+        'head_chunk_tokens': args.head_chunk_tokens,
         'timing_note': 'Medians of full forward+LM loss+backward without optimizer; '
                        'first measured stage also sampled for memory',
         'forward_ms': forward_ms, 'loss_ms': loss_ms,

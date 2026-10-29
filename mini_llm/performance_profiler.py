@@ -55,6 +55,12 @@ class _PerformanceProfiler:
         self.rmsnorm_detail_enabled = raw_rmsnorm_detail not in {
             "0", "false", "off", "no", ""
         }
+        raw_matrix_pool_detail = os.environ.get(
+            "MINI_LLM_MATRIX_POOL_DETAIL_PROFILE", "0"
+        ).strip().lower()
+        self.matrix_pool_detail_enabled = raw_matrix_pool_detail not in {
+            "0", "false", "off", "no", ""
+        }
 
     def configure(self, enabled: bool, reset: bool = False):
         self.enabled = bool(enabled)
@@ -71,7 +77,8 @@ class _PerformanceProfiler:
 
     @contextmanager
     def scope(self, name: str):
-        if not self.enabled or _SUPPRESS_COARSE_SCOPE.get():
+        if (not self.enabled or _SUPPRESS_COARSE_SCOPE.get()
+                or self.matrix_pool_detail_enabled):
             yield
             return
 
@@ -267,6 +274,29 @@ class _PerformanceProfiler:
                     (f"{name}.gpu", start_event, end_event)
                 )
 
+    @contextmanager
+    def matrix_pool_detail_scope(self, name: str):
+        """Profile Model B sub-operations without serializing the GPU stream."""
+        if not self.enabled or not self.matrix_pool_detail_enabled:
+            yield
+            return
+        host_start = time.perf_counter()
+        if BACKEND_NAME == "cupy":
+            start_event = xp.cuda.Event()
+            end_event = xp.cuda.Event()
+            start_event.record()
+        else:
+            start_event = end_event = None
+        try:
+            yield
+        finally:
+            self._record(f"{name}.host", time.perf_counter() - host_start)
+            if BACKEND_NAME == "cupy":
+                end_event.record()
+                self._pending_gpu_events.append(
+                    (f"{name}.gpu", start_event, end_event)
+                )
+
     def _resolve_pending_gpu_events(self):
         if not self._pending_gpu_events:
             return
@@ -355,6 +385,10 @@ def moe_detail_scope(name: str):
 
 def performance_report(title: str = "Performance profile") -> str:
     return PERFORMANCE_PROFILER.format_report(title)
+
+
+def matrix_pool_detail_scope(name: str):
+    return PERFORMANCE_PROFILER.matrix_pool_detail_scope(name)
 
 
 def local_detail_scope(name: str):

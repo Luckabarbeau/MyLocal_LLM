@@ -238,6 +238,46 @@ class _PackedProjection:
             self.refresh()
         pieces = [g.reshape(-1, g.shape[-1]) for g in grads]
         data = value.reshape(-1, value.shape[-1])
+        # 0102V: at long contexts, packing all Q/K/V gradients requires a
+        # temporary [B*T, total_width] buffer (192 MiB in BF16 at 65K).
+        # Optionally stream this packing/GEMM work in row chunks instead.
+        # This is deliberately opt-in until a real 65K GPU benchmark proves
+        # the memory benefit outweighs the additional GEMM launches.
+        chunk_rows = int(os.environ.get(
+            "MINI_LLM_DUAL_RESOLUTION_PACKED_BACKWARD_CHUNK_TOKENS", "0"
+        ))
+        if chunk_rows < 0:
+            raise ValueError("packed backward chunk size must be nonnegative")
+        if 0 < chunk_rows < data.shape[0]:
+            use_bf16 = (is_low_precision_dtype(self.weight.dtype)
+                        and _bf16_projection_matmul_enabled())
+            matmul_dtype = (self.weight.dtype if use_bf16 else
+                            (xp.float32 if is_low_precision_dtype(data.dtype)
+                             else data.dtype))
+            weight = self.weight if use_bf16 else _work_array(self.weight)
+            # Allocate the output once, but never allocate a full-sequence
+            # packed gradient or cast the entire gradient sequence to BF16.
+            dx = xp.empty(data.shape, dtype=matmul_dtype)
+            for lo in range(0, data.shape[0], chunk_rows):
+                hi = min(lo + chunk_rows, data.shape[0])
+                packed = xp.empty((hi - lo, self.ends[-1]), dtype=matmul_dtype)
+                for j, grad in enumerate(pieces):
+                    part = grad[lo:hi]
+                    if use_bf16:
+                        part = part.astype(self.weight.dtype, copy=False)
+                    else:
+                        part = _work_array(part)
+                    packed[:, self.ends[j]:self.ends[j + 1]] = part
+                data_chunk = data[lo:hi]
+                if use_bf16:
+                    data_chunk = data_chunk.astype(self.weight.dtype, copy=False)
+                else:
+                    data_chunk = _work_array(data_chunk)
+                if accumulate_parameter_grads:
+                    dw = data_chunk.T @ packed
+                    self.gradient += dw.astype(self.gradient.dtype, copy=False)
+                dx[lo:hi] = packed @ weight.T
+            return dx.reshape(value.shape)
         if is_low_precision_dtype(self.weight.dtype) and _bf16_projection_matmul_enabled():
             # Mirror the optimized 338M QKV projection backward: BF16 tensor-
             # core GEMMs, FP32 cumulative gradient buffers. This is an optional
@@ -695,6 +735,70 @@ class DualResolutionAttention:
             if prepared[key].dtype.kind not in {"i", "u"}:
                 raise TypeError(f"{key} must use an integer dtype")
         prepared["block_valid"] = prepared["block_valid"].astype(xp.bool_, copy=False)
+        # Model B fast-path eligibility.  When all complete blocks occupy the
+        # initial contiguous token range of every batch row, the compressor
+        # may reshape the original hidden tensor rather than gather a full
+        # [B, blocks, 128, D] copy.  Decide from CPU metadata; never transfer
+        # a GPU predicate to the host during forward/backward execution.
+        if metadata is None:
+            prepared["contiguous_pool_blocks"] = (
+                batch == 1 or seq_len % self.block_size == 0
+            )
+        elif host_bounds_checked:
+            host_indices = metadata["block_indices"]
+            host_valid = metadata["block_valid"]
+            n_blocks = host_indices.shape[1]
+            expected = np.arange(n_blocks * self.block_size, dtype=np.int64)
+            prepared["contiguous_pool_blocks"] = bool(
+                np.all(host_valid)
+                and n_blocks * self.block_size <= seq_len
+                and (batch == 1 or n_blocks * self.block_size == seq_len)
+                and np.array_equal(
+                    host_indices,
+                    np.broadcast_to(
+                        expected.reshape(1, n_blocks, self.block_size),
+                        host_indices.shape,
+                    ),
+                )
+            )
+        else:
+            # GPU-produced, irregular or unvalidated indexing must retain the
+            # exact indexed-gather reference implementation.
+            prepared["contiguous_pool_blocks"] = False
+        # Stronger invariant used by bounded Model B global attention.  It is
+        # deliberately established from host metadata only: packed documents,
+        # noncontiguous coordinates, missing blocks, and GPU-produced layouts
+        # must retain the fully metadata-aware kernel bounds.
+        if metadata is None:
+            prepared["single_contiguous_document"] = position_ids is None
+        elif host_bounds_checked:
+            host_docs = np.asarray(metadata["document_ids"])
+            host_positions = np.asarray(metadata["position_ids"])
+            host_block_docs = np.asarray(metadata["block_document_ids"])
+            host_ends = np.asarray(metadata["block_end_positions"])
+            n_blocks = host_ends.shape[1]
+            expected_positions = np.broadcast_to(
+                np.arange(seq_len, dtype=host_positions.dtype)[None, :],
+                host_positions.shape,
+            )
+            expected_ends = np.broadcast_to(
+                (np.arange(1, n_blocks + 1, dtype=host_ends.dtype)
+                 * self.block_size - 1)[None, :],
+                host_ends.shape,
+            )
+            prepared["single_contiguous_document"] = bool(
+                prepared["contiguous_pool_blocks"]
+                and np.all(metadata["block_valid"])
+                and np.all(host_docs == host_docs[:, :1])
+                and np.array_equal(host_positions, expected_positions)
+                and np.array_equal(
+                    host_block_docs,
+                    np.broadcast_to(host_docs[:, :1], host_block_docs.shape),
+                )
+                and np.array_equal(host_ends, expected_ends)
+            )
+        else:
+            prepared["single_contiguous_document"] = False
         if _fast_projection_enabled():
             # Index vectors are invariant across all 20 layers and checkpoint
             # replay. Build them once on the host when EOS metadata originates

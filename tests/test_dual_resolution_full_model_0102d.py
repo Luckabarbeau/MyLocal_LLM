@@ -96,3 +96,18 @@ def test_full_twenty_layer_shape_contract_with_tiny_width():
     assert report['gradients']['compress']['nonzero']
     assert report['gradients']['global']['nonzero']
     assert report['gradients']['ffn']['nonzero']
+
+
+def test_0102p_disable_global_applies_to_tiny_and_production_config():
+    from benchmarks.benchmark_dual_resolution_full_model_0102d import build_config
+    for tiny in (False, True):
+        args = parse_args([
+            '--architecture', 'matrix-pool', '--disable-global',
+            '--context', '24' if tiny else '4096',
+            *(['--tiny'] if tiny else []),
+        ])
+        config = build_config(args, backend_name='numpy')
+        assert config.dual_resolution.compression_mode == 'matrix_pool'
+        assert config.dual_resolution.global_enabled is False
+    args = parse_args(['--architecture', 'matrix-pool', '--tiny', '--context', '24'])
+    assert build_config(args, backend_name='numpy').dual_resolution.global_enabled

@@ -105,6 +105,7 @@ def test_matrix_pool_forward_backward_directional_derivatives(monkeypatch):
         build_dual_resolution_metadata(tokens, eos_token_id=99, block_size=4),
         1, 8, None,
     )
+    assert metadata["single_contiguous_document"] is True
     summaries, cache = attention._pool_forward(hidden, metadata, True)
     cache["block_indices"] = metadata["block_indices"][cache["rows"], cache["slots"]]
     upstream = rng.normal(size=summaries.shape)
@@ -190,6 +191,37 @@ def test_future_token_never_changes_earlier_output_and_summaries_receive_gradien
         assert np.all(np.isfinite(parameter.grad)), parameter.name
 
 
+def test_prepared_global_rope_matches_raw_packed_document_path(monkeypatch):
+    if BACKEND_NAME != "numpy":
+        pytest.skip("deterministic packed-document parity uses NumPy")
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS", "0")
+    attention = _attention(seed=1031)
+    tokens = np.array([[1, 2, 3, 0, 4, 5, 6, 0]])
+    metadata = build_dual_resolution_metadata(tokens, eos_token_id=0, block_size=4)
+    rng = np.random.default_rng(1032)
+    x = rng.normal(scale=0.1, size=(1, 8, 16))
+    residual = rng.normal(scale=0.1, size=x.shape)
+    upstream = rng.normal(size=x.shape)
+
+    def execute(enabled):
+        monkeypatch.setenv(
+            "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE", str(int(enabled))
+        )
+        attention.zero_grad()
+        output, cache = attention.forward(
+            x, residual_input=residual, dual_resolution_metadata=metadata
+        )
+        dx, dresidual = attention.backward(upstream, cache)
+        return output, dx, dresidual, [p.grad.copy() for p in attention.parameters()]
+
+    raw = execute(False)
+    prepared = execute(True)
+    for got, expected in zip(prepared[:3], raw[:3]):
+        np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+    for got, expected in zip(prepared[3], raw[3]):
+        np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
 def test_eos_blocks_expand_to_four_summaries_without_cross_document_visibility(monkeypatch):
     monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL", "cupy")
     attention = _attention()
@@ -199,6 +231,7 @@ def test_eos_blocks_expand_to_four_summaries_without_cross_document_visibility(m
         1, 12, None,
     )
     expanded = attention._summary_metadata(metadata)
+    assert metadata["single_contiguous_document"] is False
     assert expanded["valid"].shape[1] == metadata["block_valid"].shape[1] * 4
     assert int(expanded["valid"].sum()) == int(metadata["block_valid"].sum()) * 4
     first_document = expanded["documents"][0, :4]
@@ -284,3 +317,94 @@ def test_production_width_triton_mixed_window_and_global_parity(monkeypatch):
     for got, expected in zip(triton[3], reference[3]):
         assert bool(cp.all(cp.isfinite(got)))
         cp.testing.assert_allclose(got, expected, rtol=0.22, atol=0.22)
+
+@pytest.mark.skipif(BACKEND_NAME != "numpy", reason="NumPy exact scatter-reference check")
+def test_0102p_matrix_pool_backward_scatter_matches_reference_multiple_documents(monkeypatch):
+    """Accumulate into dQ without allocating a duplicate full-context zero tensor."""
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS", "0")
+    attention = _attention(seed=1037)
+    rng = np.random.default_rng(1038)
+    # Two rows with EOS delimiters, several complete blocks, and an incomplete tail.
+    tokens = np.array([
+        [1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 12, 13],
+        [4, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14, 15],
+    ], dtype=np.int64)
+    hidden = rng.normal(size=(2, 13, 16))
+    meta = attention._prepare_metadata(
+        build_dual_resolution_metadata(tokens, eos_token_id=0, block_size=4),
+        2, 13, None,
+    )
+    summaries, cache = attention._pool_forward(hidden, meta, True)
+    cache["block_indices"] = meta["block_indices"][cache["rows"], cache["slots"]]
+    ds = rng.normal(size=summaries.shape)
+    initial = rng.normal(size=hidden.shape)
+    attention.zero_grad()
+    separate = attention._pool_backward(ds, cache, hidden.shape, True)
+    reference_weight = attention.W_pool_score.grad.copy()
+    reference_position = attention.pool_position.grad.copy()
+    attention.zero_grad()
+    inplace = initial.copy()
+    result = attention._pool_backward(
+        ds, cache, hidden.shape, True, initial_dx=inplace
+    )
+    assert result is inplace
+    np.testing.assert_allclose(result, initial + separate, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(attention.W_pool_score.grad, reference_weight, rtol=0, atol=0)
+    np.testing.assert_allclose(attention.pool_position.grad, reference_position, rtol=0, atol=0)
+
+
+def test_0102p_end_to_end_backward_scatter_parity(monkeypatch):
+    """Both settings calculate the same full-block gradients, not just the pool."""
+    if BACKEND_NAME != "numpy":
+        pytest.skip("exact full-model parity uses the NumPy reference")
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS", "0")
+    config, _ = _tiny_model(seed=1041)
+    tokens = np.array([[1, 2, 3, 4, 8, 7, 6, 5, 3, 2, 4, 7]])
+    meta = build_dual_resolution_metadata(tokens, eos_token_id=30, block_size=4)
+    answers = []
+    for setting in ("0", "1"):
+        monkeypatch.setenv("MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE", setting)
+        model = DecoderLanguageModel(config, rng_seed=1041, dtype="float64")
+        model.zero_grad()
+        hidden, cache = model.forward_body(tokens, activation_checkpoint=True,
+                                           dual_resolution_metadata=meta)
+        delta = np.random.default_rng(1042).normal(size=hidden.shape)
+        model.backward_body(delta, cache)
+        answers.append((np.asarray(hidden).copy(),
+                        {p.name: np.asarray(p.grad).copy() for p in model.parameters()}))
+    np.testing.assert_allclose(answers[0][0], answers[1][0], rtol=0, atol=0)
+    for name, grad in answers[0][1].items():
+        np.testing.assert_allclose(grad, answers[1][1][name],
+                                   rtol=2e-12, atol=2e-12, err_msg=name)
+
+@pytest.mark.skipif(BACKEND_NAME != "cupy", reason="CuPy GPU scatter parity")
+def test_0102p_gpu_matrix_pool_backward_scatter_parity(monkeypatch):
+    """CuPy advanced indexing must add each completed block's gradient once."""
+    from mini_llm.backend import xp
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS", "0")
+    attention = _attention(seed=1051, dtype="float32")
+    rng = np.random.default_rng(1052)
+    tokens = np.array([
+        [1, 2, 3, 0, 5, 6, 7, 8, 9],
+        [9, 8, 7, 6, 0, 5, 4, 3, 2],
+    ], dtype=np.int64)
+    hidden = xp.asarray(rng.normal(size=(2, 9, 16)).astype(np.float32))
+    metadata = attention._prepare_metadata(
+        build_dual_resolution_metadata(tokens, eos_token_id=0, block_size=4),
+        2, 9, None,
+    )
+    summaries, cache = attention._pool_forward(hidden, metadata, True)
+    cache["block_indices"] = metadata["block_indices"][cache["rows"], cache["slots"]]
+    ds = xp.asarray(rng.normal(size=summaries.shape).astype(np.float32))
+    initial = xp.asarray(rng.normal(size=hidden.shape).astype(np.float32))
+    attention.zero_grad()
+    separate = attention._pool_backward(ds, cache, hidden.shape, True)
+    grad_score = attention.W_pool_score.grad.copy()
+    attention.zero_grad()
+    base = initial.copy()
+    result = attention._pool_backward(ds, cache, hidden.shape, True, initial_dx=base)
+    assert result is base
+    np.testing.assert_allclose(xp.asnumpy(result), xp.asnumpy(initial + separate),
+                               atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(xp.asnumpy(attention.W_pool_score.grad),
+                               xp.asnumpy(grad_score), atol=0, rtol=0)

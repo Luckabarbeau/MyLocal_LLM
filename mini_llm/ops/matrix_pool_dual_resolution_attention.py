@@ -11,12 +11,18 @@ from ..backend import BACKEND_NAME, is_low_precision_dtype, resolve_dtype, xp
 from ..init import matrix_parameter
 from ..parameter import Parameter
 from ..performance_profiler import matrix_pool_detail_scope, performance_scope
-from .attention import softmax_backward, softmax_forward
+from .attention import (
+    _compact_packed_v_enabled,
+    _fused_packed_qkv_rope_forward_bf16,
+    softmax_backward,
+    softmax_forward,
+)
 from .rope import prepare_rope_positions, rope_backward, rope_forward
 from .dual_resolution_attention import (
     DualResolutionAttention,
     _PackedProjection,
     _add_parameter_grad,
+    _bf16_output_dx_enabled,
     _fast_projection_enabled,
     _linear_backward,
     _linear_forward,
@@ -414,6 +420,35 @@ class MatrixPoolDualResolutionAttention:
             cache[count] = result
         return cache[count]
 
+    def _local_rope_positions(self, metadata, dtype):
+        """Prepare token-position RoPE ONCE for all layers and checkpoint replay.
+
+        The 0102F device metadata is shared across the 20-layer model and its
+        checkpoint replays.  The raw position tensor never changes during that
+        lifetime; in particular packed documents retain their own positions.
+        The prior Q/K path performed two synchronizing position checks and two
+        max-position reads *per layer* on CuPy.  PreparedRoPEPositions is
+        accepted by rope_forward without any device-to-host scalar reads.
+
+        This is intentionally separate from metadata construction so it also
+        works for the regular (no explicit metadata) reference path.  The
+        disabled option reproduces the original Q/K execution for A/B testing.
+        """
+        enabled = os.environ.get(
+            "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return metadata["position_ids"]
+        key = (self.d_head, self.rope_base, str(dtype),
+               tuple(metadata["position_ids"].shape))
+        cache = metadata.setdefault("_matrix_pool_local_rope_0102y", {})
+        if key not in cache:
+            cache[key] = prepare_rope_positions(
+                metadata["position_ids"], d_head=self.d_head,
+                base=self.rope_base, dtype=dtype,
+            )
+        return cache[key]
+
     def _global_rope_positions(self, metadata, summary_metadata, dtype):
         """Prepare immutable token/summary RoPE factors once per model pass."""
         enabled = os.environ.get(
@@ -426,8 +461,17 @@ class MatrixPoolDualResolutionAttention:
                tuple(summary_metadata["positions"].shape))
         cache = metadata.setdefault("_matrix_pool_global_rope_0102x", {})
         if key not in cache:
+            # Global queries and local Q/K rotate the SAME token positions.
+            # Reuse their prepared factors instead of constructing a second
+            # [batch, sequence, d_head/2] cos/sin pair on every microbatch.
+            # If the local fast path is disabled for an A/B benchmark, the
+            # global path still prepares its own factors as before.
             cache[key] = (
-                prepare_rope_positions(
+                self._local_rope_positions(metadata, dtype)
+                if os.environ.get(
+                    "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE", "1"
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                else prepare_rope_positions(
                     metadata["position_ids"], d_head=self.global_head_dim,
                     base=self.rope_base, dtype=dtype,
                 ),
@@ -528,19 +572,55 @@ class MatrixPoolDualResolutionAttention:
         metadata = self._prepare_metadata(
             dual_resolution_metadata, batch, length, position_ids
         )
-        positions = metadata["position_ids"]
+        packed_qkv = None
+        q_width = self.n_q_heads * self.d_head
+        kv_width = self.n_kv_heads * self.d_head
         if _fast_projection_enabled():
             self._ensure_projection_groups()
-            qp, kp, vp = self._packed_main.forward(x)
+            packed_qkv = self._packed_main.forward_packed(x)
+            q_pre = packed_qkv[:, :q_width].reshape(
+                batch, length, self.n_q_heads, self.d_head
+            )
+            k_pre = packed_qkv[:, q_width:q_width + kv_width].reshape(
+                batch, length, self.n_kv_heads, self.d_head
+            )
+            v = packed_qkv[:, q_width + kv_width:].reshape(
+                batch, length, self.n_kv_heads, self.d_head
+            )
         else:
-            qp = _linear_forward(x, self.Wq)
-            kp = _linear_forward(x, self.Wk)
-            vp = _linear_forward(x, self.Wv)
-        q_pre = qp.reshape(batch, length, self.n_q_heads, self.d_head)
-        k_pre = kp.reshape(batch, length, self.n_kv_heads, self.d_head)
-        v = vp.reshape(batch, length, self.n_kv_heads, self.d_head)
-        q, q_rope_cache = rope_forward(q_pre, self.rope_base, positions)
-        k, k_rope_cache = rope_forward(k_pre, self.rope_base, positions)
+            q_pre = _linear_forward(x, self.Wq).reshape(
+                batch, length, self.n_q_heads, self.d_head
+            )
+            k_pre = _linear_forward(x, self.Wk).reshape(
+                batch, length, self.n_kv_heads, self.d_head
+            )
+            v = _linear_forward(x, self.Wv).reshape(
+                batch, length, self.n_kv_heads, self.d_head
+            )
+        local_rope_positions = self._local_rope_positions(metadata, x.dtype)
+        fused_qkv_rope = None
+        if packed_qkv is not None and _compact_packed_v_enabled():
+            fused_qkv_rope = _fused_packed_qkv_rope_forward_bf16(
+                packed_qkv,
+                local_rope_positions,
+                batch=batch,
+                seq_len=length,
+                q_heads=self.n_q_heads,
+                kv_heads=self.n_kv_heads,
+                d_head=self.d_head,
+            )
+        if fused_qkv_rope is None:
+            q, q_rope_cache = rope_forward(
+                q_pre, self.rope_base, local_rope_positions
+            )
+            k, k_rope_cache = rope_forward(
+                k_pre, self.rope_base, local_rope_positions
+            )
+            if packed_qkv is not None and _compact_packed_v_enabled():
+                v = xp.array(v, copy=True, order="C")
+        else:
+            q, k, v, q_rope_cache, k_rope_cache = fused_qkv_rope
+        packed_qkv = None
         with performance_scope("matrix_pool.local.forward"):
             local_context, local_cache = self._local_forward(
                 q, k, v, metadata["document_ids"], return_cache
@@ -648,9 +728,18 @@ class MatrixPoolDualResolutionAttention:
                         self.W_global_o,
                         _work_array(global_compute.reshape(-1, self.global_width)).T @ dy2,
                     )
-                dgc = (dy2 @ _work_array(self.W_global_o.data).T).reshape(
-                    batch, length, self.global_heads, self.global_head_dim
-                )
+                if (_bf16_output_dx_enabled()
+                        and is_low_precision_dtype(dy.dtype)
+                        and dy.dtype == self.W_global_o.data.dtype):
+                    dgc = (
+                        dy.reshape(-1, self.d_model) @ self.W_global_o.data.T
+                    ).astype(xp.float32, copy=False).reshape(
+                        batch, length, self.global_heads, self.global_head_dim
+                    )
+                else:
+                    dgc = (dy2 @ _work_array(self.W_global_o.data).T).reshape(
+                        batch, length, self.global_heads, self.global_head_dim
+                    )
             with performance_scope("matrix_pool.global.backward"):
                 with matrix_pool_detail_scope("matrix_pool.global_attention.backward"):
                     dqg, dkg, dvg = self._global_backward(
@@ -725,9 +814,19 @@ class MatrixPoolDualResolutionAttention:
                 self.Wo,
                 _work_array(local_compute.reshape(-1, self.d_model)).T @ dl2,
             )
-        dlocal_context = (dl2 @ _work_array(self.Wo.data).T).reshape(
-            batch, length, self.n_q_heads, self.d_head
-        )
+        if (_bf16_output_dx_enabled()
+                and is_low_precision_dtype(dy.dtype)
+                and dy.dtype == self.Wo.data.dtype):
+            dlocal_context = (
+                d_local_delta.astype(dy.dtype, copy=False).reshape(-1, self.d_model)
+                @ self.Wo.data.T
+            ).astype(xp.float32, copy=False).reshape(
+                batch, length, self.n_q_heads, self.d_head
+            )
+        else:
+            dlocal_context = (dl2 @ _work_array(self.Wo.data).T).reshape(
+                batch, length, self.n_q_heads, self.d_head
+            )
         with performance_scope("matrix_pool.local.backward"):
             dq, dk, dv = self._local_backward(
                 dlocal_context, cache["q"], cache["k"], cache["v"],

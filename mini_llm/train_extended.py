@@ -242,6 +242,20 @@ class ExtendedTrainer:
             self.ar_accum_length_buckets = False
         if self.ar_accum_length_buckets and not self.ar_compact_target:
             raise ValueError("length bucketing requires MINI_LLM_AR_COMPACT_TARGET=1")
+        # 0102X: optional source-preserving, length-aware microbatch regrouping.
+        # Separate from the legacy compact-AR bucketer: dual-resolution inputs
+        # have variable width and need fresh document/block metadata after repack.
+        dual_bucket_env = os.environ.get(
+            "MINI_LLM_DUAL_RESOLUTION_ACCUM_LENGTH_BUCKETS", "0"
+        )
+        if dual_bucket_env not in ("0", "1"):
+            raise ValueError("MINI_LLM_DUAL_RESOLUTION_ACCUM_LENGTH_BUCKETS must be 0 or 1")
+        self.dual_accum_length_buckets = dual_bucket_env == "1"
+        if self.dual_accum_length_buckets and not self.dual_document_first:
+            raise ValueError("dual-resolution length buckets require dual-resolution AR")
+        if self.dual_accum_length_buckets and self.training_objective is not None:
+            raise ValueError("dual-resolution length buckets require the AR objective")
+        self._last_step_dual_bucket = None
         self._last_step_ar_bucket = None
         self._last_step_ar_compact = None
         self._last_step_block_proposal_metrics = None
@@ -369,6 +383,10 @@ class ExtendedTrainer:
             raise ValueError("length bucketing requires supervised_tokens accumulation weighting")
         if self.ar_accum_length_buckets and int(grad_accum_steps) < 2:
             raise ValueError("length bucketing requires at least two accumulation microbatches")
+        if self.dual_accum_length_buckets and gradient_accumulation_weighting != "supervised_tokens":
+            raise ValueError("dual-resolution length bucketing requires supervised_tokens weighting")
+        if self.dual_accum_length_buckets and int(grad_accum_steps) < 2:
+            raise ValueError("dual-resolution length bucketing requires at least two microbatches")
         self.gradient_accumulation_weighting = gradient_accumulation_weighting
         self.grad_clip = grad_clip  # Store grad_clip parameter
         self.loss_scale = loss_scale  # Store loss scale (trainer owns it)
@@ -737,6 +755,9 @@ class ExtendedTrainer:
                         f"{os.environ.get('MINI_LLM_DUAL_RESOLUTION_FUSED_GATE', '0').strip().lower() in ('1', 'true', 'yes') and BACKEND_NAME == 'cupy'}"
                     )
                 print("  Dual-resolution sampling: document-first, EOS-bounded")
+                print("  Dual-resolution accumulation length grouping: "
+                      + ("enabled (source-preserving)" if self.dual_accum_length_buckets
+                         else "disabled"))
                 print("  Active length: min(document pairs, context cap), "
                       "no tail padding at batch=1")
                 print("  Supervision: all genuine next-token pairs throughout active context")
@@ -1535,7 +1556,8 @@ class ExtendedTrainer:
             cache.popitem(last=False)
         return index
     
-    def get_train_batch(self, return_metadata: bool = False):
+    def get_train_batch(self, return_metadata: bool = False, *,
+                        prepare_dual_resolution_metadata: bool = True):
         """Get one reproducible training batch.
 
         Hierarchical-memory batches are EOS/document bounded.  A compact
@@ -1595,19 +1617,20 @@ class ExtendedTrainer:
                 document_index=document_index, return_metadata=True,
                 shape_bucket=self.dual_shape_bucket,
             )
-            metadata.update(self._dual_resolution_batch_metadata(inputs))
-            # Geometric bucketing may append EOS padding. Those tokens must
-            # neither be supervised nor create visible compressed summaries.
-            dual_meta = metadata["dual_resolution_metadata"]
-            if dual_meta["block_indices"].shape[1]:
-                end_indices = dual_meta["block_indices"][:, :, -1]
-                dual_meta["block_valid"] &= (
-                    end_indices < metadata["target_valid_lengths"][:, None]
+            if prepare_dual_resolution_metadata:
+                metadata.update(self._dual_resolution_batch_metadata(inputs))
+                # Geometric bucketing may append EOS padding. Those tokens must
+                # neither be supervised nor create visible compressed summaries.
+                dual_meta = metadata["dual_resolution_metadata"]
+                if dual_meta["block_indices"].shape[1]:
+                    end_indices = dual_meta["block_indices"][:, :, -1]
+                    dual_meta["block_valid"] &= (
+                        end_indices < metadata["target_valid_lengths"][:, None]
+                    )
+                # Never undo the sampler's padding/valid-target mask.
+                metadata["target_loss_mask"] *= (
+                    np.asarray(inputs) != self.eos_token_id
                 )
-            # Never undo the sampler's padding/valid-target mask.
-            metadata["target_loss_mask"] *= (
-                np.asarray(inputs) != self.eos_token_id
-            )
         elif self.memory_context is None:
             inputs, targets = create_minibatch(
                 shard_data, self.batch_size, self.seq_length, rng=self.train_rng
@@ -2688,7 +2711,52 @@ class ExtendedTrainer:
 
         prefetched_batches = None
         self._last_step_ar_bucket = None
-        if self.ar_accum_length_buckets:
+        self._last_step_dual_bucket = None
+        if self.dual_accum_length_buckets:
+            from mini_llm.data.dual_resolution_length_buckets import (
+                regroup_dual_resolution_document_batches,
+            )
+            with performance_scope("train.data_batch"):
+                sampled = []
+                for _ in range(self.grad_accum_steps):
+                    source_inputs, source_targets, source_meta = self.get_train_batch(
+                        return_metadata=True, prepare_dual_resolution_metadata=False,
+                    )
+                    sampled.append((self._last_train_batch_source,
+                                    source_inputs, source_targets, source_meta))
+                prefetched_batches, self._last_step_dual_bucket = (
+                    regroup_dual_resolution_document_batches(
+                        sampled, batch_size=self.batch_size,
+                        context_length=self.seq_length,
+                        eos_token_id=self.eos_token_id,
+                    )
+                )
+                del sampled
+                # The sampler already accounted for the *old* padded shapes.
+                # Correct the counter so production executed-token statistics
+                # and checkpoint provenance use the shapes actually executed.
+                self.tokens_processed += (
+                    self._last_step_dual_bucket["bucketed_rows"]
+                    - self._last_step_dual_bucket["original_rows"]
+                )
+                # Padded positions can neither train the LM head nor produce
+                # completed historical blocks. Rebuild all attention metadata
+                # for the new [batch, max_valid] shapes, never reuse the old
+                # per-row block arrays with the previous width.
+                rebuilt = []
+                for source, source_inputs, source_targets, source_meta in prefetched_batches:
+                    sampler_mask = source_meta["target_loss_mask"]
+                    source_meta.update(self._dual_resolution_batch_metadata(source_inputs))
+                    source_meta["target_loss_mask"] *= sampler_mask
+                    dual = source_meta["dual_resolution_metadata"]
+                    if dual["block_indices"].shape[1]:
+                        ends = dual["block_indices"][:, :, -1]
+                        dual["block_valid"] &= (
+                            ends < source_meta["target_valid_lengths"][:, None]
+                        )
+                    rebuilt.append((source, source_inputs, source_targets, source_meta))
+                prefetched_batches = rebuilt
+        elif self.ar_accum_length_buckets:
             from mini_llm.data.accumulation_length_buckets import (
                 regroup_ar_accumulation_batches,
             )
@@ -3885,6 +3953,13 @@ class ExtendedTrainer:
                     throughput_text += (
                         f", ar_working_rows={compact['executed']}/{compact['capacity']}"
                         f", ar_padding_skipped={100.0*(1.0-compact['executed']/max(1,compact['capacity'])):.1f}%"
+                    )
+                if self._last_step_dual_bucket is not None:
+                    grouped = self._last_step_dual_bucket
+                    throughput_text += (
+                        f", dual_bucket_rows={grouped['original_rows']}->{grouped['bucketed_rows']}"
+                        f", dual_bucket_saved={100.0*grouped['padding_saved_rows']/max(1,grouped['original_rows']):.1f}%"
+                        f", dual_bucket_strata={grouped['strata']}"
                     )
                 if self._last_step_ar_bucket is not None:
                     packed = self._last_step_ar_bucket

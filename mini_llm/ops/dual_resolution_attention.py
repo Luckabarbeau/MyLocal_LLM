@@ -226,10 +226,14 @@ class _PackedProjection:
             self.weight[:, self.ends[i]:self.ends[i + 1]] = param.data
         self.valid = True
 
-    def forward(self, value):
+    def forward_packed(self, value):
+        """Return the contiguous 2-D packed projection for fused consumers."""
         if not self.valid:
             self.refresh()
-        out = value.reshape(-1, value.shape[-1]) @ self.weight
+        return value.reshape(-1, value.shape[-1]) @ self.weight
+
+    def forward(self, value):
+        out = self.forward_packed(value)
         out = out.reshape(value.shape[:-1] + (self.ends[-1],))
         return tuple(out[..., self.ends[i]:self.ends[i+1]] for i in range(len(self.widths)))
 
@@ -280,14 +284,19 @@ class _PackedProjection:
             return dx.reshape(value.shape)
         if is_low_precision_dtype(self.weight.dtype) and _bf16_projection_matmul_enabled():
             # Mirror the optimized 338M QKV projection backward: BF16 tensor-
-            # core GEMMs, FP32 cumulative gradient buffers. This is an optional
-            # mixed-precision tradeoff, not bit-exact with FP32 GEMMs.
-            pieces = [g.astype(self.weight.dtype, copy=False) for g in pieces]
+            # core GEMMs, FP32 cumulative gradient buffers. Pack directly into
+            # the BF16 destination so FP32 inputs do not create one cast
+            # temporary per projection before concatenation.
+            combined = xp.empty(
+                (data.shape[0], self.ends[-1]), dtype=self.weight.dtype
+            )
+            for i, piece in enumerate(pieces):
+                combined[:, self.ends[i]:self.ends[i + 1]] = piece
             data = data.astype(self.weight.dtype, copy=False)
         else:
             pieces = [_work_array(g) for g in pieces]
             data = _work_array(data)
-        combined = xp.concatenate(pieces, axis=-1)
+            combined = xp.concatenate(pieces, axis=-1)
         if accumulate_parameter_grads:
             dw = data.T @ combined
             self.gradient += dw.astype(self.gradient.dtype, copy=False)

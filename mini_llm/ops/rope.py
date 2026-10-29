@@ -1,11 +1,16 @@
 from dataclasses import dataclass
+import os
 
-from ..backend import xp, dtype_name
+import numpy as np
+
+from ..backend import BACKEND_NAME, dtype_name, is_bfloat16_dtype, xp
 
 
 # Shared cache across all attention layers.  A fixed-length training run uses
 # one table for every layer; inference can also reuse the same cached table.
 _ROPE_TABLE_CACHE = {}
+_FUSED_ROPE_BACKWARD_KERNEL = None
+_FUSED_ROPE_BACKWARD_DISABLED = False
 
 
 def clear_rope_cache():
@@ -157,8 +162,115 @@ def rope_forward(x, base=10_000.0, position_ids=None):
     return y, {"cos": cos, "sin": sin}
 
 
+def _fused_rope_backward_enabled():
+    return (
+        BACKEND_NAME == "cupy"
+        and os.environ.get("MINI_LLM_FUSED_ROPE_BACKWARD", "0")
+        .strip().lower() in {"1", "true", "yes", "on"}
+    )
+
+
+def _get_fused_rope_backward_kernel():
+    global _FUSED_ROPE_BACKWARD_KERNEL, _FUSED_ROPE_BACKWARD_DISABLED
+    if _FUSED_ROPE_BACKWARD_DISABLED:
+        return None
+    if _FUSED_ROPE_BACKWARD_KERNEL is not None:
+        return _FUSED_ROPE_BACKWARD_KERNEL
+    code = r"""
+    #include <cuda_bf16.h>
+
+    extern "C" __global__
+    void inverse_rope_bf16_factors(
+        const float* __restrict__ dy,
+        const __nv_bfloat16* __restrict__ cos_table,
+        const __nv_bfloat16* __restrict__ sin_table,
+        float* __restrict__ dx,
+        long long total_pairs,
+        int seq_len,
+        int heads,
+        int d_head,
+        int factor_batches)
+    {
+        const int half = d_head >> 1;
+        for (long long pair = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+             pair < total_pairs;
+             pair += (long long)blockDim.x * gridDim.x) {
+            const long long token_head = pair / half;
+            const int pair_lane = (int)(pair - token_head * half);
+            const int token = (int)((token_head / heads) % seq_len);
+            const int batch = (int)(token_head / ((long long)heads * seq_len));
+            const long long factor = (
+                ((long long)(factor_batches == 1 ? 0 : batch) * seq_len + token)
+                * half + pair_lane
+            );
+            const long long base = pair << 1;
+            const float a = dy[base];
+            const float b = dy[base + 1];
+            const float c = __bfloat162float(cos_table[factor]);
+            const float s = __bfloat162float(sin_table[factor]);
+            dx[base] = a * c + b * s;
+            dx[base + 1] = -a * s + b * c;
+        }
+    }
+    """
+    try:
+        _FUSED_ROPE_BACKWARD_KERNEL = xp.RawKernel(
+            code, "inverse_rope_bf16_factors", options=("--std=c++11",)
+        )
+    except Exception:
+        _FUSED_ROPE_BACKWARD_DISABLED = True
+        return None
+    return _FUSED_ROPE_BACKWARD_KERNEL
+
+
+def _fused_rope_backward(dy, cos, sin):
+    global _FUSED_ROPE_BACKWARD_DISABLED
+    if (
+        not _fused_rope_backward_enabled()
+        or dy.ndim != 4
+        or dy.dtype != xp.float32
+        or not dy.flags.c_contiguous
+        or not is_bfloat16_dtype(cos.dtype)
+        or not is_bfloat16_dtype(sin.dtype)
+        or not cos.flags.c_contiguous
+        or not sin.flags.c_contiguous
+    ):
+        return None
+    batch, seq_len, heads, d_head = map(int, dy.shape)
+    if d_head % 2 or tuple(sin.shape) != tuple(cos.shape):
+        return None
+    factor_batches = int(cos.shape[0])
+    if (
+        factor_batches not in (1, batch)
+        or tuple(cos.shape[1:]) != (seq_len, 1, d_head // 2)
+    ):
+        return None
+    kernel = _get_fused_rope_backward_kernel()
+    if kernel is None:
+        return None
+    dx = xp.empty_like(dy)
+    total_pairs = int(dy.size // 2)
+    threads = 256
+    blocks = min((total_pairs + threads - 1) // threads, 65535)
+    try:
+        kernel(
+            (blocks,), (threads,),
+            (
+                dy, cos, sin, dx, np.int64(total_pairs), np.int32(seq_len),
+                np.int32(heads), np.int32(d_head), np.int32(factor_batches),
+            ),
+        )
+    except Exception:
+        _FUSED_ROPE_BACKWARD_DISABLED = True
+        return None
+    return dx
+
+
 def rope_backward(dy, cache):
     cos, sin = cache["cos"], cache["sin"]
+    fused = _fused_rope_backward(dy, cos, sin)
+    if fused is not None:
+        return fused
     dy0, dy1 = dy[..., 0::2], dy[..., 1::2]
     dx = xp.empty_like(dy)
     dx[..., 0::2] = dy0 * cos + dy1 * sin

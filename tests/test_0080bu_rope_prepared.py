@@ -117,3 +117,31 @@ def test_prepared_rope_cuda_bf16_parity():
         asnumpy(rope_backward(dy, cache)), asnumpy(rope_backward(dy, ref_cache)),
         rtol=0.02, atol=0.02,
     )
+
+
+@pytest.mark.skipif(BACKEND_NAME != "cupy", reason="BF16 CUDA fused backward test")
+@pytest.mark.parametrize("batched_positions", [False, True])
+def test_fused_rope_backward_bf16_factor_parity(monkeypatch, batched_positions):
+    rng = np.random.default_rng(82)
+    dtype = resolve_dtype("bfloat16")
+    positions_np = np.asarray(
+        [[3, 19, 511, 4096, 65535], [7, 23, 1023, 8192, 65534]],
+        dtype=np.int64,
+    )
+    positions = xp.asarray(positions_np if batched_positions else positions_np[0])
+    prepared = prepare_rope_positions(
+        positions, d_head=64, base=1000000.0, dtype=dtype
+    )
+    dy = xp.asarray(
+        rng.normal(size=(2, 5, 3, 64)).astype(np.float32), dtype=xp.float32
+    )
+    cache = {"cos": prepared.cos, "sin": prepared.sin}
+
+    monkeypatch.setenv("MINI_LLM_FUSED_ROPE_BACKWARD", "0")
+    reference = rope_backward(dy, cache)
+    monkeypatch.setenv("MINI_LLM_FUSED_ROPE_BACKWARD", "1")
+    optimized = rope_backward(dy, cache)
+
+    np.testing.assert_allclose(
+        asnumpy(optimized), asnumpy(reference), rtol=2e-6, atol=2e-6
+    )

@@ -25,6 +25,7 @@ PROFILE_VARS = {
     "MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM",
     "MINI_LLM_PACKED_QKV",
     "MINI_LLM_FUSED_QKV_ROPE_FORWARD",
+    "MINI_LLM_FUSED_ROPE_BACKWARD",
     "MINI_LLM_FUSED_SPARSE_DECODE",
     "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM",
     "MINI_LLM_LOCAL_CUBLAS_MODE",
@@ -50,6 +51,35 @@ PROFILE_VARS = {
     "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS",
     "MINI_LLM_TRITON_HISTORICAL_BLOCK_FORWARD",
     "MINI_LLM_TRITON_HISTORICAL_BLOCK_PREWARM",
+    "MINI_LLM_BF16_MIXED_CONTEXT",
+    "MINI_LLM_MOE_RECOMPUTE_GATE_UP",
+    "MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS",
+    "MINI_LLM_GPU_MEMORY_AUDIT",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION",
+    "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL",
+    "MINI_LLM_DUAL_RESOLUTION_ACCUM_LENGTH_BUCKETS",
+    "MINI_LLM_DUAL_RESOLUTION_CHECKPOINT_THRESHOLD",
+    "MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL",
+    "MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL",
+    "MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET",
+    "MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_PROJECTION_GRADS",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_COMPRESSOR_QKV",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_SKIP_EMPTY_TILES",
+    "MINI_LLM_DUAL_RESOLUTION_PACKED_BACKWARD_CHUNK_TOKENS",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_POOLING",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_RMSNORM",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_GATE",
+    "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE",
+    "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE",
+    "MINI_LLM_MATRIX_POOL_FUSED_FORWARD",
+    "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD",
+    "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE",
+    "MINI_LLM_MATRIX_POOL_R4_LOGITS_BACKWARD",
 }
 
 
@@ -79,6 +109,7 @@ def test_auto_large_cupy_training_uses_consumer_profile(monkeypatch):
     assert result.resolved == "consumer-gpu"
     assert os.environ["MINI_LLM_PACKED_QKV"] == "1"
     assert os.environ["MINI_LLM_FUSED_QKV_ROPE_FORWARD"] == "1"
+    assert os.environ["MINI_LLM_FUSED_ROPE_BACKWARD"] == "1"
     assert os.environ["MINI_LLM_SWIGLU_VEC2"] == "1"
     assert os.environ["MINI_LLM_FUSED_TRAIN_RESIDUAL_RMSNORM"] == "1"
     assert os.environ["MINI_LLM_LOCAL_ATTN_QUERY_CHUNK"] == "1536"
@@ -100,15 +131,32 @@ def test_dual_resolution_consumer_profile_uses_measured_lm_head_chunk(monkeypatc
     assert os.environ["MINI_LLM_FUSED_EXPERT_GEMM"] == "0"
     assert os.environ["MINI_LLM_FUSED_SWIGLU"] == "1"
     assert os.environ["MINI_LLM_SWIGLU_VEC2"] == "1"
-    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "512"
+    assert os.environ["MINI_LLM_FUSED_ROPE_BACKWARD"] == "1"
+    assert "MINI_LLM_MOE_RECOMPUTE_GATE_UP" not in os.environ
+    assert "MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS" not in os.environ
+    assert os.environ["MINI_LLM_AR_ACCUM_LENGTH_BUCKETS"] == "0"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_ACCUM_LENGTH_BUCKETS"] == "0"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_PACKED_BACKWARD_CHUNK_TOKENS"] == "0"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX"] == "1"
+    assert os.environ["MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE"] == "1"
+    assert os.environ["MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS"] == "1"
+    assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "8192"
 
     _clear(monkeypatch)
     monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "768")
+    monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP", "1")
+    monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS", "15")
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX", "0")
+    monkeypatch.setenv("MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE", "0")
     apply_runtime_defaults(
         "consumer-gpu", backend_name="cupy", config=config,
         training=True, precision="bf16-mixed",
     )
     assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "768"
+    assert os.environ["MINI_LLM_MOE_RECOMPUTE_GATE_UP"] == "1"
+    assert os.environ["MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS"] == "15"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX"] == "0"
+    assert os.environ["MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE"] == "0"
 
 
 def test_explicit_override_wins_over_profile(monkeypatch):

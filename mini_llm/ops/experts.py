@@ -329,16 +329,31 @@ def _fused_swiglu_backward(dh, g, u):
     return dg, du
 
 
-def _moe_recompute_gate_up_enabled():
-    """0080O7: trade extra expert GEMMs in backward for smaller training tapes.
+def _moe_recompute_gate_up_enabled(name=None):
+    """Trade expert G/U tapes for GEMM replay, optionally for the first N layers.
 
-    The Experts dispatcher already retains the MoE input and routing plan.
-    Consequently G/U can be regenerated from the identical routed inputs in
-    backward without storing both [top-k routed tokens, d_ff] tensors per layer.
-    No full-history or dense attention activation is materialized here.
+    ``MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS`` leaves later-layer G/U tensors
+    resident so reverse-order backward can release them first. When the limit is
+    unset, the established all-layer behavior is preserved.
     """
     raw = os.environ.get("MINI_LLM_MOE_RECOMPUTE_GATE_UP", "0").strip().lower()
-    return raw not in {"0", "false", "off", "no", ""}
+    if raw in {"0", "false", "off", "no", ""}:
+        return False
+    raw_layers = os.environ.get("MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS")
+    if raw_layers is None:
+        return True
+    try:
+        layers = int(raw_layers)
+    except ValueError as exc:
+        raise ValueError(
+            "MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS must be an integer"
+        ) from exc
+    if not 0 <= layers <= 1024:
+        raise ValueError(
+            "MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS must be between 0 and 1024"
+        )
+    layer_match = re.search(r"(?:^|\.)blocks\.(\d+)(?:\.|$)", name or "")
+    return layers > 0 and (layer_match is None or int(layer_match.group(1)) < layers)
 
 
 def _moe_cpu_offload_enabled(name):
@@ -624,7 +639,7 @@ class ExpertFFN:
         # duplicates all routed tokens (top-k times) until backward.  Cache only
         # the two expensive SwiGLU projection activations; the dispatcher
         # regathers expert_x from the original input during backward.
-        recompute_gate_up = _moe_recompute_gate_up_enabled()
+        recompute_gate_up = _moe_recompute_gate_up_enabled(self.W_gate.name)
         if recompute_gate_up:
             # Retain no gate/up activations: the dispatcher retains the original
             # MoE input and regathers each expert's selected tokens in backward.

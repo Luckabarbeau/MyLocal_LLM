@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 
 from mini_llm.backend import BACKEND_NAME, RandomStream, asnumpy, xp
-from mini_llm.ops.experts import ExpertFFN, Experts
+from mini_llm.ops.experts import (
+    ExpertFFN,
+    Experts,
+    _moe_recompute_gate_up_enabled,
+)
 from mini_llm.blocks.moe_block import MoE
 
 
@@ -24,6 +28,20 @@ def make_expert(seed, dtype):
         d_model=8, d_ff=13, input_std=0.07, output_std=0.05,
         rng=RandomStream(seed), name="o7.expert", dtype=dtype,
     )
+
+
+def test_gate_up_recompute_layer_limit(monkeypatch):
+    monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP", "1")
+    monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS", "17")
+    assert _moe_recompute_gate_up_enabled("blocks.0.dense_ffn.expert.W_gate")
+    assert _moe_recompute_gate_up_enabled("blocks.16.dense_ffn.expert.W_gate")
+    assert not _moe_recompute_gate_up_enabled("blocks.17.dense_ffn.expert.W_gate")
+    assert not _moe_recompute_gate_up_enabled("blocks.19.dense_ffn.expert.W_gate")
+    assert _moe_recompute_gate_up_enabled()
+
+    monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS", "invalid")
+    with pytest.raises(ValueError, match="must be an integer"):
+        _moe_recompute_gate_up_enabled("blocks.0.dense_ffn.expert.W_gate")
 
 
 @pytest.mark.parametrize("packed", [False, True])

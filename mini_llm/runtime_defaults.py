@@ -59,6 +59,7 @@ _GPU_FAST_DEFAULTS: dict[str, str] = {
     # 0089N: one packed-QKV kernel replaces forward Q/K RoPE arithmetic and
     # compact-V materialization, reducing depth-20 complete F+B latency.
     "MINI_LLM_FUSED_QKV_ROPE_FORWARD": "1",
+    "MINI_LLM_FUSED_ROPE_BACKWARD": "1",
     "MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM": "1",
     "MINI_LLM_LOCAL_CUBLAS_MODE": "grouped",
     "MINI_LLM_CUBLAS_AUTOTUNE": "0",
@@ -86,6 +87,42 @@ _CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
     "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
     "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
     "MINI_LLM_LM_HEAD_CHUNK_TOKENS": "1024",
+}
+
+# Validated RTX 5080 production contract for the 348M matrix-pool Model B.
+# Apply this before generic training defaults so Model B does not inherit the
+# legacy AR bucketer. Explicit environment values still win through setdefault.
+_MODEL_B_CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
+    "MINI_LLM_BF16_MIXED_CONTEXT": "0",
+    "MINI_LLM_GPU_MEMORY_AUDIT": "0",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_CHECKPOINT": "1",
+    "MINI_LLM_GPU_MEMORY_TRIM_AFTER_VALIDATION": "1",
+    "MINI_LLM_GPU_MEMORY_TRIM_TRAIN_INTERVAL": "0",
+    "MINI_LLM_AR_ACCUM_LENGTH_BUCKETS": "0",
+    "MINI_LLM_AR_COMPACT_TARGET": "0",
+    "MINI_LLM_DUAL_RESOLUTION_ACCUM_LENGTH_BUCKETS": "0",
+    "MINI_LLM_DUAL_RESOLUTION_CHECKPOINT_THRESHOLD": "0",
+    "MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET": "geometric",
+    "MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS": "1",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_PROJECTION_GRADS": "1",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_COMPRESSOR_QKV": "1",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX": "1",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED": "1",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_SKIP_EMPTY_TILES": "0",
+    "MINI_LLM_DUAL_RESOLUTION_PACKED_BACKWARD_CHUNK_TOKENS": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_POOLING": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_RMSNORM": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_GATE": "0",
+    "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE": "1",
+    "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE": "1",
+    "MINI_LLM_MATRIX_POOL_FUSED_FORWARD": "0",
+    "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD": "1",
+    "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE": "1",
+    "MINI_LLM_MATRIX_POOL_R4_LOGITS_BACKWARD": "0",
+    "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS": "1",
 }
 
 _MEMORY_MODEL_DEFAULTS: dict[str, str] = {
@@ -138,6 +175,22 @@ def _is_large_local_model(config) -> bool:
 def _is_memory_model(config) -> bool:
     memory = getattr(config, "memory_context", None)
     return bool(memory is not None and getattr(memory, "enabled", False))
+
+
+def _is_model_b_training_family(config, *, precision: str | None) -> bool:
+    """Return whether the validated matrix-pool Model B defaults apply."""
+    if config is None or str(precision).lower() != "bf16-mixed":
+        return False
+    dual = getattr(config, "dual_resolution", None)
+    return bool(
+        dual is not None
+        and getattr(dual, "enabled", False)
+        and getattr(dual, "compression_mode", None) == "matrix_pool"
+        and int(getattr(config, "d_model", 0)) == 1024
+        and int(getattr(config, "n_layers", 0)) == 20
+        and int(getattr(config, "n_q_heads", 0)) == 16
+        and int(getattr(config, "d_head", 0)) == 64
+    )
 
 
 def _use_fused_historical_decode(config, *, training: bool) -> bool:
@@ -230,10 +283,10 @@ def _lm_head_chunk_default(
         and vocab == 32768
         and bool(getattr(dual_resolution, "enabled", False))
     ):
-        # PATCH 0102P: matched full-supervision RTX 5080 measurements selected
-        # 512 rows over 256 and 1024 for both dual-resolution architectures.
-        # This is also the lower-memory choice for variable-length long contexts.
-        return "512"
+        # Matched B2/T8192 full-model RTX 5080 measurements with gate/up
+        # recomputation improved 19.54K -> 20.45K tok/s when increasing the
+        # tile from 1024 to 8192, while remaining within the 16 GiB budget.
+        return "8192"
     if (
         width == 1024
         and active == 4096
@@ -320,6 +373,12 @@ def apply_runtime_defaults(
     # Keep packed gate/up GEMM opt-in: the 32x512 dense A/B benchmark
     # measured a regression with this path enabled.
     _setdefaults(_GPU_FAST_DEFAULTS, applied)
+    if (
+        training
+        and resolved == "consumer-gpu"
+        and _is_model_b_training_family(config, precision=precision)
+    ):
+        _setdefaults(_MODEL_B_CONSUMER_TRAINING_DEFAULTS, applied)
     if training:
         _setdefaults(_GPU_FAST_TRAINING_DEFAULTS, applied)
     if _use_fused_historical_decode(config, training=training):

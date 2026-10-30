@@ -33,7 +33,7 @@ def test_full_generation_matches_production_cli():
         suite_path=ROOT / 'benchmarks/configs/foundation_capabilities_0094_fast_generation.json')
 
 
-def test_live_generation_passes_context_and_logging(monkeypatch, tmp_path):
+def test_live_generation_passes_context_and_logging(monkeypatch, tmp_path, capsys):
     path = tmp_path / 'prompts.json'
     path.write_text(json.dumps({'prompts': [{'id':'a', 'prompt': 'Once upon a time', 'domain':'story', 'length':'short', 'topic':'fiction', 'format':'prose'}]}))
     fake = SimpleNamespace()
@@ -56,6 +56,31 @@ def test_live_generation_passes_context_and_logging(monkeypatch, tmp_path):
     assert [c['seed'] for c in fake.calls] == [42,42,123,123,879,879]
     assert all(c['use_kv_cache'] and c['log_speed'] for c in fake.calls)
     assert result['records'][0]['timing']['tokens_per_sec'] == 4.0
+    assert result['records'][0]['timing']['native_cuda_graph_decode'] is True
+    assert result['timing']['generated_tokens'] == 12
+    assert result['timing']['decode_tokens_per_sec'] == 4.0
+    assert result['timing']['request_tokens_per_sec'] == 4.0
+    assert result['timing']['native_cuda_graph_generations'] == 6
+    output = capsys.readouterr().out
+    assert output.count('Speed prompt=') == 6
+    assert 'Speed prompt=a seed=42 strategy=greedy tokens=2' in output
+    assert 'decode=0.00 tok/s' in output
+    assert 'request=4.00 tok/s' in output
+    assert 'native_graph=yes' in output
+
+
+def test_generation_speed_output_includes_decode_and_graph_count(capsys):
+    live_suite._print_generation_speed('generation_full', {'timing': {
+        'decode_tokens_per_sec': 620.25,
+        'request_tokens_per_sec': 81.5,
+        'prefill_time_s': 0.343,
+        'native_cuda_graph_generations': 144,
+        'generations': 144,
+    }})
+    output = capsys.readouterr().out
+    assert 'decode=620.25 tok/s' in output
+    assert 'request=81.50 tok/s' in output
+    assert 'native_graph=144/144' in output
 
 
 def test_graph_requirement_refuses_slow_cpu_fallback(tmp_path):
@@ -64,6 +89,18 @@ def test_graph_requirement_refuses_slow_cpu_fallback(tmp_path):
     with pytest.raises(RuntimeError, match='MINI_LLM_BACKEND=cupy'):
         live_suite.run_generation(object(), object(), prompt_suite=path,
             require_native_cuda_graph_decode=True)
+
+
+def test_preferred_graph_allows_unsupported_fallback(monkeypatch):
+    import os
+    monkeypatch.delenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE', raising=False)
+    monkeypatch.setenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT', '1')
+    from benchmarks.live_suite import _strict_graph_decode_for_generation
+    with _strict_graph_decode_for_generation(False, True):
+        assert os.environ['MINI_LLM_NATIVE_CUDA_GRAPH_DECODE'] == '1'
+        assert os.environ['MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT'] == '0'
+    assert 'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE' not in os.environ
+    assert os.environ['MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT'] == '1'
 
 
 def test_scoped_graph_flags_restored(monkeypatch):

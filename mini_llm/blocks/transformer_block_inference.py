@@ -266,6 +266,8 @@ class TransformerBlockInference:
         dual_local_start=None, dual_local_count=None, dual_summary_start=None,
         dual_summary_count=None, dual_incomplete_count=None,
         dual_document_positions=None,
+        dual_sparse_k=None, dual_sparse_v=None, dual_sparse_count=None,
+        dual_host_counters=None,
     ):
         """
         Decode one token through this block.
@@ -309,6 +311,9 @@ class TransformerBlockInference:
                 dual_summary_start, dual_summary_count,
                 dual_incomplete_count, dual_document_positions,
                 residual_input=residual1,
+                sparse_k=dual_sparse_k, sparse_v=dual_sparse_v,
+                sparse_count=dual_sparse_count, absolute_position=start_pos,
+                host_counters=dual_host_counters,
             )
         else:
             a = self.attention.decode_one(

@@ -122,6 +122,10 @@ _MODEL_B_CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
     "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD": "1",
     "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE": "1",
     "MINI_LLM_MATRIX_POOL_R4_LOGITS_BACKWARD": "0",
+    # Retain the 8Kx32K BF16 logits tile for backward instead of replaying the
+    # vocabulary GEMM. Measured +4.36% complete F+B throughput for Model B at
+    # a bounded 512 MiB activation cost; explicit 0 preserves low-memory mode.
+    "MINI_LLM_LM_HEAD_CACHE_LOGITS": "1",
     "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS": "1",
 }
 
@@ -318,6 +322,7 @@ def format_runtime_fast_paths(config=None) -> str:
         ("local_chunk", "MINI_LLM_LOCAL_ATTN_QUERY_CHUNK", "512"),
         ("local_prob_recompute", "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS", "0"),
         ("lm_head_chunk", "MINI_LLM_LM_HEAD_CHUNK_TOKENS", "0"),
+        ("lm_head_cache_logits", "MINI_LLM_LM_HEAD_CACHE_LOGITS", "0"),
         ("optimizer_offload", "MINI_LLM_OPTIMIZER_OFFLOAD", "none"),
         ("rope_prepared", "MINI_LLM_ROPE_PREPARED_POSITIONS", "0"),
         ("historical_query_chunk", "MINI_LLM_HISTORY_QUERY_CHUNK", "128"),

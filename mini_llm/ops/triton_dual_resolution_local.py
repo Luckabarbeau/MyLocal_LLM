@@ -422,6 +422,7 @@ def _dkdv_kernel(
     local_window: tl.constexpr,
     long_window: tl.constexpr,
     long_heads: tl.constexpr,
+    skip_head: tl.constexpr,
     block_m: tl.constexpr,
     block_n: tl.constexpr,
 ):
@@ -458,7 +459,7 @@ def _dkdv_kernel(
 
     for group_offset in tl.static_range(0, 4):
         original_head = kv_head * 4 + group_offset
-        head_enabled = (active_mask & (1 << original_head)) != 0
+        head_enabled = ((active_mask & (1 << original_head)) != 0) & (original_head != skip_head)
         is_long_head = (original_head < long_heads).to(tl.int1)
         head_window = tl.where(is_long_head, long_window, local_window)
         query_end = tl.minimum(
@@ -564,6 +565,7 @@ class LocalAttentionCache:
     window: int = LOCAL_WINDOW
     long_window: int = LOCAL_WINDOW
     long_heads: int = 0
+    skip_head: int = -1
 
 
 def _validate(q, k, v, documents, *, window, long_window, long_heads, scale):
@@ -596,7 +598,7 @@ def _validate(q, k, v, documents, *, window, long_window, long_heads, scale):
 
 def local_attention_forward(
     q, k, v, document_ids, *, window=512, scale=0.125,
-    long_window=None, long_heads=0,
+    long_window=None, long_heads=0, skip_head=-1,
 ):
     """BF16 EOS-safe local attention with optional long-window leading heads.
 
@@ -627,6 +629,14 @@ def local_attention_forward(
         head_groups.append((0, long_heads, long_window))
     if long_heads < N_Q_HEADS:
         head_groups.append((long_heads, N_Q_HEADS - long_heads, window))
+    if skip_head >= 0:
+        head_groups = [
+            (lo, hi - lo, win)
+            for begin, count, win in head_groups
+            for lo, hi in ((begin, min(begin + count, skip_head)),
+                           (max(begin, skip_head + 1), begin + count))
+            if hi > lo
+        ]
     for head_begin, head_count, head_window in head_groups:
         _fwd_kernel[(triton.cdiv(length, 64), batch * head_count)](
             _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(out), _ptr(lse), _ptr(heads),
@@ -638,7 +648,7 @@ def local_attention_forward(
         )
     cache = LocalAttentionCache(
         q, k, v, docs, out, lse, heads, float(scale),
-        window, long_window, long_heads,
+        window, long_window, long_heads, skip_head,
     )
     return out, cache
 
@@ -660,10 +670,12 @@ def local_attention_backward(d_out, cache):
         )
     )
     grid = triton.cdiv(length, 64)
+    active_mask = (0xFFFF if cache.skip_head < 0 else
+                   0xFFFF & ~(1 << cache.skip_head))
     _delta_kernel[(grid, batch * 16)](
         _ptr(cache.output), _ptr(d_out), _ptr(delta),
         *os[:3], *dos[:3], *dels[:3],
-        n_ctx=length, active_mask=0xFFFF, block_m=64, num_warps=4,
+        n_ctx=length, active_mask=active_mask, block_m=64, num_warps=4,
     )
     head_groups = []
     if cache.long_heads:
@@ -672,6 +684,14 @@ def local_attention_backward(d_out, cache):
         head_groups.append((
             cache.long_heads, N_Q_HEADS - cache.long_heads, cache.window,
         ))
+    if cache.skip_head >= 0:
+        head_groups = [
+            (lo, hi - lo, win)
+            for begin, count, win in head_groups
+            for lo, hi in ((begin, min(begin + count, cache.skip_head)),
+                           (max(begin, cache.skip_head + 1), begin + count))
+            if hi > lo
+        ]
     for head_begin, head_count, head_window in head_groups:
         _dq_kernel[(grid, batch * head_count)](
             _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(d_out),
@@ -692,6 +712,7 @@ def local_attention_backward(d_out, cache):
         n_ctx=length, scale=cache.scale, scale_log2=cache.scale * _LOG2E,
         active_mask=0xFFFF, local_window=cache.window,
         long_window=cache.long_window, long_heads=cache.long_heads,
+        skip_head=cache.skip_head,
         block_m=64, block_n=64, num_warps=4, num_stages=3,
     )
     return dq, dk, dv

@@ -50,6 +50,7 @@
         "use_kv_cache": true,
         "max_context": 512,
         "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true,
         "print_generations": true
       }
     },

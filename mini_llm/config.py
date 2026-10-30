@@ -237,6 +237,11 @@ class DualResolutionConfig:
     global_head_dim: int = 64
     global_enabled: bool = True
     pool_position_bias: bool = True
+    # 0102Z: fixed-phase, stride-16 exact-token retrieval; no new weights.
+    sparse_retrieval_stride: int = 0  # 0 = legacy Model B
+    sparse_retrieval_head: int = 1
+    sparse_retrieval_phase: int = -1  # per-layer; -1 disables retrieval in that layer
+    sparse_retrieval_layers: tuple = ()  # model-level layer schedule (0-based)
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -280,6 +285,24 @@ class DualResolutionConfig:
                 raise TypeError(f"{name} must be an integer")
             if value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+        if not isinstance(self.sparse_retrieval_stride, int) or self.sparse_retrieval_stride < 0:
+            raise ValueError("sparse_retrieval_stride must be a nonnegative integer")
+        if self.sparse_retrieval_stride and self.sparse_retrieval_stride != 16:
+            raise ValueError("initial sparse Model B implementation requires stride=16")
+        if not isinstance(self.sparse_retrieval_head, int) or not 0 <= self.sparse_retrieval_head < 16:
+            raise ValueError("sparse_retrieval_head must be in [0,16)")
+        if self.sparse_retrieval_stride and self.sparse_retrieval_head < self.long_local_heads:
+            raise ValueError("sparse retrieval cannot replace the 4096-token head")
+        if self.sparse_retrieval_phase != -1 and not (0 <= self.sparse_retrieval_phase < self.sparse_retrieval_stride):
+            raise ValueError("sparse phase must be -1 or in [0,stride)")
+        if len(set(self.sparse_retrieval_layers)) != len(self.sparse_retrieval_layers):
+            raise ValueError("duplicate sparse retrieval layers")
+        if len(self.sparse_retrieval_layers) > 16:
+            raise ValueError("at most sixteen distinct sparse retrieval phases")
+        if any(not isinstance(layer, int) or layer < 0 for layer in self.sparse_retrieval_layers):
+            raise ValueError("sparse layer indices must be nonnegative integers")
+        if self.sparse_retrieval_stride and self.compression_mode != "matrix_pool":
+            raise ValueError("sparse retrieval is implemented for matrix-pool Model B")
         if self.local_window < self.block_size:
             raise ValueError("local_window must be at least block_size")
         if self.local_window % self.block_size != 0:
@@ -1294,6 +1317,22 @@ class ModelConfig:
                 global_enabled=True,
             ),
         )
+
+    @classmethod
+    def dual_resolution_matrix_pool_sparse_1024_20l(cls):
+        """65K Model B + one strided original-token head in layers 3–18.
+
+        Existing projection tensors, 4096 sliding head, 512 heads and the
+        four compressed summaries/block are retained. Exactly 16 distinct
+        phase classes cover all absolute token positions across those layers.
+        """
+        base = cls.dual_resolution_matrix_pool_1024_20l()
+        return replace(base, dual_resolution=replace(
+            base.dual_resolution,
+            sparse_retrieval_stride=16,
+            sparse_retrieval_head=1,
+            sparse_retrieval_layers=tuple(range(2, 18)),
+        ))
 
     @classmethod
     def ensemble_1024_20l_dense_direct_full_history_64k(cls):

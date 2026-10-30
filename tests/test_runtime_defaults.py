@@ -39,6 +39,7 @@ PROFILE_VARS = {
     "MINI_LLM_OPTIMIZER_OFFLOAD",
     "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB",
     "MINI_LLM_LM_HEAD_CHUNK_TOKENS",
+    "MINI_LLM_LM_HEAD_CACHE_LOGITS",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS",
     "MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL",
     "MINI_LLM_AR_COMPACT_TARGET",
@@ -141,9 +142,11 @@ def test_dual_resolution_consumer_profile_uses_measured_lm_head_chunk(monkeypatc
     assert os.environ["MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE"] == "1"
     assert os.environ["MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS"] == "1"
     assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "8192"
+    assert os.environ["MINI_LLM_LM_HEAD_CACHE_LOGITS"] == "1"
 
     _clear(monkeypatch)
     monkeypatch.setenv("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "768")
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CACHE_LOGITS", "0")
     monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP", "1")
     monkeypatch.setenv("MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS", "15")
     monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX", "0")
@@ -153,6 +156,7 @@ def test_dual_resolution_consumer_profile_uses_measured_lm_head_chunk(monkeypatc
         training=True, precision="bf16-mixed",
     )
     assert os.environ["MINI_LLM_LM_HEAD_CHUNK_TOKENS"] == "768"
+    assert os.environ["MINI_LLM_LM_HEAD_CACHE_LOGITS"] == "0"
     assert os.environ["MINI_LLM_MOE_RECOMPUTE_GATE_UP"] == "1"
     assert os.environ["MINI_LLM_MOE_RECOMPUTE_GATE_UP_LAYERS"] == "15"
     assert os.environ["MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX"] == "0"

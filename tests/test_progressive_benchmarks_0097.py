@@ -81,6 +81,10 @@ def test_config_accepts_new_type_and_preserves_previous_tests():
     new=json.loads(new_path.read_text())
     ids={r['id'] for r in new['benchmarks']}
     assert {r['id'] for r in old['benchmarks']}<=ids
+    generation=next(r for r in new['benchmarks'] if r['id']=='generation_full')
+    assert generation['parameters']['use_kv_cache'] is True
+    assert generation['parameters']['require_native_cuda_graph_decode'] is True
+    assert generation['parameters']['prefer_native_cuda_graph_decode'] is True
     LiveBenchmarkScheduler(new, object(), 7_000_000_000, suite_path=new_path)
     assert any(r['type']=='long_retrieval' for r in new['benchmarks'])
     assert any(not r['enabled'] and r['id']=='long_retrieval_counterfactual_0097'

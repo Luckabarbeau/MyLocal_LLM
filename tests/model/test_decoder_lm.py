@@ -214,6 +214,36 @@ def test_chunked_lm_head_matches_full_loss_and_gradients():
         assert xp.allclose(p_new.grad, p_ref.grad, rtol=2e-5, atol=2e-6), p_ref.name
 
 
+def test_chunked_lm_head_cached_logits_match_recompute(monkeypatch):
+    config = ModelConfig.tiny_inspection()
+    recompute = DecoderLanguageModel(config, rng_seed=35, dtype="float32")
+    cached = DecoderLanguageModel(config, rng_seed=35, dtype="float32")
+    rng = np.random.default_rng(36)
+    head = xp.asarray(rng.normal(size=(2, 7, config.d_model)), dtype="float32")
+    targets = xp.asarray(
+        rng.integers(0, config.vocab_size, size=(2, 7)), dtype="int64"
+    )
+
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CACHE_LOGITS", "0")
+    loss_ref, cache_ref = recompute.chunked_lm_head_loss_forward(
+        head, targets, chunk_tokens=5
+    )
+    recompute.zero_grad()
+    dx_ref = recompute.chunked_lm_head_backward(cache_ref)
+
+    monkeypatch.setenv("MINI_LLM_LM_HEAD_CACHE_LOGITS", "1")
+    loss_cached, cache_cached = cached.chunked_lm_head_loss_forward(
+        head, targets, chunk_tokens=5
+    )
+    assert cache_cached["logits_chunks"] is not None
+    cached.zero_grad()
+    dx_cached = cached.chunked_lm_head_backward(cache_cached)
+
+    assert np.isclose(loss_cached, loss_ref, rtol=0, atol=0)
+    assert xp.array_equal(dx_cached, dx_ref)
+    assert xp.array_equal(cached.output_proj.W.grad, recompute.output_proj.W.grad)
+
+
 def test_forward_body_plus_projection_matches_forward():
     """0056 body split must not change the ordinary inference/training API."""
     config = ModelConfig.tiny_inspection()

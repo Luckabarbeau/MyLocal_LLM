@@ -22,6 +22,7 @@ Usage:
 """
 
 import os
+from dataclasses import replace
 
 from mini_llm.backend import xp, BACKEND_NAME
 from mini_llm.config import ModelConfig
@@ -144,7 +145,18 @@ class InferenceModel:
                 attention_config=attention_config,
                 layer_idx=layer_idx,
                 rms_eps=config.rms_eps,
-                dual_resolution_config=self.dual_resolution_config,
+                dual_resolution_config=(
+                    replace(
+                        self.dual_resolution_config,
+                        sparse_retrieval_phase=(0, 8, 4, 12, 2, 10, 6, 14,
+                                                1, 9, 5, 13, 3, 11, 7, 15)[
+                            self.dual_resolution_config.sparse_retrieval_layers.index(layer_idx)
+                        ],
+                    )
+                    if (self.dual_resolution_config.sparse_retrieval_stride
+                        and layer_idx in self.dual_resolution_config.sparse_retrieval_layers)
+                    else self.dual_resolution_config
+                ),
             )
             self.blocks.append(block)
         
@@ -248,8 +260,14 @@ class InferenceModel:
                 summary_capacity, summary_width,
             )
             layer_rows = (self.n_layers, batch_size)
+            sparse_stride = int(getattr(self.dual_resolution_config, "sparse_retrieval_stride", 0))
+            sparse_capacity = (max_length + sparse_stride - 1) // sparse_stride + 1 if sparse_stride else 0
+            sparse_shape = (self.n_layers, batch_size, 1, sparse_capacity, self.head_dim)
             dual_state = dict(
                 dual_resolution_enabled=True,
+                dual_sparse_k_cache=xp.empty(sparse_shape, dtype=self.dtype) if sparse_stride else None,
+                dual_sparse_v_cache=xp.empty(sparse_shape, dtype=self.dtype) if sparse_stride else None,
+                dual_sparse_count=xp.zeros(layer_rows, dtype=xp.int32) if sparse_stride else None,
                 dual_summary_k_cache=xp.empty(summary_shape, dtype=self.dtype),
                 dual_summary_v_cache=xp.empty(summary_shape, dtype=self.dtype),
                 dual_incomplete_hidden=xp.empty(
@@ -263,6 +281,14 @@ class InferenceModel:
                 dual_incomplete_count=xp.zeros(layer_rows, dtype=xp.int32),
                 dual_document_positions=xp.zeros((batch_size,), dtype=xp.int64),
                 dual_reset_pending=xp.zeros((batch_size,), dtype=xp.bool_),
+                dual_host_counters=(
+                    [dict(
+                        document_position=0, local_start=0, local_count=0,
+                        summary_start=0, summary_count=0,
+                        incomplete_count=0, sparse_count=0,
+                    ) for _ in range(self.n_layers)]
+                    if matrix_pool and batch_size == 1 else None
+                ),
             )
 
         for block in self.blocks:
@@ -879,10 +905,31 @@ class InferenceModel:
             raise ValueError("No capacity remaining in generation cache.")
 
         pending = state.dual_reset_pending
-        if bool(xp.any(pending)):
+        host_counters = state.dual_host_counters
+        if host_counters is not None:
+            if state.dual_host_reset_pending:
+                state.dual_local_start[:, 0] = 0
+                state.dual_local_count[:, 0] = 0
+                if state.dual_sparse_count is not None:
+                    state.dual_sparse_count[:, 0] = 0
+                state.dual_summary_start[:, 0] = 0
+                state.dual_summary_count[:, 0] = 0
+                state.dual_incomplete_count[:, 0] = 0
+                state.dual_document_positions[0] = 0
+                pending[0] = False
+                for counters in host_counters:
+                    counters.update(
+                        document_position=0, local_start=0, local_count=0,
+                        summary_start=0, summary_count=0,
+                        incomplete_count=0, sparse_count=0,
+                    )
+                state.dual_host_reset_pending = False
+        elif bool(xp.any(pending)):
             rows = xp.nonzero(pending)[0]
             state.dual_local_start[:, rows] = 0
             state.dual_local_count[:, rows] = 0
+            if state.dual_sparse_count is not None:
+                state.dual_sparse_count[:, rows] = 0
             state.dual_summary_start[:, rows] = 0
             state.dual_summary_count[:, rows] = 0
             state.dual_incomplete_count[:, rows] = 0
@@ -912,6 +959,10 @@ class InferenceModel:
                 dual_summary_count=state.dual_summary_count[i],
                 dual_incomplete_count=state.dual_incomplete_count[i],
                 dual_document_positions=state.dual_document_positions,
+                dual_sparse_k=None if state.dual_sparse_k_cache is None else state.dual_sparse_k_cache[i],
+                dual_sparse_v=None if state.dual_sparse_v_cache is None else state.dual_sparse_v_cache[i],
+                dual_sparse_count=None if state.dual_sparse_count is None else state.dual_sparse_count[i],
+                dual_host_counters=None if host_counters is None else host_counters[i],
             )
             if chain_norms:
                 x, normalized_input = block_output
@@ -922,8 +973,14 @@ class InferenceModel:
         last_hidden = x[:, -1, :].astype(self.dtype, copy=False)
         logits = self._lm_head_forward(last_hidden)
         state.dual_document_positions += 1
+        if host_counters is not None:
+            for counters in host_counters:
+                counters["document_position"] += 1
         if state.eos_token_id is not None:
-            state.dual_reset_pending |= token_ids[:, 0] == int(state.eos_token_id)
+            eos_rows = token_ids[:, 0] == int(state.eos_token_id)
+            state.dual_reset_pending |= eos_rows
+            if host_counters is not None:
+                state.dual_host_reset_pending = bool(eos_rows[0].item())
         state.length += 1
         return logits
 
@@ -965,6 +1022,31 @@ class InferenceModel:
                 logits = self._dual_incremental_token(
                     input_ids[:, offset:offset + 1], state
                 )
+            from mini_llm.native_cuda_graph_decode import (
+                enabled as native_graph_enabled,
+                strict as native_graph_strict,
+            )
+            existing_native_graph = getattr(state, "_native_cuda_graph", None)
+            state._native_cuda_graph = None
+            state._native_cuda_graph_failure = None
+            if native_graph_enabled():
+                try:
+                    from mini_llm.native_dual_cuda_graph_decode import (
+                        NativeDualBF16CudaGraphDecoder,
+                    )
+                    if (
+                        isinstance(existing_native_graph, NativeDualBF16CudaGraphDecoder)
+                        and existing_native_graph.engine is self
+                        and existing_native_graph.state is state
+                    ):
+                        state._native_cuda_graph = existing_native_graph
+                    else:
+                        xp.cuda.get_current_stream().synchronize()
+                        state._native_cuda_graph = NativeDualBF16CudaGraphDecoder(self, state)
+                except Exception as exc:
+                    state._native_cuda_graph_failure = f"{type(exc).__name__}: {exc}"
+                    if native_graph_strict():
+                        raise
             return logits
 
         if state.long_memory_enabled:
@@ -1121,6 +1203,13 @@ class InferenceModel:
         if B != state.batch_size:
             raise ValueError("input batch size does not match generation state")
 
+        if not state.has_capacity(1):
+            raise ValueError("No capacity remaining in generation cache.")
+
+        native_graph = getattr(state, "_native_cuda_graph", None)
+        if native_graph is not None:
+            return native_graph.decode_one(next_ids, state)
+
         if state.dual_resolution_enabled:
             return self._dual_incremental_token(next_ids, state)
 
@@ -1131,13 +1220,6 @@ class InferenceModel:
                 return self._decode_routed_prefix_long(next_ids, state)
             return self._decode_terminal_long(next_ids, state)
         
-        if not state.has_capacity(1):
-            raise ValueError("No capacity remaining in generation cache.")
-
-        native_graph = getattr(state, "_native_cuda_graph", None)
-        if native_graph is not None:
-            return native_graph.decode_one(next_ids, state)
-
         # Embed token.
         x = self._embedding_lookup(next_ids)  # [B, 1, D]
         

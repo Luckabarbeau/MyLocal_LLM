@@ -39,6 +39,8 @@ _LOG2E = 1.4426950408889634
 _D = 64
 _BM = 32
 _BN = 64
+_SPARSE_BM = 64
+_SPARSE_BN = 32
 
 
 class _Pointer:
@@ -96,6 +98,7 @@ def _forward(
     GLOBAL: tl.constexpr, BF16: tl.constexpr, SKIP_EMPTY: tl.constexpr,
     BOUNDED: tl.constexpr, HISTORY_BLOCK: tl.constexpr,
     SUMMARIES_PER_BLOCK: tl.constexpr, Q_TILE_OFFSET: tl.constexpr,
+    SPARSE_STRIDE: tl.constexpr, SPARSE_PHASE: tl.constexpr,
     BM: tl.constexpr, BN: tl.constexpr,
 ):
     tile = tl.program_id(0) + Q_TILE_OFFSET
@@ -110,7 +113,10 @@ def _forward(
                 mask=m[:,None] < NQ, other=0.)
     if GLOBAL:
         qdoc = tl.load(QDOC + batch*qdsb + m*qdst, mask=m < NQ, other=-1)
-        qpos = tl.load(QPOS + batch*qpsb + m*qpst, mask=m < NQ, other=-1)
+        if SPARSE_STRIDE > 0:
+            qpos = m
+        else:
+            qpos = tl.load(QPOS + batch*qpsb + m*qpst, mask=m < NQ, other=-1)
     else:
         qdoc = tl.zeros((BM,), tl.int32)
         qpos = tl.zeros((BM,), tl.int32)
@@ -121,15 +127,22 @@ def _forward(
     key_stop = NK
     if BOUNDED:
         max_query = tl.minimum((tile + 1) * BM, NQ) - 1
-        key_stop = tl.minimum(
-            NK, (max_query // HISTORY_BLOCK) * SUMMARIES_PER_BLOCK
-        )
+        if SPARSE_STRIDE > 0:
+            key_stop = tl.minimum(NK, tl.maximum(0, (max_query - SPARSE_PHASE) // SPARSE_STRIDE + 1))
+        else:
+            key_stop = tl.minimum(
+                NK, (max_query // HISTORY_BLOCK) * SUMMARIES_PER_BLOCK
+            )
     for key_start in tl.range(0, key_stop, BN):
         kn = key_start + n
         if GLOBAL:
             kdoc = tl.load(KDOC + batch*kdsb + kn*kdst, mask=kn < NK, other=-2)
-            kend = tl.load(KEND + batch*kesb + kn*kest, mask=kn < NK, other=-2)
-            kval = tl.load(KVALID + batch*kvsb + kn*kvst, mask=kn < NK, other=0)
+            if SPARSE_STRIDE > 0:
+                kend = SPARSE_PHASE + kn * SPARSE_STRIDE - 1
+                kval = tl.full((BN,), 1, tl.int32)
+            else:
+                kend = tl.load(KEND + batch*kesb + kn*kest, mask=kn < NK, other=-2)
+                kval = tl.load(KVALID + batch*kvsb + kn*kvst, mask=kn < NK, other=0)
         else:
             kdoc = tl.zeros((BN,), tl.int32)
             kend = tl.zeros((BN,), tl.int32)
@@ -174,7 +187,7 @@ def _forward(
     tl.store(O + batch*osb + m[:,None]*ost + head*osh + d[None,:],
              result, mask=m[:,None] < NQ)
     tl.store(LSE + batch*lsb + m*lst + head*lsh, lse, mask=m < NQ)
-    if GLOBAL:
+    if GLOBAL and SPARSE_STRIDE == 0:
         tl.store(AVAIL + batch*asb + m*ast, ever_visible,
                  mask=(m < NQ) & (head == 0))
 
@@ -196,7 +209,8 @@ def _dq(
     SCALE:tl.constexpr,SCALE_LOG2:tl.constexpr,GLOBAL:tl.constexpr,
     BF16:tl.constexpr,SKIP_EMPTY:tl.constexpr,BOUNDED:tl.constexpr,
     HISTORY_BLOCK:tl.constexpr,SUMMARIES_PER_BLOCK:tl.constexpr,
-    Q_TILE_OFFSET:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
+    Q_TILE_OFFSET:tl.constexpr,SPARSE_STRIDE:tl.constexpr,SPARSE_PHASE:tl.constexpr,
+    BM:tl.constexpr,BN:tl.constexpr,
 ):
     tile=tl.program_id(0)+Q_TILE_OFFSET
     bh=tl.program_id(1)
@@ -213,7 +227,10 @@ def _dq(
     delta=tl.sum(o.to(tl.float32)*dout.to(tl.float32),axis=1)
     if GLOBAL:
         qdoc=tl.load(QDOC+batch*qdsb+m*qdst,mask=m<NQ,other=-1)
-        qpos=tl.load(QPOS+batch*qpsb+m*qpst,mask=m<NQ,other=-1)
+        if SPARSE_STRIDE > 0:
+            qpos=m
+        else:
+            qpos=tl.load(QPOS+batch*qpsb+m*qpst,mask=m<NQ,other=-1)
     else:
         qdoc=tl.zeros((BM,),tl.int32)
         qpos=tl.zeros((BM,),tl.int32)
@@ -221,15 +238,22 @@ def _dq(
     key_stop=NK
     if BOUNDED:
         max_query=tl.minimum((tile+1)*BM,NQ)-1
-        key_stop=tl.minimum(
-            NK,(max_query//HISTORY_BLOCK)*SUMMARIES_PER_BLOCK
-        )
+        if SPARSE_STRIDE > 0:
+            key_stop=tl.minimum(NK,tl.maximum(0,(max_query-SPARSE_PHASE)//SPARSE_STRIDE+1))
+        else:
+            key_stop=tl.minimum(
+                NK,(max_query//HISTORY_BLOCK)*SUMMARIES_PER_BLOCK
+            )
     for key_start in tl.range(0,key_stop,BN):
         kn=key_start+n
         if GLOBAL:
             kdoc=tl.load(KDOC+batch*kdsb+kn*kdst,mask=kn<NK,other=-2)
-            kend=tl.load(KEND+batch*kesb+kn*kest,mask=kn<NK,other=-2)
-            kval=tl.load(KVALID+batch*kvsb+kn*kvst,mask=kn<NK,other=0)
+            if SPARSE_STRIDE > 0:
+                kend=SPARSE_PHASE+kn*SPARSE_STRIDE-1
+                kval=tl.full((BN,),1,tl.int32)
+            else:
+                kend=tl.load(KEND+batch*kesb+kn*kest,mask=kn<NK,other=-2)
+                kval=tl.load(KVALID+batch*kvsb+kn*kvst,mask=kn<NK,other=0)
         else:
             kdoc=tl.zeros((BN,),tl.int32)
             kend=tl.zeros((BN,),tl.int32)
@@ -276,7 +300,8 @@ def _dkdv(
     SCALE:tl.constexpr,SCALE_LOG2:tl.constexpr,GLOBAL:tl.constexpr,
     BF16:tl.constexpr,SKIP_EMPTY:tl.constexpr,BOUNDED:tl.constexpr,
     HISTORY_BLOCK:tl.constexpr,SUMMARIES_PER_BLOCK:tl.constexpr,
-    Q_TILE_OFFSET:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
+    Q_TILE_OFFSET:tl.constexpr,SPARSE_STRIDE:tl.constexpr,SPARSE_PHASE:tl.constexpr,
+    ADD_DKDV:tl.constexpr,BM:tl.constexpr,BN:tl.constexpr,
 ):
     ktile=tl.program_id(0)
     bh=tl.program_id(1)
@@ -289,8 +314,12 @@ def _dkdv(
     v=tl.load(V+batch*vsb+kn[:,None]*vst+kvhead*vsh+d[None,:],mask=kn[:,None]<NK,other=0.)
     if GLOBAL:
         kdoc=tl.load(KDOC+batch*kdsb+kn*kdst,mask=kn<NK,other=-2)
-        kend=tl.load(KEND+batch*kesb+kn*kest,mask=kn<NK,other=-2)
-        kval=tl.load(KVALID+batch*kvsb+kn*kvst,mask=kn<NK,other=0)
+        if SPARSE_STRIDE > 0:
+            kend=SPARSE_PHASE+kn*SPARSE_STRIDE-1
+            kval=tl.full((BN,),1,tl.int32)
+        else:
+            kend=tl.load(KEND+batch*kesb+kn*kest,mask=kn<NK,other=-2)
+            kval=tl.load(KVALID+batch*kvsb+kn*kvst,mask=kn<NK,other=0)
     else:
         kdoc=tl.zeros((BN,),tl.int32)
         kend=tl.zeros((BN,),tl.int32)
@@ -300,14 +329,20 @@ def _dkdv(
     query_begin=0
     if BOUNDED:
         first_summary=ktile*BN
-        query_begin=(first_summary//SUMMARIES_PER_BLOCK+1)*HISTORY_BLOCK
+        if SPARSE_STRIDE > 0:
+            query_begin=((SPARSE_PHASE + first_summary*SPARSE_STRIDE)//BM)*BM
+        else:
+            query_begin=(first_summary//SUMMARIES_PER_BLOCK+1)*HISTORY_BLOCK
     for group in range(GROUP):
         head=kvhead*GROUP+group
         for query_start in tl.range(query_begin,NQ,BM):
             m=query_start+mbase
             if GLOBAL:
                 qdoc=tl.load(QDOC+batch*qdsb+m*qdst,mask=m<NQ,other=-1)
-                qpos=tl.load(QPOS+batch*qpsb+m*qpst,mask=m<NQ,other=-1)
+                if SPARSE_STRIDE > 0:
+                    qpos=m
+                else:
+                    qpos=tl.load(QPOS+batch*qpsb+m*qpst,mask=m<NQ,other=-1)
             else:
                 qdoc=tl.zeros((BM,),tl.int32)
                 qpos=tl.zeros((BM,),tl.int32)
@@ -336,7 +371,16 @@ def _dkdv(
                 else:
                     dvacc=tl.dot(p,dout.to(tl.float32),dvacc,input_precision='tf32x3')
                     dkacc=tl.dot(ds,q.to(tl.float32),dkacc,input_precision='tf32x3')
-    tl.store(DK+batch*dksb+kn[:,None]*dkst+kvhead*dksh+d[None,:],dkacc*SCALE,mask=kn[:,None]<NK)
+    if ADD_DKDV:
+        dkacc=dkacc*SCALE+tl.load(
+            DK+batch*dksb+kn[:,None]*dkst+kvhead*dksh+d[None,:],
+            mask=kn[:,None]<NK,other=0.)
+        dvacc=dvacc+tl.load(
+            DV+batch*dvsb+kn[:,None]*dvst+kvhead*dvsh+d[None,:],
+            mask=kn[:,None]<NK,other=0.)
+    else:
+        dkacc=dkacc*SCALE
+    tl.store(DK+batch*dksb+kn[:,None]*dkst+kvhead*dksh+d[None,:],dkacc,mask=kn[:,None]<NK)
     tl.store(DV+batch*dvsb+kn[:,None]*dvst+kvhead*dvsh+d[None,:],dvacc,mask=kn[:,None]<NK)
 
 
@@ -355,6 +399,8 @@ class TiledAttentionCache:
     bounded: bool
     history_block_size: int
     summaries_per_block: int
+    sparse_stride: int = 0
+    sparse_phase: int = 0
 
 
 def _validate(q, k, v, scale):
@@ -396,33 +442,59 @@ def _metadata(q, k, *, documents=None, positions=None, block_documents=None,
 
 def forward(q,k,v,*,scale,documents=None,positions=None,
             block_documents=None,block_ends=None,block_valid=None,
-            bounded_causal=False,history_block_size=128,summaries_per_block=1):
+            bounded_causal=False,history_block_size=128,summaries_per_block=1,
+            sparse_stride=0,sparse_phase=0,out=None,lse=None):
     """FP32 output; full bidirectional attention if metadata is omitted."""
     import cupy as cp
     _validate(q,k,v,scale)
-    meta,global_mask=_metadata(q,k,documents=documents,positions=positions,
-        block_documents=block_documents,block_ends=block_ends,block_valid=block_valid)
+    sparse_stride = int(sparse_stride)
+    sparse_phase = int(sparse_phase)
+    if sparse_stride:
+        if documents is None or documents.shape != q.shape[:2]:
+            raise ValueError("sparse stride requires query document IDs")
+        expected_keys = max(0, (q.shape[1] - sparse_phase + sparse_stride - 1) // sparse_stride)
+        if not 0 <= sparse_phase < sparse_stride or k.shape[1] != expected_keys:
+            raise ValueError("sparse stride requires a valid phase and matching K/V view")
+        documents = cp.asarray(documents, dtype=cp.int32)
+        key_documents = documents[:, sparse_phase::sparse_stride]
+        meta = (documents, documents, key_documents, key_documents, key_documents)
+        global_mask = True
+    else:
+        meta,global_mask=_metadata(q,k,documents=documents,positions=positions,
+            block_documents=block_documents,block_ends=block_ends,block_valid=block_valid)
     batch,nq,hq,_=q.shape
     nk=k.shape[1]
-    out=cp.zeros(q.shape,dtype=cp.float32)
-    lse=cp.zeros(q.shape[:3],dtype=cp.float32)
-    availability=cp.zeros(q.shape[:2],dtype=cp.uint8)
+    if out is None:
+        out=cp.zeros(q.shape,dtype=cp.float32)
+    elif out.shape != q.shape or str(out.dtype) != 'float32':
+        raise ValueError('provided attention output must be matching FP32 storage')
+    if lse is None:
+        lse=cp.zeros(q.shape[:3],dtype=cp.float32)
+    elif lse.shape != q.shape[:3] or str(lse.dtype) != 'float32':
+        raise ValueError('provided attention LSE must be matching FP32 storage')
+    availability=(cp.zeros((1,1),dtype=cp.uint8) if sparse_stride else
+                  cp.zeros(q.shape[:2],dtype=cp.uint8))
     skip_empty = global_mask and _skip_empty_tiles_enabled()
     bounded = bool(global_mask and bounded_causal and _bounded_global_enabled())
+    if sparse_stride and not global_mask:
+        raise ValueError("sparse stride requires causal metadata")
     history_block_size = int(history_block_size)
     summaries_per_block = int(summaries_per_block)
-    if bounded and (history_block_size <= 0 or summaries_per_block <= 0
+    if bounded and not sparse_stride and (history_block_size <= 0 or summaries_per_block <= 0
                     or history_block_size % _BM):
         raise ValueError('bounded global attention requires a positive BM-aligned block and summary count')
     cache=TiledAttentionCache(
         q,k,v,out,lse,availability.view(cp.bool_),meta,float(scale),global_mask,
         skip_empty,bounded,history_block_size,summaries_per_block,
+        sparse_stride,sparse_phase,
     )
-    if nk==0 or (bounded and nq<=history_block_size):
+    if nk==0 or (bounded and not sparse_stride and nq<=history_block_size):
         return out,cache
     qstr,kstr,vstr,ostr,lstr=map(_strides,(q,k,v,out,lse))
-    q_tile_offset = history_block_size // _BM if bounded else 0
-    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * _BM), _BM)
+    bm = _SPARSE_BM if sparse_stride else _BM
+    bn = _SPARSE_BN if sparse_stride else _BN
+    q_tile_offset = history_block_size // bm if bounded and not sparse_stride else 0
+    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * bm), bm)
     qds,qps,kds,kes,kvs=map(_strides,meta)
     astr=_strides(availability)
     _forward[(q_tiles,batch*hq)](
@@ -433,13 +505,14 @@ def forward(q,k,v,*,scale,documents=None,positions=None,
         SCALE_LOG2=float(scale)*_LOG2E,GLOBAL=global_mask,SKIP_EMPTY=skip_empty,
         BOUNDED=bounded,HISTORY_BLOCK=history_block_size,
         SUMMARIES_PER_BLOCK=summaries_per_block,Q_TILE_OFFSET=q_tile_offset,
-        BF16=str(q.dtype)=='bfloat16',BM=_BM,BN=_BN,
+        SPARSE_STRIDE=sparse_stride,SPARSE_PHASE=sparse_phase,
+        BF16=str(q.dtype)=='bfloat16',BM=bm,BN=bn,
         num_warps=4,num_stages=2,
     )
     return out,cache
 
 
-def backward(dout,cache):
+def backward(dout,cache,*,dq=None,dk=None,dv=None,add_dkdv=False):
     """Return deterministic FP32 dQ,dK,dV (GQA reductions included)."""
     import cupy as cp
     q,k,v=cache.q,cache.k,cache.v
@@ -447,32 +520,42 @@ def backward(dout,cache):
         raise ValueError('upstream gradient shape mismatch')
     nq=q.shape[1]
     nk=k.shape[1]
-    dq=cp.zeros(q.shape,dtype=cp.float32)
-    dk=cp.zeros(k.shape,dtype=cp.float32)
-    dv=cp.zeros(v.shape,dtype=cp.float32)
-    if nk==0 or (cache.bounded and nq<=cache.history_block_size):
+    if dq is None:
+        dq=cp.zeros(q.shape,dtype=cp.float32)
+    if dk is None:
+        dk=cp.zeros(k.shape,dtype=cp.float32)
+    if dv is None:
+        dv=cp.zeros(v.shape,dtype=cp.float32)
+    if (dq.shape != q.shape or dk.shape != k.shape or dv.shape != v.shape or
+            any(str(x.dtype) != 'float32' for x in (dq,dk,dv))):
+        raise ValueError('provided attention gradients must be matching FP32 storage')
+    if nk==0 or (cache.bounded and not cache.sparse_stride and nq<=cache.history_block_size):
         return dq,dk,dv
     qstr,kstr,vstr,ostr,dostr,lstr,dqstr,dkstr,dvstr=map(
         _strides,(q,k,v,cache.output,dout,cache.lse,dq,dk,dv))
     qds,qps,kds,kes,kvs=map(_strides,cache.metadata)
     common=(*map(_ptr,(q,k,v,*cache.metadata,cache.output,dout,cache.lse)),)
-    q_tile_offset = cache.history_block_size // _BM if cache.bounded else 0
-    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * _BM), _BM)
+    bm = _SPARSE_BM if cache.sparse_stride else _BM
+    bn = _SPARSE_BN if cache.sparse_stride else _BN
+    q_tile_offset = cache.history_block_size // bm if cache.bounded and not cache.sparse_stride else 0
+    q_tiles = triton.cdiv(max(0, nq - q_tile_offset * bm), bm)
     config=dict(NQ=nq,NK=nk,GROUP=q.shape[2]//k.shape[2],
                 SCALE=cache.scale,SCALE_LOG2=cache.scale*_LOG2E,
                 GLOBAL=cache.global_mask,SKIP_EMPTY=cache.skip_empty,
                 BOUNDED=cache.bounded,HISTORY_BLOCK=cache.history_block_size,
                 SUMMARIES_PER_BLOCK=cache.summaries_per_block,
-                Q_TILE_OFFSET=q_tile_offset,BF16=str(q.dtype)=='bfloat16',
-                BM=_BM,BN=_BN,num_warps=4,num_stages=2)
+                Q_TILE_OFFSET=q_tile_offset,
+                SPARSE_STRIDE=cache.sparse_stride,SPARSE_PHASE=cache.sparse_phase,
+                BF16=str(q.dtype)=='bfloat16',
+                BM=bm,BN=bn,num_warps=4,num_stages=2)
     _dq[(q_tiles,q.shape[0]*q.shape[2])](
         *common,_ptr(dq),
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*dostr[:3],*lstr[:3],
         *dqstr[:3],*qds[:2],*qps[:2],*kds[:2],*kes[:2],*kvs[:2],
         HQ=q.shape[2],**config)
-    _dkdv[(triton.cdiv(nk,_BN),q.shape[0]*k.shape[2])](
+    _dkdv[(triton.cdiv(nk,bn),q.shape[0]*k.shape[2])](
         *common,_ptr(dk),_ptr(dv),
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*dostr[:3],*lstr[:3],
         *dkstr[:3],*dvstr[:3],*qds[:2],*qps[:2],*kds[:2],*kes[:2],*kvs[:2],
-        HK=k.shape[2],**config)
+        HK=k.shape[2],ADD_DKDV=bool(add_dkdv),**config)
     return dq,dk,dv

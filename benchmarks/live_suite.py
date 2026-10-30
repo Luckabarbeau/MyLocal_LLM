@@ -153,24 +153,24 @@ def _generator(model, tokenizer, *, max_context=None):
 
 
 @contextlib.contextmanager
-def _strict_graph_decode_for_generation(required):
+def _strict_graph_decode_for_generation(required, preferred=False):
     """Activate native CUDA graphs only for this benchmark, never globally.
 
     Running the complete capability suite must not accidentally apply strict
     CUDA-graph constraints to unrelated long-context inference benchmarks.
     The caller's original environment is restored even if generation fails.
     """
-    if not required:
+    if not required and not preferred:
         yield
         return
     names = ('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE',
              'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT')
     original = {name: os.environ.get(name) for name in names}
     try:
-        for name in names:
-            os.environ[name] = '1'
+        os.environ['MINI_LLM_NATIVE_CUDA_GRAPH_DECODE'] = '1'
+        os.environ['MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT'] = '1' if required else '0'
         from mini_llm.native_cuda_graph_decode import enabled, strict
-        if not (enabled() and strict()):
+        if required and not (enabled() and strict()):
             raise RuntimeError('native CUDA graph decode requires MINI_LLM_BACKEND=cupy')
         yield
     finally:
@@ -184,7 +184,8 @@ def _strict_graph_decode_for_generation(required):
 def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42,),
                    strategies=('greedy', 'top-k'), max_new_tokens=128, temperature=0.8,
                    top_k=40, top_p=1.0, use_kv_cache=True, max_context=None,
-                   require_native_cuda_graph_decode=False, print_generations=False):
+                   require_native_cuda_graph_decode=False,
+                   prefer_native_cuda_graph_decode=False, print_generations=False):
     from benchmarks.evaluate_generation import select_prompts
     from benchmarks.generation_metrics import repetition_metrics, grouped_summary
     suite_path = Path(prompt_suite)
@@ -192,7 +193,7 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
     prompts = select_prompts(suite, ','.join(prompt_ids) if prompt_ids else None, None, None)
     if max_context is not None and int(max_context) <= 0:
         raise ValueError('generation max_context must be positive')
-    if require_native_cuda_graph_decode and not use_kv_cache:
+    if (require_native_cuda_graph_decode or prefer_native_cuda_graph_decode) and not use_kv_cache:
         raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     records = []
     plain_model = (
@@ -200,7 +201,8 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
         if getattr(getattr(model, 'config', None), 'full_history_layers', ())
         else contextlib.nullcontext()
     )
-    with (_strict_graph_decode_for_generation(require_native_cuda_graph_decode),
+    with (_strict_graph_decode_for_generation(
+              require_native_cuda_graph_decode, prefer_native_cuda_graph_decode),
           _preserve_global_rng(), plain_model):
         generator = _generator(model, tokenizer, max_context=max_context)
         for prompt in prompts:
@@ -214,14 +216,24 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
                         seed=int(seed), use_kv_cache=use_kv_cache,
                         log_speed=True, return_token_ids=True,
                     )
-                    if require_native_cuda_graph_decode:
-                        state = getattr(generator, '_state', None)
-                        if getattr(state, '_native_cuda_graph', None) is None:
-                            reason = getattr(state, '_native_cuda_graph_failure', None)
-                            raise RuntimeError(
-                                'native CUDA graph decode was requested but not active'
-                                + (f': {reason}' if reason else '')
-                            )
+                    state = getattr(generator, '_state', None)
+                    graph_active = getattr(state, '_native_cuda_graph', None) is not None
+                    if require_native_cuda_graph_decode and not graph_active:
+                        reason = getattr(state, '_native_cuda_graph_failure', None)
+                        raise RuntimeError(
+                            'native CUDA graph decode was requested but not active'
+                            + (f': {reason}' if reason else '')
+                        )
+                    generated_count = len(timing.get('generated_token_ids') or ())
+                    print(
+                        f"    Speed prompt={prompt['id']} seed={int(seed)} "
+                        f"strategy={strategy} tokens={generated_count} "
+                        f"decode={float(timing.get('decode_tokens_per_sec') or 0.0):.2f} tok/s "
+                        f"request={float(timing.get('tokens_per_sec') or 0.0):.2f} tok/s "
+                        f"prefill={float(timing.get('prefill_time_s') or 0.0):.3f}s "
+                        f"native_graph={'yes' if graph_active else 'no'}",
+                        flush=True,
+                    )
                     if print_generations:
                         print('    Generated:\n' + text_out[:1200] +
                               ('...' if len(text_out) > 1200 else ''), flush=True)
@@ -240,13 +252,31 @@ def run_generation(model, tokenizer, *, prompt_suite, prompt_ids=None, seeds=(42
                             'prefill_time_s': timing.get('prefill_time_s'),
                             'tokens_per_sec': timing.get('tokens_per_sec'),
                             'decode_tokens_per_sec': timing.get('decode_tokens_per_sec'),
+                            'native_cuda_graph_decode': graph_active,
                         },
                     })
+    generated_tokens = sum(record['metrics']['generated_tokens'] for record in records)
+    total_time = sum(float(record['timing'].get('total_time_s') or 0.0) for record in records)
+    prefill_time = sum(float(record['timing'].get('prefill_time_s') or 0.0) for record in records)
+    decode_time = max(total_time - prefill_time, 0.0)
+    timing_summary = {
+        'generations': len(records),
+        'generated_tokens': generated_tokens,
+        'total_time_s': total_time,
+        'prefill_time_s': prefill_time,
+        'decode_time_s': decode_time,
+        'request_tokens_per_sec': generated_tokens / total_time if total_time > 0 else 0.0,
+        'decode_tokens_per_sec': generated_tokens / decode_time if decode_time > 0 else 0.0,
+        'native_cuda_graph_generations': sum(
+            bool(record['timing'].get('native_cuda_graph_decode')) for record in records
+        ),
+    }
     # Force recreation at each future checkpoint: cached InferenceModel copies
     # must never accidentally carry earlier step's weights.
     del generator
     gc.collect()
     return {'summary': grouped_summary(records), 'records': records,
+            'timing': timing_summary,
             'prompt_suite_sha256': _sha256(suite_path)}
 
 
@@ -296,6 +326,25 @@ def run_reference(model, tokenizer, *, references, top_k_predictions=10,
             'diagnostics': summarize_cases(results)}
 
 
+def _print_generation_speed(name, result):
+    timing = result.get('timing', {})
+    required = (
+        'decode_tokens_per_sec', 'request_tokens_per_sec', 'prefill_time_s',
+        'native_cuda_graph_generations', 'generations',
+    )
+    if not all(key in timing for key in required):
+        return
+    print(
+        f"[0093] Benchmark {name} speed: "
+        f"decode={timing['decode_tokens_per_sec']:.2f} tok/s "
+        f"request={timing['request_tokens_per_sec']:.2f} tok/s "
+        f"prefill={timing['prefill_time_s']:.3f}s "
+        f"native_graph={timing['native_cuda_graph_generations']}/"
+        f"{timing['generations']}",
+        flush=True,
+    )
+
+
 class LiveBenchmarkScheduler:
     """Schedule each benchmark independently by cumulative supervised tokens."""
 
@@ -337,7 +386,8 @@ class LiveBenchmarkScheduler:
                 'wikitext': {'data', 'context_length', 'stride', 'document_mode', 'max_tokens'},
                 'generation': {'prompt_suite', 'prompt_ids', 'seeds', 'strategies',
                                'max_new_tokens', 'temperature', 'top_k', 'top_p', 'use_kv_cache',
-                               'max_context', 'require_native_cuda_graph_decode', 'print_generations'},
+                               'max_context', 'require_native_cuda_graph_decode',
+                               'prefer_native_cuda_graph_decode', 'print_generations'},
                 'reference_continuation': {'references', 'top_k_predictions', 'cutoffs',
                     'generation_tokens', 'seeds', 'strategy', 'temperature', 'top_k',
                     'use_kv_cache', 'branch_top_k', 'max_context',
@@ -418,6 +468,8 @@ class LiveBenchmarkScheduler:
             existing = json.loads((dest/'result.json').read_text(encoding='utf-8'))
             if existing.get('suite_hash') != self.config_hash or existing.get('configuration') != benchmark:
                 raise ValueError(f'Existing benchmark result has different configuration: {dest}')
+            if benchmark['type'] == 'generation':
+                _print_generation_speed(name, existing.get('results', {}))
             return existing
         event = {
             'benchmark_id': name, 'benchmark_type': benchmark['type'],
@@ -453,6 +505,8 @@ class LiveBenchmarkScheduler:
                          summary_metrics=summary_metrics(kind, result),
                          elapsed_seconds=time.perf_counter() - before)
             _atomic_json(dest / 'result.json', event)
+            if kind == 'generation':
+                _print_generation_speed(name, result)
             if kind == 'reference_continuation':
                 from benchmarks.live_report import reference_per_case_csv
                 (dest/'report.html').write_text(reference_html(result), encoding='utf-8')

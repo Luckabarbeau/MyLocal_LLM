@@ -401,11 +401,15 @@ class TextGenerator:
                 max_length=self.max_context
             )
         elif reset:
-            # Reset state for new prompt
-            self._state = self._inference_model.create_generation_state(
-                batch_size=1,
-                max_length=self.max_context
-            )
+            # Captured graphs are bound to the existing cache addresses. Reuse
+            # that state so repeated requests do not recapture the graph.
+            if getattr(self._state, '_native_cuda_graph', None) is not None:
+                self._state.reset()
+            else:
+                self._state = self._inference_model.create_generation_state(
+                    batch_size=1,
+                    max_length=self.max_context
+                )
 
 
 def main():

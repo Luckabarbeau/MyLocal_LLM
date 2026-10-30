@@ -2,6 +2,7 @@
 
 import os
 from types import SimpleNamespace
+from dataclasses import replace
 
 from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloat16_dtype
 from mini_llm.config import ModelConfig
@@ -107,7 +108,21 @@ class DecoderLanguageModel:
                 attention_config=attention_config,
                 residual_gates=self.progressive_depth_enabled,
                 ffn_mode=getattr(config, "ffn_mode", "moe"),
-                dual_resolution_config=config.dual_resolution,
+                dual_resolution_config=(
+                    replace(
+                        config.dual_resolution,
+                        sparse_retrieval_phase=(
+                            # Bit reversal gives even coverage after each group of layers.
+                            (0, 8, 4, 12, 2, 10, 6, 14,
+                             1, 9, 5, 13, 3, 11, 7, 15)[
+                                config.dual_resolution.sparse_retrieval_layers.index(layer_idx)
+                            ]
+                        ),
+                    )
+                    if (config.dual_resolution.sparse_retrieval_stride
+                        and layer_idx in config.dual_resolution.sparse_retrieval_layers)
+                    else config.dual_resolution
+                ),
                 residual_gate_init=(
                     1.0 if layer_idx < self.active_layers else 0.0
                 ),
@@ -1698,6 +1713,10 @@ class DecoderLanguageModel:
 
         loss_sum = xp.asarray(0.0, dtype=xp.float32)
         finite_ok = None
+        cache_logits = os.environ.get(
+            "MINI_LLM_LM_HEAD_CACHE_LOGITS", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        logits_chunks = [] if cache_logits else None
         for start in range(0, n, chunk_tokens):
             end = min(start + chunk_tokens, n)
             with performance_scope("model.output_projection.chunk_forward"):
@@ -1712,7 +1731,10 @@ class DecoderLanguageModel:
                     loss_mask=None if mask_f32 is None else mask_f32[start:end],
                     normalizer_count=normalizer_count,
                 )
-            del logits
+            if logits_chunks is None:
+                del logits
+            else:
+                logits_chunks.append(logits)
 
         if finite_trace is not None:
             finite_trace.append(("logits", finite_ok))
@@ -1722,6 +1744,7 @@ class DecoderLanguageModel:
             "loss_mask_f32": mask_f32,
             "normalizer_count": normalizer_count,
             "chunk_tokens": chunk_tokens,
+            "logits_chunks": logits_chunks,
             "target_slice": normalized_slice,
             "full_head_shape": full_head_shape,
         }
@@ -1741,6 +1764,7 @@ class DecoderLanguageModel:
         mask_f32 = loss_cache.get("loss_mask_f32")
         normalizer_count = float(loss_cache["normalizer_count"])
         chunk_tokens = int(loss_cache["chunk_tokens"])
+        logits_chunks = loss_cache.pop("logits_chunks", None)
         n, _ = map(int, flat_x.shape)
 
         dx = xp.empty_like(flat_x)
@@ -1751,11 +1775,14 @@ class DecoderLanguageModel:
         )
         W_grad = (None if router_only or frozen_output_projection
                   else self.output_proj.W.grad)
-        for start in range(0, n, chunk_tokens):
+        for chunk_index, start in enumerate(range(0, n, chunk_tokens)):
             end = min(start + chunk_tokens, n)
             x_chunk = flat_x[start:end]
-            with performance_scope("model.output_projection.chunk_recompute"):
-                logits = x_chunk @ W
+            if logits_chunks is None:
+                with performance_scope("model.output_projection.chunk_recompute"):
+                    logits = x_chunk @ W
+            else:
+                logits = logits_chunks[chunk_index]
             with performance_scope("model.loss.chunk_backward"):
                 d_logits = chunked_bf16_cross_entropy_grad_inplace(
                     logits,

@@ -68,6 +68,10 @@ class MatrixPoolDualResolutionAttention:
         self.local_window = int(config.local_window)
         self.long_local_window = int(config.long_local_window)
         self.long_local_heads = int(config.long_local_heads)
+        self.sparse_stride = int(getattr(config, "sparse_retrieval_stride", 0))
+        self.sparse_head = int(getattr(config, "sparse_retrieval_head", 1))
+        self.sparse_phase = int(getattr(config, "sparse_retrieval_phase", -1))
+        self.sparse_enabled = self.sparse_stride > 0 and self.sparse_phase >= 0
         self.summaries_per_block = int(config.summaries_per_block)
         self.global_heads = int(config.global_heads)
         self.global_head_dim = int(config.global_head_dim)
@@ -164,7 +168,31 @@ class MatrixPoolDualResolutionAttention:
             for group in self._packed_projection_groups:
                 group.refresh()
 
+    def _sparse_forward(self, q, k, v, docs, *, out=None, lse=None):
+        from .sparse_stride_history_0102z import sparse_forward
+        h = self.sparse_head
+        g = h // self.group_size
+        return sparse_forward(
+            q[:, :, h:h + 1, :], k[:, :, g:g + 1, :],
+            v[:, :, g:g + 1, :], docs,
+            stride=self.sparse_stride, phase=self.sparse_phase,
+            scale=self.scale, kernel=self.local_kernel, out=out, lse=lse,
+        )
+
+    def _sparse_backward(self, dout, cache, dq, dk, dv):
+        from .sparse_stride_history_0102z import sparse_backward
+        h, g = self.sparse_head, self.sparse_head // self.group_size
+        sparse_backward(
+            dout[:, :, h:h + 1, :], cache, kernel=self.local_kernel,
+            dq=dq[:, :, h:h + 1, :],
+            dk=dk[:, self.sparse_phase::self.sparse_stride, g:g + 1, :],
+            dv=dv[:, self.sparse_phase::self.sparse_stride, g:g + 1, :],
+            add_dkdv=True,
+        )
+        return dq, dk, dv
+
     def _local_forward(self, q, k, v, documents, return_cache):
+        sparse_cache = None
         if self.local_kernel == "triton":
             if BACKEND_NAME != "cupy":
                 raise RuntimeError("Triton local attention requires CuPy")
@@ -173,14 +201,25 @@ class MatrixPoolDualResolutionAttention:
                 q, k, v, documents, window=self.local_window,
                 long_window=self.long_local_window,
                 long_heads=self.long_local_heads, scale=self.scale,
+                skip_head=self.sparse_head if self.sparse_enabled else -1,
             )
-            return result, ({"triton": cache} if return_cache else None)
+            if self.sparse_enabled:
+                h = self.sparse_head
+                _, sparse_cache = self._sparse_forward(
+                    q, k, v, documents,
+                    out=result[:, :, h:h + 1, :],
+                    lse=cache.lse_log2[:, :, h:h + 1],
+                )
+            return result, ({"triton": cache, "sparse": sparse_cache}
+                            if return_cache else None)
         batch, length = q.shape[:2]
         output = xp.zeros(q.shape, dtype=_work_array(q).dtype)
         caches = []
         chunk = min(self.global_query_chunk, max(1, length))
         for row in range(batch):
             for head in range(self.n_q_heads):
+                if self.sparse_enabled and head == self.sparse_head:
+                    continue
                 window = (self.long_local_window if head < self.long_local_heads
                           else self.local_window)
                 kv_head = head // self.group_size
@@ -205,18 +244,26 @@ class MatrixPoolDualResolutionAttention:
                         caches.append((row, head, kv_head, qs, qe, ks, ke,
                                        None if self.recompute_attention_probs
                                        else probabilities))
-        return output, caches
+        if self.sparse_enabled:
+            sparse, sparse_cache = self._sparse_forward(q, k, v, documents)
+            output[:, :, self.sparse_head:self.sparse_head + 1, :] = sparse
+        return output, ({"reference": caches, "sparse": sparse_cache}
+                        if self.sparse_enabled and return_cache else caches)
 
     def _local_backward(self, dout, q, k, v, cache, documents):
         if isinstance(cache, dict) and "triton" in cache:
             from .triton_dual_resolution_local import local_attention_backward
-            return local_attention_backward(
+            dq, dk, dv = local_attention_backward(
                 _work_array(dout).astype(xp.float32, copy=False), cache["triton"]
             )
+            if self.sparse_enabled:
+                return self._sparse_backward(dout, cache["sparse"], dq, dk, dv)
+            return dq, dk, dv
+        caches = cache["reference"] if isinstance(cache, dict) else cache
         dq = xp.zeros(q.shape, dtype=_work_array(dout).dtype)
         dk = xp.zeros(k.shape, dtype=dq.dtype)
         dv = xp.zeros(v.shape, dtype=dq.dtype)
-        for row, head, kv_head, qs, qe, ks, ke, probabilities in cache:
+        for row, head, kv_head, qs, qe, ks, ke, probabilities in caches:
             window = (self.long_local_window if head < self.long_local_heads
                       else self.local_window)
             qh = _work_array(q[row, qs:qe, head])
@@ -237,6 +284,8 @@ class MatrixPoolDualResolutionAttention:
             dq[row, qs:qe, head] += (ds @ kh) * self.scale
             dk[row, ks:ke, kv_head] += (ds.T @ qh) * self.scale
             dv[row, ks:ke, kv_head] += probabilities.T @ dc
+        if self.sparse_enabled:
+            return self._sparse_backward(dout, cache["sparse"], dq, dk, dv)
         return dq, dk, dv
 
     def _valid_blocks(self, hidden, metadata):

@@ -12,10 +12,18 @@ def summary_metrics(kind, result):
         return {k: result[k] for k in ('cross_entropy', 'perplexity', 'bits_per_byte', 'scored_tokens')}
     if kind == 'generation':
         summary = result['summary']['overall']
-        return {k: summary.get(k) for k in (
+        metrics = {k: summary.get(k) for k in (
             'count', 'mean_repeated_8gram_rate', 'mean_distinct_4',
             'repeat_8gram_onset_fraction',
         )}
+        timing = result.get('timing', {})
+        metrics.update({
+            'decode_tokens_per_second': timing.get('decode_tokens_per_sec'),
+            'request_tokens_per_second': timing.get('request_tokens_per_sec'),
+            'generation_prefill_seconds': timing.get('prefill_time_s'),
+            'native_cuda_graph_generations': timing.get('native_cuda_graph_generations'),
+        })
+        return metrics
     if kind in ('math', 'logic'):
         return {'task_count': result['count'], 'choice_accuracy': result['accuracy'],
                 'ladder_complete_rate': result.get('progression',{}).get('all_stages_passed_rate'),

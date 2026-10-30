@@ -42,6 +42,9 @@ class GenerationState:
     # incomplete pre-attention normalized blocks live in the dedicated arrays.
     dual_resolution_enabled: bool = False
     dual_summary_k_cache: Optional[xp.ndarray] = None
+    dual_sparse_k_cache: Optional[xp.ndarray] = None
+    dual_sparse_v_cache: Optional[xp.ndarray] = None
+    dual_sparse_count: Optional[xp.ndarray] = None
     dual_summary_v_cache: Optional[xp.ndarray] = None
     dual_incomplete_hidden: Optional[xp.ndarray] = None
     dual_local_start: Optional[xp.ndarray] = None
@@ -51,6 +54,10 @@ class GenerationState:
     dual_incomplete_count: Optional[xp.ndarray] = None
     dual_document_positions: Optional[xp.ndarray] = None
     dual_reset_pending: Optional[xp.ndarray] = None
+    # Batch-one matrix-pool inference mirrors deterministic ring counters on the
+    # host to avoid repeated device scalar readbacks in every decoder layer.
+    dual_host_counters: Optional[list[dict[str, int]]] = None
+    dual_host_reset_pending: bool = False
     eos_token_id: Optional[int] = None
 
     # 0059I terminal-Landmark long-memory inference state.  The deep
@@ -105,12 +112,21 @@ class GenerationState:
         if self.dual_resolution_enabled:
             for values in (
                 self.dual_local_start, self.dual_local_count,
+                self.dual_sparse_count,
                 self.dual_summary_start, self.dual_summary_count,
                 self.dual_incomplete_count, self.dual_document_positions,
                 self.dual_reset_pending,
             ):
                 if values is not None:
                     values[...] = 0
+            if self.dual_host_counters is not None:
+                for counters in self.dual_host_counters:
+                    counters.update(
+                        document_position=0, local_start=0, local_count=0,
+                        summary_start=0, summary_count=0,
+                        incomplete_count=0, sparse_count=0,
+                    )
+                self.dual_host_reset_pending = False
     
     def remaining_capacity(self) -> int:
         """Remaining tokens that can be generated."""

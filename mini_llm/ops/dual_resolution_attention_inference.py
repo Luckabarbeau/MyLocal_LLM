@@ -97,6 +97,10 @@ class DualResolutionAttentionInference:
             getattr(dual_config, "long_local_window", self.local_window)
         )
         self.long_local_heads = int(getattr(dual_config, "long_local_heads", 0))
+        self.sparse_stride = int(getattr(dual_config, "sparse_retrieval_stride", 0))
+        self.sparse_head = int(getattr(dual_config, "sparse_retrieval_head", 1))
+        self.sparse_phase = int(getattr(dual_config, "sparse_retrieval_phase", -1))
+        self.sparse_enabled = self.sparse_stride > 0 and self.sparse_phase >= 0
         self.summaries_per_block = int(
             getattr(dual_config, "summaries_per_block", 1)
         )
@@ -466,11 +470,25 @@ class DualResolutionAttentionInference:
             return summary
         return self._native_compress_block(block)
 
-    def _matrix_local_attention(self, q, keys, values):
+    def _matrix_local_attention(self, q, keys, values, *, sparse_k=None, sparse_v=None):
         """Apply the configured window independently to each local query head."""
         contexts = xp.empty_like(q)
         available = int(keys.shape[1])
         for head in range(self.n_q_heads):
+            if self.sparse_enabled and head == self.sparse_head:
+                if sparse_k is None or int(sparse_k.shape[1]) == 0:
+                    contexts[:, :, head, :] = 0
+                else:
+                    kvh = head // self.group_size
+                    # The sparse buffers hold only the one selected KV group.
+                    qh = _work_array(q[:, :, head, :])
+                    kh = _work_array(sparse_k[:, :, 0, :])
+                    vh = _work_array(sparse_v[:, :, 0, :])
+                    logits = (qh * self.scale) @ kh.transpose(0, 2, 1)
+                    contexts[:, :, head, :] = (
+                        _softmax(logits, axis=-1) @ vh
+                    ).astype(q.dtype, copy=False)
+                continue
             window = (
                 self.long_local_window
                 if head < self.long_local_heads else self.local_window
@@ -510,6 +528,8 @@ class DualResolutionAttentionInference:
         self, x, residual_input, local_k, local_v, summary_k, summary_v,
         incomplete_hidden, local_start, local_count, summary_start,
         summary_count, incomplete_count, document_positions,
+        sparse_k=None, sparse_v=None, sparse_count=None, absolute_position=None,
+        host_counters=None,
     ):
         if residual_input is None or residual_input.shape != x.shape:
             raise ValueError("matrix-pool inference requires residual_input [B,1,d_model]")
@@ -524,20 +544,55 @@ class DualResolutionAttentionInference:
         completed_rows = []
 
         for row in range(batch):
-            position = int(document_positions[row].item())
+            counters = host_counters if batch == 1 and row == 0 else None
+            position = (
+                int(counters["document_position"])
+                if counters is not None else int(document_positions[row].item())
+            )
             q_row = self._apply_rope(q_pre[row:row + 1], position)
             k_row = self._apply_rope(k_pre[row:row + 1], position)[0, 0]
             v_row = values[row, 0]
-            ls, lc = self._insert_ring(
-                local_k[row], k_row,
-                int(local_start[row].item()), int(local_count[row].item()),
+            local_start_value = (
+                int(counters["local_start"])
+                if counters is not None else int(local_start[row].item())
             )
+            local_count_value = (
+                int(counters["local_count"])
+                if counters is not None else int(local_count[row].item())
+            )
+            ls, lc = self._insert_ring(
+                local_k[row], k_row, local_start_value, local_count_value,
+            )
+            if counters is not None:
+                counters["local_start"], counters["local_count"] = ls, lc
             local_capacity = int(local_v[row].shape[1])
             local_v[row, :, (ls + lc - 1) % local_capacity, :] = v_row
             local_start[row], local_count[row] = ls, lc
             lk = self._ordered_ring(local_k[row], ls, lc)
             lv = self._ordered_ring(local_v[row], ls, lc)
-            local_context = self._matrix_local_attention(q_row, lk, lv)
+            sampled_k = sampled_v = None
+            if self.sparse_enabled:
+                if sparse_k is None or sparse_v is None or sparse_count is None or absolute_position is None:
+                    raise ValueError("sparse retrieval inference requires explicit KV cache")
+                count = (
+                    int(counters["sparse_count"])
+                    if counters is not None else int(sparse_count[row].item())
+                )
+                if int(absolute_position) % self.sparse_stride == self.sparse_phase:
+                    if count >= sparse_k.shape[2]:
+                        raise ValueError("sparse retrieval KV capacity exceeded")
+                    kvh = self.sparse_head // self.group_size
+                    sparse_k[row, 0, count, :] = k_row[kvh]
+                    sparse_v[row, 0, count, :] = v_row[kvh]
+                    count += 1
+                    sparse_count[row] = count
+                if counters is not None:
+                    counters["sparse_count"] = count
+                sampled_k = sparse_k[row:row + 1, :, :count, :].transpose(0, 2, 1, 3)
+                sampled_v = sparse_v[row:row + 1, :, :count, :].transpose(0, 2, 1, 3)
+            local_context = self._matrix_local_attention(
+                q_row, lk, lv, sparse_k=sampled_k, sparse_v=sampled_v
+            )
             local_delta = (
                 local_context.reshape(1, self.d_model).astype(x.dtype, copy=False)
                 @ self.Wo
@@ -547,8 +602,14 @@ class DualResolutionAttentionInference:
                 + _work_array(local_delta)
             )
             global_delta = xp.zeros_like(local_delta)
-            ss = int(summary_start[row].item())
-            sc = int(summary_count[row].item())
+            ss = (
+                int(counters["summary_start"])
+                if counters is not None else int(summary_start[row].item())
+            )
+            sc = (
+                int(counters["summary_count"])
+                if counters is not None else int(summary_count[row].item())
+            )
             if self.global_enabled and sc:
                 state_compute = local_state.astype(x.dtype, copy=False)
                 qg = (
@@ -567,12 +628,17 @@ class DualResolutionAttentionInference:
             ).astype(output.dtype, copy=False)
 
             if self.global_enabled:
-                offset = int(incomplete_count[row].item())
+                offset = (
+                    int(counters["incomplete_count"])
+                    if counters is not None else int(incomplete_count[row].item())
+                )
                 incomplete_hidden[row, offset, :] = local_state[0, 0].astype(
                     incomplete_hidden.dtype, copy=False
                 )
                 offset += 1
                 incomplete_count[row] = offset
+                if counters is not None:
+                    counters["incomplete_count"] = offset
                 if offset == self.block_size:
                     completed_rows.append((row, position))
 
@@ -588,8 +654,15 @@ class DualResolutionAttentionInference:
             values = (summary_rows @ self.W_global_v).reshape(
                 self.summaries_per_block, self.global_heads, self.global_head_dim
             )
-            ss = int(summary_start[row].item())
-            sc = int(summary_count[row].item())
+            counters = host_counters if batch == 1 and row == 0 else None
+            ss = (
+                int(counters["summary_start"])
+                if counters is not None else int(summary_start[row].item())
+            )
+            sc = (
+                int(counters["summary_count"])
+                if counters is not None else int(summary_count[row].item())
+            )
             capacity = int(summary_k[row].shape[1])
             for index in range(self.summaries_per_block):
                 ss, sc = self._insert_ring(
@@ -599,12 +672,17 @@ class DualResolutionAttentionInference:
                 summary_v[row, :, slot, :] = values[index]
             summary_start[row], summary_count[row] = ss, sc
             incomplete_count[row] = 0
+            if counters is not None:
+                counters["summary_start"], counters["summary_count"] = ss, sc
+                counters["incomplete_count"] = 0
         return output
 
     def decode_one(
         self, x, local_k, local_v, summary_k, summary_v, incomplete_hidden,
         local_start, local_count, summary_start, summary_count, incomplete_count,
         document_positions, residual_input=None,
+        sparse_k=None, sparse_v=None, sparse_count=None, absolute_position=None,
+        host_counters=None,
     ):
         """Consume one normalized token for every independent batch row."""
         if x.ndim != 3 or int(x.shape[1]) != 1 or int(x.shape[2]) != self.d_model:
@@ -614,6 +692,8 @@ class DualResolutionAttentionInference:
                 x, residual_input, local_k, local_v, summary_k, summary_v,
                 incomplete_hidden, local_start, local_count, summary_start,
                 summary_count, incomplete_count, document_positions,
+                sparse_k=sparse_k, sparse_v=sparse_v, sparse_count=sparse_count,
+                absolute_position=absolute_position, host_counters=host_counters,
             )
         batch = int(x.shape[0])
         qkv = (x[:, 0, :] @ self.Wqkv)[:, None, :]

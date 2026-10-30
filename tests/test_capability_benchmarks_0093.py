@@ -91,6 +91,27 @@ def test_code_syntax_and_no_unsandboxed_execution(tmp_path, monkeypatch):
     assert run['cases'][0]['checks']['status'] == 'unavailable_no_bwrap'
 
 
+def test_capability_generation_enables_graph_scope(tmp_path, monkeypatch):
+    import os
+    observed=[]
+    class GraphAwareGenerator(FakeGenerator):
+        def generate(self,**kwargs):
+            observed.append((os.environ.get('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE'),
+                             os.environ.get('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT')))
+            return super().generate(**kwargs)
+    monkeypatch.delenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE',raising=False)
+    monkeypatch.delenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT',raising=False)
+    monkeypatch.setattr(capability,'_generator',lambda *args,**kwargs:GraphAwareGenerator())
+    tasks=tmp_path/'python.json'
+    tasks.write_text(json.dumps({'version':1,'family':'python','tasks':[
+        {'id':'prime','function':'is_prime','prompt':'def is_prime(n):\n'}]}))
+    capability.run_code(ToyModel(),ByteTokenizer(),tasks=str(tasks),language='python',
+                        max_new_tokens=2,prefer_native_cuda_graph_decode=True)
+    assert observed==[('1','0')]
+    assert 'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE' not in os.environ
+    assert 'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT' not in os.environ
+
+
 def test_terminal_and_narrative_factual_probes(tmp_path, monkeypatch):
     monkeypatch.setattr(capability, '_generator', lambda *args, **kwargs: FakeGenerator('pwd\n'))
     terminal = tmp_path/'terminal.json'

@@ -164,6 +164,54 @@ def test_cannot_silently_truncate_long_prompt():
                            task_ids=['archive_00'],distances=[16000])
 
 
+def test_bounded_context_runs_supported_retrieval_distances(monkeypatch):
+    from benchmarks import long_retrieval_0097 as mod
+    tok=FakeTokenizer()
+    fake=FakeGen(tok)
+    monkeypatch.setattr(mod,'_generator',lambda model,tk,max_context=None:fake)
+    cfg=SimpleNamespace(enabled=False,integration_mode='plain',memory_length=65536)
+    model=SimpleNamespace(config=SimpleNamespace(context_length=4096,memory_context=cfg))
+    out=run_long_retrieval(model,tok,tasks=TASK/'long_retrieval_0097.json',
+        task_ids=['archive_00'],distances=[1000,16000],
+        skip_unsupported_distances=True)
+    assert out['count']==1
+    assert [r['requested_distance_tokens'] for r in out['cases']]==[1000]
+    assert out['by_distance']['1000']['supported'] is True
+    assert out['by_distance']['16000']['supported'] is False
+    assert out['by_distance']['16000']['accuracy'] is None
+    assert out['unsupported_cases']==[{
+        'id':'archive_00',
+        'requested_distance_tokens':16000,
+        'prompt_tokens':out['unsupported_cases'][0]['prompt_tokens'],
+        'reason':'historical_read is required beyond the working context',
+    }]
+
+
+def test_matrix_pool_bounded_retrieval_uses_parallel_full_sequence(monkeypatch):
+    from benchmarks import long_retrieval_0097 as mod
+    tok=FakeTokenizer()
+    class Model:
+        config=SimpleNamespace(
+            context_length=4096,
+            memory_context=SimpleNamespace(enabled=False,integration_mode='plain',memory_length=4096),
+            dual_resolution=SimpleNamespace(enabled=True,compression_mode='matrix_pool'),
+        )
+        def forward(self,ids,return_cache=False):
+            text=tok.decode(np.asarray(ids)[0])
+            actual=re.search(r'Archived entry: project .*? has verification word (\w+)',text)
+            assert actual
+            logits=np.full((1,np.asarray(ids).shape[1],len(tok.tokens)+32),-9.0)
+            logits[0,-1,tok.tokens[' '+actual.group(1)]]=9.0
+            return logits
+    monkeypatch.setattr(mod,'_generator',lambda *args,**kwargs:
+                        pytest.fail('bounded matrix-pool retrieval created a generator'))
+    out=run_long_retrieval(Model(),tok,tasks=TASK/'long_retrieval_0097.json',
+        task_ids=['archive_00'],distances=[1000],skip_unsupported_distances=True)
+    assert out['mode']=='native_full_sequence_bounded_context'
+    assert out['count']==1 and out['cases'][0]['correct']
+    assert out['cases'][0]['history_path_active'] is False
+
+
 def test_progression_metadata_roundtrip_is_stable():
     from benchmarks.capability_suite import run_choices
     from benchmarks import capability_suite as mod

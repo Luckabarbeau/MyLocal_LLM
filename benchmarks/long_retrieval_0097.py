@@ -20,7 +20,9 @@ from pathlib import Path
 import numpy as np
 
 from mini_llm.backend import xp, asnumpy
-from benchmarks.live_suite import _generator, _preserve_global_rng
+from benchmarks.live_suite import (
+    _generator, _preserve_global_rng, _strict_graph_decode_for_generation,
+)
 
 
 FILLER = (
@@ -120,7 +122,8 @@ def _disable_cuda_graphs_for_long_prefill():
 
 
 def run_long_retrieval(model, tokenizer, *, tasks, distances=(1000,4000,16000),
-                       task_ids=None, include_counterfactual=False, max_cases=None):
+                       task_ids=None, include_counterfactual=False, max_cases=None,
+                       skip_unsupported_distances=False):
     """Benchmark 1K/4K/16K factual retrieval through actual inference memory.
 
     Not a pure memory score: reading the question, inference path and tokenizer
@@ -154,32 +157,82 @@ def run_long_retrieval(model, tokenizer, *, tasks, distances=(1000,4000,16000),
         for distance in distances:
             ids, query, fact, fact_len = _build_prefix(tokenizer, case, distance)
             built.append((case, distance, ids, query, fact, fact_len))
-    max_horizon = max(len(row[2]) for row in built)+8
     supports = bool(memory_cfg is not None and memory_cfg.enabled and
                     memory_cfg.integration_mode == 'historical_read')
-    if max_horizon > working and supports and max_horizon > int(memory_cfg.memory_length):
+    runnable = []
+    unsupported = []
+    for row in built:
+        prompt_tokens = len(row[2])
+        reason = None
+        if prompt_tokens > working and not supports:
+            reason = 'historical_read is required beyond the working context'
+        elif (prompt_tokens > working and
+              prompt_tokens + 8 > int(memory_cfg.memory_length)):
+            reason = 'prompt exceeds the trained historical horizon'
+        if reason is None:
+            runnable.append(row)
+        else:
+            unsupported.append({
+                'id': row[0]['id'],
+                'requested_distance_tokens': row[1],
+                'prompt_tokens': prompt_tokens,
+                'reason': reason,
+            })
+    if unsupported and not skip_unsupported_distances:
+        if any('historical_read' in row['reason'] for row in unsupported):
+            raise NotImplementedError(
+                '0097 long retrieval requires historical_read for >working context; never truncate')
         raise ValueError('Retrieval prompt exceeds trained historical horizon')
-    if max_horizon > working and not supports:
-        raise NotImplementedError('0097 long retrieval requires historical_read for >working context; never truncate')
-    with _preserve_global_rng(), _disable_cuda_graphs_for_long_prefill():
+    max_horizon = max((len(row[2]) for row in runnable), default=working) + 8
+    dual_cfg = getattr(model.config, 'dual_resolution', None)
+    bounded_full_sequence = bool(
+        not supports and dual_cfg is not None and getattr(dual_cfg, 'enabled', False)
+        and getattr(dual_cfg, 'compression_mode', None) == 'matrix_pool'
+    )
+    graph_context = (
+        _disable_cuda_graphs_for_long_prefill() if supports or bounded_full_sequence
+        else _strict_graph_decode_for_generation(False, True)
+    )
+    with _preserve_global_rng(), graph_context:
         # The generator is an adapter to the validated native InferenceModel.
         # Do not use TextGenerator.generate(): it produces arbitrary free text,
         # while our test needs logits from a long-context prefill.
-        generator = _generator(model, tokenizer, max_context=max_horizon)
-        generator._ensure_inference_model(reset=True)
-        impl = generator._inference_model
-        for case, distance, ids, query, fact, fact_len in built:
+        generator = None
+        impl = None
+        reusable_state = None
+        if not bounded_full_sequence:
+            generator = _generator(model, tokenizer, max_context=max_horizon)
+            generator._ensure_inference_model(reset=True)
+            impl = generator._inference_model
+            reusable_state = getattr(generator, '_state', None) if not supports else None
+        for case_index, (case, distance, ids, query, fact, fact_len) in enumerate(runnable):
             # Because these options share identical single-token next-token
             # boundaries, one prefill evaluates all candidates exactly.
             # Build choices from the *exact prompt last boundary*.
             choices = _one_token_choices(tokenizer, query, case['answer'])
-            state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
-            next_logits = impl.prefill(xp.asarray(np.asarray(ids, dtype=np.int32)[None,:]), state)
+            if bounded_full_sequence:
+                state = None
+                full_logits = model.forward(
+                    xp.asarray(np.asarray(ids, dtype=np.int32)[None,:]),
+                    return_cache=False,
+                )
+                next_logits = full_logits[0, -1]
+            else:
+                if reusable_state is not None:
+                    state = reusable_state
+                    if case_index:
+                        state.reset()
+                else:
+                    state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
+                next_logits = impl.prefill(xp.asarray(np.asarray(ids, dtype=np.int32)[None,:]), state)
             score = _rank_logits(next_logits, choices, case['answer'])
+            if bounded_full_sequence:
+                del next_logits, full_logits
             row = {'id': case['id'], 'category': case.get('category','retrieval'),
                    'difficulty': ('short' if distance <=1024 else 'medium' if distance <=4096 else 'long'),
                    'requested_distance_tokens': distance, 'measured_distance_tokens': len(ids)-fact_len,
-                   'prompt_tokens': len(ids), 'history_path_active': bool(state.long_memory_enabled),
+                   'prompt_tokens': len(ids),
+                   'history_path_active': bool(state is not None and state.long_memory_enabled),
                    'fact_in_historical_store': bool(len(ids)>working and fact_len<=len(ids)-working),
                    'answer': case['answer'], 'question': query.strip(),
                    'fact': fact.strip(), 'choices': [word for word,_ in choices], **score}
@@ -187,9 +240,23 @@ def run_long_retrieval(model, tokenizer, *, tasks, distances=(1000,4000,16000),
                 replacement = next(word for word,_ in choices if word != case['answer'])
                 modified, _, _, _ = _build_prefix(tokenizer, case, distance,
                                                     replace_answer=replacement)
-                control_state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
-                neg_logits = impl.prefill(xp.asarray(np.asarray(modified, dtype=np.int32)[None,:]), control_state)
+                if bounded_full_sequence:
+                    control_state = None
+                    control_logits = model.forward(
+                        xp.asarray(np.asarray(modified, dtype=np.int32)[None,:]),
+                        return_cache=False,
+                    )
+                    neg_logits = control_logits[0, -1]
+                else:
+                    if reusable_state is not None:
+                        state.reset()
+                        control_state = state
+                    else:
+                        control_state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
+                    neg_logits = impl.prefill(xp.asarray(np.asarray(modified, dtype=np.int32)[None,:]), control_state)
                 control_score = _rank_logits(neg_logits, choices, replacement)
+                if bounded_full_sequence:
+                    del neg_logits, control_logits
                 row['counterfactual'] = {
                     'replacement': replacement,
                     'prediction': control_score['prediction'],
@@ -201,21 +268,35 @@ def run_long_retrieval(model, tokenizer, *, tasks, distances=(1000,4000,16000),
                         f"Archived entry: project {case['project']} has verification word {replacement}.\n")),
                 }
             results.append(row)
-        del generator
+        if generator is not None:
+            del generator
     by_distance = {}
     for distance in distances:
         rows = [r for r in results if r['requested_distance_tokens']==distance]
+        skipped = [r for r in unsupported if r['requested_distance_tokens']==distance]
         by_distance[str(distance)] = {
-            'count': len(rows), 'accuracy': sum(r['correct'] for r in rows)/len(rows),
-            'mean_correct_margin': float(np.mean([r['correct_margin'] for r in rows])),
-            'mean_correct_logprob': float(np.mean([r['correct_logprob'] for r in rows])),
-            'mean_full_vocab_rank': float(np.mean([r['full_vocab_rank'] for r in rows])),
-            'counterfactual_flip_rate': (sum(r['counterfactual']['follows_replacement'] for r in rows)/len(rows)
-                if include_counterfactual else None),
+            'count': len(rows),
+            'supported': bool(rows),
+            'skipped_cases': len(skipped),
+            'skip_reason': skipped[0]['reason'] if skipped else None,
+            'accuracy': sum(r['correct'] for r in rows)/len(rows) if rows else None,
+            'mean_correct_margin': (float(np.mean([r['correct_margin'] for r in rows]))
+                                    if rows else None),
+            'mean_correct_logprob': (float(np.mean([r['correct_logprob'] for r in rows]))
+                                     if rows else None),
+            'mean_full_vocab_rank': (float(np.mean([r['full_vocab_rank'] for r in rows]))
+                                     if rows else None),
+            'counterfactual_flip_rate': (
+                sum(r['counterfactual']['follows_replacement'] for r in rows)/len(rows)
+                if include_counterfactual and rows else None),
         }
+    mode = ('native_inference_prefill_historical_read' if supports else
+            'native_full_sequence_bounded_context' if bounded_full_sequence else
+            'native_inference_prefill_bounded_context')
     return {'family':'long_retrieval', 'tasks_sha256':hashlib.sha256(blob).hexdigest(),
             'cases':results, 'count':len(results), 'by_distance':by_distance,
-            'mode':'native_inference_prefill_historical_read',
-            'warning':('No model may truncate a long retrieval prompt. Filler is synthetic and '
-                       'repetitive; retrieval also depends on training/inference memory parity. '
-                       'Candidate preference is not unconstrained free answer generation.')}
+            'unsupported_cases':unsupported, 'mode':mode,
+            'warning':('No model may truncate a long retrieval prompt. Unsupported distances are '
+                       'explicitly skipped when capability-aware evaluation is enabled. Filler is '
+                       'synthetic and repetitive; retrieval also depends on training/inference '
+                       'memory parity. Candidate preference is not unconstrained free answer generation.')}

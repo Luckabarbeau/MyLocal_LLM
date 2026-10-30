@@ -58,10 +58,23 @@ def test_model_b_native_graph_activates_and_matches_fallback(monkeypatch):
     reference.reset()
     second_prompt = cp.asarray([[4, 5, 6]], dtype=cp.int32)
     monkeypatch.setenv("MINI_LLM_NATIVE_CUDA_GRAPH_DECODE", "0")
-    engine.prefill(second_prompt, reference)
+    expected_prefill = engine.prefill(second_prompt, reference)
     monkeypatch.setenv("MINI_LLM_NATIVE_CUDA_GRAPH_DECODE", "1")
-    engine.prefill(second_prompt, captured)
+    fallback = engine._dual_incremental_token
+    monkeypatch.setattr(
+        engine, "_dual_incremental_token",
+        lambda *args, **kwargs: pytest.fail("reused graph prefill called fallback"),
+    )
+    actual_prefill = engine.prefill(second_prompt, captured)
+    monkeypatch.setattr(engine, "_dual_incremental_token", fallback)
     assert captured._native_cuda_graph is graph
+    cp.cuda.get_current_stream().synchronize()
+    np.testing.assert_allclose(
+        cp.asnumpy(actual_prefill).astype(np.float32),
+        cp.asnumpy(expected_prefill).astype(np.float32),
+        rtol=0.02,
+        atol=0.15,
+    )
 
     second_token = cp.asarray([[7]], dtype=cp.int32)
     expected = engine.decode_one(second_token, reference)

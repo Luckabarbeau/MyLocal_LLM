@@ -192,6 +192,32 @@ def test_auto_cupy_inference_uses_fast_not_training_memory_policy(monkeypatch):
     assert "MINI_LLM_LM_HEAD_CHUNK_TOKENS" not in os.environ
 
 
+def test_model_b_gpu_fast_inference_uses_forward_triton_defaults(monkeypatch):
+    _clear(monkeypatch)
+    import dataclasses
+    config = dataclasses.replace(
+        ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l(), dtype="bfloat16"
+    )
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config, training=False,
+    )
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL"] == "triton"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL"] == "triton"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL"] == "triton"
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS"] == "1"
+    assert os.environ["MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE"] == "1"
+    assert "MINI_LLM_DUAL_RESOLUTION_BF16_OUTPUT_DX" not in os.environ
+    assert "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD" not in os.environ
+    assert "MINI_LLM_LM_HEAD_CACHE_LOGITS" not in os.environ
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL", "cupy")
+    apply_runtime_defaults(
+        "gpu-fast", backend_name="cupy", config=config, training=False,
+    )
+    assert os.environ["MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL"] == "cupy"
+
+
 def test_historical_bf16_inference_enables_measured_fused_decode(monkeypatch):
     _clear(monkeypatch)
     import dataclasses

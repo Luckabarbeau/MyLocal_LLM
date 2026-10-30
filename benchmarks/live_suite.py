@@ -284,7 +284,9 @@ def run_reference(model, tokenizer, *, references, top_k_predictions=10,
                   cutoffs=(0.25, 0.5, 0.75), generation_tokens=128,
                   seeds=(42,), strategy='top-k', temperature=0.8,
                   top_k=40, use_kv_cache=True, branch_top_k=0, max_context=4096,
-                  reference_ids=None, reference_categories=None):
+                  reference_ids=None, reference_categories=None,
+                  require_native_cuda_graph_decode=False,
+                  prefer_native_cuda_graph_decode=False):
     from benchmarks.reference_continuation import analyze_reference, load_references
     cases, digest = load_references(references)
     if reference_ids is not None:
@@ -300,8 +302,17 @@ def run_reference(model, tokenizer, *, references, top_k_predictions=10,
         raise ValueError('Reference filters selected no texts')
     if int(generation_tokens) < 0:
         raise ValueError('generation_tokens must be nonnegative')
+    if (int(generation_tokens) > 0 and
+            (require_native_cuda_graph_decode or prefer_native_cuda_graph_decode) and
+            not use_kv_cache):
+        raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     results = []
-    with _preserve_global_rng():
+    graph_decode = (
+        _strict_graph_decode_for_generation(
+            require_native_cuda_graph_decode, prefer_native_cuda_graph_decode)
+        if int(generation_tokens) > 0 else contextlib.nullcontext()
+    )
+    with _preserve_global_rng(), graph_decode:
         with _plain_4096_model(model):
             # Build a fresh plain-context KV inference model, backed by the
             # live training weights. Do not mutate the frozen training memory
@@ -391,18 +402,24 @@ class LiveBenchmarkScheduler:
                 'reference_continuation': {'references', 'top_k_predictions', 'cutoffs',
                     'generation_tokens', 'seeds', 'strategy', 'temperature', 'top_k',
                     'use_kv_cache', 'branch_top_k', 'max_context',
-                    'reference_ids', 'reference_categories'},
+                    'reference_ids', 'reference_categories',
+                    'require_native_cuda_graph_decode', 'prefer_native_cuda_graph_decode'},
                 'python_code': {'tasks', 'task_ids', 'run_tests', 'max_new_tokens', 'seeds', 'strategy',
-                    'temperature', 'top_k', 'use_kv_cache'},
+                    'temperature', 'top_k', 'use_kv_cache', 'require_native_cuda_graph_decode',
+                    'prefer_native_cuda_graph_decode'},
                 'cpp_code': {'tasks', 'task_ids', 'run_tests', 'max_new_tokens', 'seeds', 'strategy',
-                    'temperature', 'top_k', 'use_kv_cache'},
+                    'temperature', 'top_k', 'use_kv_cache', 'require_native_cuda_graph_decode',
+                    'prefer_native_cuda_graph_decode'},
                 'math': {'tasks', 'task_ids', 'scoring', 'max_context'},
                 'logic': {'tasks', 'task_ids', 'scoring', 'max_context'},
                 'terminal': {'tasks', 'task_ids', 'scoring', 'max_context', 'max_new_tokens', 'seeds',
-                    'strategy', 'temperature', 'top_k', 'use_kv_cache'},
+                    'strategy', 'temperature', 'top_k', 'use_kv_cache',
+                    'require_native_cuda_graph_decode', 'prefer_native_cuda_graph_decode'},
                 'narrative': {'tasks', 'task_ids', 'scoring', 'max_context', 'max_new_tokens', 'seeds',
-                    'strategy', 'temperature', 'top_k', 'use_kv_cache'},
-                'long_retrieval': {'tasks','task_ids','distances','include_counterfactual','max_cases'},
+                    'strategy', 'temperature', 'top_k', 'use_kv_cache',
+                    'require_native_cuda_graph_decode', 'prefer_native_cuda_graph_decode'},
+                'long_retrieval': {'tasks','task_ids','distances','include_counterfactual','max_cases',
+                                   'skip_unsupported_distances'},
             }[kind]
             if set(params) - allowed:
                 raise ValueError(f'{name} unknown parameters: {sorted(set(params)-allowed)}')

@@ -48,8 +48,10 @@ def summary_metrics(kind, result):
                 'ladder_complete_rate': result.get('progression',{}).get('all_stages_passed_rate'),
                 'mean_passed_prefix': result.get('progression',{}).get('mean_passed_prefix')}
     if kind == 'long_retrieval':
-        out = {'task_count': result['count'],
-               'long_retrieval_accuracy': sum(x['correct'] for x in result['cases'])/result['count']}
+        count = int(result['count'])
+        out = {'task_count': count,
+               'long_retrieval_accuracy': (
+                   sum(x['correct'] for x in result['cases'])/count if count else None)}
         for d, summary in result['by_distance'].items():
             if d in ('1000','4000','16000'):
                 out['retrieval_accuracy_'+d] = summary['accuracy']

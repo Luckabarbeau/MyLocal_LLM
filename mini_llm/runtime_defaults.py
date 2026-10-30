@@ -92,6 +92,24 @@ _CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
 # Validated RTX 5080 production contract for the 348M matrix-pool Model B.
 # Apply this before generic training defaults so Model B does not inherit the
 # legacy AR bucketer. Explicit environment values still win through setdefault.
+_MODEL_B_INFERENCE_DEFAULTS: dict[str, str] = {
+    "MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET": "geometric",
+    "MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS": "1",
+    "MINI_LLM_DUAL_RESOLUTION_BF16_COMPRESSOR_QKV": "1",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED": "1",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_SKIP_EMPTY_TILES": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_POOLING": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_RMSNORM": "0",
+    "MINI_LLM_DUAL_RESOLUTION_FUSED_GATE": "0",
+    "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE": "1",
+    "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE": "1",
+    "MINI_LLM_MATRIX_POOL_FUSED_FORWARD": "0",
+}
+
+
 _MODEL_B_CONSUMER_TRAINING_DEFAULTS: dict[str, str] = {
     "MINI_LLM_BF16_MIXED_CONTEXT": "0",
     "MINI_LLM_GPU_MEMORY_AUDIT": "0",
@@ -183,7 +201,8 @@ def _is_memory_model(config) -> bool:
 
 def _is_model_b_training_family(config, *, precision: str | None) -> bool:
     """Return whether the validated matrix-pool Model B defaults apply."""
-    if config is None or str(precision).lower() != "bf16-mixed":
+    dtype = str(precision or getattr(config, "dtype", "")).lower()
+    if config is None or dtype not in {"bf16-mixed", "bfloat16", "bf16"}:
         return False
     dual = getattr(config, "dual_resolution", None)
     return bool(
@@ -384,6 +403,8 @@ def apply_runtime_defaults(
         and _is_model_b_training_family(config, precision=precision)
     ):
         _setdefaults(_MODEL_B_CONSUMER_TRAINING_DEFAULTS, applied)
+    if not training and _is_model_b_training_family(config, precision=precision):
+        _setdefaults(_MODEL_B_INFERENCE_DEFAULTS, applied)
     if training:
         _setdefaults(_GPU_FAST_TRAINING_DEFAULTS, applied)
     if _use_fused_historical_decode(config, training=training):

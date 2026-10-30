@@ -1017,18 +1017,12 @@ class InferenceModel:
                     f"Prompt length {T_prompt} exceeds remaining capacity "
                     f"{state.remaining_capacity()}."
                 )
-            logits = None
-            for offset in range(T_prompt):
-                logits = self._dual_incremental_token(
-                    input_ids[:, offset:offset + 1], state
-                )
             from mini_llm.native_cuda_graph_decode import (
                 enabled as native_graph_enabled,
                 strict as native_graph_strict,
             )
             existing_native_graph = getattr(state, "_native_cuda_graph", None)
-            state._native_cuda_graph = None
-            state._native_cuda_graph_failure = None
+            native_graph = None
             if native_graph_enabled():
                 try:
                     from mini_llm.native_dual_cuda_graph_decode import (
@@ -1039,14 +1033,32 @@ class InferenceModel:
                         and existing_native_graph.engine is self
                         and existing_native_graph.state is state
                     ):
-                        state._native_cuda_graph = existing_native_graph
+                        native_graph = existing_native_graph
                     else:
                         xp.cuda.get_current_stream().synchronize()
-                        state._native_cuda_graph = NativeDualBF16CudaGraphDecoder(self, state)
+                        native_graph = NativeDualBF16CudaGraphDecoder(self, state)
                 except Exception as exc:
                     state._native_cuda_graph_failure = f"{type(exc).__name__}: {exc}"
                     if native_graph_strict():
                         raise
+            if native_graph is not None:
+                state._native_cuda_graph = native_graph
+                state._native_cuda_graph_failure = None
+                logits = None
+                for offset in range(T_prompt):
+                    logits = native_graph.decode_one(
+                        input_ids[:, offset:offset + 1], state
+                    )
+                return logits
+
+            state._native_cuda_graph = None
+            if not native_graph_enabled():
+                state._native_cuda_graph_failure = None
+            logits = None
+            for offset in range(T_prompt):
+                logits = self._dual_incremental_token(
+                    input_ids[:, offset:offset + 1], state
+                )
             return logits
 
         if state.long_memory_enabled:

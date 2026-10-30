@@ -7,6 +7,7 @@ Bubblewrap sandbox is required. Unavailable sandbox != failed task.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import json
 import math
@@ -19,7 +20,10 @@ import tempfile
 import numpy as np
 
 from mini_llm.backend import xp, asnumpy
-from benchmarks.live_suite import _generator, _plain_4096_model, _preserve_global_rng
+from benchmarks.live_suite import (
+    _generator, _plain_4096_model, _preserve_global_rng,
+    _strict_graph_decode_for_generation,
+)
 
 
 def _load(path, family):
@@ -269,13 +273,20 @@ def _cpp_execution(source, case, *, run_tests):
 
 def run_code(model, tokenizer, *, tasks, language, run_tests=False,
              max_new_tokens=160, seeds=(42,), strategy='greedy',
-             temperature=0.8, top_k=40, use_kv_cache=True, task_ids=None):
+             temperature=0.8, top_k=40, use_kv_cache=True, task_ids=None,
+             require_native_cuda_graph_decode=False,
+             prefer_native_cuda_graph_decode=False):
     if language not in ('python', 'cpp'):
         raise ValueError('language must be python or cpp')
     cases, fingerprint = _load(tasks, language)
     cases = _select_tasks(cases, task_ids)
+    if ((require_native_cuda_graph_decode or prefer_native_cuda_graph_decode)
+            and not use_kv_cache):
+        raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     generated = []
-    with _preserve_global_rng():
+    with (_strict_graph_decode_for_generation(
+              require_native_cuda_graph_decode, prefer_native_cuda_graph_decode),
+          _preserve_global_rng()):
         with _plain_4096_model(model):
             generator = _generator(model, tokenizer)
             for case in cases:
@@ -329,13 +340,20 @@ def run_code(model, tokenizer, *, tasks, language, run_tests=False,
 
 def run_terminal(model, tokenizer, *, tasks, scoring='mean', max_context=4096,
                  max_new_tokens=48, seeds=(42,), strategy='greedy', temperature=0.8,
-                 top_k=40, use_kv_cache=True, task_ids=None):
+                 top_k=40, use_kv_cache=True, task_ids=None,
+                 require_native_cuda_graph_decode=False,
+                 prefer_native_cuda_graph_decode=False):
     if scoring not in ('mean', 'sum'):
         raise ValueError('scoring must be mean or sum')
     cases, fingerprint = _load(tasks, 'terminal')
     cases = _select_tasks(cases, task_ids)
+    if ((require_native_cuda_graph_decode or prefer_native_cuda_graph_decode)
+            and not use_kv_cache):
+        raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     results = []
-    with _preserve_global_rng():
+    with (_strict_graph_decode_for_generation(
+              require_native_cuda_graph_decode, prefer_native_cuda_graph_decode),
+          _preserve_global_rng()):
         with _plain_4096_model(model):
             generator = _generator(model, tokenizer)
             for case in cases:
@@ -372,7 +390,9 @@ def run_terminal(model, tokenizer, *, tasks, scoring='mean', max_context=4096,
 
 def run_narrative(model, tokenizer, *, tasks, scoring='mean', max_context=4096,
                   max_new_tokens=128, seeds=(42,), strategy='top-k', temperature=0.8,
-                  top_k=40, use_kv_cache=True, task_ids=None):
+                  top_k=40, use_kv_cache=True, task_ids=None,
+                  require_native_cuda_graph_decode=False,
+                  prefer_native_cuda_graph_decode=False):
     """Score context-dependent factual choices; optionally sample continuations.
 
     ``max_new_tokens=0`` avoids creating inference/KV-cache state and is the
@@ -386,10 +406,19 @@ def run_narrative(model, tokenizer, *, tasks, scoring='mean', max_context=4096,
         raise ValueError('max_new_tokens must be nonnegative')
     if int(max_new_tokens) > 0 and not seeds:
         raise ValueError('At least one seed is required when generation is enabled')
+    if (int(max_new_tokens) > 0 and
+            (require_native_cuda_graph_decode or prefer_native_cuda_graph_decode) and
+            not use_kv_cache):
+        raise ValueError('native CUDA graph decode requires use_kv_cache=true')
     cases, fingerprint = _load(tasks, 'narrative')
     cases = _select_tasks(cases, task_ids)
     results = []
-    with _preserve_global_rng():
+    graph_decode = (
+        _strict_graph_decode_for_generation(
+            require_native_cuda_graph_decode, prefer_native_cuda_graph_decode)
+        if int(max_new_tokens) > 0 else contextlib.nullcontext()
+    )
+    with graph_decode, _preserve_global_rng():
         with _plain_4096_model(model):
             generator = (_generator(model, tokenizer) if int(max_new_tokens) else None)
             for case in cases:

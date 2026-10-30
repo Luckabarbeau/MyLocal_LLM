@@ -95,7 +95,9 @@
         "top_k": 40,
         "max_context": 512,
         "use_kv_cache": true,
-        "branch_top_k": 3
+        "branch_top_k": 3,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -110,7 +112,10 @@
         "seeds": [
           42
         ],
-        "strategy": "greedy"
+        "strategy": "greedy",
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -125,7 +130,10 @@
         "seeds": [
           42
         ],
-        "strategy": "greedy"
+        "strategy": "greedy",
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -140,7 +148,10 @@
         "seeds": [
           42
         ],
-        "strategy": "greedy"
+        "strategy": "greedy",
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -174,7 +185,10 @@
           42
         ],
         "max_new_tokens": 48,
-        "strategy": "greedy"
+        "strategy": "greedy",
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -188,7 +202,10 @@
           42
         ],
         "max_new_tokens": 96,
-        "strategy": "top-k"
+        "strategy": "top-k",
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -239,7 +256,10 @@
           "negation_01",
           "negation_02",
           "negation_03"
-        ]
+        ],
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -273,7 +293,10 @@
           42
         ],
         "top_k_predictions": 10,
-        "max_context": 512
+        "max_context": 512,
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -319,7 +342,10 @@
           42
         ],
         "strategy": "greedy",
-        "max_new_tokens": 48
+        "max_new_tokens": 48,
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -334,7 +360,10 @@
           42
         ],
         "strategy": "greedy",
-        "max_new_tokens": 320
+        "max_new_tokens": 320,
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -349,7 +378,10 @@
           42
         ],
         "strategy": "greedy",
-        "max_new_tokens": 320
+        "max_new_tokens": 320,
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -385,7 +417,10 @@
           0.85
         ],
         "strategy": "top-k",
-        "top_k": 40
+        "top_k": 40,
+        "use_kv_cache": true,
+        "require_native_cuda_graph_decode": true,
+        "prefer_native_cuda_graph_decode": true
       }
     },
     {
@@ -406,7 +441,8 @@
           "archive_02",
           "archive_03"
         ],
-        "include_counterfactual": false
+        "include_counterfactual": false,
+        "skip_unsupported_distances": true
       }
     },
     {
@@ -421,7 +457,8 @@
           4000,
           16000
         ],
-        "include_counterfactual": true
+        "include_counterfactual": true,
+        "skip_unsupported_distances": true
       }
     }
   ]

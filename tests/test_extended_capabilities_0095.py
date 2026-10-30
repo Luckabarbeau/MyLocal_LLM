@@ -149,6 +149,45 @@ def test_reference_filtered_token_only_with_fake_model(tmp_path, monkeypatch):
                       generation_tokens=0)
 
 
+def test_reference_generation_enables_native_graph_scope(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    from benchmarks import live_suite
+
+    class Tok:
+        def encode(self,text): return [ord(x) for x in text]
+        def decode(self,ids): return ''.join(map(chr,ids))
+
+    class Model:
+        config=SimpleNamespace(context_length=4096,
+            memory_context=SimpleNamespace(enabled=False))
+        historical_memory=None
+        hierarchical_memory_enabled=False
+        def forward(self,x,return_cache=False):
+            inputs=np.asarray(x)
+            output=np.zeros((*inputs.shape,128),dtype=np.float32)
+            output[...,65]=3.0
+            return output
+
+    observed=[]
+    class Generator:
+        def generate(self,**kwargs):
+            observed.append((os.environ.get('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE'),
+                             os.environ.get('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT')))
+            return 'A',{'generated_token_ids':[65],'eos_token_id':2}
+
+    monkeypatch.delenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE',raising=False)
+    monkeypatch.delenv('MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT',raising=False)
+    monkeypatch.setattr(live_suite,'_generator',lambda model,tokenizer,max_context=None:Generator())
+    filename=tmp_path/'references.json'
+    filename.write_text(json.dumps({'references':[{'id':'a','text':'ABCDEF'}]}))
+    run_reference(Model(),Tok(),references=filename,cutoffs=[0.5],generation_tokens=1,
+                  seeds=[42],prefer_native_cuda_graph_decode=True)
+    assert observed==[('1','0')]
+    assert 'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE' not in os.environ
+    assert 'MINI_LLM_NATIVE_CUDA_GRAPH_DECODE_STRICT' not in os.environ
+
+
 def test_0095_reference_result_artifacts_and_longitudinal_metrics(tmp_path):
     from types import SimpleNamespace
     class Tok:

@@ -114,6 +114,63 @@ def test_inference_sparse_head_respects_zero_history_and_selected_kv():
     np.testing.assert_allclose(populated[..., 1, :], 2., rtol=1e-5)
 
 
+def test_sparse_backward_reuses_buffers_and_accumulates_kv():
+    """Catch the reference bug that dropped sparse gradients in Model B."""
+    q, k, v, docs = _sample()
+    upstream = np.random.default_rng(92).normal(size=q.shape).astype(np.float32)
+    _, cache = sparse_forward(q, k, v, docs, stride=16, phase=5,
+                              scale=.125, kernel='cupy')
+    expected_q, expected_k, expected_v = sparse_backward(
+        upstream, cache, kernel='cupy')
+
+    dq = np.full(expected_q.shape, 19., dtype=np.float32)
+    dk = np.full(expected_k.shape, 3., dtype=np.float32)
+    dv = np.full(expected_v.shape, -7., dtype=np.float32)
+    result = sparse_backward(upstream, cache, kernel='cupy',
+                             dq=dq, dk=dk, dv=dv, add_dkdv=True)
+    assert all(actual is supplied for actual, supplied in zip(result, (dq, dk, dv)))
+    np.testing.assert_allclose(dq, expected_q, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dk, expected_k + 3., rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dv, expected_v - 7., rtol=1e-6, atol=1e-6)
+
+    # When add_dkdv=False existing values must be overwritten, as in Triton.
+    sparse_backward(upstream, cache, kernel='cupy', dq=dq, dk=dk, dv=dv)
+    np.testing.assert_allclose(dk, expected_k, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dv, expected_v, rtol=1e-6, atol=1e-6)
+
+
+def test_model_b_reference_sparse_gradients_reach_gqa_buffers():
+    """Integration regression: local attention must retain sparse K/V grads."""
+    from mini_llm.backend import RandomStream
+    from mini_llm.ops.matrix_pool_dual_resolution_attention import MatrixPoolDualResolutionAttention
+    config = replace(ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l().dual_resolution,
+                     sparse_retrieval_phase=8)
+    operator = MatrixPoolDualResolutionAttention(
+        d_model=1024, n_q_heads=16, n_kv_heads=4, d_head=64,
+        input_std=.02, output_std=.02, rng=RandomStream(1901),
+        dtype='float32', config=config,
+    )
+    rng = np.random.default_rng(1903)
+    q = rng.normal(0, .1, size=(1, 32, 16, 64)).astype(np.float32)
+    k = rng.normal(0, .1, size=(1, 32, 4, 64)).astype(np.float32)
+    v = rng.normal(0, .1, size=(1, 32, 4, 64)).astype(np.float32)
+    docs = np.zeros((1, 32), dtype=np.int32)
+    upstream = np.zeros_like(q)
+    upstream[0, 31, 1] = rng.normal(size=(64,)).astype(np.float32)
+    operator.local_kernel = 'cupy'
+    _, cache = operator._local_forward(q, k, v, docs, True)
+    dq, dk, dv = operator._local_backward(upstream, q, k, v, cache, docs)
+    _, sparse_cache = operator._sparse_forward(q, k, v, docs)
+    ref_dq, ref_dk, ref_dv = sparse_backward(
+        upstream[:, :, 1:2, :], sparse_cache, kernel='cupy')
+    np.testing.assert_allclose(dq[:, :, 1:2, :], ref_dq, atol=1e-6)
+    np.testing.assert_allclose(dk[:, 8::16, 0:1, :], ref_dk, atol=1e-6)
+    np.testing.assert_allclose(dv[:, 8::16, 0:1, :], ref_dv, atol=1e-6)
+    assert np.max(np.abs(dv[:, 8, 0, :])) > 0.
+    assert np.max(np.abs(dv[:, 24, 0, :])) > 0.
+    np.testing.assert_array_equal(dv[:, 9, 0, :], 0.)
+
+
 @pytest.mark.skipif(__import__('mini_llm.backend',fromlist=['BACKEND_NAME']).BACKEND_NAME != 'cupy',
                     reason='GPU-specific Triton parity')
 def test_triton_parity_and_strided_kv_gradient():
@@ -127,13 +184,15 @@ def test_triton_parity_and_strided_kv_gradient():
     out, cache = sparse_forward(qg, kg, vg, dg, stride=16, phase=5, scale=.125,
                                 kernel='triton')
     dq, dk, dv = sparse_backward(grad, cache, kernel='triton')
-    ref_q, ref_k, ref_v = [cp.asnumpy(x).astype(np.float32) for x in (qg, kg, vg)]
-    ref_o, ref_cache = sparse_forward(ref_q, ref_k, ref_v, docs,
+    # With MINI_LLM_BACKEND=cupy the reference also uses CuPy softmax;
+    # passing NumPy arrays here is invalid and never exercised the kernel.
+    ref_q, ref_k, ref_v = [x.astype(cp.float32) for x in (qg, kg, vg)]
+    ref_o, ref_cache = sparse_forward(ref_q, ref_k, ref_v, dg,
                                       stride=16, phase=5, scale=.125, kernel='cupy')
-    ref_dq, ref_dk, ref_dv = sparse_backward(cp.asnumpy(grad), ref_cache,
-                                            kernel='cupy')
+    ref_dq, ref_dk, ref_dv = sparse_backward(grad, ref_cache, kernel='cupy')
     for actual, expected in ((out, ref_o), (dq,ref_dq), (dk,ref_dk), (dv,ref_dv)):
-        np.testing.assert_allclose(cp.asnumpy(actual), expected, rtol=.12, atol=.10)
+        np.testing.assert_allclose(cp.asnumpy(actual), cp.asnumpy(expected),
+                                   rtol=.12, atol=.10)
 
 @pytest.mark.skipif(__import__('mini_llm.backend',fromlist=['BACKEND_NAME']).BACKEND_NAME != 'numpy',
                     reason='NumPy incremental reference')
@@ -199,5 +258,13 @@ def test_model_b_local_sparse_triton_matches_reference():
     operator.local_kernel='triton'
     got, cache_gpu = operator._local_forward(q,k,v,docs,True)
     dg = operator._local_backward(dout,q,k,v,cache_gpu,docs)
-    for x,y in ((got,ref),*zip(dg,dr)):
-        np.testing.assert_allclose(cp.asnumpy(x),cp.asnumpy(y),rtol=.15,atol=.12)
+    # Name the failing tensor so a numerical kernel discrepancy is not
+    # confused with missing GQA/sparse-gradient accumulation in the oracle.
+    for name, actual, expected in (
+        ('forward', got, ref),
+        ('dQ', dg[0], dr[0]),
+        ('dK', dg[1], dr[1]),
+        ('dV', dg[2], dr[2]),
+    ):
+        np.testing.assert_allclose(cp.asnumpy(actual), cp.asnumpy(expected),
+                                   rtol=.15, atol=.12, err_msg=name)

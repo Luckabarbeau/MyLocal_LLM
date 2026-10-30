@@ -70,9 +70,25 @@ def sparse_backward(dout, cache, *, kernel, dq=None, dk=None, dv=None,
         )
     from .attention import softmax_forward
     q, k, v, scale, indices, stride, phase = cache
-    dq = xp.zeros(q.shape, dtype=xp.float32)
-    dk = xp.zeros(k[:, phase::stride].shape, dtype=xp.float32)
-    dv = xp.zeros(v[:, phase::stride].shape, dtype=xp.float32)
+    # Match the Triton API: caller-provided buffers must be written in place.
+    # MatrixPoolDualResolutionAttention passes views into full GQA gradient
+    # tensors. Allocating replacements here silently drops sparse-head
+    # gradients because the caller correctly expects in-place accumulation.
+    expected = (q.shape, k[:, phase::stride].shape, v[:, phase::stride].shape)
+    buffers = (dq, dk, dv)
+    for name, buf, shape in zip(("dq", "dk", "dv"), buffers, expected):
+        if buf is not None and (buf.shape != shape or buf.dtype != xp.float32):
+            raise ValueError(f"provided sparse {name} must have FP32 shape {shape}")
+    dq = xp.zeros(expected[0], dtype=xp.float32) if dq is None else dq
+    dk = xp.zeros(expected[1], dtype=xp.float32) if dk is None else dk
+    dv = xp.zeros(expected[2], dtype=xp.float32) if dv is None else dv
+    # The sparse query head replaces the ordinary local head. Like Triton's
+    # _dq kernel, overwrite dQ. K/V are shared with other query heads, so
+    # add to their existing gradients only when add_dkdv is requested.
+    dq[...] = 0
+    if not add_dkdv:
+        dk[...] = 0
+        dv[...] = 0
     for row, row_indices in enumerate(indices):
         for qi, ix in enumerate(row_indices):
             if not len(ix):

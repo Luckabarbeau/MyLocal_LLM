@@ -34,6 +34,11 @@ def test_model_b_native_graph_activates_and_matches_fallback(monkeypatch):
     engine.prefill(prompt, captured)
     assert captured._native_cuda_graph is not None
     assert captured._native_cuda_graph_failure is None
+    from mini_llm.inference_policy import observe_execution
+    execution = observe_execution(engine, captured)
+    assert execution.acceleration_verified
+    assert "NativeDualBF16CudaGraphDecoder" in execution.active_optimizations
+    execution.require_fast()
 
     token = cp.asarray([[3]], dtype=cp.int32)
     expected = engine.decode_one(token, reference)

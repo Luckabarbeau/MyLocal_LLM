@@ -150,3 +150,11 @@ questions. Compare checkpoints using identical prompts, seeds, decoding
 parameters, and runtime settings.
 
 CPU-only checks: `python -m pytest -q tests/test_generation_benchmark.py`.
+
+
+## 0103G: shared generation/evaluation runner
+
+For consistent model loading, run metadata, remote-model support, and
+resumable generation/performance benchmarks, see
+[`docs/0103G_UNIFIED_EVALUATION.md`](../docs/0103G_UNIFIED_EVALUATION.md).
+The existing specialist and live benchmark scores are not changed.

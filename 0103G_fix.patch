@@ -1,0 +1,1016 @@
+diff --git a/benchmarks/README.md b/benchmarks/README.md
+index 4c7eaf6..37c985c 100644
+--- a/benchmarks/README.md
++++ b/benchmarks/README.md
+@@ -150,3 +150,11 @@ questions. Compare checkpoints using identical prompts, seeds, decoding
+ parameters, and runtime settings.
+ 
+ CPU-only checks: `python -m pytest -q tests/test_generation_benchmark.py`.
++
++
++## 0103G: shared generation/evaluation runner
++
++For consistent model loading, run metadata, remote-model support, and
++resumable generation/performance benchmarks, see
++[`docs/0103G_UNIFIED_EVALUATION.md`](../docs/0103G_UNIFIED_EVALUATION.md).
++The existing specialist and live benchmark scores are not changed.
+diff --git a/benchmarks/run_unified.py b/benchmarks/run_unified.py
+new file mode 100644
+index 0000000..89bbfd8
+--- /dev/null
++++ b/benchmarks/run_unified.py
+@@ -0,0 +1,382 @@
++#!/usr/bin/env python3
++"""0103G unified generation / end-to-end speed benchmark for model registry entries.
++
++Reuses generation_prompts_v1.json and the 0103E generation session; accepts
++native, supported in-process GGUF/Safetensors, and remote OpenAI-compatible
++registry models. Legacy teacher-forced/correctness suites remain under
++run_checkpoint_suite.py, without changes to their scoring semantics.
++
++Example:
++ MINI_LLM_BACKEND=cupy python -m benchmarks.run_unified \\
++   --registry serving_models.json --model native-348m \\
++   --prompt-ids math_general_short --tokens 128 --output-dir benchmarks/results/0103g
++"""
++from __future__ import annotations
++
++import argparse
++from contextlib import contextmanager
++from dataclasses import asdict
++from datetime import datetime, timezone
++import hashlib
++import json
++import math
++import os
++from pathlib import Path
++import statistics
++import sys
++
++from benchmarks.generation_metrics import repetition_metrics
++from mini_llm.evaluation import EvaluationEngine
++from mini_llm.model_sources import ModelCatalog, ModelSpec
++
++ROOT = Path(__file__).resolve().parents[1]
++DEFAULT_PROMPTS = ROOT / 'benchmarks' / 'generation_prompts_v1.json'
++FORMAT_VERSION = '0103G-unified-v1'
++
++
++def atomic_json(path: Path, value: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temp = path.with_name(path.name + '.tmp')
++    temp.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False,
++                               allow_nan=False) + '\n', encoding='utf-8')
++    os.replace(temp, path)
++
++
++def prompts_from_file(path: Path, selected: set[str] | None = None) -> tuple[dict, ...]:
++    data = json.loads(path.read_text(encoding='utf-8'))
++    prompts = data.get('prompts') if isinstance(data, dict) else None
++    if not isinstance(prompts, list) or not prompts:
++        raise ValueError('Prompt suite must contain a nonempty prompts array')
++    seen = set()
++    chosen = []
++    for record in prompts:
++        if not isinstance(record, dict) or any(not isinstance(record.get(k), str) or not record[k]
++                                                for k in ('id', 'prompt', 'domain')):
++            raise ValueError('Each prompt needs nonempty id, prompt, and domain')
++        if record['id'] in seen:
++            raise ValueError(f'Duplicate prompt ID: {record["id"]}')
++        seen.add(record['id'])
++        if selected is None or record['id'] in selected:
++            chosen.append(record)
++    if selected is not None and (selected - seen):
++        raise ValueError(f'Unknown prompt IDs: {sorted(selected - seen)}')
++    if not chosen:
++        raise ValueError('No prompts selected')
++    return tuple(chosen)
++
++
++def checkpoint_identity(spec: ModelSpec) -> dict:
++    """Record source identity, without claiming cryptographic weight integrity.
++
++    The saved file metadata detects ordinary mutations across --resume. It is
++    NOT an independent hash of model tensor contents. Snapshot SHA256 manifest
++    can be independently checked with verify_checkpoint_0103b.py.
++    """
++    descriptor = {'model_id': spec.id, 'format': spec.resolved_format(),
++                  'execution_policy': spec.execution_policy,
++                  'context_length': spec.context_length}
++    if spec.resolved_format() == 'remote':
++        descriptor['provider_endpoint'] = spec.api_url
++        descriptor['provider_model'] = spec.remote_model
++        descriptor['identity_strength'] = 'provider_alias_only; upstream weights may change'
++    else:
++        path = spec.path.resolve()
++        descriptor['path'] = str(path)
++        if not path.exists():
++            raise FileNotFoundError(path)
++        files = [path] if path.is_file() else sorted(p for p in path.rglob('*') if p.is_file())
++        # No model tensor loads / hashing multi-gigabyte checkpoints.
++        stats = []
++        for file in files:
++            if file.is_symlink():
++                continue
++            s = file.stat()
++            stats.append((str(file.relative_to(path) if path.is_dir() else file.name),
++                          s.st_size, s.st_mtime_ns))
++        descriptor['source_files_metadata_sha256'] = hashlib.sha256(
++            json.dumps(stats, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
++        descriptor['identity_strength'] = 'file_size_mtime_not_content_hash'
++        state = path / 'training_state.json' if path.is_dir() else None
++        if state and state.is_file():
++            try:
++                value = json.loads(state.read_text(encoding='utf-8'))
++                descriptor['optimizer_step'] = value.get('step')
++                descriptor['supervised_tokens'] = value.get('supervised_tokens_total')
++            except (ValueError, OSError):
++                descriptor['training_state_readable'] = False
++    return descriptor
++
++
++def _parse_seeds(value: str) -> tuple[int, ...]:
++    try:
++        result = tuple(int(s.strip()) for s in value.split(','))
++    except ValueError as exc:
++        raise ValueError('Seeds must be comma-separated integers') from exc
++    if not result or len(result) != len(set(result)):
++        raise ValueError('Seeds must be nonempty and unique')
++    return result
++
++
++def _rows(path: Path, valid: set[tuple[str, int]]) -> list[dict]:
++    result = []
++    seen = set()
++    if not path.exists():
++        return result
++    with path.open(encoding='utf-8') as fh:
++        for line in fh:
++            row = json.loads(line)  # reject torn writes; never silently skip
++            key = (row['prompt_id'], row['seed'])
++            if key in seen or key not in valid:
++                raise ValueError('Duplicate/unexpected results in resume file')
++            seen.add(key)
++            result.append(row)
++    return result
++
++
++def _summary(rows: list[dict], expected: int) -> dict:
++    grouped = {}
++    for row in rows:
++        name = row['domain']
++        grouped.setdefault(name, []).append(row)
++    groups = {}
++    for name, items in sorted(grouped.items()):
++        rates = [r['performance']['end_to_end_tokens_per_s'] for r in items
++                 if r['performance']['end_to_end_tokens_per_s'] is not None]
++        groups[name] = {'samples': len(items),
++                        'mean_end_to_end_tokens_per_s': statistics.mean(rates) if rates else None,
++                        'note': 'E2E includes prompt, sampling, decoding and remote network when applicable.'}
++    return {'schema': FORMAT_VERSION, 'completed': len(rows), 'expected': expected,
++            'complete': len(rows) == expected, 'domains': groups}
++
++
++def _run(*, model_spec: ModelSpec, prompts_path: Path, output_dir: Path,
++         prompt_ids: set[str] | None, seeds: tuple[int, ...], tokens: int,
++         temperature: float, top_k: int | None, top_p: float,
++         resume: bool, dry_run: bool, remote_mode: str = "completion") -> dict:
++    if tokens <= 0 or temperature < 0 or not math.isfinite(temperature):
++        raise ValueError('tokens must be positive; temperature must be finite and nonnegative')
++    if not 0 < top_p <= 1 or not math.isfinite(top_p):
++        raise ValueError('top_p must be finite in (0,1]')
++    if top_k is not None and top_k < 1:
++        raise ValueError('top_k must be positive')
++    prompts = prompts_from_file(prompts_path, prompt_ids)
++    if model_spec.resolved_format() == 'remote' and top_k is not None:
++        raise ValueError('Remote providers do not share a guaranteed top-k API')
++    if model_spec.resolved_format() == 'remote' and model_spec.execution_policy == 'strict-fast':
++        raise ValueError('Strict GPU-fast execution cannot be verified for a remote provider')
++    suite_hash = hashlib.sha256(prompts_path.read_bytes()).hexdigest()
++    settings = {'model': checkpoint_identity(model_spec), 'suite_file': str(prompts_path.resolve()),
++                'suite_sha256': suite_hash, 'prompt_ids': [p['id'] for p in prompts],
++                'seeds': list(seeds), 'max_new_tokens': tokens,
++                'sampling': {'temperature': temperature, 'top_p': top_p, 'top_k': top_k},
++                'backend_env': os.environ.get('MINI_LLM_BACKEND', 'numpy'),
++                'remote_request_style': remote_mode if model_spec.resolved_format() == 'remote' else None,
++                'note': 'CPU/GPU backend is process-global until runtime isolation is implemented.'}
++    count = len(prompts) * len(seeds)
++    if dry_run:
++        return {'expected': count, 'settings': settings}
++    manifest = output_dir / 'manifest.json'
++    results = output_dir / 'results.jsonl'
++    if resume:
++        if not manifest.exists():
++            raise ValueError('--resume requires a previous manifest')
++        prior = json.loads(manifest.read_text(encoding='utf-8'))
++        if prior.get('schema') != FORMAT_VERSION or prior.get('settings') != settings:
++            raise ValueError('Resume settings or model source metadata changed; refuse to mix results')
++    elif manifest.exists() or results.exists():
++        raise FileExistsError('Output exists; choose a new output directory or use --resume')
++    valid = {(p['id'], seed) for p in prompts for seed in seeds}
++    existing = _rows(results, valid) if resume else []
++    completed = {(r['prompt_id'], r['seed']) for r in existing}
++    if len(existing) == count:
++        summary = _summary(existing, count)
++        atomic_json(output_dir / 'summary.json', summary)
++        return summary
++
++    # Load model only after validating resume compatibility / output paths.
++    from mini_llm.serving_models import load_model
++    engine = EvaluationEngine(load_model(model_spec), model_id=model_spec.id,
++                              strict_fast=model_spec.execution_policy == 'strict-fast',
++                              remote_mode=remote_mode)
++    if not resume:
++        atomic_json(manifest, {'schema': FORMAT_VERSION,
++                               'created_utc': datetime.now(timezone.utc).isoformat(),
++                               'settings': settings,
++                               'metric_conventions': {
++                                   'end_to_end_tokens_per_s': 'local count or provider-reported count divided by wall time; not GPU decode throughput',
++                                   'prefill_s': 'available for local engine only',
++                                   'token_repetition': 'local token IDs only; never inferred from remote text',
++                                   'gpu_acceleration': 'only validated when execution report confirms it',
++                               }})
++    output_dir.mkdir(parents=True, exist_ok=True)
++    rows = list(existing)
++    with results.open('a', encoding='utf-8', buffering=1) as fh:
++        for prompt in prompts:
++            for seed in seeds:
++                if (prompt['id'], seed) in completed:
++                    continue
++                sample = engine.generate(prompt['prompt'], max_new_tokens=tokens,
++                                         temperature=temperature, top_k=top_k,
++                                         top_p=top_p, seed=seed)
++                repetition = repetition_metrics(list(sample.token_ids)) if sample.token_ids is not None else None
++                rate = (sample.completion_tokens / sample.wall_s if sample.completion_tokens is not None
++                        and sample.wall_s > 0 else None)
++                row = {'schema': FORMAT_VERSION, 'prompt_id': prompt['id'], 'domain': prompt['domain'],
++                       'seed': seed, 'text': sample.text, 'sample': sample.to_dict(),
++                       'quality': {'token_repetition': repetition},
++                       'performance': {'end_to_end_wall_s': sample.wall_s,
++                                       'end_to_end_tokens_per_s': rate,
++                                       'prefill_s': sample.prefill_s,
++                                       'decode_s': sample.decode_s,
++                                       'decode_tokens_per_s': (sample.completion_tokens / sample.decode_s
++                                         if sample.decode_s and sample.completion_tokens is not None else None)}}
++                fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
++                fh.flush()
++                os.fsync(fh.fileno())
++                rows.append(row)
++                print(f'[{len(rows)}/{count}] {prompt["id"]} seed={seed} '
++                      f'wall={sample.wall_s:.3f}s count={sample.completion_tokens}', flush=True)
++    summary = _summary(rows, count)
++    atomic_json(output_dir / 'summary.json', summary)
++    return summary
++
++
++
++@contextmanager
++def output_lock(directory: Path):
++    """Prevent two local benchmark agents from interleaving JSONL writes.
++
++    Linux/POSIX lock releases automatically on process termination. The lock
++    file can remain on disk and does not indicate an active lock by itself.
++    """
++    import fcntl
++    directory.mkdir(parents=True, exist_ok=True)
++    path = directory / '.benchmark.lock'
++    with path.open('a+') as handle:
++        try:
++            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except BlockingIOError as exc:
++            raise RuntimeError(f'Benchmark output is already in use: {directory}') from exc
++        try:
++            yield
++        finally:
++            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
++
++
++def run_legacy_suite(*, spec: ModelSpec, suite: Path, output_dir: Path,
++                     benchmark_ids: tuple[str, ...] | None = None,
++                     runtime_profile: str | None = None, dry_run: bool = False) -> dict:
++    """Compatibility bridge to existing live suites without rewriting scorers.
++
++    Existing WikiText, coding, retrieval, and other live-suite task semantics
++    remain owned by LiveBenchmarkScheduler. Output files keep their historical
++    schema; this only supplies a searchable index and common entrypoint.
++    """
++    if spec.resolved_format() != 'native':
++        raise ValueError('Existing live checkpoint suites require a native checkpoint with weights and tokenizer')
++    if spec.execution_policy != 'auto':
++        raise ValueError('Legacy suite does not implement --execution-policy; use --runtime-profile or the native benchmark CLI')
++    if not suite.is_file():
++        raise FileNotFoundError(suite)
++    config = json.loads(suite.read_text(encoding='utf-8'))
++    jobs = config.get('benchmarks')
++    if not isinstance(jobs, list) or not jobs:
++        raise ValueError('Legacy benchmark suite requires a benchmarks array')
++    if benchmark_ids is not None:
++        available = {row['id'] for row in jobs}
++        if set(benchmark_ids) - available:
++            raise ValueError(f'Unknown legacy benchmark IDs: {sorted(set(benchmark_ids)-available)}')
++    identity = checkpoint_identity(spec)
++    record = {'schema': FORMAT_VERSION, 'mode': 'existing-live-suite',
++              'checkpoint': identity, 'suite_file': str(suite.resolve()),
++              'suite_sha256': hashlib.sha256(suite.read_bytes()).hexdigest(),
++              'selected_benchmarks': list(benchmark_ids) if benchmark_ids else None,
++              'runtime_profile': runtime_profile,
++              'note': 'Legacy evaluation output retains its native formats and scoring implementations.'}
++    if dry_run:
++        return record
++    from benchmarks.run_checkpoint_suite import run_checkpoints
++    events = run_checkpoints(checkpoints=[spec.path], suite_path=suite,
++                             selected=benchmark_ids, output_root=output_dir,
++                             runtime_profile=runtime_profile)
++    record['events'] = len(events)
++    record['completed_events'] = sum(e.get('status') == 'complete' for e in events)
++    record['all_reported_events_complete'] = bool(events) and record['completed_events'] == len(events)
++    atomic_json(output_dir / 'unified_legacy_index.json', record)
++    return record
++
++
++def main(argv=None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    group = parser.add_mutually_exclusive_group(required=True)
++    group.add_argument('--registry', type=Path, help='Registry containing native, pretrained and remote models')
++    group.add_argument('--checkpoint', type=Path, help='Direct native checkpoint path')
++    parser.add_argument('--model', help='Registry model id (required with --registry)')
++    parser.add_argument('--execution-policy', choices=('auto', 'reference', 'balanced', 'fast', 'strict-fast'))
++    parser.add_argument('--prompts', type=Path, default=DEFAULT_PROMPTS)
++    parser.add_argument('--legacy-suite', type=Path, help='Run existing LiveBenchmarkScheduler suite (native only)')
++    parser.add_argument('--benchmark-ids', help='Comma-separated existing live benchmark IDs')
++    parser.add_argument('--runtime-profile', help='Legacy suite runtime profile (existing scheduler only)')
++    parser.add_argument('--prompt-ids', help='Comma-separated list of prompt IDs')
++    parser.add_argument('--seeds', default='42')
++    parser.add_argument('--tokens', type=int, default=128)
++    parser.add_argument('--remote-mode', choices=('completion', 'chat'), default='completion',
++                        help='Text completions preserve raw continuation prompts; chat alters prompt format')
++    parser.add_argument('--temperature', type=float, default=0.0)
++    parser.add_argument('--top-p', type=float, default=1.0)
++    parser.add_argument('--top-k', type=int)
++    parser.add_argument('--output-dir', type=Path, required=True)
++    parser.add_argument('--resume', action='store_true')
++    parser.add_argument('--dry-run', action='store_true')
++    args = parser.parse_args(argv)
++    if args.registry:
++        if not args.model:
++            parser.error('--model is required with --registry')
++        spec = ModelCatalog.from_manifest(args.registry).get(args.model)
++        if args.execution_policy:
++            from dataclasses import replace
++            spec = replace(spec, execution_policy=args.execution_policy)
++    else:
++        if args.model:
++            parser.error('--model requires --registry')
++        spec = ModelSpec(id=args.checkpoint.name, path=args.checkpoint.resolve(),
++                         format='native', execution_policy=args.execution_policy or 'auto')
++    if args.legacy_suite:
++        if args.prompt_ids:
++            parser.error('--prompt-ids is only valid with generation prompts')
++        if args.resume:
++            parser.error('--resume applies to generation JSONL only; live suite handles its own outputs')
++        if args.registry and spec.resolved_format() != 'native':
++            parser.error('--legacy-suite only supports native models')
++        if args.dry_run:
++            record = run_legacy_suite(spec=spec, suite=args.legacy_suite.resolve(),
++                                      output_dir=args.output_dir.resolve(),
++                                      benchmark_ids=tuple(args.benchmark_ids.split(',')) if args.benchmark_ids else None,
++                                      runtime_profile=args.runtime_profile, dry_run=True)
++        else:
++            with output_lock(args.output_dir.resolve()):
++                record = run_legacy_suite(spec=spec, suite=args.legacy_suite.resolve(),
++                                          output_dir=args.output_dir.resolve(),
++                                          benchmark_ids=tuple(args.benchmark_ids.split(',')) if args.benchmark_ids else None,
++                                          runtime_profile=args.runtime_profile, dry_run=False)
++        print(json.dumps(record, indent=2))
++        return 0 if args.dry_run or record['all_reported_events_complete'] else 1
++    if args.benchmark_ids or args.runtime_profile:
++        parser.error('--benchmark-ids and --runtime-profile require --legacy-suite')
++    selected = set(args.prompt_ids.split(',')) if args.prompt_ids else None
++    options = dict(model_spec=spec, prompts_path=args.prompts.resolve(),
++                   output_dir=args.output_dir.resolve(), prompt_ids=selected,
++                   seeds=_parse_seeds(args.seeds), tokens=args.tokens,
++                   temperature=args.temperature, top_k=args.top_k, top_p=args.top_p,
++                   resume=args.resume, dry_run=args.dry_run, remote_mode=args.remote_mode)
++    if args.dry_run:
++        summary = _run(**options)
++    else:
++        with output_lock(args.output_dir.resolve()):
++            summary = _run(**options)
++    print(json.dumps(summary, indent=2))
++    return 0
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/docs/0103G_UNIFIED_EVALUATION.md b/docs/0103G_UNIFIED_EVALUATION.md
+new file mode 100644
+index 0000000..79deaff
+--- /dev/null
++++ b/docs/0103G_UNIFIED_EVALUATION.md
+@@ -0,0 +1,104 @@
++# Patch 0103G — Unified evaluation and benchmarking (incremental)
++
++## Purpose
++
++Move benchmark **execution** onto the same session and model-loading abstractions
++used by interactive inference and serving. Do not replace verified specialist
++scoring algorithms with unvalidated generic substitutes.
++
++## Entry point
++
++`python -m benchmarks.run_unified` uses the model catalog introduced in 0103C,
++the shared generation loop in 0103E, and the external provider adapter in 0103F.
++
++### Native Model B / local checkpoints
++
++```bash
++MINI_LLM_BACKEND=cupy python -m benchmarks.run_unified \
++  --checkpoint ./checkpoints/model_b_348m \
++  --prompt-ids math_general_short,code_python_short \
++  --tokens 128 --seeds 42,123 \
++  --output-dir ./benchmarks/results/model_b_348m_0103g
++```
++
++### Registered native, SmolLM2 or remote model
++
++```bash
++MINI_LLM_BACKEND=cupy python -m benchmarks.run_unified \
++  --registry ./serving_models.json --model smollm2-360m \
++  --tokens 128 --output-dir ./benchmarks/results/smollm2_0103g
++```
++
++For an OpenAI-compatible external model, text completions are the default for
++**document-continuation prompts**. Use `--remote-mode chat` only for intentionally
++chat-formatted evaluation. Upstreams may not implement text completions; this
++fails explicitly, rather than silently comparing chat against raw continuation.
++External models cannot be assumed to support `top_k` or exact seed determinism.
++
++### Existing quality benchmarks, including WikiText / code / retrieval
++
++Existing evaluation is preserved and can be launched from the same entry point:
++
++```bash
++MINI_LLM_BACKEND=cupy python -m benchmarks.run_unified \
++  --checkpoint ./checkpoints/model_b_348m \
++  --legacy-suite benchmarks/configs/foundation_capabilities_0093.json \
++  --benchmark-ids wikitext_1024,wikitext_4096,generation_quick \
++  --output-dir ./benchmarks/results/model_b_live_0103g
++```
++
++This is an adapter to `benchmarks.run_checkpoint_suite.run_checkpoints` and the
++existing `LiveBenchmarkScheduler`, not a rewrite of WikiText scoring, code
++sandboxes or retrieval metrics. Its old result files retain their formats. A
++`unified_legacy_index.json` sidecar records the source and suite hash.
++`--resume` only covers the new JSONL generation suite; the existing scheduler
++retains its own repeat/skip behavior.
++
++## Standard new results
++
++- `manifest.json`: model source metadata identity, prompt suite SHA256,
++  selected prompt IDs, RNG seeds, max tokens, sampling, model execution policy,
++  and source/backend declarations.
++- `results.jsonl`: one durable row per `(prompt_id,seed)`; sample text,
++  locally observed token IDs (when available), execution report, latency,
++  token usage provenance, and token-level repetition metrics when possible.
++- `summary.json`: cases complete/expected and domain-level mean end-to-end
++  tokens/sec; **not** a kernel throughput claim.
++
++Results are append-only and may be resumed with `--resume`. The resume guard
++rejects changes in suite bytes, checkpoint file sizes/mtime, context, policy,
++seed, or sampling. Source metadata is **not a cryptographic hash of weights**;
++independent checkpoint integrity checks remain necessary. For remote models,
++upstream weight revisions cannot be independently detected.
++
++The CLI holds an advisory POSIX file lock to prevent two benchmark jobs from
++writing the same output simultaneously.
++
++## Measurement semantics
++
++- Local: time includes tokenization, sampling, host overhead, and decoding.
++  Prefill is measured separately with device synchronization. Decode time is
++  derived from total wall time less prefill, *not* isolated CUDA-kernel time.
++- Remote: wall time includes HTTP transport and provider execution. Prefill,
++  per-token decode rate and exact token IDs are unavailable. Provider token
++  counts are explicitly marked `provider_reported`; absent usage stays `null`.
++- Fast path: execution reports reflect observed CUDA Graph usage, not requested
++  environment flags. `strict-fast` is only available where verified native
++  GPU acceleration is supported; remote models cannot satisfy it.
++- Cross-model evaluation: identical raw prompts are necessary but not
++  sufficient. Tokenizers, context capabilities and service prompt templates
++  differ. Compare quality and throughput accordingly.
++- Generation repetition metrics are not equivalent to code correctness,
++  factuality or narrative coherence. Keep the existing specialist scorers.
++
++## Scope and future work
++
++- Does not replace `live_suite`, `run_checkpoint_suite`, `capability_suite`,
++  reference continuation or WikiText evaluators. The CLI provides a shared
++  entrypoint; deeper migration is subsequent work.
++- Does not change model mathematics, sampling, tokenizer, existing benchmark
++  definitions or CUDA kernels.
++- Neither per-model GPU runtime isolation nor direct PyTorch execution is
++  implemented by 0103G.
++- Long-context and GPU decode throughput validation still require a free GPU
++  on the target machine; CPU tests are not a performance proof.
+diff --git a/mini_llm/evaluation.py b/mini_llm/evaluation.py
+new file mode 100644
+index 0000000..290294e
+--- /dev/null
++++ b/mini_llm/evaluation.py
+@@ -0,0 +1,127 @@
++"""0103G: portable evaluation boundary over the 0103E generation session.
++
++Model execution stays in serving_models/generation/remote_provider; evaluation
++owns neither kernels nor sampling. Do not synthesize token usage for remotes.
++"""
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass
++import time
++from typing import Any
++
++
++@dataclass(frozen=True)
++class EvaluationSample:
++    text: str
++    token_ids: tuple[int, ...] | None
++    prompt_tokens: int | None
++    completion_tokens: int | None
++    usage_source: str
++    finish_reason: str | None
++    wall_s: float
++    prefill_s: float | None
++    decode_s: float | None
++    execution: dict | None
++
++    def to_dict(self) -> dict:
++        return asdict(self)
++
++
++def _report_dict(report: Any) -> dict | None:
++    if report is None:
++        return None
++    if hasattr(report, '__dataclass_fields__'):
++        return asdict(report)
++    if isinstance(report, dict):
++        return dict(report)
++    raise TypeError('Unexpected inference execution report type')
++
++
++class EvaluationEngine:
++    """Small adapter for local token sessions or remote completion providers.
++
++    For local models, time excludes model loading, includes tokenization and
++    sampling, and synchronizes the GPU before/after the request. Prefill time
++    is an independently synchronized measurement from GenerationSession.
++    For remote models only end-to-end HTTP latency is observable; any provider
++    token usage is labeled as provider-reported, not verified locally.
++    """
++
++    def __init__(self, model: Any, *, model_id: str, strict_fast: bool = False,
++                 remote_mode: str = "completion"):
++        self.model = model
++        self.model_id = model_id
++        self.is_remote = bool(getattr(model, 'is_remote', False))
++        self.strict_fast = strict_fast
++        if remote_mode not in {"chat", "completion"}:
++            raise ValueError("remote_mode must be chat or completion")
++        self.remote_mode = remote_mode
++        if self.is_remote and strict_fast:
++            raise ValueError('strict-fast requires locally observed CUDA execution; remote paths are unverified')
++
++    def generate(self, prompt: str, *, max_new_tokens: int, temperature: float = 0.0,
++                 top_p: float = 1.0, top_k: int | None = None, seed: int | None = None) -> EvaluationSample:
++        if max_new_tokens <= 0:
++            raise ValueError('max_new_tokens must be positive')
++        if self.is_remote:
++            if top_k is not None:
++                raise ValueError('Remote OpenAI completion API does not guarantee top_k support')
++            request = {
++                'model': self.model_id,
++                'max_tokens': max_new_tokens, 'temperature': temperature,
++                'top_p': top_p, 'stream': False,
++            }
++            if self.remote_mode == 'chat':
++                request['messages'] = [{'role': 'user', 'content': prompt}]
++            else:
++                request['prompt'] = prompt
++            if seed is not None:
++                request['seed'] = seed  # upstream may ignore; not claimed deterministic
++            start = time.perf_counter()
++            response = self.model.complete(request, chat=self.remote_mode == "chat",
++                                           public_id=self.model_id)
++            duration = time.perf_counter() - start
++            choices = response.get('choices') or []
++            if not choices:
++                raise ValueError('Upstream model returned no completion choices')
++            first = choices[0]
++            if self.remote_mode == 'chat':
++                message = first.get('message') or {}
++                if message.get('tool_calls'):
++                    raise ValueError('Benchmark expected plain text, but remote model requested tools')
++                content = message.get('content')
++            else:
++                content = first.get('text')
++            if not isinstance(content, str):
++                raise ValueError('Upstream completion did not return text')
++            usage = response.get('usage') or {}
++            prompt_n = usage.get('prompt_tokens')
++            completion_n = usage.get('completion_tokens')
++            for value in (prompt_n, completion_n):
++                if value is not None and (type(value) is not int or value < 0):
++                    raise ValueError('Invalid upstream token count')
++            return EvaluationSample(content, None, prompt_n, completion_n,
++                                    'provider_reported' if completion_n is not None else 'unknown',
++                                    first.get('finish_reason'), duration, None, None,
++                                    {'backend': 'remote', 'verified_fast': False,
++                                     'latency_includes_transport': True})
++
++        from .generation import GenerationSession
++        from .backend import synchronize
++        session = GenerationSession(self.model)
++        synchronize()
++        start = time.perf_counter()
++        outcome = session.generate(prompt, max_tokens=max_new_tokens, temperature=temperature,
++                                   top_p=top_p, top_k=top_k, seed=seed, log_speed=True)
++        synchronize()
++        elapsed = time.perf_counter() - start
++        report = session.execution_info()
++        if self.strict_fast:
++            if report is None:
++                raise RuntimeError('strict-fast: inference did not expose an execution report')
++            report.require_fast()
++        prefill = session.prefill_time_s
++        return EvaluationSample(outcome.text, tuple(outcome.token_ids),
++                                outcome.prompt_tokens, outcome.completion_tokens,
++                                'local_tokenizer', outcome.reason, elapsed, prefill,
++                                max(elapsed - prefill, 0.0), _report_dict(report))
+diff --git a/mini_llm/serving_api.py b/mini_llm/serving_api.py
+index 4a641fa..b3f71fe 100644
+--- a/mini_llm/serving_api.py
++++ b/mini_llm/serving_api.py
+@@ -169,6 +169,11 @@ def token_events(model, prompt, *, max_tokens, temperature, top_p, top_k, stop,
+             frequency_penalty=frequency_penalty,
+             presence_penalty=presence_penalty,
+             emit_text=text_streaming):
++            if event["kind"] == "done" and getattr(model, "execution_policy", None) == "strict-fast":
++                report = session.execution_info()
++                if report is None:
++                    raise RuntimeError("strict-fast: no execution report after decoding")
++                report.require_fast()
+             if event["kind"] == "done" and not text_streaming:
+                 full_text = session.model.decode(session.generated_ids)
+                 if full_text:
+diff --git a/mini_llm/serving_models.py b/mini_llm/serving_models.py
+index c5d24ac..7bca81a 100644
+--- a/mini_llm/serving_models.py
++++ b/mini_llm/serving_models.py
+@@ -39,10 +39,20 @@ class ServingModel:
+         native_engine = getattr(self.engine, "engine", self.engine)
+         report = observe_execution(native_engine, state)
+         state.execution_report = report
+-        if self.execution_policy == "strict-fast":
+-            report.require_fast()
++        # Strict-fast is validated *after* decoding, when a graph has had an
++        # opportunity to execute. Checking here mistakes capture for execution.
+         return logits
+ 
++    def execution_report(self, state):
++        """Observe the *completed* request, not only post-prefill capture.
++
++        CUDA graphs may first execute during decode_one. A report saved in
++        prefill can therefore be stale even when the kernel ran correctly.
++        """
++        from .inference_policy import observe_execution
++        native_engine = getattr(self.engine, "engine", self.engine)
++        return observe_execution(native_engine, state)
++
+     def decode_one(self, token_id, state):
+         from mini_llm.backend import xp
+         return self.engine.decode_one(xp.asarray([token_id], dtype=xp.int32), state)
+diff --git a/tests/test_inference_policy_0103d.py b/tests/test_inference_policy_0103d.py
+index 2bf50d3..5a67866 100644
+--- a/tests/test_inference_policy_0103d.py
++++ b/tests/test_inference_policy_0103d.py
+@@ -168,5 +168,9 @@ def test_serving_adapter_reports_session_not_global_graph_state():
+     assert not state.execution_report.acceleration_verified
+     strict = ServingModel(FakeEngine(), tokenizer=None, context_length=4,
+                           execution_policy="strict-fast")
++    # CUDA graphs may not execute until decode_one. Validate at completion,
++    # not immediately after prefill, to avoid false strict-fast rejection.
++    state = SimpleNamespace()
++    strict.prefill([1, 2], state)
+     with pytest.raises(UnverifiedExecutionPath):
+-        strict.prefill([1, 2], SimpleNamespace())
++        strict.execution_report(state).require_fast()
+diff --git a/tests/test_unified_benchmark_0103g.py b/tests/test_unified_benchmark_0103g.py
+new file mode 100644
+index 0000000..c00645c
+--- /dev/null
++++ b/tests/test_unified_benchmark_0103g.py
+@@ -0,0 +1,224 @@
++"""0103G: standardized benchmark metadata, session reuse and failure rules."""
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++
++import pytest
++
++from mini_llm.evaluation import EvaluationEngine
++from mini_llm.model_sources import ModelSpec
++from benchmarks.run_unified import (
++    _run, checkpoint_identity, prompts_from_file, _summary,
++)
++
++
++class DummyLocal:
++    context_length = 48
++    stop_ids = {99}
++    def encode(self, prompt):
++        return [1, 2]
++    def decode(self, ids):
++        return ''.join(chr(96 + i) for i in ids)
++    def create_state(self, total_tokens):
++        return object()
++    def prefill(self, ids, state):
++        import numpy as np
++        return np.array([[-100., 100., -100., -100.]], dtype='float32')
++    def decode_one(self, token_id, state):
++        import numpy as np
++        return np.array([[-100., 100., -100., -100.]], dtype='float32')
++    def execution_report(self, state):
++        return None
++
++
++class DummyRemote:
++    is_remote = True
++    def __init__(self, usage=True):
++        self.requests = []
++        self.usage = usage
++    def complete(self, payload, *, chat, public_id):
++        self.requests.append((payload, chat, public_id))
++        return {'choices': [{'message': {'content': 'hello'}, 'text': 'hello', 'finish_reason': 'stop'}],
++                'usage': {'prompt_tokens': 7, 'completion_tokens': 2} if self.usage else {}}
++
++
++@pytest.fixture
++def suite(tmp_path):
++    path = tmp_path / 'prompts.json'
++    path.write_text(json.dumps({'prompts': [
++        {'id': 'one', 'domain': 'math', 'prompt': 'One'},
++        {'id': 'two', 'domain': 'code', 'prompt': 'Two'},
++    ]}))
++    return path
++
++
++def test_local_session_usage_and_no_unverified_fast_claim():
++    sample = EvaluationEngine(DummyLocal(), model_id='mock').generate('hi', max_new_tokens=2, seed=42)
++    assert sample.text == 'aa'
++    assert sample.token_ids == (1, 1)
++    assert sample.prompt_tokens == 2
++    assert sample.completion_tokens == 2
++    assert sample.usage_source == 'local_tokenizer'
++    assert sample.prefill_s is not None and sample.decode_s is not None
++    assert sample.execution is None
++    with pytest.raises(RuntimeError, match='strict-fast'):
++        EvaluationEngine(DummyLocal(), model_id='mock', strict_fast=True).generate('hi', max_new_tokens=1)
++
++
++def test_remote_usage_not_fabricated_and_no_token_metrics():
++    remote = DummyRemote(usage=False)
++    sample = EvaluationEngine(remote, model_id='lfm').generate('hi', max_new_tokens=4, seed=3)
++    assert sample.usage_source == 'unknown'
++    assert sample.completion_tokens is None and sample.token_ids is None
++    assert sample.prefill_s is None and sample.decode_s is None
++    assert remote.requests[0][0]['seed'] == 3
++    assert remote.requests[0][0]['prompt'] == 'hi'
++    assert remote.requests[0][1] is False
++    with pytest.raises(ValueError, match='top_k'):
++        EvaluationEngine(remote, model_id='lfm').generate('hi', max_new_tokens=4, top_k=40)
++    with pytest.raises(ValueError, match='remote'):
++        EvaluationEngine(remote, model_id='lfm', strict_fast=True)
++
++
++def test_provider_usage_is_explicitly_labeled():
++    sample = EvaluationEngine(DummyRemote(), model_id='lfm').generate('hi', max_new_tokens=2)
++    assert sample.usage_source == 'provider_reported'
++    assert sample.prompt_tokens == 7
++    assert sample.completion_tokens == 2
++
++
++def test_prompt_validation_and_unknown_ids(suite):
++    assert len(prompts_from_file(suite, {'one'})) == 1
++    with pytest.raises(ValueError, match='Unknown'):
++        prompts_from_file(suite, {'absent'})
++    suite.write_text(json.dumps({'prompts': [{'id': 'dupe', 'prompt': 'a', 'domain': 'b'},
++                                             {'id': 'dupe', 'prompt': 'c', 'domain': 'd'}]}))
++    with pytest.raises(ValueError, match='Duplicate'):
++        prompts_from_file(suite)
++
++
++def test_incremental_output_and_resume(tmp_path, suite, monkeypatch):
++    from mini_llm import serving_models
++    model = DummyLocal()
++    monkeypatch.setattr(serving_models, 'load_model', lambda spec: model)
++    path = tmp_path / 'model.gguf'
++    path.write_bytes(b'abc')
++    spec = ModelSpec(id='local', path=path, format='gguf')
++    out = tmp_path / 'results'
++    args = dict(model_spec=spec, prompts_path=suite, output_dir=out,
++                prompt_ids=None, seeds=(3, 5), tokens=2,
++                temperature=0.0, top_k=None, top_p=1.0, dry_run=False)
++    result = _run(**args, resume=False)
++    assert result['complete'] and result['completed'] == 4
++    rows = [json.loads(s) for s in (out / 'results.jsonl').read_text().splitlines()]
++    assert len(rows) == 4 and rows[0]['quality']['token_repetition'] is not None
++    assert (out / 'manifest.json').is_file()
++    assert _run(**args, resume=True)['completed'] == 4
++    # Partial resume can repair a completed result after interruption.
++    (out / 'results.jsonl').write_text('\n'.join(json.dumps(x) for x in rows[:2]) + '\n')
++    assert _run(**args, resume=True)['completed'] == 4
++    # Detect changed model and changed prompt suite before any execution.
++    path.write_bytes(b'abcd')
++    with pytest.raises(ValueError, match='Resume settings'):
++        _run(**args, resume=True)
++
++
++def test_corrupt_and_duplicate_result_records_rejected(tmp_path, suite, monkeypatch):
++    from mini_llm import serving_models
++    monkeypatch.setattr(serving_models, 'load_model', lambda spec: DummyLocal())
++    path = tmp_path / 'tiny.gguf'
++    path.write_bytes(b'abc')
++    out = tmp_path / 'out'
++    args = dict(model_spec=ModelSpec(id='x', path=path, format='gguf'),
++                prompts_path=suite, output_dir=out, prompt_ids={'one'},
++                seeds=(0,), tokens=1, temperature=0, top_k=None, top_p=1.0, dry_run=False)
++    _run(**args, resume=False)
++    with (out / 'results.jsonl').open('a') as f:
++        f.write((out / 'results.jsonl').read_text())
++    with pytest.raises(ValueError, match='Duplicate'):
++        _run(**args, resume=True)
++
++
++def test_metadata_no_content_hash_claim(tmp_path):
++    p = tmp_path / 'model.gguf'
++    p.write_bytes(b'abc')
++    meta = checkpoint_identity(ModelSpec(id='m', path=p, format='gguf'))
++    assert meta['identity_strength'] == 'file_size_mtime_not_content_hash'
++    remote = checkpoint_identity(ModelSpec(id='r', format='remote',
++        api_url='http://127.0.0.1:18080/v1', remote_model='lfm'))
++    assert 'upstream weights may change' in remote['identity_strength']
++
++
++def test_no_results_are_a_pass():
++    assert not _summary([], 3)['complete']
++
++
++def test_real_native_checkpoint_through_unified_cli(tmp_path, suite):
++    """Catch wiring regressions that dummy adapter tests cannot detect."""
++    from tests.test_canonical_model_loading_0103c import _tiny_checkpoint
++    import subprocess, sys, os
++    checkpoint = tmp_path / 'checkpoint'
++    _tiny_checkpoint(checkpoint)
++    output = tmp_path / 'cli_results'
++    cmd = [sys.executable, '-m', 'benchmarks.run_unified',
++           '--checkpoint', str(checkpoint), '--prompts', str(suite),
++           '--prompt-ids', 'one', '--seeds', '42', '--tokens', '1',
++           '--output-dir', str(output), '--execution-policy', 'reference']
++    env = dict(os.environ, MINI_LLM_BACKEND='numpy')
++    result = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[1],
++                            env=env, capture_output=True, text=True, timeout=45)
++    assert result.returncode == 0, result.stdout + '\n' + result.stderr
++    row = json.loads((output / 'results.jsonl').read_text())
++    assert row['sample']['usage_source'] == 'local_tokenizer'
++    assert row['sample']['execution']['backend'] == 'numpy'
++    assert row['sample']['completion_tokens'] == 1
++    assert row['performance']['end_to_end_wall_s'] >= 0
++
++
++def test_existing_live_suite_bridge_uses_original_scoring(monkeypatch, suite, tmp_path):
++    from benchmarks.run_unified import run_legacy_suite
++    from benchmarks import run_checkpoint_suite
++    called = []
++    def mock_run(**kwargs):
++        called.append(kwargs)
++        return [{'status': 'complete', 'type': 'wikitext'}]
++    monkeypatch.setattr(run_checkpoint_suite, 'run_checkpoints', mock_run)
++    checkpoint = tmp_path / 'checkpoint'
++    checkpoint.mkdir()
++    (checkpoint / 'config.json').write_text('{}')
++    live = tmp_path / 'live.json'
++    live.write_text(json.dumps({'benchmarks': [{'id': 'wikitext_1024'}]}))
++    destination = tmp_path / 'out'
++    obj = run_legacy_suite(spec=ModelSpec(id='native', path=checkpoint, format='native'),
++                           suite=live, output_dir=destination,
++                           benchmark_ids=('wikitext_1024',))
++    assert obj['completed_events'] == 1 and obj['all_reported_events_complete']
++    assert called[0]['output_root'] == destination
++    assert (destination / 'unified_legacy_index.json').exists()
++    with pytest.raises(ValueError, match='Unknown legacy'):
++        run_legacy_suite(spec=ModelSpec(id='native', path=checkpoint, format='native'),
++                         suite=live, output_dir=destination, benchmark_ids=('unknown',))
++    with pytest.raises(ValueError, match='require a native'):
++        run_legacy_suite(spec=ModelSpec(id='remote', format='remote',
++                         api_url='http://localhost:9999/v1', remote_model='lfm'),
++                         suite=live, output_dir=destination)
++
++
++def test_remote_chat_mode_is_labeled_and_not_prompt_equivalent():
++    engine = DummyRemote()
++    EvaluationEngine(engine, model_id='lfm', remote_mode='chat').generate('prompt', max_new_tokens=1)
++    assert engine.requests[0][1] is True
++    assert engine.requests[0][0]['messages'] == [{'role': 'user', 'content': 'prompt'}]
++    assert 'prompt' not in engine.requests[0][0]
++
++
++def test_output_directory_lock_prevents_concurrent_writers(tmp_path):
++    from benchmarks.run_unified import output_lock
++    with output_lock(tmp_path / 'out'):
++        with pytest.raises(RuntimeError, match='already in use'):
++            with output_lock(tmp_path / 'out'):
++                pass
++    with output_lock(tmp_path / 'out'):
++        pass
+diff --git a/scripts/register_0103g_suite.py b/scripts/register_0103g_suite.py
+new file mode 100644
+index 0000000..d48067e
+--- /dev/null
++++ b/scripts/register_0103g_suite.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""Register 0103G tests without replacing a locally customized regression runner.
++
++Safe to rerun. This utility edits only the CPU_SUITES dictionary, keeping all
++existing suites, CUDA-memory safeguards, and local modifications intact.
++"""
++
++from __future__ import annotations
++
++import ast
++import os
++import stat
++from pathlib import Path
++import tempfile
++
++
++TEST = "tests/test_unified_benchmark_0103g.py"
++SUITE = "unified_benchmark"
++ROOT = Path(__file__).resolve().parents[1]
++RUNNER = ROOT / "scripts" / "run_0103a_regressions.py"
++
++
++def update_runner(path: Path) -> bool:
++    contents = path.read_text(encoding="utf-8")
++    tree = ast.parse(contents, filename=str(path))
++    candidates = [
++        stmt.value
++        for stmt in tree.body
++        if isinstance(stmt, (ast.Assign, ast.AnnAssign))
++        and (any(isinstance(target, ast.Name) and target.id == "CPU_SUITES"
++                 for target in stmt.targets)
++             if isinstance(stmt, ast.Assign)
++             else isinstance(stmt.target, ast.Name) and stmt.target.id == "CPU_SUITES")
++    ]
++    if len(candidates) != 1 or not isinstance(candidates[0], ast.Dict):
++        raise RuntimeError("Expected exactly one literal CPU_SUITES dictionary; no changes made")
++    suites = candidates[0]
++    keys = [key.value if isinstance(key, ast.Constant) else None for key in suites.keys]
++    if SUITE in keys:
++        index = keys.index(SUITE)
++        values = [node.value for node in ast.walk(suites.values[index])
++                  if isinstance(node, ast.Constant) and isinstance(node.value, str)]
++        if TEST not in values:
++            raise RuntimeError(f"Existing {SUITE} suite doesn't include {TEST}; no changes made")
++        print(f"0103G regression tier already registered in {path}")
++        return False
++    # Preserve existing suite structure even if 0103A..0103F changed its order.
++    lines = contents.splitlines(keepends=True)
++    close_index = suites.end_lineno - 1  # AST line numbers are one-based.
++    closing = lines[close_index]
++    if closing.strip() != "}":
++        raise RuntimeError("CPU_SUITES dictionary has an unusual layout; no changes made")
++    indentation = (lines[suites.keys[0].lineno - 1][:suites.keys[0].col_offset]
++                   if suites.keys else "    ")
++    addition = (f'{indentation}"{SUITE}": (\n'
++                f'{indentation}    "{TEST}",\n'
++                f'{indentation}),\n')
++    new_text = ''.join(lines[:close_index]) + addition + ''.join(lines[close_index:])
++    compile(new_text, str(path), "exec")
++    # Atomic replacement avoids leaving a truncated runner if interrupted.
++    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
++                                     prefix=".runner-0103g-", delete=False) as tmp:
++        tmp.write(new_text)
++        temp_path = Path(tmp.name)
++    try:
++        temp_path.chmod(stat.S_IMODE(path.stat().st_mode))
++        os.replace(temp_path, path)
++    finally:
++        temp_path.unlink(missing_ok=True)
++    print(f"Registered {SUITE}: {TEST} in {path}")
++    return True
++
++
++if __name__ == "__main__":
++    update_runner(RUNNER)

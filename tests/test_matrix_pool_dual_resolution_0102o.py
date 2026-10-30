@@ -307,16 +307,35 @@ def test_production_width_triton_mixed_window_and_global_parity(monkeypatch):
         )
         operator.zero_grad()
         dx, dr = operator.backward(dy, cache)
-        return output, dx, dr, [p.grad.copy() for p in operator.parameters()]
+        # The reference and Triton paths are tested sequentially on a single
+        # GPU.  Do not retain a full set of GPU gradients, caches and temporary
+        # allocations from the reference when allocating the Triton workspace.
+        # Keep the comparison on CPU; importantly, no dimensions or tolerances
+        # are reduced to work around low GPU headroom.
+        cp.cuda.get_current_stream().synchronize()
+        return (
+            cp.asnumpy(output.astype(cp.float32)),
+            cp.asnumpy(dx.astype(cp.float32)),
+            cp.asnumpy(dr.astype(cp.float32)),
+            [cp.asnumpy(p.grad.astype(cp.float32)) for p in operator.parameters()],
+        )
 
     reference = run("cupy", "cupy")
+    # Reference output is now host-resident; release unreachable GPU buffers
+    # before Triton launches.  No allocation holding x/residual/dy is released.
+    import gc
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
     triton = run("triton", "triton")
-    for got, expected in zip(triton[:3], reference[:3]):
-        cp.testing.assert_allclose(got.astype("float32"), expected.astype("float32"),
-                                   rtol=0.12, atol=0.12)
-    for got, expected in zip(triton[3], reference[3]):
-        assert bool(cp.all(cp.isfinite(got)))
-        cp.testing.assert_allclose(got, expected, rtol=0.22, atol=0.22)
+    for name, got, expected in zip(("output", "dx", "dresidual"),
+                                   triton[:3], reference[:3]):
+        np.testing.assert_allclose(got, expected, rtol=0.12, atol=0.12,
+                                   err_msg=name)
+    for index, (got, expected) in enumerate(zip(triton[3], reference[3])):
+        assert np.isfinite(got).all(), f"non-finite parameter gradient {index}"
+        np.testing.assert_allclose(got, expected, rtol=0.22, atol=0.22,
+                                   err_msg=f"parameter gradient {index}")
 
 @pytest.mark.skipif(BACKEND_NAME != "numpy", reason="NumPy exact scatter-reference check")
 def test_0102p_matrix_pool_backward_scatter_matches_reference_multiple_documents(monkeypatch):

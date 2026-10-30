@@ -7,7 +7,6 @@ never reimplements attention, projections, checkpoint loading or tokenization.
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from collections import Counter, deque
 import hmac
 import json
 import os
@@ -104,53 +103,9 @@ def parse_tool_envelope(text, tools):
     return result
 
 
-def sample_token(logits, temperature=0.0, top_p=1.0, top_k=None, *,
-                 repetition_penalty=1.0, frequency_penalty=0.0,
-                 presence_penalty=0.0, recent_counts=None):
-    """Sample on the active backend, applying bounded recent-token penalties."""
-    from mini_llm.backend import xp
-    penalize = bool(recent_counts) and (repetition_penalty != 1.0 or
-                                         frequency_penalty != 0.0 or presence_penalty != 0.0)
-    # Never modify the logits buffer returned by the inference backend.
-    row = logits[0].reshape(-1).astype(xp.float32, copy=penalize)
-    if penalize:
-        # Keep the history/counts on CPU and send only the distinct token IDs
-        # in the bounded window; do not transfer a full vocabulary to CPU.
-        ids = xp.asarray(list(recent_counts), dtype=xp.int32)
-        counts = xp.asarray(list(recent_counts.values()), dtype=xp.float32)
-        values = row[ids]
-        if repetition_penalty != 1.0:
-            values = xp.where(values > 0, values / xp.float32(repetition_penalty),
-                              values * xp.float32(repetition_penalty))
-        if frequency_penalty != 0:
-            values = values - xp.float32(frequency_penalty) * counts
-        if presence_penalty != 0:
-            values = values - xp.float32(presence_penalty)
-        row[ids] = values
-    if temperature == 0:
-        return int(xp.argmax(row).item())
-    if not 0 < top_p <= 1:
-        raise APIError("top_p must be within (0,1]")
-    vocab = int(row.shape[0])
-    k = min(vocab, int(top_k) if top_k is not None else vocab)
-    if k <= 0:
-        raise APIError("top_k must be >= 1")
-    indices = (xp.arange(vocab) if k == vocab else
-               xp.argpartition(row, vocab - k)[vocab - k:])
-    values = row[indices] / xp.float32(temperature)
-    if top_p < 1:
-        order = xp.argsort(values)[::-1]
-        indices, values = indices[order], values[order]
-    weights = xp.exp(values - xp.max(values))
-    if top_p < 1:
-        cum = xp.cumsum(weights)
-        keep = (cum - weights) < xp.float32(top_p) * cum[-1]
-        weights = xp.where(keep, weights, 0)
-    cdf = xp.cumsum(weights)
-    point = xp.random.random() * cdf[-1]
-    slot = xp.searchsorted(cdf, point, side="right")
-    slot = xp.minimum(slot, len(indices) - 1)
-    return int(indices[slot].item())
+# Public compatibility hook: tests and existing integrations may monkeypatch this
+# name. Actual sampling now lives in mini_llm.generation.
+from .generation import sample_token
 
 
 class ModelManager:
@@ -160,10 +115,20 @@ class ModelManager:
         self.lock = threading.RLock()
         self.current_id = None
         self.current = None
+        self.remote_engines = {}
 
     def acquire(self, model_id):
         if model_id not in self.registry:
             raise APIError(f"Unknown model {model_id!r}", 404, "model_not_found")
+        spec = self.registry[model_id]
+        if spec.format == "remote":
+            # Completion-level remote models neither consume GPU memory nor
+            # mutate local numerical runtime flags. Preserve the loaded local
+            # engine and allow concurrent remote requests.
+            with self.lock:
+                if model_id not in self.remote_engines:
+                    self.remote_engines[model_id] = self.loader(spec)
+                return self.remote_engines[model_id]
         if self.current_id == model_id:
             return self.current
         # Do not keep multiple VRAM-sized models resident on small GPUs.
@@ -184,72 +149,38 @@ class ModelManager:
 
 def token_events(model, prompt, *, max_tokens, temperature, top_p, top_k, stop,
                  repetition_penalty=1.0, repetition_window=256,
-                 frequency_penalty=0.0, presence_penalty=0.0):
-    """Yield decoded deltas while preserving partial UTF-8 and stop prefixes."""
-    ids = model.encode(prompt)
-    if not ids:
-        raise APIError("Prompt tokenized to an empty sequence")
-    remaining = model.context_length - len(ids)
-    if remaining <= 0:
-        raise APIError(f"Prompt ({len(ids)} tokens) exceeds context ({model.context_length})")
-    max_tokens = min(max_tokens, remaining)
-    if max_tokens < 1:
-        raise APIError("max_tokens must be positive")
-    yield {"kind": "prefill", "count": len(ids)}
-    state = model.create_state(len(ids) + max_tokens)
-    logits = model.prefill(ids, state)
-    generated = []
-    # A bounded prompt+generation window: no O(64K) scan or large GPU mask.
-    recent = deque(ids[-repetition_window:] if repetition_window else [])
-    counts = Counter(recent)
-    emitted = ""
-    decoded = ""
-    stops = [s for s in stop if s]
-    stop_buffer = max((len(s) - 1 for s in stops), default=0)
-    reason = "length"
-    for iteration in range(max_tokens):
-        token_id = sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k,
-                                repetition_penalty=repetition_penalty,
-                                frequency_penalty=frequency_penalty,
-                                presence_penalty=presence_penalty, recent_counts=counts)
-        if token_id in model.stop_ids:
-            reason = "stop"
-            break
-        generated.append(token_id)
-        if repetition_window:
-            if len(recent) >= repetition_window:
-                old = recent.popleft()
-                counts[old] -= 1
-                if not counts[old]:
-                    del counts[old]
-            recent.append(token_id)
-            counts[token_id] += 1
-        decoded = model.decode(generated)
-        pos = min((decoded.index(s) for s in stops if s in decoded), default=-1)
-        if pos >= 0:
-            decoded = decoded[:pos]
-            reason = "stop"
-        # A byte-level BPE decoder can temporarily produce a replacement glyph
-        # for an incomplete UTF-8 sequence. Do not stream that unstable tail.
-        visible = decoded.rstrip("\ufffd")
-        if reason != "stop" and stop_buffer:
-            visible = visible[:-stop_buffer] if len(visible) > stop_buffer else ""
-        if not visible.startswith(emitted):
-            raise RuntimeError("Tokenizer decoded output is not prefix-stable")
-        delta = visible[len(emitted):]
-        if delta:
-            emitted = visible
-            yield {"kind": "content", "text": delta}
-        if reason == "stop":
-            break
-        if iteration + 1 < max_tokens:
-            logits = model.decode_one(token_id, state)
-    # Release stop-prefix buffer if generation simply hit its length cap.
-    if reason == "length":
-        final = decoded.rstrip("\ufffd")
-        if final.startswith(emitted) and final != emitted:
-            yield {"kind": "content", "text": final[len(emitted):]}
-    yield {"kind": "done", "reason": reason, "count": len(generated)}
+                 frequency_penalty=0.0, presence_penalty=0.0,
+                 text_streaming=True):
+    """Backward-compatible HTTP events from the shared generation session.
+
+    Non-streamed responses decode once, avoiding quadratic BPE decoding;
+    streamed responses or explicit stop strings retain incremental decoding.
+    """
+    from .generation import GenerationSession
+    session = GenerationSession(model, sampler=lambda logits, **kw: sample_token(logits, **kw))
+    try:
+        if not text_streaming and stop:
+            raise ValueError("Stop strings require incremental decoding")
+        for event in session.stream(
+            prompt, max_tokens=max_tokens, temperature=temperature,
+            top_p=top_p, top_k=top_k, stop=stop,
+            repetition_penalty=repetition_penalty,
+            repetition_window=repetition_window,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            emit_text=text_streaming):
+            if event["kind"] == "done" and getattr(model, "execution_policy", None) == "strict-fast":
+                report = session.execution_info()
+                if report is None:
+                    raise RuntimeError("strict-fast: no execution report after decoding")
+                report.require_fast()
+            if event["kind"] == "done" and not text_streaming:
+                full_text = session.model.decode(session.generated_ids)
+                if full_text:
+                    yield {"kind": "content", "text": full_text}
+            yield event
+    except ValueError as exc:
+        raise APIError(str(exc)) from exc
 
 
 def _normalize_request(request, *, chat):
@@ -345,6 +276,14 @@ def create_server(manager, *, host="127.0.0.1", port=8000, api_key=None):
                     raise APIError("Request body must be within 16 MiB", 413)
                 request = json.loads(self.rfile.read(length))
                 chat = self.path.endswith("chat/completions")
+                # A remote engine owns the upstream prompt template, sampling
+                # and tool protocol. Forward the client's OpenAI payload; do
+                # not tokenize or wrap it in our in-process ChatML template.
+                if isinstance(request, dict) and isinstance(request.get("model"), str):
+                    spec = manager.registry.get(request["model"])
+                    if spec is not None and spec.format == "remote":
+                        self._remote_completion(request, spec, chat=chat)
+                        return
                 args = _normalize_request(request, chat=chat)
                 spec = manager.registry.get(args["model"])
                 if spec is None:
@@ -365,7 +304,9 @@ def create_server(manager, *, host="127.0.0.1", port=8000, api_key=None):
                 with manager.lock:
                     model = manager.acquire(args["model"])
                     events = token_events(model, prompt, max_tokens=args["max_tokens"],
-                                          **sampling.__dict__, stop=args["stop"])
+                                          **sampling.__dict__, stop=args["stop"],
+                                          text_streaming=bool(args["stop"]) or
+                                          (args["stream"] and not tools))
                     first = next(events)  # Prefill-token count, before sending headers
                     completion_id = "chatcmpl-" + uuid.uuid4().hex
                     created = int(time.time())
@@ -395,6 +336,43 @@ def create_server(manager, *, host="127.0.0.1", port=8000, api_key=None):
                         self._error(err)
                 except (OSError, ValueError):
                     pass
+
+        def _remote_completion(self, request, spec, *, chat):
+            from .remote_provider import RemoteProviderError
+            try:
+                engine = manager.acquire(spec.id)
+                if request.get("stream") is True:
+                    # Fetch the upstream response before committing local SSE
+                    # headers, so connection and provider errors remain JSON.
+                    stream = engine.stream(request, chat=chat, public_id=spec.id)
+                    try:
+                        first = next(stream)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self._sse_started = True
+                        self.close_connection = True
+                        self.wfile.write(first)
+                        for line in stream:
+                            self.wfile.write(line)
+                            # Flush completed SSE events immediately. Delaying
+                            # until exhaustion would destroy token streaming.
+                            if line in (b"\n", b"\r\n"):
+                                self.wfile.flush()
+                        self.wfile.flush()
+                    finally:
+                        stream.close()
+                else:
+                    result = engine.complete(request, chat=chat, public_id=spec.id)
+                    self._json(result)
+            except RemoteProviderError as exc:
+                error = APIError(str(exc), exc.status, exc.code)
+                if self._sse_started:
+                    self._sse_error(error)
+                else:
+                    self._error(error)
 
         def _collect(self, events):
             text_parts = []

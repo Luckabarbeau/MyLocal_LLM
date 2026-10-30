@@ -96,6 +96,7 @@ class GenerationState:
 
     def reset(self):
         """Reset generation state without deallocating cache."""
+        self._cuda_graph_decode_count = 0
         self.length = 0
         self.retrieval_routes.clear()
         self.historical_reader_routes.clear()

@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from mini_llm.config import ModelConfig
 from mini_llm.runtime_defaults import (
     apply_runtime_defaults, format_runtime_fast_paths,
@@ -82,6 +84,24 @@ PROFILE_VARS = {
     "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE",
     "MINI_LLM_MATRIX_POOL_R4_LOGITS_BACKWARD",
 }
+
+
+@pytest.fixture(autouse=True)
+def _restore_profile_environment():
+    """Do not leak os.environ mutations from apply_runtime_defaults.
+
+    apply_runtime_defaults writes via os.environ.setdefault, which pytest's
+    monkeypatch cannot automatically undo. A later numerical test can otherwise
+    accidentally enable Triton or GPU-specific kernels on the NumPy backend.
+    Preserve the caller's complete MINI_LLM_* snapshot for this test only.
+    """
+    before = {key: value for key, value in os.environ.items()
+              if key.startswith("MINI_LLM_")}
+    yield
+    for key in tuple(os.environ):
+        if key.startswith("MINI_LLM_") and key not in before:
+            del os.environ[key]
+    os.environ.update(before)
 
 
 def _clear(monkeypatch):

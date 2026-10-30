@@ -69,3 +69,22 @@ current checkout. Those modules must be loaded with `pytest.importorskip` so an
 absent optional artifact produces a documented skip rather than preventing the
 entire suite from collecting. `test_source_audit_0078d.py` currently follows
 this policy for the absent `benchmarks.audit_source_sampling_0078d` utility.
+
+## Model B 0103A regression gate
+
+Run the recommended bounded baseline correctness suites in independent
+processes instead of mixing runtime-profile tests with numerical tests:
+
+```bash
+python scripts/run_0103a_regressions.py --mode cpu --report /tmp/0103a_cpu.json
+```
+
+When the CUDA device is available and **not** occupied by training, run:
+
+```bash
+python scripts/run_0103a_regressions.py --mode gpu --report /tmp/0103a_gpu.json
+```
+
+These tests protect the current **348M Model B + stride-16 sparse historical
+head**. See `docs/0103A_BASELINE_REGRESSION.md` for the precise coverage and
+limitations. Passing correctness checks does not establish GPU throughput.

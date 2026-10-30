@@ -1049,6 +1049,7 @@ class InferenceModel:
                     logits = native_graph.decode_one(
                         input_ids[:, offset:offset + 1], state
                     )
+                state._cuda_graph_decode_count = int(getattr(state, "_cuda_graph_decode_count", 0)) + T_prompt
                 return logits
 
             state._native_cuda_graph = None
@@ -1220,7 +1221,9 @@ class InferenceModel:
 
         native_graph = getattr(state, "_native_cuda_graph", None)
         if native_graph is not None:
-            return native_graph.decode_one(next_ids, state)
+            logits = native_graph.decode_one(next_ids, state)
+            state._cuda_graph_decode_count = int(getattr(state, "_cuda_graph_decode_count", 0)) + 1
+            return logits
 
         if state.dual_resolution_enabled:
             return self._dual_incremental_token(next_ids, state)

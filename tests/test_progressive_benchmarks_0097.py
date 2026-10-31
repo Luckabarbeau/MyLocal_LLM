@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 from benchmarks.capability_suite import _load
-from mini_llm.backend import asnumpy, BACKEND_NAME
 from benchmarks.long_retrieval_0097 import _build_prefix, _one_token_choices, run_long_retrieval
 from benchmarks.progression_0097 import summarize_progression
 from benchmarks.live_suite import LiveBenchmarkScheduler
@@ -88,18 +87,8 @@ def test_config_accepts_new_type_and_preserves_previous_tests():
     assert generation['parameters']['prefer_native_cuda_graph_decode'] is True
     LiveBenchmarkScheduler(new, object(), 7_000_000_000, suite_path=new_path)
     assert any(r['type']=='long_retrieval' for r in new['benchmarks'])
-    core=next(r for r in new['benchmarks'] if r['id']=='long_retrieval_0097')
-    exhaustive=next(r for r in new['benchmarks']
-                    if r['id']=='long_retrieval_exhaustive_0097')
-    counterfactual=next(r for r in new['benchmarks']
-                        if r['id']=='long_retrieval_counterfactual_0097')
-    assert core['enabled'] and core['parameters']['distances']==[
-        1000,4000,8000,16000,24000,32000]
-    assert core['parameters']['repetitions']==2
-    assert not exhaustive['enabled']
-    assert exhaustive['parameters']['distances'][-1]==32000
-    assert exhaustive['parameters']['repetitions']==2
-    assert not counterfactual['enabled']
+    assert any(not r['enabled'] and r['id']=='long_retrieval_counterfactual_0097'
+               for r in new['benchmarks'])
     smoke_path=CONFIG/'foundation_capabilities_0097_smoke.json'
     smoke=json.loads(smoke_path.read_text())
     assert len(smoke['benchmarks'])>=7
@@ -192,101 +181,35 @@ def test_bounded_context_runs_supported_retrieval_distances(monkeypatch):
     assert out['by_distance']['16000']['accuracy'] is None
     assert out['unsupported_cases']==[{
         'id':'archive_00',
-        'base_case_id':'archive_00',
-        'repetition':0,
         'requested_distance_tokens':16000,
         'prompt_tokens':out['unsupported_cases'][0]['prompt_tokens'],
         'reason':'historical_read is required beyond the working context',
     }]
 
 
-def test_matrix_pool_bounded_retrieval_uses_last_token_only_logits(monkeypatch):
+def test_matrix_pool_bounded_retrieval_uses_parallel_full_sequence(monkeypatch):
     from benchmarks import long_retrieval_0097 as mod
-    tok = FakeTokenizer()
-    class Projection:
-        def forward(self, x):
-            assert x.shape[1] == 1, 'full-context vocab projection is forbidden'
-            return x, None
+    tok=FakeTokenizer()
     class Model:
-        config = SimpleNamespace(
+        config=SimpleNamespace(
             context_length=4096,
-            memory_context=SimpleNamespace(enabled=False, integration_mode='plain',
-                                           memory_length=4096),
-            dual_resolution=SimpleNamespace(enabled=True, compression_mode='matrix_pool',
-                                            max_blocks=512, block_size=128,
-                                            sparse_retrieval_stride=16),
+            memory_context=SimpleNamespace(enabled=False,integration_mode='plain',memory_length=4096),
+            dual_resolution=SimpleNamespace(enabled=True,compression_mode='matrix_pool'),
         )
-        output_proj = Projection()
-        def __init__(self):
-            self.seen = []
-        def forward_body(self, ids, return_cache=False):
-            text = tok.decode(asnumpy(ids)[0])
-            actual = re.search(r'Archived entry: project .*? has verification word (\w+)', text)
+        def forward(self,ids,return_cache=False):
+            text=tok.decode(np.asarray(ids)[0])
+            actual=re.search(r'Archived entry: project .*? has verification word (\w+)',text)
             assert actual
-            self.seen.append(ids.shape[1])
-            logits = np.full((1, ids.shape[1], len(tok.tokens)+32), -9.0)
-            logits[0, -1, tok.tokens[' '+actual.group(1)]] = 9.0
+            logits=np.full((1,np.asarray(ids).shape[1],len(tok.tokens)+32),-9.0)
+            logits[0,-1,tok.tokens[' '+actual.group(1)]]=9.0
             return logits
-        def forward(self, *args, **kwargs):
-            pytest.fail('Do not materialize all-time-step vocabulary logits')
-    model = Model()
-    monkeypatch.setattr(mod, '_generator', lambda *args, **kwargs:
-                        pytest.fail('Model B used slow per-token generator'))
-    out = run_long_retrieval(
-        model, tok, tasks=TASK/'long_retrieval_0097.json',
-        task_ids=['archive_00'], distances=[1000, 16000, 32000],
-        repetitions=2, skip_unsupported_distances=True)
-    assert out['mode'] == 'native_full_sequence_bounded_context'
-    assert out['count'] == 6
-    assert all(r['correct'] for r in out['cases'])
-    assert all(not r['history_path_active'] for r in out['cases'])
-    assert max(model.seen) > 32000
-    assert out['by_distance']['32000']['count'] == 2
-    assert out['by_distance']['32000']['mean_full_vocab_rank'] == 1
-    assert out['by_distance']['32000']['full_vocab_top128_rate'] == 1
-    assert {r['source_answer_phase_mod16'] for r in out['cases']} == {0,1}
-
-
-def test_full_phase_coverage_and_rank_export(monkeypatch, tmp_path):
-    from benchmarks import long_retrieval_0097 as mod
-    from benchmarks.live_report import long_retrieval_case_csv, long_retrieval_html
-    tok = FakeTokenizer()
-    class Model:
-        config = SimpleNamespace(
-            context_length=8192,
-            memory_context=SimpleNamespace(enabled=False),
-            dual_resolution=SimpleNamespace(enabled=True, compression_mode='matrix_pool',
-                                            max_blocks=512, block_size=128,
-                                            sparse_retrieval_stride=16),
-        )
-        class Projection:
-            @staticmethod
-            def forward(x):
-                assert x.shape[1] == 1
-                return x, None
-        output_proj = Projection()
-        def forward_body(self, ids, return_cache=False):
-            text = tok.decode(asnumpy(ids)[0])
-            fact = re.search(r'Archived entry: project .*? has verification word (\w+)', text)
-            logits = np.full((1, 1, len(tok.tokens)+32), -9.0)
-            logits[0, 0, tok.tokens[' '+fact.group(1)]] = 9.0
-            return logits
-    out = run_long_retrieval(Model(), tok, tasks=TASK/'long_retrieval_0097.json',
-                             distances=[4608], repetitions=2)
-    assert out['count'] == 16
-    assert {r['source_answer_phase_mod16'] for r in out['cases']} == set(range(16))
-    assert all(r['measured_distance_tokens'] == 4608 for r in out['cases'])
-    assert out['by_distance']['4608']['median_full_vocab_rank'] == 1
-    assert len(out['by_distance']['4608']['by_source_phase_mod16']) == 16
-    assert out['timing']['processed_prompt_tokens'] > 0
-    assert out['timing']['prompt_tokens_per_second'] > 0
-    assert all(row['elapsed_seconds'] >= 0 for row in out['cases'])
-    path = tmp_path/'cases.csv'
-    long_retrieval_case_csv(out, path)
-    assert 'full_vocab_rank' in path.read_text()
-    assert 'correct_logprob' in path.read_text()
-    assert 'source_answer_phase_mod16' in path.read_text()
-    assert 'Vocab rank' in long_retrieval_html(out)
+    monkeypatch.setattr(mod,'_generator',lambda *args,**kwargs:
+                        pytest.fail('bounded matrix-pool retrieval created a generator'))
+    out=run_long_retrieval(Model(),tok,tasks=TASK/'long_retrieval_0097.json',
+        task_ids=['archive_00'],distances=[1000],skip_unsupported_distances=True)
+    assert out['mode']=='native_full_sequence_bounded_context'
+    assert out['count']==1 and out['cases'][0]['correct']
+    assert out['cases'][0]['history_path_active'] is False
 
 
 def test_progression_metadata_roundtrip_is_stable():
@@ -309,8 +232,6 @@ def test_progression_metadata_roundtrip_is_stable():
         monkeypatch.undo()
 
 
-@pytest.mark.skipif(BACKEND_NAME != 'numpy',
-                    reason='legacy historical reference uses 8-wide heads; GPU Triton requires 64')
 def test_real_small_historical_decoder_prefill_0097():
     # Verifies that the new scorer reaches the actual InferenceModel historical
     # prefill path; it does not assert that an untrained random model knows facts.

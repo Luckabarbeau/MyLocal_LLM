@@ -150,39 +150,3 @@ questions. Compare checkpoints using identical prompts, seeds, decoding
 parameters, and runtime settings.
 
 CPU-only checks: `python -m pytest -q tests/test_generation_benchmark.py`.
-
-### Model B long-retrieval evaluation (0097)
-
-The progressive 0097 suite now evaluates synthetic factual recall at distances
-of **1K, 4K, 6K, 8K, 12K, 16K, 24K, and 32K tokens**. Each main-suite
-length uses all eight base project facts with two deterministic variations
-(**16 probes per distance**), covering all 16 original-token sparse-attention
-phases for the stride-16 Model B. The short smoke suite retains fewer cases.
-A separate, less frequent, smaller counterfactual run tests whether changing
-an historical fact changes the model's token probabilities.
-
-Model B is identified by `dual_resolution.enabled` and
-`compression_mode="matrix_pool"`. It evaluates complete contexts beyond the
-*training* `context_length` where the configured `max_blocks * block_size`
-permits, without changing weights or the training configuration. Its forward
-pass uses `forward_body(return_cache=False)` plus the vocabulary projection
-**only for the final hidden state**. This avoids materializing `[T, vocab]`
-logits, but still performs full-sequence attention, which can be expensive at
-32K. The historical-read model retains its existing native prefill path.
-
-The `result.json`, `report.html` and `retrieval_by_case.csv` contain exact
-fact-end-to-query token distance, correct-token **full-vocabulary rank**, its
-log-probability and probability, four-candidate rank and margin, phase modulo
-16 and (when enabled) counterfactual score shifts. `by_distance` also records
-median/geometric-mean rank and top-128 fraction. The benchmark is deterministic
-and never truncates unsupported long prompts. Interpretation: better target
-rank alone can reflect language-model progress; causal sensitivity to changing
-the fact is a stronger retrieval diagnostic. The filler text is intentionally
-repeated; success here does not establish general long-document retrieval.
-
-To reduce the number of full-model evaluations, adjust the `task_ids`,
-`repetitions`, or `distances` fields in the chosen
-`benchmarks/configs/foundation_capabilities_0097*.json` file. Each distinct
-configuration gets a different suite hash. Full-model 32K validation on your
-RTX 5080 still needs to be run against a trained checkpoint; CPU tests cover
-logic, phase coverage and last-token-only projection, not GPU performance.

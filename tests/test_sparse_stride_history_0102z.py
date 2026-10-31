@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from mini_llm.config import ModelConfig, DualResolutionConfig
-from mini_llm.backend import xp, asnumpy, BACKEND_NAME
 from mini_llm.ops.sparse_stride_history_0102z import sparse_forward, sparse_backward
 
 
@@ -38,21 +37,21 @@ def test_architecture_separate_no_new_parameters_and_all_phases():
 
 
 def test_reference_exact_causal_document_mask_and_distant_gradient():
-    q, k, v, docs = [xp.asarray(a) for a in _sample()]
+    q, k, v, docs = _sample()
     out, cache = sparse_forward(q, k, v, docs, stride=16, phase=5,
                                 scale=.125, kernel='cupy')
     assert out.shape == q.shape
     # All positions before first selected key in a document have no sparse
     # history, and the head must produce zero rather than NaN.
-    np.testing.assert_array_equal(asnumpy(out[:, :5]), 0)
-    assert np.isfinite(asnumpy(out)).all()
+    np.testing.assert_array_equal(out[:, :5], 0)
+    assert np.isfinite(out).all()
     # Phase 5 key in first document cannot leak into the next document.
-    np.testing.assert_array_equal(asnumpy(out[:, 11:21]), 0)
+    np.testing.assert_array_equal(out[:, 11:21], 0)
     changed = v.copy()
     changed[:, 37:, :, :] += 10.
     out_changed, _ = sparse_forward(q, k, changed, docs, stride=16, phase=5,
                                     scale=.125, kernel='cupy')
-    np.testing.assert_allclose(asnumpy(out_changed[:, :37]), asnumpy(out[:, :37]), atol=1e-7)
+    np.testing.assert_allclose(out_changed[:, :37], out[:, :37], atol=1e-7)
     grad = np.zeros_like(out)
     grad[:, -1] = 1
     dq, dk, dv = sparse_backward(grad, cache, kernel='cupy')
@@ -60,21 +59,21 @@ def test_reference_exact_causal_document_mask_and_distant_gradient():
     assert dk.shape == dv.shape == (2, 3, 1, 64)
     # Last token's document sees only the phase-5 key at index 37; the
     # earlier selected indices 5 and 21 must receive no gradient.
-    np.testing.assert_array_equal(asnumpy(dk[:, :2]), 0)
-    np.testing.assert_array_equal(asnumpy(dv[:, :2]), 0)
-    assert np.max(np.abs(asnumpy(dv[:, 2]))) > 0
+    np.testing.assert_array_equal(dk[:, :2], 0)
+    np.testing.assert_array_equal(dv[:, :2], 0)
+    assert np.max(np.abs(dv[:, 2])) > 0
 
 
 def test_reference_finite_differences_qkv():
-    q, k, v, docs = [xp.asarray(a) for a in _sample()]
-    grad = xp.asarray(np.random.default_rng(42).normal(size=q.shape).astype(np.float32))
+    q, k, v, docs = _sample()
+    grad = np.random.default_rng(42).normal(size=q.shape).astype(np.float32)
     out, cache = sparse_forward(q, k, v, docs, stride=16, phase=5,
                                 scale=.125, kernel='cupy')
     dq, dk, dv = sparse_backward(grad, cache, kernel='cupy')
     def objective():
         y, _ = sparse_forward(q, k, v, docs, stride=16, phase=5,
                               scale=.125, kernel='cupy')
-        return float(asnumpy(xp.sum(y * grad)))
+        return np.sum(y * grad)
     eps = 2e-3
     for arr, index, expected in (
         (q, (0, 25, 0, 12), dq[0, 25, 0, 12]),
@@ -87,41 +86,7 @@ def test_reference_finite_differences_qkv():
         arr[index] = original - eps
         minus = objective()
         arr[index] = original
-        np.testing.assert_allclose((plus-minus)/(2*eps), float(asnumpy(expected)), rtol=.035, atol=.002)
-
-
-def test_reference_sparse_backward_accumulates_into_shared_gqa_kv_views():
-    q, k, v, docs = [xp.asarray(a) for a in _sample()]
-    out, cache = sparse_forward(q, k, v, docs, stride=16, phase=5,
-                                scale=.125, kernel='cupy')
-    upstream = xp.asarray(np.random.default_rng(3103).normal(size=q.shape).astype(np.float32))
-    want_q, want_k, want_v = sparse_backward(upstream, cache, kernel='cupy')
-
-    # The sparse query-head gradient overwrites its own dQ buffer.
-    # The K/V gradients *add* to preexisting gradients from local GQA heads.
-    q_store = xp.full(q.shape, 17, dtype=xp.float32)
-    k_store = xp.full((2, 43, 4, 64), 2, dtype=xp.float32)
-    v_store = xp.full((2, 43, 4, 64), -3, dtype=xp.float32)
-    q_view = q_store
-    k_view = k_store[:, 5::16, 0:1, :]
-    v_view = v_store[:, 5::16, 0:1, :]
-    got_q, got_k, got_v = sparse_backward(
-        upstream, cache, kernel='cupy', dq=q_view, dk=k_view,
-        dv=v_view, add_dkdv=True,
-    )
-    assert got_q is q_view and got_k is k_view and got_v is v_view
-    np.testing.assert_allclose(asnumpy(got_q), asnumpy(want_q), rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(asnumpy(got_k), asnumpy(want_k) + 2, rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(asnumpy(got_v), asnumpy(want_v) - 3, rtol=1e-6, atol=1e-6)
-    np.testing.assert_array_equal(asnumpy(k_store[:, :, 1:, :]), 2)
-    np.testing.assert_array_equal(asnumpy(v_store[:, :, 1:, :]), -3)
-    np.testing.assert_array_equal(asnumpy(k_store[:, :5, 0, :]), 2)
-
-    # In non-additive mode the provided buffers must be overwritten.
-    sparse_backward(upstream, cache, kernel='cupy', dq=q_view, dk=k_view,
-                    dv=v_view, add_dkdv=False)
-    np.testing.assert_allclose(asnumpy(k_view), asnumpy(want_k), rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(asnumpy(v_view), asnumpy(want_v), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose((plus-minus)/(2*eps), expected, rtol=.035, atol=.002)
 
 
 def test_inference_sparse_head_respects_zero_history_and_selected_kv():
@@ -134,19 +99,19 @@ def test_inference_sparse_head_respects_zero_history_and_selected_kv():
     )
     inference = DualResolutionAttentionInference(1024, 16, 4, 64,
                                                    dual_config=config)
-    q = xp.ones((1, 1, 16, 64), dtype=xp.float32)
-    k = xp.ones((4, 1, 64), dtype=xp.float32)
-    v = xp.ones((4, 1, 64), dtype=xp.float32)
+    q = np.ones((1, 1, 16, 64), dtype=np.float32)
+    k = np.ones((4, 1, 64), dtype=np.float32)
+    v = np.ones((4, 1, 64), dtype=np.float32)
     empty = inference._matrix_local_attention(q, k, v,
-                                               sparse_k=xp.zeros((1,0,1,64), dtype=xp.float32),
-                                               sparse_v=xp.zeros((1,0,1,64), dtype=xp.float32))
-    assert np.all(asnumpy(empty[..., 1, :]) == 0.)
-    selected_k = xp.ones((1,2,1,64), dtype=xp.float32)
-    selected_v = xp.asarray(np.stack((np.ones((64,),dtype=np.float32),
-                           np.ones((64,),dtype=np.float32)*3), axis=0).reshape(1,2,1,64))
+                                               sparse_k=np.zeros((1,0,1,64), dtype=np.float32),
+                                               sparse_v=np.zeros((1,0,1,64), dtype=np.float32))
+    assert np.all(empty[..., 1, :] == 0.)
+    selected_k = np.ones((1,2,1,64), dtype=np.float32)
+    selected_v = np.stack((np.ones((64,),dtype=np.float32),
+                           np.ones((64,),dtype=np.float32)*3), axis=0).reshape(1,2,1,64)
     populated = inference._matrix_local_attention(q, k, v,
                            sparse_k=selected_k, sparse_v=selected_v)
-    np.testing.assert_allclose(asnumpy(populated[..., 1, :]), 2., rtol=1e-5)
+    np.testing.assert_allclose(populated[..., 1, :], 2., rtol=1e-5)
 
 
 @pytest.mark.skipif(__import__('mini_llm.backend',fromlist=['BACKEND_NAME']).BACKEND_NAME != 'cupy',
@@ -162,24 +127,20 @@ def test_triton_parity_and_strided_kv_gradient():
     out, cache = sparse_forward(qg, kg, vg, dg, stride=16, phase=5, scale=.125,
                                 kernel='triton')
     dq, dk, dv = sparse_backward(grad, cache, kernel='triton')
-    ref_q, ref_k, ref_v = [cp.asarray(cp.asnumpy(x), dtype=cp.float32) for x in (qg, kg, vg)]
-    ref_o, ref_cache = sparse_forward(ref_q, ref_k, ref_v, dg,
+    ref_q, ref_k, ref_v = [cp.asnumpy(x).astype(np.float32) for x in (qg, kg, vg)]
+    ref_o, ref_cache = sparse_forward(ref_q, ref_k, ref_v, docs,
                                       stride=16, phase=5, scale=.125, kernel='cupy')
-    ref_dq, ref_dk, ref_dv = sparse_backward(grad, ref_cache, kernel='cupy')
-    for label, actual, expected in (
-        ('output', out, ref_o), ('dQ', dq, ref_dq),
-        ('dK', dk, ref_dk), ('dV', dv, ref_dv),
-    ):
-        np.testing.assert_allclose(cp.asnumpy(actual), cp.asnumpy(expected),
-                                   rtol=.12, atol=.10, err_msg=label)
+    ref_dq, ref_dk, ref_dv = sparse_backward(cp.asnumpy(grad), ref_cache,
+                                            kernel='cupy')
+    for actual, expected in ((out, ref_o), (dq,ref_dq), (dk,ref_dk), (dv,ref_dv)):
+        np.testing.assert_allclose(cp.asnumpy(actual), expected, rtol=.12, atol=.10)
 
-@pytest.mark.skipif(BACKEND_NAME != 'numpy', reason='NumPy incremental reference')
+@pytest.mark.skipif(__import__('mini_llm.backend',fromlist=['BACKEND_NAME']).BACKEND_NAME != 'numpy',
+                    reason='NumPy incremental reference')
 def test_two_layer_training_vs_incremental_inference(monkeypatch):
     from mini_llm.model.decoder_lm import DecoderLanguageModel
     from mini_llm.inference_model import InferenceModel
     monkeypatch.setenv('MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS','0')
-    monkeypatch.setenv('MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL','cupy')
-    monkeypatch.setenv('MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL','cupy')
     base = ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l()
     dual = replace(base.dual_resolution, block_size=4, local_window=16,
                    long_local_window=32, max_blocks=20, global_query_chunk=16,
@@ -238,9 +199,5 @@ def test_model_b_local_sparse_triton_matches_reference():
     operator.local_kernel='triton'
     got, cache_gpu = operator._local_forward(q,k,v,docs,True)
     dg = operator._local_backward(dout,q,k,v,cache_gpu,docs)
-    for label, x, y in (
-        ('local+sparse output', got, ref), ('dQ', dg[0], dr[0]),
-        ('shared GQA dK', dg[1], dr[1]), ('shared GQA dV', dg[2], dr[2]),
-    ):
-        np.testing.assert_allclose(cp.asnumpy(x), cp.asnumpy(y),
-                                   rtol=.15, atol=.12, err_msg=label)
+    for x,y in ((got,ref),*zip(dg,dr)):
+        np.testing.assert_allclose(cp.asnumpy(x),cp.asnumpy(y),rtol=.15,atol=.12)

@@ -419,7 +419,7 @@ class LiveBenchmarkScheduler:
                     'strategy', 'temperature', 'top_k', 'use_kv_cache',
                     'require_native_cuda_graph_decode', 'prefer_native_cuda_graph_decode'},
                 'long_retrieval': {'tasks','task_ids','distances','include_counterfactual','max_cases',
-                                   'skip_unsupported_distances','repetitions'},
+                                   'skip_unsupported_distances'},
             }[kind]
             if set(params) - allowed:
                 raise ValueError(f'{name} unknown parameters: {sorted(set(params)-allowed)}')

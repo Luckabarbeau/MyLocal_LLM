@@ -128,17 +128,13 @@
         "distances": [
           1000,
           4000,
-          6000,
-          8000,
-          16000,
-          32000
+          16000
         ],
         "task_ids": [
           "archive_00"
         ],
         "include_counterfactual": false,
-        "skip_unsupported_distances": true,
-        "repetitions": 1
+        "skip_unsupported_distances": true
       }
     }
   ]

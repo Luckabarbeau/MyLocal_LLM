@@ -1,8 +1,12 @@
-"""Distance-controlled retrieval through Model B or legacy historical-read inference.
+"""0097 distance-controlled, checkpoint-compatible long-context retrieval.
 
-Model B uses full-sequence no-cache forward, projecting ONLY the final hidden
-state to vocabulary logits. No artificial restriction to its training window.
-The benchmark records full-vocabulary target ranks even on incorrect answers.
+Uses the *actual* InferenceModel prefill path (historical_read when the prompt
+exceeds the 4096-token working window).  Never calls the old 4096-token
+teacher-forced scorer, and never silently truncates the 16K-token challenge.
+
+Compares single-token candidate probabilities, which avoids additional costly
+full-history prefill passes per multi-token answer. Reports measured distance
+in tokenizer tokens, retrieval mode, and negative-control likelihood shifts.
 """
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ import json
 import os
 from contextlib import contextmanager
 import math
-import time
 from pathlib import Path
 
 import numpy as np
@@ -62,7 +65,7 @@ def _one_token_choices(tokenizer, prefix, target, n=4):
     return options[:n]
 
 
-def _build_prefix(tokenizer, case, distance, *, replace_answer=None, lead_tokens=0):
+def _build_prefix(tokenizer, case, distance, *, replace_answer=None):
     word = replace_answer if replace_answer is not None else case['answer']
     fact = (f"Archived entry: project {case['project']} has verification word {word}.\n")
     query = (f"\nThe official verification word for project {case['project']} is")
@@ -73,65 +76,10 @@ def _build_prefix(tokenizer, case, distance, *, replace_answer=None, lead_tokens
     required = int(distance)-len(query_ids)
     if not filler_tokens:
         raise ValueError('Filler tokenization empty')
-    # Prefix padding controls the source token's absolute stride-16 phase,
-    # without changing the requested *fact-end to query-end* distance.
-    newline = _tokens(tokenizer, '\n')
-    if lead_tokens and not newline:
-        raise ValueError('Tokenizer does not encode newline phase padding')
-    lead = [newline[0]] * int(lead_tokens) if lead_tokens else []
-    ids = lead + fact_ids + (filler_tokens*(required//len(filler_tokens)) + filler_tokens[:required%len(filler_tokens)]) + query_ids
-    fact_end = len(lead) + len(fact_ids)
-    assert len(ids) - fact_end == distance
-    return ids, query, fact, fact_end
-
-
-def _answer_source_offset(tokenizer, case):
-    """Index of the first answer-dependent token in the historical fact.
-
-    Usually this is exactly the leading answer token. Some BPE tokenizers
-    merge the whitespace or previous word with the answer, so use a
-    counterfactual first-difference fallback instead of failing a whole suite.
-    """
-    head = f"Archived entry: project {case['project']} has verification word"
-    bare = _tokens(tokenizer, head)
-    with_answer = _tokens(tokenizer, head + ' ' + case['answer'])
-    if with_answer[:len(bare)] == bare and len(with_answer) > len(bare):
-        return len(bare)
-    alternative = 'blue' if case['answer'] == 'red' else 'red'
-    counterfactual = _tokens(tokenizer, head + ' ' + alternative)
-    first_difference = 0
-    while (first_difference < min(len(with_answer), len(counterfactual))
-           and with_answer[first_difference] == counterfactual[first_difference]):
-        first_difference += 1
-    if first_difference >= len(with_answer):
-        raise ValueError('Cannot identify a distinct source-answer token')
-    return first_difference
-
-
-def _repeat_case(case, repeat, case_index):
-    # Rotating the association prevents repeated probes from merely testing
-    # the same word prior. The original case is retained for repeat zero.
-    if repeat == 0:
-        return dict(case)
-    palette = ('red', 'blue', 'green', 'white', 'black', 'orange', 'yellow', 'gold')
-    variant = dict(case)
-    variant['project'] = f"{case['project']}-R{repeat:02d}"
-    variant['answer'] = palette[(case_index + repeat) % len(palette)]
-    return variant
-
-
-def _model_b_final_logits(model, ids):
-    # A full [T,vocab] LM head at 32K is >2 GiB even in BF16. Run all layers,
-    # but project only the final time step. Never build an entire logits cube.
-    hidden = model.forward_body(
-        xp.asarray(np.asarray(ids, dtype=np.int32)[None, :]),
-        return_cache=False,
-    )
-    logits, _ = model.output_proj.forward(hidden[:, -1:, :].copy())
-    result = logits[0, -1]
-    del hidden, logits
-    return result
-
+    ids = fact_ids + (filler_tokens*(required//len(filler_tokens)) + filler_tokens[:required%len(filler_tokens)]) + query_ids
+    # Exact measurement starts immediately AFTER the fact's last token.
+    assert len(ids)-len(fact_ids) == distance
+    return ids, query, fact, len(fact_ids)
 
 
 def _rank_logits(logits, candidates, answer):
@@ -173,14 +121,14 @@ def _disable_cuda_graphs_for_long_prefill():
             else:os.environ[key]=value
 
 
-def run_long_retrieval(model, tokenizer, *, tasks,
-                       distances=(1000, 4000, 6000, 8000, 12000, 16000, 24000, 32000),
+def run_long_retrieval(model, tokenizer, *, tasks, distances=(1000,4000,16000),
                        task_ids=None, include_counterfactual=False, max_cases=None,
-                       repetitions=1, skip_unsupported_distances=False):
-    """Measure factual retrieval at exact distances, including >training-context.
+                       skip_unsupported_distances=False):
+    """Benchmark 1K/4K/16K factual retrieval through actual inference memory.
 
-    Repetitions vary the project/answer association and (for sparse Model B)
-    systematically vary the answer-source absolute position modulo 16.
+    Not a pure memory score: reading the question, inference path and tokenizer
+    each affect results. Counterfactual swaps the fact and checks whether the
+    original answer becomes less likely (causal sensitivity diagnostic).
     """
     source = Path(tasks)
     blob = source.read_bytes()
@@ -192,112 +140,83 @@ def run_long_retrieval(model, tokenizer, *, tasks,
         wanted = set(task_ids)
         known = {r['id'] for r in cases}
         if wanted - known:
-            raise ValueError('Unknown retrieval IDs: ' + str(sorted(wanted - known)))
+            raise ValueError('Unknown retrieval IDs: '+str(sorted(wanted-known)))
         cases = [r for r in cases if r['id'] in wanted]
     if max_cases is not None:
         cases = cases[:int(max_cases)]
     distances = [int(d) for d in distances]
-    if repetitions < 1 or int(repetitions) != repetitions:
-        raise ValueError('repetitions must be a positive integer')
-    repetitions = int(repetitions)
-    if not cases or not distances or len(set(distances)) != len(distances) or any(d < 64 for d in distances):
-        raise ValueError('Need nonempty cases and unique positive retrieval distances')
-
+    if not cases or not distances or any(d < 64 for d in distances):
+        raise ValueError('Need nonempty cases and positive retrieval distances')
     memory_cfg = getattr(model.config, 'memory_context', None)
     working = int(model.config.context_length)
+    results = []
+    # No blanket catch: unsupported long memory is explicitly flagged on the
+    # affected cases; actual prefill/cuda failures propagate as benchmark errors.
+    built = []
+    for case in cases:
+        for distance in distances:
+            ids, query, fact, fact_len = _build_prefix(tokenizer, case, distance)
+            built.append((case, distance, ids, query, fact, fact_len))
     supports = bool(memory_cfg is not None and memory_cfg.enabled and
                     memory_cfg.integration_mode == 'historical_read')
+    runnable = []
+    unsupported = []
+    for row in built:
+        prompt_tokens = len(row[2])
+        reason = None
+        if prompt_tokens > working and not supports:
+            reason = 'historical_read is required beyond the working context'
+        elif (prompt_tokens > working and
+              prompt_tokens + 8 > int(memory_cfg.memory_length)):
+            reason = 'prompt exceeds the trained historical horizon'
+        if reason is None:
+            runnable.append(row)
+        else:
+            unsupported.append({
+                'id': row[0]['id'],
+                'requested_distance_tokens': row[1],
+                'prompt_tokens': prompt_tokens,
+                'reason': reason,
+            })
+    if unsupported and not skip_unsupported_distances:
+        if any('historical_read' in row['reason'] for row in unsupported):
+            raise NotImplementedError(
+                '0097 long retrieval requires historical_read for >working context; never truncate')
+        raise ValueError('Retrieval prompt exceeds trained historical horizon')
+    max_horizon = max((len(row[2]) for row in runnable), default=working) + 8
     dual_cfg = getattr(model.config, 'dual_resolution', None)
     bounded_full_sequence = bool(
         not supports and dual_cfg is not None and getattr(dual_cfg, 'enabled', False)
         and getattr(dual_cfg, 'compression_mode', None) == 'matrix_pool'
     )
-    # Model B's max_blocks gives its architectural horizon, even if checkpoint
-    # config.context_length was set to 8192 by the training launch.
-    # No weights, training config, or model object are mutated.
-    horizon = (int(dual_cfg.max_blocks) * int(dual_cfg.block_size)
-               if bounded_full_sequence else
-               int(memory_cfg.memory_length) if supports else working)
-    sparse_stride = (int(getattr(dual_cfg, 'sparse_retrieval_stride', 0))
-                     if bounded_full_sequence else 0)
-
-    built = []
-    for case_index, case in enumerate(cases):
-        for repeat in range(repetitions):
-            variant = _repeat_case(case, repeat, case_index)
-            offset = _answer_source_offset(tokenizer, variant)
-            # Cover phase classes in order (with eight cases and two repeats,
-            # sixteen exact phases). Repeated examples keep their own IDs.
-            wanted_phase = ((case_index * repetitions + repeat) % sparse_stride
-                            if sparse_stride else None)
-            pad = ((wanted_phase - offset) % sparse_stride if sparse_stride else 0)
-            for distance in distances:
-                ids, query, fact, fact_end = _build_prefix(
-                    tokenizer, variant, distance, lead_tokens=pad)
-                source_position = pad + offset
-                built.append(dict(case=variant, base_id=case['id'],
-                                  id=(case['id'] if repeat == 0 else
-                                      f"{case['id']}_r{repeat:02d}"),
-                                  repetition=repeat, distance=distance,
-                                  ids=ids, query=query, fact=fact, fact_end=fact_end,
-                                  source_position=source_position,
-                                  phase=(source_position % sparse_stride
-                                         if sparse_stride else None), pad=pad))
-    runnable, unsupported = [], []
-    for row in built:
-        prompt_tokens = len(row['ids'])
-        reason = None
-        if prompt_tokens > working and not (supports or bounded_full_sequence):
-            reason = 'historical_read is required beyond the working context'
-        elif prompt_tokens > horizon:
-            reason = (f'prompt exceeds supported inference horizon ({horizon} tokens)')
-        if reason is None:
-            runnable.append(row)
-        else:
-            unsupported.append({
-                'id': row['id'], 'base_case_id': row['base_id'],
-                'repetition': row['repetition'],
-                'requested_distance_tokens': row['distance'],
-                'prompt_tokens': prompt_tokens, 'reason': reason,
-            })
-    if unsupported and not skip_unsupported_distances:
-        if any('historical_read' in x['reason'] for x in unsupported):
-            raise NotImplementedError(
-                '0097 long retrieval requires historical_read for >working context; never truncate')
-        raise ValueError('Retrieval prompt exceeds the supported inference horizon; never truncate')
-
-    runnable.sort(key=lambda row: (
-        row['distance'], row['phase'] if row['phase'] is not None else -1, row['id']))
-    max_horizon = max((len(x['ids']) for x in runnable), default=working)
-    graph_context = (_disable_cuda_graphs_for_long_prefill()
-                     if supports or bounded_full_sequence else
-                     _strict_graph_decode_for_generation(False, True))
-    results = []
-    benchmark_start = time.perf_counter()
+    graph_context = (
+        _disable_cuda_graphs_for_long_prefill() if supports or bounded_full_sequence
+        else _strict_graph_decode_for_generation(False, True)
+    )
     with _preserve_global_rng(), graph_context:
-        generator = impl = reusable_state = None
-        if not bounded_full_sequence and runnable:
+        # The generator is an adapter to the validated native InferenceModel.
+        # Do not use TextGenerator.generate(): it produces arbitrary free text,
+        # while our test needs logits from a long-context prefill.
+        generator = None
+        impl = None
+        reusable_state = None
+        if not bounded_full_sequence:
             generator = _generator(model, tokenizer, max_context=max_horizon)
             generator._ensure_inference_model(reset=True)
             impl = generator._inference_model
             reusable_state = getattr(generator, '_state', None) if not supports else None
-
-        total_cases = len(runnable)
-        for case_index, example in enumerate(runnable):
-            case_start = time.perf_counter()
-            case = example['case']
-            distance = example['distance']
-            ids, query, fact, fact_end = (example[k] for k in
-                                          ('ids', 'query', 'fact', 'fact_end'))
-            print(
-                f"[0097] Long retrieval {case_index + 1}/{total_cases} "
-                f"id={example['id']} distance={distance} tokens={len(ids)}",
-                flush=True,
-            )
+        for case_index, (case, distance, ids, query, fact, fact_len) in enumerate(runnable):
+            # Because these options share identical single-token next-token
+            # boundaries, one prefill evaluates all candidates exactly.
+            # Build choices from the *exact prompt last boundary*.
             choices = _one_token_choices(tokenizer, query, case['answer'])
             if bounded_full_sequence:
-                next_logits = _model_b_final_logits(model, ids)
                 state = None
+                full_logits = model.forward(
+                    xp.asarray(np.asarray(ids, dtype=np.int32)[None,:]),
+                    return_cache=False,
+                )
+                next_logits = full_logits[0, -1]
             else:
                 if reusable_state is not None:
                     state = reusable_state
@@ -305,50 +224,39 @@ def run_long_retrieval(model, tokenizer, *, tasks,
                         state.reset()
                 else:
                     state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
-                next_logits = impl.prefill(
-                    xp.asarray(np.asarray(ids, dtype=np.int32)[None, :]), state)
+                next_logits = impl.prefill(xp.asarray(np.asarray(ids, dtype=np.int32)[None,:]), state)
             score = _rank_logits(next_logits, choices, case['answer'])
-            del next_logits
-            row = {
-                'id': example['id'], 'base_case_id': example['base_id'],
-                'repetition': example['repetition'],
-                'category': case.get('category', 'retrieval'),
-                'difficulty': ('short' if distance <= 1024 else
-                               'medium' if distance <= 4096 else 'long'),
-                'requested_distance_tokens': distance,
-                'measured_distance_tokens': len(ids) - fact_end,
-                'prompt_tokens': len(ids),
-                'history_path_active': bool(state is not None and state.long_memory_enabled),
-                'fact_in_historical_store': bool(len(ids) > working and
-                                                 fact_end <= len(ids) - working),
-                'model_b_full_sequence': bounded_full_sequence,
-                'source_answer_position': example['source_position'],
-                'source_answer_phase_mod16': (example['source_position'] % 16),
-                'sparse_phase': example['phase'],
-                'answer': case['answer'], 'question': query.strip(),
-                'fact': fact.strip(), 'choices': [word for word, _ in choices], **score,
-            }
+            if bounded_full_sequence:
+                del next_logits, full_logits
+            row = {'id': case['id'], 'category': case.get('category','retrieval'),
+                   'difficulty': ('short' if distance <=1024 else 'medium' if distance <=4096 else 'long'),
+                   'requested_distance_tokens': distance, 'measured_distance_tokens': len(ids)-fact_len,
+                   'prompt_tokens': len(ids),
+                   'history_path_active': bool(state is not None and state.long_memory_enabled),
+                   'fact_in_historical_store': bool(len(ids)>working and fact_len<=len(ids)-working),
+                   'answer': case['answer'], 'question': query.strip(),
+                   'fact': fact.strip(), 'choices': [word for word,_ in choices], **score}
             if include_counterfactual:
-                replacement = next(word for word, _ in choices if word != case['answer'])
-                modified, _, _, modified_fact_end = _build_prefix(
-                    tokenizer, case, distance, replace_answer=replacement,
-                    lead_tokens=example['pad'])
-                if len(modified) > horizon:
-                    raise ValueError('Counterfactual prompt exceeds inference horizon')
+                replacement = next(word for word,_ in choices if word != case['answer'])
+                modified, _, _, _ = _build_prefix(tokenizer, case, distance,
+                                                    replace_answer=replacement)
                 if bounded_full_sequence:
-                    neg_logits = _model_b_final_logits(model, modified)
+                    control_state = None
+                    control_logits = model.forward(
+                        xp.asarray(np.asarray(modified, dtype=np.int32)[None,:]),
+                        return_cache=False,
+                    )
+                    neg_logits = control_logits[0, -1]
                 else:
                     if reusable_state is not None:
                         state.reset()
                         control_state = state
                     else:
-                        control_state = impl.create_generation_state(
-                            batch_size=1, max_length=max_horizon)
-                    neg_logits = impl.prefill(
-                        xp.asarray(np.asarray(modified, dtype=np.int32)[None, :]),
-                        control_state)
+                        control_state = impl.create_generation_state(batch_size=1, max_length=max_horizon)
+                    neg_logits = impl.prefill(xp.asarray(np.asarray(modified, dtype=np.int32)[None,:]), control_state)
                 control_score = _rank_logits(neg_logits, choices, replacement)
-                del neg_logits
+                if bounded_full_sequence:
+                    del neg_logits, control_logits
                 row['counterfactual'] = {
                     'replacement': replacement,
                     'prediction': control_score['prediction'],
@@ -356,80 +264,39 @@ def run_long_retrieval(model, tokenizer, *, tasks,
                     'original_answer_logprob_change': float(
                         control_score['candidate_logprobs'][case['answer']] -
                         score['correct_logprob']),
-                    'measured_distance_tokens': len(modified) - modified_fact_end,
+                    'measured_distance_tokens': len(modified)-len(_tokens(tokenizer,
+                        f"Archived entry: project {case['project']} has verification word {replacement}.\n")),
                 }
-            case_elapsed = time.perf_counter() - case_start
-            processed_tokens = len(ids) * (2 if include_counterfactual else 1)
-            row['elapsed_seconds'] = case_elapsed
-            row['prompt_tokens_per_second'] = (
-                processed_tokens / case_elapsed if case_elapsed > 0 else None)
-            print(
-                f"[0097] Long retrieval complete {case_index + 1}/{total_cases} "
-                f"elapsed={case_elapsed:.3f}s rank={row['full_vocab_rank']} "
-                f"correct={int(row['correct'])}",
-                flush=True,
-            )
             results.append(row)
         if generator is not None:
             del generator
-
     by_distance = {}
     for distance in distances:
-        rows = [r for r in results if r['requested_distance_tokens'] == distance]
-        skipped = [r for r in unsupported if r['requested_distance_tokens'] == distance]
-        ranks = [r['full_vocab_rank'] for r in rows]
+        rows = [r for r in results if r['requested_distance_tokens']==distance]
+        skipped = [r for r in unsupported if r['requested_distance_tokens']==distance]
         by_distance[str(distance)] = {
-            'count': len(rows), 'supported': bool(rows),
+            'count': len(rows),
+            'supported': bool(rows),
             'skipped_cases': len(skipped),
             'skip_reason': skipped[0]['reason'] if skipped else None,
-            'accuracy': sum(r['correct'] for r in rows) / len(rows) if rows else None,
+            'accuracy': sum(r['correct'] for r in rows)/len(rows) if rows else None,
             'mean_correct_margin': (float(np.mean([r['correct_margin'] for r in rows]))
                                     if rows else None),
             'mean_correct_logprob': (float(np.mean([r['correct_logprob'] for r in rows]))
                                      if rows else None),
-            'mean_full_vocab_rank': float(np.mean(ranks)) if ranks else None,
-            'median_full_vocab_rank': float(np.median(ranks)) if ranks else None,
-            'geomean_full_vocab_rank': (float(np.exp(np.mean(np.log(ranks))))
-                                        if ranks else None),
-            'full_vocab_top1_rate': sum(r == 1 for r in ranks) / len(ranks) if ranks else None,
-            'full_vocab_top128_rate': sum(r <= 128 for r in ranks) / len(ranks) if ranks else None,
+            'mean_full_vocab_rank': (float(np.mean([r['full_vocab_rank'] for r in rows]))
+                                     if rows else None),
             'counterfactual_flip_rate': (
-                sum(r['counterfactual']['follows_replacement'] for r in rows) / len(rows)
+                sum(r['counterfactual']['follows_replacement'] for r in rows)/len(rows)
                 if include_counterfactual and rows else None),
-            'mean_counterfactual_original_logprob_change': (
-                float(np.mean([r['counterfactual']['original_answer_logprob_change']
-                               for r in rows])) if include_counterfactual and rows else None),
-            'by_source_phase_mod16': {
-                str(phase): {
-                    'count': len(group),
-                    'mean_full_vocab_rank': float(np.mean([g['full_vocab_rank'] for g in group])),
-                    'accuracy': sum(g['correct'] for g in group) / len(group),
-                }
-                for phase in range(16)
-                if (group := [g for g in rows if g['source_answer_phase_mod16'] == phase])
-            },
         }
     mode = ('native_inference_prefill_historical_read' if supports else
             'native_full_sequence_bounded_context' if bounded_full_sequence else
             'native_inference_prefill_bounded_context')
-    elapsed_seconds = time.perf_counter() - benchmark_start
-    processed_prompt_tokens = sum(
-        row['prompt_tokens'] * (2 if include_counterfactual else 1) for row in results)
-    return {
-        'family': 'long_retrieval', 'tasks_sha256': hashlib.sha256(blob).hexdigest(),
-        'cases': results, 'count': len(results), 'repetitions': repetitions,
-        'requested_distances': distances, 'by_distance': by_distance,
-        'unsupported_cases': unsupported, 'mode': mode,
-        'training_context_length': working, 'evaluation_horizon': horizon,
-        'timing': {
-            'elapsed_seconds': elapsed_seconds,
-            'processed_prompt_tokens': processed_prompt_tokens,
-            'prompt_tokens_per_second': (
-                processed_prompt_tokens / elapsed_seconds if elapsed_seconds > 0 else None),
-        },
-        'warning': ('No prompt is truncated. Model B is evaluated using full-sequence '
-                    'no-cache attention and last-token-only LM projection; its context '
-                    'length may exceed the training window. Full-vocabulary rank and '
-                    'counterfactual sensitivity are stronger diagnostics than four-choice '
-                    'accuracy. Exact retrieval is not established by rank alone.'),
-    }
+    return {'family':'long_retrieval', 'tasks_sha256':hashlib.sha256(blob).hexdigest(),
+            'cases':results, 'count':len(results), 'by_distance':by_distance,
+            'unsupported_cases':unsupported, 'mode':mode,
+            'warning':('No model may truncate a long retrieval prompt. Unsupported distances are '
+                       'explicitly skipped when capability-aware evaluation is enabled. Filler is '
+                       'synthetic and repetitive; retrieval also depends on training/inference '
+                       'memory parity. Candidate preference is not unconstrained free answer generation.')}

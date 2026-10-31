@@ -9,7 +9,9 @@ from collections import OrderedDict
 
 import numpy as np
 
-from .token_shards import _dual_resolution_geometric_length
+from .token_shards import (
+    _dual_resolution_geometric_length, _dual_resolution_fine_length,
+)
 
 
 def regroup_dual_resolution_document_batches(
@@ -44,7 +46,7 @@ def regroup_dual_resolution_document_batches(
         if int(metadata.get("context_capacity", -1)) != context_length:
             raise ValueError("source context capacity mismatch")
         shape_bucket = metadata.get("shape_bucket", "none")
-        if shape_bucket not in ("none", "geometric"):
+        if shape_bucket not in ("none", "geometric", "fine"):
             raise ValueError("unsupported dual-resolution shape bucket")
         lengths = np.asarray(metadata.get("target_valid_lengths"), dtype=np.int64)
         loss_mask = np.asarray(metadata.get("target_loss_mask"))
@@ -79,8 +81,12 @@ def regroup_dual_resolution_document_batches(
         for offset in range(0, len(rows), batch_size):
             subset = rows[offset:offset + batch_size]
             max_valid = max(row[0] for row in subset)
-            width = (max_valid if shape_bucket == "none" else
-                     _dual_resolution_geometric_length(max_valid, context_length))
+            if shape_bucket == "none":
+                width = max_valid
+            elif shape_bucket == "geometric":
+                width = _dual_resolution_geometric_length(max_valid, context_length)
+            else:  # fine, already validated above
+                width = _dual_resolution_fine_length(max_valid, context_length)
             inp = np.full((batch_size, width), eos_token_id, dtype=subset[0][1].dtype)
             tgt = np.full((batch_size, width), eos_token_id, dtype=subset[0][2].dtype)
             mask = np.zeros((batch_size, width), dtype=np.float32)

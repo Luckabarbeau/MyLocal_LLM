@@ -212,9 +212,9 @@ class ExtendedTrainer:
             "MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET", "none"
         ).strip().lower()
         if self.dual_document_first and self.dual_shape_bucket not in {
-            "none", "geometric"
+            "none", "geometric", "fine"
         }:
-            raise ValueError("dual-resolution shape bucket must be none/geometric")
+            raise ValueError("dual-resolution shape bucket must be none/geometric/fine")
         if self.dual_document_first and self.ar_compact_target:
             print("Dual-resolution full-sequence sampling supersedes legacy "
                   "AR_COMPACT_TARGET; disabling that historical-only optimization")

@@ -433,16 +433,36 @@
         "distances": [
           1000,
           4000,
-          16000
-        ],
-        "task_ids": [
-          "archive_00",
-          "archive_01",
-          "archive_02",
-          "archive_03"
+          8000,
+          16000,
+          24000,
+          32000
         ],
         "include_counterfactual": false,
-        "skip_unsupported_distances": true
+        "skip_unsupported_distances": true,
+        "repetitions": 2
+      }
+    },
+    {
+      "id": "long_retrieval_exhaustive_0097",
+      "type": "long_retrieval",
+      "enabled": false,
+      "every_supervised_tokens": 5000000000,
+      "parameters": {
+        "tasks": "benchmarks/tasks/long_retrieval_0097.json",
+        "distances": [
+          1000,
+          4000,
+          6000,
+          8000,
+          12000,
+          16000,
+          24000,
+          32000
+        ],
+        "include_counterfactual": false,
+        "skip_unsupported_distances": true,
+        "repetitions": 2
       }
     },
     {
@@ -455,10 +475,20 @@
         "distances": [
           1000,
           4000,
-          16000
+          6000,
+          8000,
+          12000,
+          16000,
+          24000,
+          32000
         ],
         "include_counterfactual": true,
-        "skip_unsupported_distances": true
+        "skip_unsupported_distances": true,
+        "repetitions": 2,
+        "task_ids": [
+          "archive_00",
+          "archive_01"
+        ]
       }
     }
   ]

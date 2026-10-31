@@ -70,9 +70,24 @@ def sparse_backward(dout, cache, *, kernel, dq=None, dk=None, dv=None,
         )
     from .attention import softmax_forward
     q, k, v, scale, indices, stride, phase = cache
-    dq = xp.zeros(q.shape, dtype=xp.float32)
-    dk = xp.zeros(k[:, phase::stride].shape, dtype=xp.float32)
-    dv = xp.zeros(v[:, phase::stride].shape, dtype=xp.float32)
+    # Match the Triton API: overwrite this query head's dQ, and optionally
+    # ADD the sparse dK/dV contribution to the shared GQA gradients that the
+    # other local heads already produced.  The supplied arrays may be
+    # non-contiguous views into the full [B,T,H,D] gradient buffers.
+    expected_kv = k[:, phase::stride].shape
+    if dq is None:
+        dq = xp.zeros(q.shape, dtype=xp.float32)
+    if dk is None:
+        dk = xp.zeros(expected_kv, dtype=xp.float32)
+    if dv is None:
+        dv = xp.zeros(expected_kv, dtype=xp.float32)
+    if (dq.shape != q.shape or dk.shape != expected_kv or dv.shape != expected_kv
+            or any(str(a.dtype) != 'float32' for a in (dq, dk, dv))):
+        raise ValueError('sparse reference gradients require matching FP32 buffers')
+    dq[...] = 0
+    if not add_dkdv:
+        dk[...] = 0
+        dv[...] = 0
     for row, row_indices in enumerate(indices):
         for qi, ix in enumerate(row_indices):
             if not len(ix):

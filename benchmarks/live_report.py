@@ -53,9 +53,10 @@ def summary_metrics(kind, result):
                'long_retrieval_accuracy': (
                    sum(x['correct'] for x in result['cases'])/count if count else None)}
         for d, summary in result['by_distance'].items():
-            if d in ('1000','4000','16000'):
-                out['retrieval_accuracy_'+d] = summary['accuracy']
-                out['retrieval_margin_'+d] = summary['mean_correct_margin']
+            out['retrieval_accuracy_'+d] = summary['accuracy']
+            out['retrieval_margin_'+d] = summary['mean_correct_margin']
+            out['retrieval_rank_'+d] = summary.get('mean_full_vocab_rank')
+            out['retrieval_logprob_'+d] = summary.get('mean_correct_logprob')
         return out
     if kind == 'reference_continuation' and 'diagnostics' in result:
         micro = result['diagnostics']['micro']
@@ -277,27 +278,60 @@ def reference_per_case_csv(result, destination):
 
 
 def long_retrieval_html(result):
-    """Show actual *token distance* and score margins, never false full-context claims."""
-    out=['<!doctype html><html><meta charset="utf-8"><title>Long retrieval</title>',
-         '<style>body{font:15px system-ui;max-width:980px;margin:auto;padding:2em}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.5em}pre{white-space:pre-wrap}</style>',
-         '<h1>Distance-controlled factual retrieval</h1><p>'+html.escape(result['warning'])+'</p>',
-         '<pre>'+html.escape(json.dumps(result['by_distance'],indent=2))+'</pre>',
-         '<table><tr><th>Scenario</th><th>Actual distance (tokens)</th><th>Long memory</th><th>Answer</th><th>Prediction</th><th>Margin</th><th>Correct</th></tr>']
+    """Expose full-vocabulary rank and per-length summaries in the HTML report."""
+    out = ['<!doctype html><html><meta charset="utf-8"><title>Long retrieval</title>',
+           '<style>body{font:15px system-ui;max-width:1100px;margin:auto;padding:2em}'
+           'table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.4em}'
+           'pre{white-space:pre-wrap}th{background:#eee}</style>',
+           '<h1>Distance-controlled factual retrieval</h1><p>' +
+           html.escape(result['warning']) + '</p>',
+           '<h2>By-distance metrics</h2><table><tr><th>Distance</th><th>Cases</th>'
+           '<th>Accuracy</th><th>Mean rank</th><th>Median rank</th>'
+           '<th>Geometric mean rank</th><th>Mean log P(correct)</th>'
+           '<th>Top-128 fraction</th><th>Skipped</th></tr>']
+    for distance, metrics in result['by_distance'].items():
+        def fmt(key):
+            v = metrics.get(key)
+            return '—' if v is None else (f'{v:.4g}' if isinstance(v, float) else str(v))
+        cells = [distance, fmt('count'), fmt('accuracy'), fmt('mean_full_vocab_rank'),
+                 fmt('median_full_vocab_rank'), fmt('geomean_full_vocab_rank'),
+                 fmt('mean_correct_logprob'), fmt('full_vocab_top128_rate'),
+                 fmt('skipped_cases')]
+        out.append('<tr>' + ''.join('<td>' + html.escape(str(c)) + '</td>' for c in cells) + '</tr>')
+    out.append('</table><h2>Individual retrieval cases</h2><table><tr><th>Case</th>'
+               '<th>Repeat</th><th>Distance</th><th>Answer phase</th>'
+               '<th>Answer</th><th>Prediction</th><th>Vocab rank</th>'
+               '<th>Log P(correct)</th><th>Candidate margin</th><th>Correct</th></tr>')
     for r in result['cases']:
-        cols=(r['id'],str(r['measured_distance_tokens']),str(r['history_path_active']),r['answer'],
-              r['prediction'],f"{r['correct_margin']:.3f}",str(r['correct']))
-        out.append('<tr>'+''.join('<td>'+html.escape(str(c))+'</td>' for c in cols)+'</tr>')
+        cells = (r['id'], r.get('repetition', 0), r['measured_distance_tokens'],
+                 r.get('source_answer_phase_mod16'), r['answer'], r['prediction'],
+                 r['full_vocab_rank'], f"{r['correct_logprob']:.4f}",
+                 f"{r['correct_margin']:.4f}", r['correct'])
+        out.append('<tr>' + ''.join('<td>' + html.escape(str(c)) + '</td>' for c in cells) + '</tr>')
     out.append('</table></html>')
     return '\n'.join(out)
 
+
 def long_retrieval_case_csv(result, destination):
-    keys=['id','category','requested_distance_tokens','measured_distance_tokens','prompt_tokens',
-          'history_path_active','fact_in_historical_store','answer','prediction','correct','correct_rank',
-          'full_vocab_rank','correct_probability','correct_margin']
-    with Path(destination).open('w',encoding='utf-8',newline='') as f:
-        w=csv.DictWriter(f,fieldnames=keys);w.writeheader()
+    keys = ['id','base_case_id','repetition','category','requested_distance_tokens',
+            'measured_distance_tokens','prompt_tokens','source_answer_position',
+            'source_answer_phase_mod16','sparse_phase','model_b_full_sequence',
+            'history_path_active','fact_in_historical_store','answer','prediction',
+            'correct','correct_rank','full_vocab_rank','correct_logprob',
+            'correct_probability','correct_margin','relative_choice_probability',
+            'counterfactual_replacement','counterfactual_follows_replacement',
+            'counterfactual_original_answer_logprob_change']
+    with Path(destination).open('w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
         for row in result['cases']:
-            w.writerow({k:row.get(k) for k in keys})
+            flat = {key: row.get(key) for key in keys}
+            control = row.get('counterfactual', {})
+            flat['counterfactual_replacement'] = control.get('replacement')
+            flat['counterfactual_follows_replacement'] = control.get('follows_replacement')
+            flat['counterfactual_original_answer_logprob_change'] = (
+                control.get('original_answer_logprob_change'))
+            writer.writerow(flat)
 
 
 def progression_detail_csv(result, destination):

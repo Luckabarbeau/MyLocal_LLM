@@ -800,6 +800,37 @@ def _dual_resolution_geometric_length(length: int, cap: int) -> int:
         base *= 2
 
 
+def _dual_resolution_fine_length(length: int, cap: int) -> int:
+    """Round to a fixed, fine-grained training shape (maximum 65,536).
+
+    Retain the original geometric ladder through 128 tokens. Above that,
+    use 64-token steps through 2K, then double the step at every context
+    doubling: 128 to 4K, 256 to 8K, 512 to 16K, 1024 to 32K, and 2048
+    to 64K. Exactly 120 possible buckets exist with cap=65,536.
+
+    Padding is never larger than the established geometric policy. The
+    final bucket is clipped to a non-aligned context cap if necessary.
+    """
+    length, cap = int(length), int(cap)
+    if length <= 0 or cap < length or length > 65_536:
+        raise ValueError("fine bucket requires 1 <= length <= min(cap, 65536)")
+    if length <= 128:
+        return _dual_resolution_geometric_length(length, cap)
+    if length <= 2_048:
+        spacing = 64
+    elif length <= 4_096:
+        spacing = 128
+    elif length <= 8_192:
+        spacing = 256
+    elif length <= 16_384:
+        spacing = 512
+    elif length <= 32_768:
+        spacing = 1_024
+    else:
+        spacing = 2_048
+    return min(((length + spacing - 1) // spacing) * spacing, cap)
+
+
 def create_dual_resolution_document_minibatch(
     shard_data: np.ndarray,
     batch_size: int,
@@ -866,8 +897,12 @@ def create_dual_resolution_document_minibatch(
         executed_length = _dual_resolution_geometric_length(
             executed_length, max_context_length
         )
+    elif shape_bucket == "fine":
+        executed_length = _dual_resolution_fine_length(
+            executed_length, max_context_length
+        )
     elif shape_bucket != "none":
-        raise ValueError("shape_bucket must be 'none' or 'geometric'")
+        raise ValueError("shape_bucket must be 'none', 'geometric', or 'fine'")
     inputs = np.full(
         (batch_size, executed_length), int(eos_token_id), dtype=shard_data.dtype
     )

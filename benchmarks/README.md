@@ -186,3 +186,11 @@ To reduce the number of full-model evaluations, adjust the `task_ids`,
 configuration gets a different suite hash. Full-model 32K validation on your
 RTX 5080 still needs to be run against a trained checkpoint; CPU tests cover
 logic, phase coverage and last-token-only projection, not GPU performance.
+
+
+## 0103G: shared generation/evaluation runner
+
+For consistent model loading, run metadata, remote-model support, and
+resumable generation/performance benchmarks, see
+[`docs/0103G_UNIFIED_EVALUATION.md`](../docs/0103G_UNIFIED_EVALUATION.md).
+The existing specialist and live benchmark scores are not changed.

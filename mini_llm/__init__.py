@@ -23,3 +23,6 @@ from .ops.experts_inference import ExpertsInference
 from .model.decoder_lm import DecoderLanguageModel
 from .inference_model import InferenceModel
 from .inference_state import GenerationState
+
+# 0103-0: additive model-centric API; legacy public classes remain unchanged.
+from .model_api import Model

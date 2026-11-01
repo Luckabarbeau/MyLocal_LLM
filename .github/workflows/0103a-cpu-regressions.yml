@@ -1,0 +1,30 @@
+name: 0103A Model B CPU regressions
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  model-b-numpy-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install project and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Compile Python source
+        run: python -m compileall -q mini_llm scripts tests
+      - name: Run isolated Model B CPU regression gates
+        run: python scripts/run_0103a_regressions.py --mode cpu --report 0103a_cpu_report.json
+      - name: Upload machine-readable test summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-b-0103a-cpu-regression
+          path: 0103a_cpu_report.json
+          if-no-files-found: ignore

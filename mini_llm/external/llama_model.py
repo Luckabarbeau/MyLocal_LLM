@@ -172,7 +172,9 @@ class ExternalLlamaModel:
         self._require_weights()
         graph = getattr(state, "_external_cuda_graph", None)
         if graph is not None:
-            return graph.decode_one(token_ids, state)
+            logits = graph.decode_one(token_ids, state)
+            state._cuda_graph_decode_count = int(getattr(state, "_cuda_graph_decode_count", 0)) + 1
+            return logits
         return self.engine.decode_one(token_ids, state)
 
     def forward(self, token_ids):

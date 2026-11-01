@@ -80,7 +80,7 @@ class BlockProposalTextGenerator:
     def generate(self, prompt, max_new_tokens=50, strategy='greedy', temperature=1.,
                  top_k=None, top_p=None, seed=None, log_speed=False,
                  use_kv_cache=True, return_token_ids=False):
-        from inference import greedy_decode, temperature_sample, top_k_sample, top_p_sample
+        from mini_llm.legacy_generation import greedy_decode, temperature_sample, top_k_sample, top_p_sample
 
         if not use_kv_cache:
             raise NotImplementedError('block-proposal reference requires causal KV cache')

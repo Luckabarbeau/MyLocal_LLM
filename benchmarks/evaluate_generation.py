@@ -172,72 +172,39 @@ def write_summaries(output_dir: Path, records: list[dict], expected: int) -> Non
 
 
 def load_generator(checkpoint: Path, requested_context: int | None,
-                   runtime_profile: str | None):
-    """Use the same model/tokenizer initialization and TextGenerator as inference.py."""
-    from inference import TextGenerator
+                   runtime_profile: str | None, execution_policy: str = "auto"):
+    """Compatibility shim: canonical loader handles checkpoint/tokenizer/config.
+
+    Benchmark-specific generation and metadata remain here until 0103G.
+    """
+    from mini_llm.legacy_generation import TextGenerator
     from mini_llm.backend import BACKEND_NAME
-    from mini_llm.checkpoint import load_checkpoint
-    from mini_llm.config import ModelConfig
-    from mini_llm.model.decoder_lm import DecoderLanguageModel
-    from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile
-    from mini_llm.tokenizer.tokenizer import FastBPETokenizer, SimpleBPETokenizer
+    from mini_llm.model_loading import load_native_checkpoint
+    from mini_llm.runtime_defaults import format_runtime_profile
 
-    config_path = checkpoint / "config.json"
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Checkpoint config not found: {config_path}")
-    config = ModelConfig(**json.loads(config_path.read_text(encoding="utf-8")))
-    profile = apply_runtime_defaults(runtime_profile, backend_name=BACKEND_NAME,
-                                     config=config, training=False,
-                                     precision=getattr(config, "dtype", None))
-    print(format_runtime_profile(profile), flush=True)
-
-    memory_cfg = getattr(config, "memory_context", None)
-    if requested_context is not None:
-        max_context = requested_context
-    elif memory_cfg is not None and memory_cfg.enabled and memory_cfg.integration_mode in {
-        "terminal_landmark", "routed_prefix", "historical_read"
-    }:
-        max_context = int(memory_cfg.memory_length)
-    else:
-        max_context = int(config.context_length)
-    if max_context <= 0:
-        raise ValueError("--max-context must be positive")
-    if (memory_cfg is not None and memory_cfg.enabled and
-        memory_cfg.integration_mode in {"terminal_landmark", "routed_prefix", "historical_read"} and
-        max_context > int(memory_cfg.memory_length)):
-        raise ValueError("Requested context exceeds checkpoint memory horizon")
-
-    tokenizer_path = checkpoint / "tokenizer.json"
-    if not tokenizer_path.exists():
-        tokenizer_path = checkpoint.parent / "tokenizer.json"
-    if not tokenizer_path.exists():
-        raise FileNotFoundError(f"Tokenizer not found: {tokenizer_path}")
-    token_json = json.loads(tokenizer_path.read_text(encoding="utf-8"))
-    if "vocab_size" in token_json and "token_to_id" in token_json:
-        tokenizer = SimpleBPETokenizer.load(str(tokenizer_path))
-    else:
-        tokenizer = FastBPETokenizer.load(str(tokenizer_path))
-
-    model = DecoderLanguageModel(config, rng_seed=42, dtype=config.dtype)
-    names = [p.name for p in model.parameters()]
-    loaded, _, state = load_checkpoint(checkpoint, param_names=names, skip_optimizer=True)
-    for p in model.parameters():
-        if p.name in loaded:
-            p.data[...] = loaded[p.name]
-    if getattr(config, "progressive_depth", False):
-        active = int((state or {}).get("progressive_active_layers", config.progressive_initial_layers))
-        model.set_active_layers(active)
-    step = (state or {}).get("step", None)
-    print(f"Loaded {len(loaded)} parameter arrays; step={step}; context={max_context}; "
-          f"backend={BACKEND_NAME}; tokenizer={len(tokenizer)}", flush=True)
-    return TextGenerator(model, tokenizer, max_context=max_context), {
-        "step": step,
-        "context": max_context,
-        "model_dtype": str(config.dtype),
+    effective_policy = ("reference" if runtime_profile == "reference" and execution_policy == "auto"
+                        else execution_policy)
+    loaded = load_native_checkpoint(checkpoint, requested_context=requested_context,
+                                    runtime_profile=runtime_profile,
+                                    apply_profile=effective_policy != "reference",
+                                    execution_policy=effective_policy)
+    print(format_runtime_profile(loaded.runtime_profile) if loaded.runtime_profile else
+          "Runtime profile: reference (no GPU optimization defaults)", flush=True)
+    info = {
+        "step": loaded.training_state.get("step"),
+        "context": loaded.context_length,
+        "model_dtype": str(loaded.config.dtype),
         "backend": BACKEND_NAME,
-        "tokenizer_path": str(tokenizer_path.resolve()),
-        "runtime_env": {k: v for k, v in sorted(os.environ.items()) if k.startswith("MINI_LLM_")},
+        "execution_policy": effective_policy,
+        "tokenizer_path": str(loaded.tokenizer_path.resolve()),
+        "runtime_env": {k: v for k, v in sorted(os.environ.items())
+                        if k.startswith("MINI_LLM_")},
     }
+    print(f"Loaded {len(loaded.model.parameters())} parameter arrays; "
+          f"step={info['step']}; context={loaded.context_length}; "
+          f"backend={BACKEND_NAME}; tokenizer={len(loaded.tokenizer)}", flush=True)
+    return TextGenerator(loaded.model, loaded.tokenizer,
+                         max_context=loaded.context_length), info
 
 
 def load_block_generator(checkpoint: Path, tokenizer_path: Path | None,
@@ -289,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=("kv-cache", "reference"), default="kv-cache")
     parser.add_argument("--max-context", type=int)
     parser.add_argument("--runtime-profile", choices=("auto", "gpu-fast", "consumer-gpu", "reference"))
+    parser.add_argument("--execution-policy", choices=("auto", "reference", "balanced", "fast", "strict-fast"),
+                        default="auto", help="Model-aware optimized execution with observed CUDA Graph reporting")
     parser.add_argument("--resume", action="store_true", help="Continue a matching interrupted benchmark")
     parser.add_argument("--dry-run", action="store_true", help="Show selection without loading model")
     parser.add_argument("--print-generations", action="store_true",
@@ -334,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         "backend": args.backend,
         "max_context_request": args.max_context,
         "runtime_profile_request": args.runtime_profile,
+        "execution_policy_request": args.execution_policy,
     }
     if args.architecture == "block-proposal-0080i":
         config.update(architecture=args.architecture,
@@ -382,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         generator, meta = load_block_generator(args.checkpoint, args.tokenizer_path,
                                                args.max_context, args.commit_stride)
     else:
-        generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile)
+        generator, meta = load_generator(args.checkpoint, args.max_context, args.runtime_profile,
+                                         execution_policy=args.execution_policy)
     if args.resume:
         previous = old["checkpoint_metadata"]
         if (previous.get("step") != meta["step"] or
@@ -418,6 +389,12 @@ def main(argv: list[str] | None = None) -> int:
                         use_kv_cache=args.backend == "kv-cache",
                         return_token_ids=True,
                     )
+                    from dataclasses import asdict
+                    execution = getattr(generator, "last_execution_report", None)
+                    if args.execution_policy == "strict-fast":
+                        if args.backend != "kv-cache" or execution is None:
+                            raise RuntimeError("strict-fast requires observed KV-cache accelerated execution")
+                        execution.require_fast()
                     raw_ids = timing["generated_token_ids"]
                     eos = timing["eos_token_id"]
                     ended_eos = bool(raw_ids and raw_ids[-1] == eos)
@@ -431,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                         "generated_token_ids": token_ids,
                         "stopped_on_eos": ended_eos,
                         "metrics": measured,
+                        "execution": asdict(execution) if execution is not None else None,
                         "timing": {"total_time_s": timing.get("total_time_s"),
                                    "prefill_time_s": timing.get("prefill_time_s"),
                                    "tokens_per_sec": timing.get("tokens_per_sec"),

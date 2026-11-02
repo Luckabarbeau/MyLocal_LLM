@@ -121,7 +121,19 @@ class ResidualSpecialist:
             docs = np.asarray(asnumpy(dual_resolution_metadata["document_ids"]))
             if docs.shape != frozen_hidden.shape[:2]:
                 raise ValueError("specialist document IDs must have shape [B,T]")
-            if np.any(docs != docs[:, :1]):
+            lengths = dual_resolution_metadata.get("valid_lengths")
+            if lengths is None:
+                lengths = np.full(docs.shape[0], docs.shape[1], dtype=np.int64)
+            else:
+                lengths = np.asarray(asnumpy(lengths), dtype=np.int64)
+                if lengths.shape != (docs.shape[0],) or np.any(lengths < 1) or np.any(lengths > docs.shape[1]):
+                    raise ValueError("invalid specialist valid_lengths")
+            # Padding EOS creates artificial document identifiers *after* the
+            # genuine sample. Future padding cannot influence causal predictions
+            # on genuine positions, and its CE mask is zero. Never permit an
+            # actual packed multi-document input to pass this gate.
+            if any(np.any(docs[row, :length] != docs[row, 0])
+                   for row, length in enumerate(lengths)):
                 raise NotImplementedError(
                     "specialist multi-document attention needs document-aware "
                     "optimized masks; use document-first, single-document rows"

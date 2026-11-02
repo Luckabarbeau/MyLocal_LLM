@@ -17,6 +17,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+# Needed when this script is invoked directly rather than as a module.
+sys.path.insert(0, str(ROOT))
 
 # Exact, versioned selectors intentionally avoid running unbounded historical
 # research benchmarks or allocating the full 348M model on a CPU.
@@ -48,6 +50,13 @@ CPU_SUITES = {
     "runtime_profile_isolated": (
         "tests/test_runtime_defaults.py",
     ),
+    "model_centered_0105": (
+        "tests/test_production_profile_0105a.py",
+        "tests/test_training_path_parity_0105c.py",
+        "tests/test_specialist_sampler_0105d.py",
+        "tests/test_specialist_training_run_0105e.py",
+        "tests/test_specialist_cli_0105f.py",
+    ),
     "model_centered_0104": (
         "tests/test_checkpoint_transactions_0104a.py",
         "tests/test_model_b_config_roundtrip_0104b.py",
@@ -61,6 +70,7 @@ CPU_SUITES = {
 }
 
 GPU_SUITES = {
+    "model_b_0105_profile_contract": ("tests/test_model_b_gpu_contract_0105b.py",),
     "sparse_triton_parity": (
         "tests/test_sparse_stride_history_0102z.py::test_triton_parity_and_strided_kv_gradient",
         "tests/test_sparse_stride_history_0102z.py::test_model_b_local_sparse_triton_matches_reference",
@@ -74,7 +84,8 @@ GPU_SUITES = {
 }
 
 
-def environment_for(mode: str, inherited: dict[str, str]) -> dict[str, str]:
+def environment_for(mode: str, inherited: dict[str, str], *,
+                    model_b_profile: bool = False) -> dict[str, str]:
     """Pin backend, without changing the parent's environment or fast flags."""
     if mode not in {"cpu", "gpu"}:
         raise ValueError(f"Invalid backend tier: {mode}")
@@ -87,6 +98,9 @@ def environment_for(mode: str, inherited: dict[str, str]) -> dict[str, str]:
     for name in tuple(env):
         if name.startswith("MINI_LLM_") and name != "MINI_LLM_BACKEND":
             del env[name]
+    if mode == "gpu" and model_b_profile:
+        from mini_llm.production_profile_0105 import ENVIRONMENT
+        env.update(ENVIRONMENT)
     return env
 
 
@@ -138,13 +152,17 @@ def gpu_memory_headroom(env: dict[str, str]) -> dict[str, float]:
 
 
 def run(mode: str, *, report: Path | None = None, extra: tuple[str, ...] = (),
-        dry_run: bool = False) -> int:
+        dry_run: bool = False, model_b_profile: bool = False) -> int:
     suites = suites_for(mode)
+    if not model_b_profile:
+        suites = tuple(item for item in suites
+                       if item[1] != "model_b_0105_profile_contract")
     results = []
     started = time.time()
     gpu_checked = False
     for tier, name, selectors in suites:
-        env = environment_for(tier, os.environ)
+        env = environment_for(tier, os.environ, model_b_profile=model_b_profile)
+        # The 0105 contract test is only meaningful under the exact profile.
         command = [sys.executable, "-m", "pytest", "-q", *selectors, *extra]
         if dry_run:
             print(f"[{tier}/{name}] {' '.join(command)}", flush=True)
@@ -199,6 +217,7 @@ def run(mode: str, *, report: Path | None = None, extra: tuple[str, ...] = (),
             "model": "model_b_348m_sparse16",
             "started_utc_epoch": started,
             "mode": mode,
+            "model_b_profile": bool(model_b_profile),
             "complete": len(results) == len(suites) and
                         all(row["status"] == "passed" for row in results),
             "suites": results,
@@ -217,8 +236,11 @@ def main() -> int:
     parser.add_argument("--mode", choices=("cpu", "gpu", "all"), default="cpu")
     parser.add_argument("--report", type=Path, help="Optional JSON validation record")
     parser.add_argument("--list", action="store_true", help="Print suite commands only")
+    parser.add_argument("--model-b-profile", action="store_true",
+                        help="Apply exact 0105A production training flags to GPU subprocesses")
     args = parser.parse_args()
-    return run(args.mode, report=args.report, dry_run=args.list)
+    return run(args.mode, report=args.report, dry_run=args.list,
+               model_b_profile=args.model_b_profile)
 
 
 if __name__ == "__main__":

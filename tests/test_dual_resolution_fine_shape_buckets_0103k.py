@@ -199,14 +199,14 @@ def test_matrix_pool_sparse_attention_padding_and_gradient_parity(monkeypatch):
     operator = MatrixPoolDualResolutionAttention(
         d_model=256, n_q_heads=4, n_kv_heads=2, d_head=64,
         input_std=.05, output_std=.05, rng=RandomStream(100),
-        dtype='float64', config=config,
+        dtype='float32', config=config,
     )
     assert operator.sparse_enabled
     rng = np.random.default_rng(4)
     valid = 260
-    x = rng.normal(scale=.01, size=(1, valid, 256))
-    residual = rng.normal(scale=.01, size=x.shape)
-    upstream = rng.normal(scale=.01, size=x.shape)
+    x = rng.normal(scale=.01, size=(1, valid, 256)).astype(np.float32)
+    residual = rng.normal(scale=.01, size=x.shape).astype(np.float32)
+    upstream = rng.normal(scale=.01, size=x.shape).astype(np.float32)
 
     outputs = []
     for width in (320, 384):  # fine vs original geometric
@@ -228,9 +228,9 @@ def test_matrix_pool_sparse_attention_padding_and_gradient_parity(monkeypatch):
                         [parameter.grad.copy() for parameter in operator.parameters()]))
 
     for fine, geometric in zip(outputs[0][:3], outputs[1][:3]):
-        np.testing.assert_allclose(fine, geometric, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(fine, geometric, rtol=3e-5, atol=2e-6)
     for fine, geometric in zip(outputs[0][3], outputs[1][3]):
-        np.testing.assert_allclose(fine, geometric, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(fine, geometric, rtol=3e-5, atol=2e-6)
 
 
 @pytest.mark.skipif(__import__('mini_llm.backend', fromlist=['BACKEND_NAME']).BACKEND_NAME

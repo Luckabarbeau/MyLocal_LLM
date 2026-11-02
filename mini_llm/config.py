@@ -244,6 +244,12 @@ class DualResolutionConfig:
     sparse_retrieval_layers: tuple = ()  # model-level layer schedule (0-based)
 
     def __post_init__(self):
+        # JSON restores sequences as lists. Canonicalize this architecture
+        # identity field before validation and checkpoint comparisons.
+        layers = self.sparse_retrieval_layers
+        if not isinstance(layers, (tuple, list)):
+            raise TypeError("sparse_retrieval_layers must be a list or tuple")
+        object.__setattr__(self, "sparse_retrieval_layers", tuple(layers))
         if not isinstance(self.enabled, bool):
             raise TypeError("dual-resolution enabled must be a bool")
         if not isinstance(self.recompute_attention_probs, bool):

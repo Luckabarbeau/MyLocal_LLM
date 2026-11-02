@@ -48,6 +48,16 @@ CPU_SUITES = {
     "runtime_profile_isolated": (
         "tests/test_runtime_defaults.py",
     ),
+    "model_centered_0104": (
+        "tests/test_checkpoint_transactions_0104a.py",
+        "tests/test_model_b_config_roundtrip_0104b.py",
+        "tests/test_dual_resolution_fine_shape_buckets_0103k.py",
+        "tests/test_training_run_0104d.py",
+        "tests/test_residual_specialist_phase1.py",
+        "tests/test_residual_specialist_phase2.py",
+        "tests/test_specialist_composition_0104e.py",
+        "tests/test_specialist_checkpoint_0104f.py",
+    ),
 }
 
 GPU_SUITES = {

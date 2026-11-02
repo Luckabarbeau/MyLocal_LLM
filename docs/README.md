@@ -10,6 +10,8 @@ be treated as required setup steps.
 |---|---|
 | [`../README.md`](../README.md) | Project overview, architecture, and installation |
 | [`USER_GUIDE.md`](USER_GUIDE.md) | Training, resume, inference, and runtime controls |
+| [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | Current Model B identity, completed 0104 APIs and remaining GPU gates |
+| [`MODEL_CENTERED_DEVELOPER_GUIDE.md`](MODEL_CENTERED_DEVELOPER_GUIDE.md) | Unified model, generation, training and specialist interfaces |
 | [`EXTENDED_TRAINING.md`](EXTENDED_TRAINING.md) | Extended training workflow |
 | [`TOKENIZER_README.md`](TOKENIZER_README.md) | Tokenizer training and artifacts |
 | [`DEBUG_COMMANDS.md`](DEBUG_COMMANDS.md) | Focused diagnostics commands |

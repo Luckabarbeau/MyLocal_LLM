@@ -67,7 +67,8 @@ class FrozenFoundation:
     def config(self):
         return self.model.config
 
-    def hidden(self, token_ids, *, memory_metadata=None, position_ids=None):
+    def hidden(self, token_ids, *, memory_metadata=None, position_ids=None,
+               dual_resolution_metadata=None):
         """Return `(normalized_hidden, target_slice)` without forward caches.
 
         Historical foundation inputs must use the checkpoint's complete source
@@ -77,6 +78,7 @@ class FrozenFoundation:
         return self.model.forward_body(
             token_ids, return_cache=False, return_target_slice=True,
             memory_metadata=memory_metadata, position_ids=position_ids,
+            dual_resolution_metadata=dual_resolution_metadata,
         )
 
     def project(self, normalized_hidden, target_slice=None):
@@ -95,9 +97,11 @@ class FrozenFoundation:
         logits, _ = self.model.output_proj.forward(head)
         return logits
 
-    def predict(self, token_ids, *, memory_metadata=None, position_ids=None):
+    def predict(self, token_ids, *, memory_metadata=None, position_ids=None,
+                dual_resolution_metadata=None):
         hidden, target_slice = self.hidden(
-            token_ids, memory_metadata=memory_metadata, position_ids=position_ids
+            token_ids, memory_metadata=memory_metadata, position_ids=position_ids,
+            dual_resolution_metadata=dual_resolution_metadata,
         )
         return self.project(hidden, target_slice)
 

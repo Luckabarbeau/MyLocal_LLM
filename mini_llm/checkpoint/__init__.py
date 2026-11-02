@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -25,78 +27,123 @@ def _optimizer_offload_mode():
     return raw if raw in {"moments", "full"} else "none"
 
 
+def _write_payload(path, model_params, optimizer_state, training_state):
+    """Write an isolated checkpoint payload; never mutate the active snapshot."""
+    params_path = path / "model_params"
+    params_path.mkdir()
+    for name, data in model_params.items():
+        np.save(params_path / f"{name}.npy", _convert_to_numpy(data))
+
+    if optimizer_state is not None:
+        opt_path = path / "optimizer_state"
+        opt_path.mkdir()
+        scalars = {}
+        for name, value in optimizer_state.items():
+            if isinstance(value, dict):
+                nested = opt_path / name
+                nested.mkdir()
+                nested_scalars = {}
+                for key, item in value.items():
+                    if hasattr(item, "__array__"):
+                        np.save(nested / f"{key}.npy", _convert_to_numpy(item))
+                    else:
+                        nested_scalars[key] = item
+                if nested_scalars:
+                    (nested / "scalars.json").write_text(
+                        json.dumps(nested_scalars), encoding="utf-8")
+            elif hasattr(value, "__array__"):
+                np.save(opt_path / f"{name}.npy", _convert_to_numpy(value))
+            else:
+                scalars[name] = value
+        if scalars:
+            (opt_path / "scalars.json").write_text(
+                json.dumps(scalars), encoding="utf-8")
+
+    if training_state is not None:
+        (path / "training_state.json").write_text(
+            json.dumps(training_state, indent=2), encoding="utf-8")
+
+
+def _checkpoint_previous(path):
+    return path.with_name(path.name + ".previous")
+
+
+def _resolve_checkpoint_path(path):
+    """Recover reads after interruption between old and new directory renames."""
+    path = Path(path)
+    if path.is_dir():
+        return path
+    backup = _checkpoint_previous(path)
+    if not path.exists() and backup.is_dir():
+        return backup
+    return path
+
+
 def save_checkpoint(
     path: Union[str, Path],
     model_params: Dict[str, np.ndarray],
     optimizer_state: Optional[Dict] = None,
     training_state: Optional[Dict] = None,
 ):
-    """
-    Save model, optimizer, and training state to disk.
-    
-    Handles both NumPy and CuPy arrays correctly by converting to NumPy
-    before saving. This ensures checkpoint compatibility across backends.
-    
-    Args:
-        path: Directory to save checkpoint
-        model_params: Dictionary mapping parameter names to numpy arrays
-        optimizer_state: Optional optimizer state dictionary
-        training_state: Optional training state (step, loss history, etc.)
+    """Publish a complete checkpoint using a staged sibling directory.
+
+    Legacy paths/layout stay unchanged. The previous complete checkpoint is
+    retained at ``<path>.previous`` for interruption recovery. The active
+    directory is *never* modified while parameter and optimizer files are
+    being written. A crash during the final pair of directory renames can
+    leave the active path absent; load_checkpoint then reads .previous.
+
+    This operation requires the staging and destination to share a filesystem.
+    Consumers must not write ancillary files into the checkpoint directory
+    concurrently with checkpoint publication (the normal training writer is
+    serialized). A transactional checkpoint requires additional disk space.
     """
     path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    
-    # Save model parameters (convert CuPy to NumPy if needed)
-    params_path = path / "model_params"
-    params_path.mkdir(exist_ok=True)
-    
-    for name, data in model_params.items():
-        data_np = _convert_to_numpy(data)
-        np.save(params_path / f"{name}.npy", data_np)
-    
-    # Save optimizer state if provided (convert CuPy to NumPy if needed)
-    if optimizer_state is not None:
-        # Save optimizer state arrays directly as npy files instead of JSON lists
-        # This avoids corruption and memory issues with large arrays
-        opt_state_dir = path / "optimizer_state"
-        opt_state_dir.mkdir(exist_ok=True)
-        if "muon_m" not in optimizer_state:
-            # Avoid stale Muon momentum surviving a weights-only return to AdamW.
-            old_muon_dir = opt_state_dir / "muon_m"
-            if old_muon_dir.is_dir():
-                for old_file in old_muon_dir.glob("*.npy"):
-                    old_file.unlink()
-
-        for key, value in optimizer_state.items():
-            if isinstance(value, dict):
-                key_dir = opt_state_dir / key
-                key_dir.mkdir(exist_ok=True)
-                # Hybrid Muon uses a smaller m/v group; remove stale AdamW
-                # tensors when saving back into the same checkpoint directory.
-                if key in {"m", "v", "muon_m"}:
-                    for old_file in key_dir.glob("*.npy"):
-                        if old_file.stem not in value:
-                            old_file.unlink()
-                for k, v in value.items():
-                    if hasattr(v, '__array__'):
-                        arr_np = _convert_to_numpy(v)
-                        np.save(key_dir / f"{k}.npy", arr_np)
-                    else:
-                        # Save scalars/other values as JSON
-                        with open(key_dir / "scalars.json", "w") as f:
-                            json.dump({k: v}, f)
-            elif hasattr(value, '__array__'):
-                arr_np = _convert_to_numpy(value)
-                np.save(opt_state_dir / f"{key}.npy", arr_np)
-            else:
-                with open(opt_state_dir / "scalars.json", "w") as f:
-                    json.dump({key: value}, f)
-    
-    # Save training state if provided
-    if training_state is not None:
-        with open(path / "training_state.json", "w") as f:
-            json.dump(training_state, f, indent=2)
-    
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not path.is_dir():
+        raise NotADirectoryError(str(path))
+    previous = _checkpoint_previous(path)
+    if not path.exists() and previous.is_dir():
+        # Recover a committed predecessor before attempting another save.
+        os.replace(previous, path)
+    stage = path.with_name(path.name + ".pending-" + uuid.uuid4().hex)
+    stage.mkdir()
+    activated = False
+    moved_old = False
+    try:
+        # The training launcher stores config/tokenizer and supporting files
+        # alongside the payload. Preserve them while replacing managed paths.
+        if path.is_dir():
+            for entry in path.iterdir():
+                if entry.name in {"model_params", "optimizer_state", "training_state.json"}:
+                    continue
+                destination = stage / entry.name
+                if entry.is_symlink():
+                    destination.symlink_to(os.readlink(entry))
+                elif entry.is_dir():
+                    shutil.copytree(entry, destination, copy_function=os.link,
+                                    symlinks=True)
+                else:
+                    os.link(entry, destination)
+        _write_payload(stage, model_params, optimizer_state, training_state)
+        # Force payload visibility before switching checkpoint directory names.
+        # fsync regular files is intentionally not done here for the large
+        # optimizer tensors: atomic replacement, not power-loss durability,
+        # is the specific contract of this patch.
+        if previous.exists():
+            shutil.rmtree(previous)
+        if path.exists():
+            os.replace(path, previous)
+            moved_old = True
+        os.replace(stage, path)
+        activated = True
+    except BaseException:
+        if moved_old and not path.exists() and previous.is_dir():
+            os.replace(previous, path)
+        raise
+    finally:
+        if not activated and stage.exists():
+            shutil.rmtree(stage)
     print(f"Checkpoint saved to {path}")
 
 
@@ -118,7 +165,7 @@ def load_checkpoint(
     Returns:
         Tuple of (model_params, optimizer_state, training_state)
     """
-    path = Path(path)
+    path = _resolve_checkpoint_path(path)
     
     # Load model parameters
     params_path = path / "model_params"
@@ -176,6 +223,26 @@ def load_checkpoint(
                         import cupy
                         arr = cupy.asarray(arr)
                     optimizer_state["v"][npy_file.stem] = arr
+            # Preserve future optimizer extensions and nested scalar state,
+            # without changing the established host-offload rules for m/v.
+            for nested in optimizer_dir.iterdir():
+                if not nested.is_dir() or nested.name in {"m", "v", "muon_m", "master_weights"}:
+                    continue
+                contents = {}
+                for array_file in nested.glob("*.npy"):
+                    arr = np.load(array_file)
+                    contents[array_file.stem] = (xp.asarray(arr) if BACKEND_NAME == "cupy" else arr)
+                if (nested / "scalars.json").is_file():
+                    contents.update(json.loads((nested / "scalars.json").read_text(encoding="utf-8")))
+                optimizer_state[nested.name] = contents
+            for scalar_dir in ("m", "v", "muon_m", "master_weights"):
+                scalar_path = optimizer_dir / scalar_dir / "scalars.json"
+                if scalar_path.is_file():
+                    optimizer_state.setdefault(scalar_dir, {}).update(
+                        json.loads(scalar_path.read_text(encoding="utf-8")))
+            for array_file in optimizer_dir.glob("*.npy"):
+                arr = np.load(array_file)
+                optimizer_state[array_file.stem] = (xp.asarray(arr) if BACKEND_NAME == "cupy" else arr)
     
     # 0076A: Muon has only one momentum tensor; never synthesize AdamW v.
     if optimizer_state is not None:

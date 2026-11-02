@@ -95,6 +95,8 @@ class Model:
     def capabilities(self) -> Capabilities:
         return Capabilities(generate=self.tokenizer is not None,
                             streaming=self.tokenizer is not None,
+                            score=True,  # exact native chunked teacher forcing
+                            train=True,  # ExtendedTrainer via TrainingRun adapter
                             persistent_sessions=False,  # multi-turn KV continuation not implemented
                             accessible_weights=True)
 
@@ -118,36 +120,93 @@ class Model:
         )
 
     def generate(self, prompt: str, *, max_new_tokens: int = 128,
-                 require_fast: bool = False, **kwargs) -> GenerationResult:
+                 require_fast: bool = False, strategy: str = "greedy",
+                 temperature: float = 1.0, top_k: int | None = None,
+                 top_p: float | None = None, seed: int | None = None,
+                 log_speed: bool = False, **kwargs) -> GenerationResult:
+        """One-shot generation through the same request session as serving.
+
+        Preserve the legacy facade's decoding strategy names and EOS inclusion
+        while avoiding a second generation/sampling implementation. This does
+        not provide append-only multi-turn KV continuation.
+        """
         if not self.capabilities.generate:
             raise UnsupportedModelOperation("Generation requires a tokenizer")
-        # The model facade always configures BEFORE constructing the inference engine.
-        from .backend import BACKEND_NAME
-        from .inference_policy import configure_inference
-        selected_policy = "strict-fast" if require_fast else self.execution_policy
-        configure_inference(self._native_model.config, backend=BACKEND_NAME,
-                            dtype=self._native_model.dtype, policy=selected_policy)
-        # Existing optimized/native implementation; no new decoding maths.
-        from .legacy_generation import TextGenerator
-        generator = TextGenerator(self._native_model, self.tokenizer,
-                                  max_context=self._context_length)
-        output, timing = generator.generate(
-            prompt, max_new_tokens=max_new_tokens,
-            use_kv_cache=True, return_token_ids=True, **kwargs,
+        if strategy not in {"greedy", "temperature", "top-k", "top-p"}:
+            raise ValueError(f"Unknown strategy: {strategy}")
+        if strategy == "top-k" and top_k is None:
+            raise ValueError("top-k sampling requires top_k")
+        if strategy == "top-p" and top_p is None:
+            raise ValueError("top-p sampling requires top_p")
+        if require_fast or self.execution_policy == "strict-fast":
+            # Fail *before* expensive generation if selected path is unverified.
+            from .backend import BACKEND_NAME
+            from .inference_policy import configure_inference
+            configure_inference(self._native_model.config, backend=BACKEND_NAME,
+                                dtype=self._native_model.dtype, policy="strict-fast")
+        session = self.session()
+        temp = 0.0 if strategy == "greedy" else temperature
+        outcome = session.generate(
+            prompt, max_tokens=max_new_tokens, temperature=temp,
+            top_k=top_k if strategy == "top-k" else None,
+            top_p=(top_p if strategy == "top-p" else 1.0),
+            seed=seed, log_speed=log_speed,
+            include_stop_token=True, **kwargs,
         )
-        ids = tuple(int(i) for i in timing.pop("generated_token_ids", ()))
-        report = getattr(generator, "last_execution_report", None) or self.execution_info()
+        report = session.execution_info() or self.execution_info()
         self._last_execution_report = report
-        if require_fast or selected_policy == "strict-fast":
+        if require_fast or self.execution_policy == "strict-fast":
             report.require_fast()
-        return GenerationResult(text=output, token_ids=ids,
-                                timing=timing, execution=report)
+        timing = {
+            "prefill_time_s": session.prefill_time_s,
+            "forward_times": tuple(session.forward_times),
+            "sample_times": tuple(session.sample_times),
+            "total_tokens": outcome.completion_tokens,
+        }
+        return GenerationResult(outcome.text, tuple(outcome.token_ids), timing, report)
 
-    def score(self, *args, **kwargs):
-        raise UnsupportedModelOperation("Unified score API is scheduled for 0103G")
+    def score(self, token_ids, target_ids, *, loss_mask=None,
+              position_ids=None, memory_metadata=None,
+              dual_resolution_metadata=None, chunk_tokens=512) -> float:
+        """Teacher-forced token CE via the existing chunked native LM head.
 
-    def train(self, *args, **kwargs):
-        raise UnsupportedModelOperation("Unified training API is scheduled for 0103H")
+        No optimizer, backward graph or persistent full-vocabulary logits are
+        allocated. Callers own target shifting, EOS masks and document metadata.
+        Other providers without a native decoder must reject this operation.
+        """
+        from .backend import xp
+        ids = xp.asarray(token_ids, dtype=xp.int32)
+        targets = xp.asarray(target_ids, dtype=xp.int32)
+        if ids.ndim != 2 or targets.ndim != 2:
+            raise ValueError("token_ids and target_ids must be [batch, seq]")
+        if ids.shape != targets.shape:
+            raise ValueError("token IDs and targets must have equal shapes")
+        hidden, target_slice = self._native_model.forward_body(
+            ids, return_cache=False, return_target_slice=True,
+            position_ids=position_ids, memory_metadata=memory_metadata,
+            dual_resolution_metadata=dual_resolution_metadata,
+        )
+        if target_slice is not None:
+            start, stop = map(int, target_slice)
+            targets = targets[:, start:stop]
+            if loss_mask is not None:
+                loss_mask = xp.asarray(loss_mask)[:, start:stop]
+        loss, _ = self._native_model.chunked_lm_head_loss_forward(
+            hidden, targets, target_slice=target_slice,
+            loss_mask=loss_mask, chunk_tokens=chunk_tokens,
+        )
+        return float(loss)
+
+    def train(self, *, train_shard_paths=(), val_shard_paths=(), **training_options):
+        """Create a native TrainingRun using the validated ExtendedTrainer path.
+
+        Composite specialist trainers are not yet supported by this adapter.
+        """
+        from .training_run import TrainingRun
+        return TrainingRun.from_native(
+            self, train_shard_paths=train_shard_paths,
+            val_shard_paths=val_shard_paths, **training_options,
+        )
 
     def session(self):
         """Create an independent generation session over shared model weights.
@@ -167,5 +226,13 @@ class Model:
         return GenerationSession(NativeGeneratorAdapter(TextGenerator(
             self._native_model, self.tokenizer, max_context=self._context_length)))
 
-    def save_weights(self, *args, **kwargs):
-        raise UnsupportedModelOperation("Weights-only export via facade is not wired in 0103-0")
+    def save_weights(self, path):
+        """Write a canonical, weights-only native checkpoint snapshot.
+
+        No optimizer state is serialized. The configuration and tokenizer must
+        already exist at ``path`` or be supplied by the calling application;
+        this method deliberately does not fabricate tokenizer metadata.
+        """
+        from .checkpoint import save_checkpoint
+        save_checkpoint(path, {p.name: p.data for p in self._native_model.parameters()})
+        return path

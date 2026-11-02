@@ -107,10 +107,31 @@ class ResidualSpecialist:
             block.refresh_compute_buffers()
 
     def forward_delta(self, frozen_hidden, *, position_ids=None,
+                      dual_resolution_metadata=None,
                       return_cache=True, activation_checkpoint=False):
         """Calculate correction. The foundation hidden tensor is never modified."""
         if frozen_hidden.shape[-1] != self.config.d_model:
             raise ValueError("specialist/foundation hidden width mismatch")
+        if dual_resolution_metadata is not None:
+            # The present GQA specialist uses optimized causal attention kernels
+            # without document-ID masks. Fail closed instead of leaking packed
+            # neighboring documents. Single-document rows remain fully supported.
+            from mini_llm.backend import asnumpy
+            import numpy as np
+            docs = np.asarray(asnumpy(dual_resolution_metadata["document_ids"]))
+            if docs.shape != frozen_hidden.shape[:2]:
+                raise ValueError("specialist document IDs must have shape [B,T]")
+            if np.any(docs != docs[:, :1]):
+                raise NotImplementedError(
+                    "specialist multi-document attention needs document-aware "
+                    "optimized masks; use document-first, single-document rows"
+                )
+            if position_ids is None:
+                position_ids = dual_resolution_metadata["position_ids"]
+            else:
+                if not np.array_equal(np.asarray(asnumpy(position_ids)),
+                                      np.asarray(asnumpy(dual_resolution_metadata["position_ids"]))):
+                    raise ValueError("specialist position_ids disagree with foundation metadata")
         # First no-history implementation operates on a contiguous causal
         # working sequence. `position_ids` can preserve its absolute source
         # coordinates when provided by the foundation training batch.

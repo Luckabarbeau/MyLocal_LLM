@@ -49,7 +49,7 @@ def test_native_wrap_inspection_does_not_copy_or_allocate_model_weights():
     assert info.model_id == "tiny"
     assert facade.capabilities.inspect and facade.capabilities.accessible_weights
     assert not facade.capabilities.generate  # No tokenizer was provided.
-    assert not facade.capabilities.train  # Not wired yet, despite native capability.
+    assert facade.capabilities.train  # Wired through ExtendedTrainer adapter.
     with pytest.raises(UnsupportedModelOperation, match="tokenizer"):
         facade.generate("Hello")
 
@@ -126,30 +126,53 @@ def test_native_checkpoint_load_and_schema_validation(tmp_path, monkeypatch):
         Model.load(checkpoint)
 
 
-def test_generate_uses_existing_engine_and_does_not_claim_fast(monkeypatch):
-    from inference import TextGenerator
+def test_generate_uses_common_session_and_does_not_claim_fast(monkeypatch):
+    from mini_llm.generation import GenerationOutput
 
     class DummyTokenizer:
         pass
 
     seen = []
+    class FakeSession:
+        prefill_time_s = 0.01
+        forward_times = [0.02]
+        sample_times = [0.001]
+        def generate(self, prompt, **kwargs):
+            seen.append((prompt, kwargs))
+            return GenerationOutput("output", (1, 2), "length", 1, 2)
+        def execution_info(self):
+            return None
 
-    def fake_generate(self, prompt, **kwargs):
-        seen.append((self.model, self.tokenizer, prompt, kwargs))
-        return "output", {"generated_token_ids": [1, 2], "seconds": 0.3}
-
-    monkeypatch.setattr(TextGenerator, "generate", fake_generate)
     raw = DecoderLanguageModel(tiny_config())
     model = Model.wrap_native(raw, tokenizer=DummyTokenizer())
+    monkeypatch.setattr(Model, "session", lambda self: FakeSession())
     result = model.generate("hey", max_new_tokens=2)
     assert result.text == "output" and result.token_ids == (1, 2)
-    assert result.timing == {"seconds": 0.3}
-    assert seen[0][0] is raw and seen[0][1] is model.tokenizer
-    assert seen[0][3]["use_kv_cache"] is True
+    assert result.timing["total_tokens"] == 2
+    assert seen[0][0] == "hey"
+    assert seen[0][1]["max_tokens"] == 2
+    assert seen[0][1]["include_stop_token"] is True
     with pytest.raises(UnverifiedExecutionPath):
         model.generate("hey", require_fast=True)
     assert len(seen) == 1  # Fail before doing expensive work.
 
+
+def test_model_score_chunked_forward_only_and_mask():
+    native = DecoderLanguageModel(tiny_config(), rng_seed=18)
+    facade = Model.wrap_native(native)
+    assert facade.capabilities.score
+    ids = np.asarray([[1, 2, 3, 4]], dtype=np.int32)
+    targets = np.asarray([[2, 3, 4, 5]], dtype=np.int32)
+    mask = np.asarray([[1, 1, 0, 1]], dtype=np.float32)
+    score = facade.score(ids, targets, loss_mask=mask, chunk_tokens=2)
+    hidden, target_slice = native.forward_body(ids, return_cache=False, return_target_slice=True)
+    expected, _ = native.chunked_lm_head_loss_forward(
+        hidden, targets, target_slice=target_slice,
+        loss_mask=mask, chunk_tokens=2)
+    assert np.isfinite(score) and score == pytest.approx(expected)
+    assert all(p.grad is not None for p in native.parameters())  # Existing parameter buffers only
+    with pytest.raises(ValueError, match="equal shapes"):
+        facade.score(ids, targets[:, :2])
 
 def test_shared_operator_registry_is_backend_independent_and_not_implicitly_fast():
     from mini_llm.model_contracts import OperatorSpec

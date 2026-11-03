@@ -24,7 +24,13 @@ from mini_llm.ops.dual_resolution_attention import (
 
 
 class SpecialistDocumentSampler:
-    """One EOS-bounded, mixed-shard sampling stream with reproducible cursors."""
+    """Document-first mixed-shard stream for any positive microbatch size.
+
+    All rows in a microbatch are sampled independently from one chosen source,
+    matching the production foundation sampler. Short rows are EOS-padded and
+    excluded from the loss by the per-row target mask; document metadata is
+    built for every row, with invalid padded historical blocks suppressed.
+    """
 
     def __init__(self, root, *, context_length, batch_size, eos_token_id,
                  block_size, seed=42, shape_bucket='fine', cache_size=4):
@@ -48,8 +54,6 @@ class SpecialistDocumentSampler:
             raise ValueError('context, batch and block size must be positive')
         if self.shape_bucket not in {'none', 'geometric', 'fine'}:
             raise ValueError('unknown shape bucket')
-        if self.batch_size != 1:
-            raise NotImplementedError('0105 specialist validation is limited to batch_size=1')
         if self.eos_token_id < 0 or self.eos_token_id >= int(manifest['vocab_size']):
             raise ValueError('EOS token outside tokenizer vocabulary')
         self.rng = {'train': np.random.default_rng(seed),

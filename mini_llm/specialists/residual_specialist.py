@@ -6,12 +6,16 @@ inherited through the foundation's contextual hidden states; private readers
 are a separate unimplemented future adapter, not silently disabled.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import os
 
 from mini_llm.backend import RandomStream, xp, resolve_dtype
 from mini_llm.blocks.transformer_block import TransformerBlock
-from mini_llm.config import AttentionLayerConfig, LocalAttentionConfig
+from mini_llm.config import (
+    AttentionLayerConfig, DualResolutionConfig, LocalAttentionConfig,
+)
 from mini_llm.ops.linear import Linear
+from mini_llm.ops.rope import prepare_rope_positions
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,8 @@ class SpecialistConfig:
     init_std: float = 0.02
     rms_eps: float = 1e-6
     rope_base: float = 10000.0
+    residual_init_std: float | None = None
+    dual_resolution: DualResolutionConfig | dict | None = None
     memory_mode: str = "foundation_only"
     # Future `private` readers will use this independently of the foundation:
     history_horizon: int | None = None
@@ -37,6 +43,14 @@ class SpecialistConfig:
     history_retrieval_blocks: int = 8
 
     def __post_init__(self):
+        dual = self.dual_resolution
+        if isinstance(dual, dict):
+            dual = DualResolutionConfig(**dual)
+            object.__setattr__(self, "dual_resolution", dual)
+        elif dual is not None and not isinstance(dual, DualResolutionConfig):
+            raise TypeError("dual_resolution must be DualResolutionConfig-compatible")
+        if dual is not None and not dual.enabled:
+            raise ValueError("specialist dual_resolution must be enabled when provided")
         if not self.specialist_id or not all(c.isalnum() or c in "-_" for c in self.specialist_id):
             raise ValueError("specialist_id must be alphanumeric, '-' or '_'")
         if self.n_layers <= 0 or self.d_model <= 0 or self.d_ff <= 0:
@@ -55,6 +69,45 @@ class SpecialistConfig:
             raise ValueError("history_horizon must be positive")
         if self.history_block_size <= 0 or self.history_retrieval_blocks <= 0:
             raise ValueError("history block sizes must be positive")
+        if self.residual_init_std is not None and self.residual_init_std <= 0:
+            raise ValueError("residual_init_std must be positive")
+
+    @classmethod
+    def from_foundation(
+            cls, foundation_config, *, specialist_id, n_layers,
+            recompute_attention_probs: bool | None = None):
+        """Build a truncated stack with the exact foundation block geometry."""
+        dual = foundation_config.dual_resolution
+        if not dual.enabled or dual.compression_mode != "matrix_pool":
+            raise ValueError("Model B specialist requires matrix-pool dual resolution")
+        if not 0 < int(n_layers) <= int(foundation_config.n_layers):
+            raise ValueError("specialist layers must be within the foundation depth")
+        # A 16-layer specialist represents Model B's complete sparse phase bank
+        # (foundation layers 2..17), without the four non-sparse boundary layers.
+        if (int(n_layers) == 16 and dual.sparse_retrieval_stride == 16
+                and len(dual.sparse_retrieval_layers) == 16):
+            dual = replace(
+                dual, sparse_retrieval_phase=-1,
+                sparse_retrieval_layers=tuple(range(16)))
+        if recompute_attention_probs is not None:
+            dual = replace(
+                dual, recompute_attention_probs=bool(recompute_attention_probs))
+        return cls(
+            specialist_id=specialist_id, n_layers=int(n_layers),
+            d_model=foundation_config.d_model, d_ff=foundation_config.d_ff,
+            n_q_heads=foundation_config.n_q_heads,
+            n_kv_heads=foundation_config.n_kv_heads,
+            d_head=foundation_config.d_head,
+            local_window=dual.local_window,
+            full_window=dual.long_local_window,
+            full_heads=dual.long_local_heads,
+            dtype=foundation_config.dtype,
+            init_std=foundation_config.init_std,
+            rms_eps=foundation_config.rms_eps,
+            rope_base=foundation_config.rope_base,
+            residual_init_std=foundation_config.residual_init_std,
+            dual_resolution=dual,
+        )
 
 
 class ResidualSpecialist:
@@ -70,24 +123,45 @@ class ResidualSpecialist:
         self.dtype = resolve_dtype(config.dtype)
         rng = RandomStream(rng_seed)
         name = f"specialists.{config.specialist_id}"
-        # Head zero is full-current; other heads are strictly causal local-512.
-        # Reuse the optimized per-head attention kernels, not dense 16-head attention.
-        attention = AttentionLayerConfig(heads=(
-            *(LocalAttentionConfig(window=config.full_window)
-              for _ in range(config.full_heads)),
-            *(LocalAttentionConfig(window=config.local_window)
-              for _ in range(config.n_q_heads - config.full_heads)),
-        ))
-        self.blocks = [TransformerBlock(
-            d_model=config.d_model, n_q_heads=config.n_q_heads,
-            n_kv_heads=config.n_kv_heads, d_head=config.d_head,
-            d_ff=config.d_ff, n_experts=1, top_k=1,
-            input_std=config.init_std,
-            output_std=config.init_std / (2 * config.n_layers)**0.5,
-            rope_base=config.rope_base, rng=rng, eps=config.rms_eps,
-            name=f"{name}.blocks.{i}", dtype=config.dtype,
-            attention_config=attention, ffn_mode="dense",
-        ) for i in range(config.n_layers)]
+        attention = None
+        if config.dual_resolution is None:
+            # Legacy prototype geometry retained for small reference tests and
+            # old checkpoints. Production specialists use from_foundation().
+            attention = AttentionLayerConfig(heads=(
+                *(LocalAttentionConfig(window=config.full_window)
+                  for _ in range(config.full_heads)),
+                *(LocalAttentionConfig(window=config.local_window)
+                  for _ in range(config.n_q_heads - config.full_heads)),
+            ))
+        output_std = (
+            config.residual_init_std if config.residual_init_std is not None
+            else config.init_std / (2 * config.n_layers)**0.5
+        )
+        sparse_phases = (0, 8, 4, 12, 2, 10, 6, 14,
+                         1, 9, 5, 13, 3, 11, 7, 15)
+        dual_base = config.dual_resolution
+        if dual_base is not None and not isinstance(dual_base, DualResolutionConfig):
+            raise TypeError("dual_resolution was not canonicalized")
+        self.blocks = []
+        for i in range(config.n_layers):
+            dual = dual_base
+            if (dual is not None and dual.sparse_retrieval_stride
+                    and i in dual.sparse_retrieval_layers):
+                dual = replace(
+                    dual,
+                    sparse_retrieval_phase=sparse_phases[
+                        dual.sparse_retrieval_layers.index(i)],
+                )
+            self.blocks.append(TransformerBlock(
+                d_model=config.d_model, n_q_heads=config.n_q_heads,
+                n_kv_heads=config.n_kv_heads, d_head=config.d_head,
+                d_ff=config.d_ff, n_experts=1, top_k=1,
+                input_std=config.init_std, output_std=output_std,
+                rope_base=config.rope_base, rng=rng, eps=config.rms_eps,
+                name=f"{name}.blocks.{i}", dtype=config.dtype,
+                attention_config=attention, ffn_mode="dense",
+                dual_resolution_config=dual,
+            ))
         self.correction_proj = Linear(
             config.d_model, config.d_model,
             config.init_std, rng, name=f"{name}.correction_proj", dtype=config.dtype
@@ -112,8 +186,11 @@ class ResidualSpecialist:
         """Calculate correction. The foundation hidden tensor is never modified."""
         if frozen_hidden.shape[-1] != self.config.d_model:
             raise ValueError("specialist/foundation hidden width mismatch")
-        if dual_resolution_metadata is not None:
-            # The present GQA specialist uses optimized causal attention kernels
+        uses_dual_resolution = self.config.dual_resolution is not None
+        if uses_dual_resolution and dual_resolution_metadata is None:
+            raise ValueError("Model B specialist requires dual-resolution metadata")
+        if dual_resolution_metadata is not None and not uses_dual_resolution:
+            # The legacy GQA specialist uses optimized causal attention kernels
             # without document-ID masks. Fail closed instead of leaking packed
             # neighboring documents. Single-document rows remain fully supported.
             from mini_llm.backend import asnumpy
@@ -146,22 +223,34 @@ class ResidualSpecialist:
                     raise ValueError("specialist position_ids disagree with foundation metadata")
         # First no-history implementation operates on a contiguous causal
         # working sequence. `position_ids` can preserve its absolute source
-        # coordinates when provided by the foundation training batch.
+        # coordinates when provided by the foundation training batch. Prepare
+        # their RoPE factors once for all specialist layers and checkpoint
+        # replays, matching DecoderLanguageModel.forward_body.
+        if (position_ids is not None and
+                os.environ.get("MINI_LLM_ROPE_PREPARED_POSITIONS", "1").strip().lower()
+                not in {"0", "false", "off", "no", ""}):
+            position_ids = prepare_rope_positions(
+                position_ids, d_head=self.config.d_head,
+                base=self.config.rope_base, dtype=self.config.dtype,
+            )
         x = frozen_hidden
         checkpoint = bool(return_cache and activation_checkpoint)
         checkpoints = []
         caches = []
+        block_kwargs = {"position_ids": position_ids}
+        if uses_dual_resolution:
+            block_kwargs["dual_resolution_metadata"] = dual_resolution_metadata
         for idx, block in enumerate(self.blocks):
             if checkpoint:
                 checkpoints.append(x)
-                x = block.forward(x, layer_idx=idx, position_ids=position_ids,
-                                  return_cache=False)
+                x = block.forward(
+                    x, layer_idx=idx, return_cache=False, **block_kwargs)
             elif return_cache:
-                x, cache = block.forward(x, layer_idx=idx, position_ids=position_ids)
+                x, cache = block.forward(x, layer_idx=idx, **block_kwargs)
                 caches.append(cache)
             else:
-                x = block.forward(x, layer_idx=idx, position_ids=position_ids,
-                                  return_cache=False)
+                x = block.forward(
+                    x, layer_idx=idx, return_cache=False, **block_kwargs)
         # Tensor-core GEMMs require inputs in the configured low-precision type.
         projection_input = x.astype(self.dtype, copy=False)
         delta, projection_cache = self.correction_proj.forward(projection_input)
@@ -170,6 +259,7 @@ class ResidualSpecialist:
         return delta, {
             "block_caches": caches, "checkpoints": checkpoints,
             "activation_checkpoint": checkpoint, "position_ids": position_ids,
+            "dual_resolution_metadata": dual_resolution_metadata,
             "projection_cache": projection_cache,
         }
 
@@ -179,9 +269,12 @@ class ResidualSpecialist:
         if cache["activation_checkpoint"]:
             for idx in range(len(self.blocks) - 1, -1, -1):
                 block_input = cache["checkpoints"].pop()
+                replay_kwargs = {"position_ids": cache["position_ids"]}
+                if self.config.dual_resolution is not None:
+                    replay_kwargs["dual_resolution_metadata"] = cache[
+                        "dual_resolution_metadata"]
                 _, replay_cache = self.blocks[idx].forward(
-                    block_input, layer_idx=idx, position_ids=cache["position_ids"]
-                )
+                    block_input, layer_idx=idx, **replay_kwargs)
                 dx = self.blocks[idx].backward(dx, replay_cache)
         else:
             for idx in range(len(self.blocks) - 1, -1, -1):

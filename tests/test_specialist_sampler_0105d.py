@@ -26,14 +26,15 @@ def mixture(tmp_path):
     return root
 
 
-def test_restart_preserves_exact_batches_and_metadata(tmp_path):
+@pytest.mark.parametrize('batch_size', [1, 2, 4])
+def test_restart_preserves_exact_batches_and_metadata(tmp_path, batch_size):
     root = mixture(tmp_path)
-    a = SpecialistDocumentSampler(root, context_length=32, batch_size=1,
+    a = SpecialistDocumentSampler(root, context_length=32, batch_size=batch_size,
                                    eos_token_id=63, block_size=4, seed=42)
     for _ in range(5):
         a.next_batch()
     state = a.checkpoint_state()
-    b = SpecialistDocumentSampler(root, context_length=32, batch_size=1,
+    b = SpecialistDocumentSampler(root, context_length=32, batch_size=batch_size,
                                    eos_token_id=63, block_size=4, seed=99)
     b.restore(state)
     for _ in range(8):
@@ -45,8 +46,8 @@ def test_restart_preserves_exact_batches_and_metadata(tmp_path):
         np.testing.assert_array_equal(am['dual_resolution_metadata']['block_valid'],
                                       bm['dual_resolution_metadata']['block_valid'])
         assert am['source_name'] == bm['source_name']
-        valid = int(am['target_valid_lengths'][0])
-        assert len(np.unique(am['dual_resolution_metadata']['document_ids'][0, :valid])) == 1
+        for row, valid in enumerate(am['target_valid_lengths']):
+            assert len(np.unique(am['dual_resolution_metadata']['document_ids'][row, :valid])) == 1
 
 
 def test_resume_rejects_changed_sampling_contract(tmp_path):
@@ -59,7 +60,8 @@ def test_resume_rejects_changed_sampling_contract(tmp_path):
         a.restore(state)
 
 
-def test_specialist_sampler_matches_extended_trainer_source_and_document_sequence(tmp_path, monkeypatch):
+@pytest.mark.parametrize('batch_size', [1, 2, 4])
+def test_specialist_sampler_matches_extended_trainer_source_and_document_sequence(tmp_path, monkeypatch, batch_size):
     """Check actual source-order/RNG parity, not only internal restart parity."""
     from mini_llm.config import ModelConfig, DualResolutionConfig
     from mini_llm.model.decoder_lm import DecoderLanguageModel
@@ -82,10 +84,10 @@ def test_specialist_sampler_matches_extended_trainer_source_and_document_sequenc
         val_shard_paths=[p for paths in val.values() for p in paths],
         train_source_shards=train,val_source_shards=val,
         source_weights=source_weight_dict(sources),
-        seq_length=32,batch_size=1,eos_token_id=63,
+        seq_length=32,batch_size=batch_size,eos_token_id=63,
         rng_seed=42,total_steps=3,warmup_steps=1,val_steps=1,
         val_interval=100,save_interval=100)
-    specialist=SpecialistDocumentSampler(root,context_length=32,batch_size=1,
+    specialist=SpecialistDocumentSampler(root,context_length=32,batch_size=batch_size,
                                         eos_token_id=63,block_size=4,seed=42)
     for _ in range(10):
         a,b,am=legacy.get_train_batch(return_metadata=True)

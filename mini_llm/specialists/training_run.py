@@ -9,14 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from time import perf_counter
 from pathlib import Path
 
 import numpy as np
 
-from mini_llm.backend import xp
+from mini_llm.backend import xp, BACKEND_NAME, synchronize
 from mini_llm.optim.hybrid_muon import HybridMuonAdamW
 from mini_llm.optim.grad_clip import clip_grad_global_norm, _array_to_float
 from mini_llm.optim.schedule import WarmupCosineSchedule
+from mini_llm.diagnostics.source_metrics import batch_coverage, empty_record, merge_record
 
 from .checkpoint import save_specialist_checkpoint, load_specialist_checkpoint
 
@@ -34,6 +36,7 @@ class SpecialistTrainingConfig:
     muon_matmul_precision: str = 'bf16'
     head_chunk_tokens: int = 512
     activation_checkpoint: bool = True
+    accum_length_buckets: bool = True
 
     def __post_init__(self):
         if self.grad_accum_steps <= 0 or self.head_chunk_tokens <= 0:
@@ -89,19 +92,78 @@ class SpecialistTrainingRun:
         self.schedule = WarmupCosineSchedule(
             config.peak_lr, config.warmup_steps, config.total_steps)
 
-    def train_step(self):
+    def train_step(self, *, profile=False, source_metrics=False,
+                   foundation_train_ce=False, measure_step_time=False):
         if self.step >= self.config.total_steps:
             raise ValueError('total training steps exhausted')
         cfg = self.config
+        timings = {} if profile else None
+        if profile or measure_step_time:
+            synchronize()
+            step_start = perf_counter()
         self.optimizer.zero_grad()
         # Keep all microbatch weights, including short-document masks, on CPU
         # until the exact denominator is known. A per-microbatch CE is already
         # normalized internally; its gradient must be weighted by valid tokens.
         total_valid = 0
         total_loss = 0.0
-        for _ in range(cfg.grad_accum_steps):
-            inputs, targets, metadata = self.sampler.next_batch(split='train')
+        total_foundation_loss = 0.0
+        executed_tokens = 0
+        capacity_tokens = 0
+        source_records = {} if source_metrics else None
+        prefetched_batches = None
+        length_bucket_stats = None
+        if (cfg.accum_length_buckets and self.sampler.batch_size > 1
+                and cfg.grad_accum_steps > 1):
+            sample_start = perf_counter() if profile else None
+            sampled = []
+            for _ in range(cfg.grad_accum_steps):
+                inputs, targets, metadata = self.sampler.next_batch(split='train')
+                sampled.append((metadata['source_name'], inputs, targets, metadata))
+            from mini_llm.data.dual_resolution_length_buckets import (
+                regroup_dual_resolution_document_batches)
+            prefetched_batches, length_bucket_stats = (
+                regroup_dual_resolution_document_batches(
+                    sampled, batch_size=self.sampler.batch_size,
+                    context_length=self.sampler.context_length,
+                    eos_token_id=self.sampler.eos_token_id))
+            del sampled
+            # Repacking changes [B,T], so the old per-shape block arrays cannot
+            # be reused. The rowwise target masks and provenance remain exact.
+            from mini_llm.ops.dual_resolution_attention import build_dual_resolution_metadata
+            rebuilt = []
+            for source, inputs, targets, metadata in prefetched_batches:
+                dual = build_dual_resolution_metadata(
+                    inputs, eos_token_id=self.sampler.eos_token_id,
+                    block_size=self.sampler.block_size)
+                if dual['block_indices'].shape[1]:
+                    ends = dual['block_indices'][:, :, -1]
+                    dual['block_valid'] &= (
+                        ends < metadata['target_valid_lengths'][:, None])
+                dual['valid_lengths'] = np.asarray(
+                    metadata['target_valid_lengths'], dtype=np.int64)
+                metadata['dual_resolution_metadata'] = dual
+                metadata['source_name'] = source
+                rebuilt.append((inputs, targets, metadata))
+            prefetched_batches = rebuilt
+            if profile:
+                assert timings is not None and sample_start is not None
+                timings['sample_s'] = (timings.get('sample_s', 0.0)
+                                       + perf_counter() - sample_start)
+
+        for microbatch_index in range(cfg.grad_accum_steps):
+            if prefetched_batches is None:
+                sample_start = perf_counter() if profile else None
+                inputs, targets, metadata = self.sampler.next_batch(split='train')
+                if profile:
+                    assert timings is not None and sample_start is not None
+                    timings['sample_s'] = (timings.get('sample_s', 0.0)
+                                           + perf_counter() - sample_start)
+            else:
+                inputs, targets, metadata = prefetched_batches[microbatch_index]
             valid = int(np.asarray(metadata['target_loss_mask']).sum())
+            executed_tokens += int(inputs.size)
+            capacity_tokens += int(self.sampler.batch_size * self.sampler.context_length)
             if valid <= 0:
                 raise ValueError('sampler produced a batch without supervised tokens')
             loss, cache = self.composition.loss(
@@ -111,40 +173,115 @@ class SpecialistTrainingRun:
                 dual_resolution_metadata=metadata['dual_resolution_metadata'],
                 chunk_tokens=cfg.head_chunk_tokens,
                 activation_checkpoint=cfg.activation_checkpoint,
-                return_cache=True,
+                return_cache=True, timings=timings,
+                return_foundation_ce=foundation_train_ce,
             )
-            self.composition.backward(cache, grad_scale=float(valid))
-            total_loss += float(_array_to_float(loss)) * valid
+            baseline_ce = None
+            if foundation_train_ce:
+                baseline_ce = float(_array_to_float(cache.pop('foundation_loss')))
+                total_foundation_loss += baseline_ce * valid
+            self.composition.backward(cache, grad_scale=float(valid), timings=timings)
+            combined_ce = float(_array_to_float(loss))
+            total_loss += combined_ce * valid
             total_valid += valid
             name = metadata['source_name']
+            if source_metrics:
+                coverage = batch_coverage(
+                    batch_size=int(inputs.shape[0]),
+                    source_length=int(inputs.shape[1]),
+                    target_shape=targets.shape,
+                    loss_mask=np.asarray(metadata['target_loss_mask']),
+                    metadata=metadata)
+                # Generic coverage counts B*T source positions as valid; for
+                # document-first microbatches, shorter EOS-padded rows are
+                # executed but not valid source tokens. Keep that distinction
+                # explicit without altering the shared foundation metrics.
+                valid_source = int(np.asarray(metadata['target_valid_lengths']).sum())
+                coverage['valid_active_tokens'] = valid_source
+                coverage['valid_source_tokens'] = valid_source
+                # Preserve the production source metrics' valid-target weighting.
+                coverage['loss_nll_sum'] = combined_ce * coverage['supervised_token_weight']
+                bucket = source_records.setdefault(name, empty_record())
+                merge_record(bucket, coverage)
+                if foundation_train_ce:
+                    bucket['foundation_nll_sum'] = (bucket.get('foundation_nll_sum', 0.0)
+                                                    + baseline_ce * coverage['supervised_token_weight'])
             self.source_tokens[name] += valid
         if total_valid <= 0:
             raise RuntimeError('zero supervised tokens in optimizer update')
         for p in self.parameters:
             if p.grad is not None:
                 p.grad[...] /= total_valid
+        if profile:
+            synchronize()
+            clip_start = perf_counter()
         norm_backend, _, finite = clip_grad_global_norm(
             self.parameters, max_norm=cfg.grad_clip)
+        if profile:
+            synchronize()
+            timings['clip_s'] = perf_counter() - clip_start
         if not finite:
             self.optimizer.zero_grad()
             raise FloatingPointError('nonfinite specialist gradient; update rejected')
         lr = float(self.schedule(self.step))
+        if profile:
+            synchronize()
+            optimizer_start = perf_counter()
         self.optimizer.step(lr=lr)
         self.composition.specialist.refresh_compute_buffers()
+        if profile:
+            synchronize()
+            timings['optimizer_and_refresh_s'] = perf_counter() - optimizer_start
         self.step += 1
         self.supervised_tokens += total_valid
-        return {'step': self.step, 'supervised_tokens': self.supervised_tokens,
-                'supervised_tokens_step': total_valid,
-                'loss': total_loss / total_valid,
-                'grad_norm': float(_array_to_float(norm_backend)), 'lr': lr}
+        report = {'step': self.step, 'supervised_tokens': self.supervised_tokens,
+                  'supervised_tokens_step': total_valid,
+                  'loss': total_loss / total_valid,
+                  'grad_norm': float(_array_to_float(norm_backend)), 'lr': lr}
+        if foundation_train_ce:
+            report['foundation_ce'] = total_foundation_loss / total_valid
+            report['foundation_gain_ce'] = (total_foundation_loss - total_loss) / total_valid
+        if source_metrics:
+            report['per_source'] = source_records
+        if length_bucket_stats is not None:
+            report['length_bucket'] = length_bucket_stats
+        if profile or measure_step_time:
+            synchronize()
+            elapsed = perf_counter() - step_start
+            report.update({
+                'step_time_s': elapsed,
+                'executed_tokens_step': executed_tokens,
+                'capacity_tokens_step': capacity_tokens,
+                'target_fill': total_valid / max(capacity_tokens, 1),
+                'supervised_tokens_per_s': total_valid / max(elapsed, 1e-12),
+                'executed_tokens_per_s': executed_tokens / max(elapsed, 1e-12),
+                'capacity_tokens_per_s': capacity_tokens / max(elapsed, 1e-12),
+            })
+        if profile:
+            profile_info = dict(timings)
+            profile_info['total_step_s'] = elapsed
+            profile_info['supervised_tokens_per_s'] = total_valid / elapsed
+            if BACKEND_NAME == 'cupy':
+                pool = xp.get_default_memory_pool()
+                # Sampled endpoint values, NOT the maximum lifetime allocation.
+                profile_info['gpu_pool_used_mib_at_step_end'] = pool.used_bytes() / 1048576
+                profile_info['gpu_pool_reserved_mib_at_step_end'] = pool.total_bytes() / 1048576
+            report['profile'] = profile_info
+        return report
 
-    def train_steps(self, steps, *, on_step=None):
-        if steps < 0:
-            raise ValueError('steps must be nonnegative')
+    def train_steps(self, steps, *, on_step=None, profile_steps=0,
+                    source_metrics=False, foundation_train_ce=False,
+                    measure_step_time=False, retain_reports=True):
+        if steps < 0 or profile_steps < 0:
+            raise ValueError('steps and profile_steps must be nonnegative')
         reports = []
-        for _ in range(steps):
-            record = self.train_step()
-            reports.append(record)
+        for i in range(steps):
+            record = self.train_step(
+                profile=i < profile_steps, source_metrics=source_metrics,
+                foundation_train_ce=foundation_train_ce,
+                measure_step_time=measure_step_time)
+            if retain_reports:
+                reports.append(record)
             if on_step is not None:
                 on_step(record)
         return reports

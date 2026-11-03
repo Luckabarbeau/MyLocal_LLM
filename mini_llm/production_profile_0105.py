@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-# Exact configuration supplied for the active training run on 2026-11-01.
+# Reference contract updated from the 2026-11-02 foundation training command.
 # Keep operational paths separate: never load/resume the active checkpoint in
 # any regression script. Defaults are *not* assumed equivalent.
 ENVIRONMENT = {
@@ -67,7 +67,7 @@ OPTIONS = {
     "muon-matmul-precision": "bf16",
     "total-steps": "100000",
     "warmup-steps": "750",
-    "peak-lr": "3e-4",
+    "peak-lr": "1.5e-4",
     "grad-clip": "1.0",
     "weight-decay": "0.1",
     "val-interval": "100",

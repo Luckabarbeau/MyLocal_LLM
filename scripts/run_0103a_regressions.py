@@ -71,6 +71,14 @@ CPU_SUITES = {
         "tests/test_specialist_composition_0104e.py",
         "tests/test_specialist_checkpoint_0104f.py",
     ),
+    "specialist_0107_0108": (
+        "tests/test_specialist_production_contract_0107a.py",
+        "tests/test_specialist_profile_0107b.py",
+        "tests/test_specialist_train_logging_0107c.py",
+        "tests/test_specialist_multibatch_0107d.py",
+        "tests/test_specialist_model_b_shape_0108.py",
+        "tests/test_specialist_prepared_rope_0108.py",
+    ),
 }
 
 GPU_SUITES = {

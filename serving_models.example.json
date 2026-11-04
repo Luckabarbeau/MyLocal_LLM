@@ -1,13 +1,32 @@
 {
   "models": [
     {
-      "id": "smollm2-360m",
+      "id": "model-b",
+      "format": "native",
+      "path": "./checkpoints/model_b_published_copy",
+      "chat_template": "plain",
+      "tool_format": "none",
+      "context_length": 8192,
+      "execution_policy": "auto",
+      "sampling": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "top_k": 40,
+        "repetition_penalty": 1.05,
+        "repetition_window": 256,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
+      }
+    },
+    {
+      "id": "smollm2-360m-gguf",
       "format": "gguf",
-      "path": "../pretrained_models/SmolLM2-360M-Instruct-F16.gguf",
+      "path": "./pretrained_models/SmolLM2-360M-Instruct-F16.gguf",
       "dtype": "float16",
       "chat_template": "chatml",
-      "tool_format": "json_envelope",
+      "tool_format": "none",
       "context_length": 8192,
+      "execution_policy": "auto",
       "sampling": {
         "temperature": 0.7,
         "top_p": 0.9,
@@ -19,18 +38,20 @@
       }
     },
     {
-      "id": "native-338m",
-      "format": "native",
-      "path": "./checkpoints/0083_intermediate_20L_1024_fullmix_100k",
-      "chat_template": "plain",
+      "id": "smollm2-360m-safetensors",
+      "format": "safetensors",
+      "path": "./pretrained_models/SmolLM2-360M-Instruct",
+      "dtype": "float16",
+      "chat_template": "chatml",
       "tool_format": "none",
-      "context_length": 64000,
+      "context_length": 8192,
+      "execution_policy": "auto",
       "sampling": {
-        "temperature": 0.8,
+        "temperature": 0.7,
         "top_p": 0.9,
         "top_k": 40,
-        "repetition_penalty": 1.1,
-        "repetition_window": 256,
+        "repetition_penalty": 1.05,
+        "repetition_window": 128,
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0
       }

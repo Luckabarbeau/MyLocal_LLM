@@ -6,13 +6,13 @@ This is the authoritative documentation index. Current behavior belongs in the f
 
 | Document | Purpose |
 |---|---|
-| [`../README.md`](../README.md) | Project overview, setup, current architecture, and safe quickstart |
+| [`../README.md`](../README.md) | Project overview, setup, compact current-model summary, and safe quickstarts |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | Exact Model B architecture, protected run status, and pinned production profile |
 | [`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) | Strict resume, weights-only initialization, checkpoint transactions, and foundation-bound specialists |
 | [`USER_GUIDE.md`](USER_GUIDE.md) | Current training, resume, inference, serving, and specialist operations |
 | [`MODEL_CENTERED_DEVELOPER_GUIDE.md`](MODEL_CENTERED_DEVELOPER_GUIDE.md) | Model, generation, training, loading, execution, and specialist API boundaries |
 | [`DATA_PIPELINE.md`](DATA_PIPELINE.md) | Tokenizers, packed shards, manifests, Common Pile preparation, and provenance |
-| [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) | Short forward-looking roadmap and open acceptance gates |
+| [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) | Prioritized cleanup roadmap, compatibility gates, and open acceptance work |
 | [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | Single durable human/agent change log and historical filename migration ledger |
 | [`research/README.md`](research/README.md) | Retained LaTeX/PDF research artifacts and their historical status |
 | [`../benchmarks/README.md`](../benchmarks/README.md) | Current evaluation and benchmark entry points |
@@ -26,7 +26,10 @@ Do **not** create another numbered patch-report Markdown file. Update the applic
 
 ## Protected run boundary
 
-The external Model B run is user-reported at step 165 as of 2026-11-04. Its checkpoint and host are not available in this workspace, so that status is not independently verified here. Do not invent paths, claim checkpoint validation, or alter architecture/training contracts based on assumptions about the unavailable artifact.
+The exact protected-run status and verification boundary are maintained only in
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md). Do not invent paths, claim
+checkpoint validation, or alter architecture/training contracts based on an
+unavailable artifact.
 
 ## Runtime and generated-data safety
 

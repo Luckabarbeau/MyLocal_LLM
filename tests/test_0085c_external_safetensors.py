@@ -3,7 +3,8 @@
 import json
 import numpy as np
 import pytest
-from safetensors.numpy import save_file
+
+save_file = pytest.importorskip("safetensors.numpy").save_file
 
 from mini_llm.external import ExternalLlamaModel, ExternalLlamaConfig
 from mini_llm.external.safetensors_loader import (

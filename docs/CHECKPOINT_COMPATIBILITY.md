@@ -6,10 +6,9 @@ weights-only initialization, inference loading, and specialist attachment.
 
 ## Current protected run boundary
 
-The user reported that the protected external Model B run was at **step 165** on
-**2026-11-04**. That checkpoint is not available in this checkout and cannot be
-verified here. No command below names it, and no test should read, hash, resume,
-convert, or overwrite it.
+The exact protected-run status and verification boundary are maintained in
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md). No command below names that run,
+and no test should read, hash, resume, convert, or overwrite it.
 
 Before operating on any valuable checkpoint:
 
@@ -20,8 +19,7 @@ Before operating on any valuable checkpoint:
    `optimizer_state/`, and `training_state.json` as appropriate;
 5. direct experiments to a distinct destination.
 
-The model-centric refactor and this documentation update changed no foundation
-training code.
+The model-centric refactor changed no foundation training code.
 
 ## Compatibility modes
 
@@ -340,5 +338,6 @@ MINI_LLM_BACKEND=numpy pytest -q \
 ```
 
 These tests validate small/reference contracts. They do not verify the
-unavailable protected step-165 checkpoint and do not establish full-size Model B
-GPU throughput.
+unavailable protected checkpoint described in
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) and do not establish full-size Model
+B GPU throughput.

@@ -145,6 +145,10 @@ token_shards_ensemble_32k_fineweb_edu_smoke/
 
 runtime/
 
+# Local pretrained models and machine-specific serving registry
+/pretrained_models/
+/serving_models.local.json
+
 # Local rollback/scratch artifacts
 rollback_backups/
 

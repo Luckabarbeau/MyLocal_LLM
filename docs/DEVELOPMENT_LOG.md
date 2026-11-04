@@ -42,6 +42,30 @@ Copy this block directly below this section and fill every field:
 
 ---
 
+## 2026-11-04 — Second readability and duplication cleanup
+
+- **Author:** GPT-5.6-Sol coding agent, at user request
+- **Commit:** `uncommitted (working tree)`
+- **Status:** accepted documentation/test-maintenance cleanup; high-risk runtime refactors deferred
+- **Subsystem:** documentation, tests, benchmark maintenance, repository hygiene
+- **Behavior:** Established explicit canonical ownership for the landing page, exact baseline, operational guide, developer APIs, checkpoints, data, tests, benchmarks, roadmap, and development history. Reduced `README.md` to a compact landing page and moved the full native/SmolLM2 GGUF/Safetensors/remote serving workflow into `docs/USER_GUIDE.md`; standardized local examples on `serving_models.local.json` and port 8000; defined foundation and specialist flag arrays once; expanded `docs/FUTURE_DEVELOPMENT.md` into a risk-ranked cleanup plan with affected symbols, benefits, gates, and prerequisites. Added all 0107–0108 specialist contracts to the permanent CPU runner, made the optional Safetensors test skip cleanly when its extra is absent, corrected stale benchmark/data/history instructions, and ignored local downloaded-model/registry state. Removed the unreferenced `tests/fixtures/0080l_cpu_reference.json` and two obsolete shell wrappers, `benchmarks/run_checkpoint_evaluations.sh` and `benchmarks/run_fusion_evaluations.sh`, which hard-coded absent historical checkpoints and duplicated maintained runners.
+- **Compatibility:** No model mathematics, parameter names/order, training hot path, optimizer, sampler, checkpoint schema/loading, resume semantics, inference kernel, or serving implementation changed. The removed fixture had no consumers; the removed wrappers targeted retired experiments and had no repository references. Optional Safetensors coverage still runs when the dependency is installed and is an explicit skip otherwise. Existing checkpoints, including a future immutable copy of the protected Model B run, retain the same code compatibility boundary.
+- **Validation:** CPU-only collection succeeded with **2,203 tests collected** and no optional-Safetensors import error. The expanded permanent CPU gate passed **282 tests with 4 expected skips** across ten isolated suites, including **30** 0107–0108 specialist tests. Focused cleanup/regression and historical benchmark contracts passed **49 tests with 5 expected skips**. All local Markdown links resolved, both serving example JSON files parsed, removed-file references were absent, and `git diff --check` passed. No GPU test, model download, checkpoint load, or training step was run.
+- **Remaining work:** Follow the prioritized work in `docs/FUTURE_DEVELOPMENT.md`: extract benchmark/test helpers, add explicit item-level GPU opt-in, decide the orphan SFT workflow and old launcher policy, then consider medium-risk constant/preset/tokenizer/inference consolidation one change at a time. Trainer, checkpoint/resume, config/inference-model, generation-adapter, and process-global runtime refactors remain gated on copied-checkpoint and idle-GPU parity.
+- **Evidence:** `README.md`, `docs/README.md`, `docs/CURRENT_BASELINE.md`, `docs/USER_GUIDE.md`, `docs/MODEL_CENTERED_DEVELOPER_GUIDE.md`, `docs/CHECKPOINT_COMPATIBILITY.md`, `docs/FUTURE_DEVELOPMENT.md`, `tests/README.md`, `scripts/run_0103a_regressions.py`, `tests/test_regression_runner_0103a.py`, `tests/test_0085c_external_safetensors.py`, `/tmp/model_b_cpu_cleanup.json`.
+
+## 2026-11-04 — Restore pretrained-model loading and local serving guide
+
+- **Author:** GPT-5.6-Sol coding agent, at user request
+- **Commit:** `uncommitted (working tree)`
+- **Status:** accepted documentation and example configuration
+- **Subsystem:** model loading, serving, external models, documentation
+- **Behavior:** Restored the useful end-to-end workflow from the former README using current interfaces and model names. The root README now documents compatible native, GGUF, Safetensors, and remote sources; an official SmolLM2 Safetensors download; GGUF inspection and direct generation; mixed registry validation; lazy local serving; completion/chat/streaming requests; IDE base-URL use; remote-provider proxying; and security/compatibility limits. Updated `serving_models.example.json` from the retired native-338M example to Model B plus SmolLM2 GGUF and Safetensors entries.
+- **Compatibility:** Documentation and example-registry change only. No loader, tokenizer, model, checkpoint, inference kernel, server implementation, or training hot path changed. Registry paths remain placeholders and models are loaded lazily.
+- **Validation:** The example registry parsed through `ModelCatalog` and resolved `native`, `gguf`, and `safetensors` formats. Serving/native-loading/GGUF/tokenizer contracts passed **48 tests**. `serve.py --help`, `benchmarks.try_external_gguf --help`, all local Markdown links, JSON parsing, and `git diff --check` passed. The Safetensors-specific test could not collect because this environment lacks the optional `safetensors` package; no weights were downloaded and no GPU/model execution was performed.
+- **Remaining work:** Validate the documented SmolLM2 Safetensors and GGUF paths with immutable model files on an idle GPU, record exact model/tokenizer hashes, and verify generated prompt framing and output parity before enabling strict fast paths or tool envelopes.
+- **Evidence:** `README.md`, `serving_models.example.json`, `serve.py`, `mini_llm/model_sources.py`, `mini_llm/model_loading.py`, `mini_llm/serving_api.py`, `benchmarks/try_external_gguf.py`, serving and external-loader tests under `tests/`.
+
 ## 2026-11-04 — Consolidate durable change history
 
 - **Author:** GPT-5.6-Sol coding agent, at user request
@@ -264,7 +288,7 @@ This ledger is intentionally filename-oriented. Entries above are authoritative 
 
 | Old report file or grouped range | Consolidated entry | Git provenance / durable evidence |
 |---|---|---|
-| `docs/IMPLEMENTATION_SUMMARY.md` | Legacy extended-training foundation | `6119842`, later reorganized in `a27487b`/`4baae24`; current code under `mini_llm/tokenizer/`, `mini_llm/data/`, `mini_llm/train_extended.py` |
+| `docs/IMPLEMENTATION_SUMMARY.md` (originally root `IMPLEMENTATION_SUMMARY.md`) | Legacy extended-training foundation | Recover as `git show 6119842:IMPLEMENTATION_SUMMARY.md` or `git show a27487b:docs/IMPLEMENTATION_SUMMARY.md`; current code under `mini_llm/tokenizer/`, `mini_llm/data/`, `mini_llm/train_extended.py` |
 | `docs/research/HIERARCHICAL_MEMORY_0058.md` | 0058 hierarchical routed memory | current path at `a27487b`; implementation history listed in entry |
 | `docs/research/README_persistent_soft_plan_0080.md`, `docs/research/IMPLEMENTATION_0080.md` | 0080 | `1e5ffe3`, `a27487b`; `mini_llm/predictive_refinement/` and `tests/test_block_proposal_0080*.py` |
 | `docs/research/PRODUCTION_LIVE_PARITY_AUDIT_0080AA.md`, `docs/research/DECODER_CHECKPOINT_DISCONTINUITY_0080AC.md`, `docs/research/PRODUCTION_CHECKPOINT_ROUNDTRIP_0080AD.md` | 0080 negative/inconclusive/checkpoint evidence | `a27487b`; matching `tests/test_block_proposal_0080aa_live_audit.py`, `...0080ac_checkpoint_discontinuity.py`, `...0080ad_roundtrip.py` |

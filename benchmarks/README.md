@@ -55,7 +55,7 @@ Use a model catalog for registered local or remote models:
 
 ```bash
 python benchmarks/run_unified.py \
-  --registry serving_models.json --model MODEL_ID \
+  --registry serving_models.local.json --model MODEL_ID \
   --tokens 128 --seeds 42 \
   --output-dir benchmarks/results/MODEL_ID_generation
 ```

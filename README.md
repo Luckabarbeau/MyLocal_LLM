@@ -9,28 +9,22 @@ The project asks a practical question:
 > How capable can a language model become when memory, bandwidth, compute, and
 > training time are hard constraints?
 
-Those constraints are treated as design inputs. The repository favors inspectable
-model mathematics, bounded-memory execution, reproducible checkpoints, and
-measured behavior over hidden framework machinery or scale for its own sake.
+Those constraints are design inputs. The repository favors inspectable model
+mathematics, bounded-memory execution, reproducible checkpoints, and measured
+behavior over hidden framework machinery or scale for its own sake.
 
 ## Current status
 
-The current foundation is **Model B**, registry ID
-`model_b_348m_sparse16`, exposed by the training CLI as
-`dual-resolution-matrix-pool-sparse-1024-20l`.
+The current foundation is **Model B**: registry ID
+`model_b_348m_sparse16`, training preset
+`dual-resolution-matrix-pool-sparse-1024-20l`, and **348,261,376 parameters**.
+It is a 20-layer, width-1,024 decoder with a 4,096-wide dense FFN,
+matrix-pooled history, and deterministic stride-16 sparse retrieval.
 
-An external protected training run was at **step 165**, as reported by the user on
-**2026-11-04**. Its checkpoint is not present in this checkout, so its files,
-optimizer state, data provenance, and numerical behavior have **not** been
-verified here. Do not infer more than that user-reported status.
-
-The model-centric refactor added unified model loading, generation, scoring,
-training adapters, checkpoint safety, and specialist interfaces. **No foundation
-training code or Model B mathematics changed as part of this documentation
-update.**
-
-Older 338M and 500M families are historical research, not the current model;
-see [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md).
+[`docs/CURRENT_BASELINE.md`](docs/CURRENT_BASELINE.md) is the sole authority for
+its exact architecture, pinned production profile, protected external-run
+status, and verification boundary. Older 338M and 500M families are historical
+research, not the current model.
 
 ## Philosophy
 
@@ -47,78 +41,20 @@ see [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md).
   tensors, optimizer, counters, RNG, tokenizer, and data provenance. Active
   checkpoints are operational assets, not test fixtures.
 
-## Current Model B
+## What the repository provides
 
-| Field | Current value |
-|---|---:|
-| Registry model | `model_b_348m_sparse16` |
-| Training CLI model | `dual-resolution-matrix-pool-sparse-1024-20l` |
-| Parameters | **348,261,376** |
-| Transformer layers | 20 |
-| Model width | 1,024 |
-| Dense SwiGLU width | 4,096 |
-| Vocabulary | 32,768 |
-| Query heads | 16 |
-| KV heads | 4 |
-| Head dimension | 64 |
-| Addressable context | 65,536 tokens |
-| Matrix-pool block | 128 completed tokens |
-| Summaries per completed block | 4 |
-| Standard local window | 512 tokens |
-| Long-local heads | 1 head with a 4,096-token window |
-| Sparse historical stride | 16 original tokens |
-| Sparse layers | zero-based layers 2 through 17 |
-| Maximum sparse keys/head at 65,536 | 4,096 |
+- a NumPy reference backend and a CuPy/Triton GPU backend;
+- native training with explicit optimizer and checkpoint state;
+- strict native checkpoint loading and request-scoped generation;
+- GGUF and Hugging Face Safetensors loading for compatible Llama-family models;
+- an OpenAI-compatible local server for native, GGUF, Safetensors, and remote
+  model sources;
+- frozen-foundation residual-specialist training infrastructure; and
+- numerical, checkpoint, serving, data, benchmark, and GPU regression suites.
 
-Model B is a dense-FFN decoder with grouped-query attention. It does not run
-dense token-to-token attention over all 65,536 positions.
-
-Each layer retains exact local attention and compressed historical attention.
-Every completed, same-document 128-token block contributes four learned
-matrix-pool summaries. A summary becomes visible only after its block is
-complete, preserving causality and document isolation. One query head keeps a
-4,096-token exact local window; ordinary local heads use 512 tokens.
-
-In zero-based layers `2..17`, query head 1 is a deterministic original-token
-sparse-history head. Its layer phases are:
-
-```text
-layer:  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17
-phase:  0  8  4 12  2 10  6 14  1  9  5 13  3 11  7 15
-```
-
-A sparse layer attends same-document keys whose absolute token index matches its
-phase modulo 16. The schedule covers all 16 phases without adding learned
-parameters. At the 65,536-token horizon, one phase contains at most 4,096 keys.
-
-## Pinned foundation profile
-
-The current pinned profile is defined by
-`mini_llm/production_profile_0105.py`. Its environment is mirrored by
-`scripts/0105_model_b_profile.env`.
-
-| Training setting | Pinned value |
-|---|---:|
-| Training context | 8,192 |
-| Microbatch | 1 |
-| Gradient accumulation | 512 |
-| Accumulation weighting | `supervised_tokens` |
-| Optimizer | `hybrid-muon` |
-| Muon momentum | 0.95 |
-| Muon Newton–Schulz steps | 5 |
-| Muon matmul precision | `bf16` |
-| Precision | `bf16-mixed` |
-| Total optimizer steps | 100,000 |
-| Warmup | 750 steps |
-| Peak learning rate | `1.5e-4` |
-| Gradient clip | 1.0 |
-| Weight decay | 0.1 |
-| Save interval | 50 steps |
-
-The frozen profile also pins validation, seed, benchmark-suite, optimizer
-offload, bucketing, Triton, prepared-RoPE, fused-backward, and memory-trim
-settings. Treat the Python profile as the comparison authority; do not reconstruct
-it from old command snippets.
+Compatibility is explicit rather than assumed. A recognized file format does
+not imply support for every architecture, tokenizer, quantization, prompt
+template, or execution policy.
 
 ## Setup
 
@@ -127,8 +63,8 @@ Requirements:
 - Python 3.10 or newer;
 - Linux for the primary development workflow;
 - NumPy for CPU/reference work;
-- a CUDA-compatible NVIDIA GPU and matching CuPy package for GPU work;
-- enough host RAM and disk for full optimizer offload and transactional saves.
+- a CUDA-compatible NVIDIA GPU and matching CuPy package for GPU work; and
+- enough host RAM and disk for optimizer offload and transactional saves.
 
 Create an environment:
 
@@ -154,9 +90,9 @@ pip install -e ".[gpu,triton-attention,dev]"
 If the local CUDA runtime differs, install the compatible CuPy distribution
 instead of assuming `cupy-cuda13x` will work.
 
-## Safe quickstart
+## Native quickstart
 
-### 1. Inspect the registered architecture without allocating 348M weights
+### Inspect Model B without allocating its weights
 
 ```bash
 MINI_LLM_BACKEND=numpy python - <<'PY'
@@ -171,49 +107,104 @@ PY
 
 Expected parameter count: `348261376`.
 
-### 2. Audit the pinned profile safely
+Audit the pinned profile safely on CPU:
 
 ```bash
 MINI_LLM_BACKEND=numpy pytest -q tests/test_production_profile_0105a.py
 ```
 
-For a new shell intended for Model B GPU work:
+### Generate from a native checkpoint
 
-```bash
-source scripts/0105_model_b_profile.env
-```
-
-Sourcing the file changes only that shell. It does not restart or modify an
-existing process.
-
-### 3. Review safety before training
-
-Use `mini_llm/production_profile_0105.py` as the full launch contract and always
-choose a new destination for a new run. Strict resume and weights-only
-initialization are intentionally omitted here. Read
-[`docs/CHECKPOINT_COMPATIBILITY.md`](docs/CHECKPOINT_COMPATIBILITY.md) before
-using either operation; never substitute an active or protected checkpoint into
-a test or example command.
-
-### 4. Inference from an approved immutable checkpoint copy
+Use a completed, approved, immutable checkpoint copy with its matching
+`config.json` and tokenizer:
 
 ```bash
 MINI_LLM_BACKEND=cupy python inference.py \
   --checkpoint /path/to/approved-checkpoint-copy \
   --prompt "A compact language model can" \
-  --max-new-tokens 128 --strategy top-p --temperature 0.8 --top-p 0.95
+  --max-new-tokens 128 \
+  --strategy top-p --temperature 0.8 --top-p 0.95
 ```
 
-The checkpoint's `config.json` and tokenizer define the model. Do not mix a
-checkpoint with a convenient tokenizer from another dataset.
+`inference.py` accepts native checkpoints. GGUF and Safetensors models use the
+external loader, unified benchmark runner, or `serve.py`.
 
-## Checkpoint rules in one minute
+## Training safety
 
+The complete launch and resume workflow lives in
+[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md). The exact profile lives in
+`mini_llm/production_profile_0105.py` and is mirrored for shell use by
+`scripts/0105_model_b_profile.env`.
+
+Before any GPU operation:
+
+```bash
+nvidia-smi
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+```
+
+Do not compete with, signal, inspect, hash, relocate, or reuse paths from an
+active training run. New runs need new checkpoint and log destinations.
 `--resume-from` is strict continuation; `--init-from` is a fresh run initialized
-from matching weights. Saved config, tokenizer/data pairing, exact tensor schema,
-optimizer/RNG state, transactions, active-path safety, specialist foundation
-SHA256, and derived-cache round trips are covered in
-[`docs/CHECKPOINT_COMPATIBILITY.md`](docs/CHECKPOINT_COMPATIBILITY.md).
+from compatible weights. Read
+[`docs/CHECKPOINT_COMPATIBILITY.md`](docs/CHECKPOINT_COMPATIBILITY.md) before
+either operation.
+
+## Serve native and pretrained models locally
+
+The local OpenAI-compatible server accepts these registry formats:
+
+| Format | Source |
+|---|---|
+| `native` | Complete MyLocal_LLM checkpoint directory |
+| `gguf` | Compatible Llama-family F32, F16, or Q8_0 GGUF |
+| `safetensors` | Compatible Hugging Face directory with config, tokenizer, and all shards |
+| `remote` | Existing OpenAI-compatible HTTP service |
+
+Install external-model support, copy the canonical mixed registry example, and
+edit its placeholder paths:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[gpu,external,dev]"
+cp serving_models.example.json serving_models.local.json
+```
+
+The example contains a native Model B copy and SmolLM2 GGUF/Safetensors entries.
+The server does not download weights. For the official SmolLM2 download,
+GGUF inspection, registry validation, remote providers, streaming, security,
+and compatibility limits, see
+[`docs/USER_GUIDE.md#8-pretrained-models-and-local-serving`](docs/USER_GUIDE.md#8-pretrained-models-and-local-serving).
+
+Start the localhost-only server on the documented default port:
+
+```bash
+MINI_LLM_BACKEND=cupy python -u serve.py \
+  --registry ./serving_models.local.json \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+Models load lazily. In another shell:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/models
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "smollm2-360m-safetensors",
+    "messages": [{"role": "user", "content": "Explain numerical stability briefly."}],
+    "max_tokens": 128
+  }'
+```
+
+IDE clients such as Zed can use `http://127.0.0.1:8000/v1` as a custom
+OpenAI-compatible base URL and an ID returned by `/v1/models`.
+
+Keep the default localhost bind. If access beyond localhost is intentional,
+require `--api-key` or `MYLOCAL_LLM_API_KEY`, put TLS and network controls in
+front of the service, and treat it as a development server rather than a
+hardened multi-tenant deployment.
 
 ## Repository layout
 
@@ -221,7 +212,7 @@ SHA256, and derived-cache round trips are covered in
 mini_llm/       model, ops, optimizer, data, checkpoint, inference, specialists
 train_model.py  production foundation training entry point
 inference.py    native autoregressive inference CLI
-serve.py        serving entry point
+serve.py        OpenAI-compatible serving entry point
 scripts/        profile auditors, regression runners, guarded workflows
 benchmarks/     performance and evaluation programs
 configs/        checked-in configuration artifacts
@@ -229,37 +220,42 @@ docs/           current guides, development log, and retained research artifacts
 tests/          numerical, integration, checkpoint, and GPU regressions
 ```
 
-Generated `checkpoints/`, `logs/`, token shards, and benchmark results are runtime
-state. Do not delete, relocate, hash repeatedly, or reuse them as test outputs
-while a process may own them.
+Generated checkpoints, logs, token shards, downloaded weights, and benchmark
+results are runtime state. Do not delete, relocate, repeatedly hash, or reuse
+them as test outputs while a process may own them.
 
 ## Validation
 
-Focused CPU checkpoint and profile checks:
+Run the permanent bounded CPU gate:
 
 ```bash
-MINI_LLM_BACKEND=numpy pytest -q \
-  tests/test_baseline_contract_0103a.py \
-  tests/test_model_b_config_roundtrip_0104b.py \
-  tests/test_checkpoint_transactions_0104a.py \
-  tests/test_production_profile_0105a.py \
-  tests/test_specialist_checkpoint_0104f.py
+MINI_LLM_BACKEND=numpy .venv/bin/python \
+  scripts/run_0103a_regressions.py \
+  --mode cpu \
+  --report /tmp/model_b_cpu_regressions.json
 ```
 
-Run GPU tests only when no important training or inference process owns the
-GPU. Check `nvidia-smi` first. CPU correctness does not prove full-model GPU
-parity or throughput.
+Run GPU tests only when no important training, inference, or serving process
+owns the device. CPU correctness does not prove full-model GPU parity,
+throughput, or memory headroom.
 
 ## Documentation
 
-- [`docs/CURRENT_BASELINE.md`](docs/CURRENT_BASELINE.md) — current Model B snapshot;
-- [`docs/CHECKPOINT_COMPATIBILITY.md`](docs/CHECKPOINT_COMPATIBILITY.md) — checkpoint contract and safe operations;
-- [`docs/README.md`](docs/README.md) — documentation map;
-- [`docs/MODEL_CENTERED_DEVELOPER_GUIDE.md`](docs/MODEL_CENTERED_DEVELOPER_GUIDE.md) — current APIs;
-- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md) — tokenizer, shards, manifests, and provenance;
-- [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md) — current roadmap and open gates;
-- [`tests/README.md`](tests/README.md) — test markers and safe workflows;
-- [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md) — historical models and development record.
+Each topic has one canonical owner:
+
+- [`docs/CURRENT_BASELINE.md`](docs/CURRENT_BASELINE.md) — exact current model and pinned profile;
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — installation and operational workflows;
+- [`docs/MODEL_CENTERED_DEVELOPER_GUIDE.md`](docs/MODEL_CENTERED_DEVELOPER_GUIDE.md) — APIs, ownership, loading, execution, and HTTP semantics;
+- [`docs/CHECKPOINT_COMPATIBILITY.md`](docs/CHECKPOINT_COMPATIBILITY.md) — resume, initialization, publication, and specialist binding;
+- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md) — tokenizer, shards, manifests, and Common Pile procedures;
+- [`benchmarks/README.md`](benchmarks/README.md) — benchmark commands and result semantics;
+- [`tests/README.md`](tests/README.md) — test selection and CPU/GPU safety;
+- [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md) — prioritized open cleanup and acceptance work; and
+- [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md) — completed changes, validation, and negative results.
+
+Start with [`docs/README.md`](docs/README.md) for the complete documentation map.
+Do not add standalone patch-report Markdown files; record durable changes in the
+development log.
 
 ## License
 

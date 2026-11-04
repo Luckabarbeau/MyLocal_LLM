@@ -1,9 +1,8 @@
-"""0080L regression methodology with a versioned 0080AP MoE reference.
+"""0080L regression methodology with the versioned 0080AP MoE reference.
 
-The original `0080l_cpu_reference.json` remains unchanged as the historical
-selected-only-softmax baseline. `0080ap_cpu_reference.json` instead pins the
-new full-expert-softmax MoE semantics for exact CPU comparisons. The two
-references must not be compared as though they used identical routing.
+`0080ap_cpu_reference.json` pins the full-expert-softmax MoE semantics used by
+these exact CPU comparisons. The superseded selected-only-softmax fixture is
+recoverable from Git history but is not an active test input.
 """
 import hashlib
 import json

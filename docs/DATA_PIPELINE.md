@@ -225,7 +225,7 @@ unless its explicitly configured identity matches.
 From the repository root:
 
 ```bash
-chmod +x scripts/download_common_pile_longform.sh
+mkdir -p ../pretraining_data
 ./scripts/download_common_pile_longform.sh priority1 ../pretraining_data
 
 .venv/bin/python prepare_common_pile_longform.py prepare-stage \

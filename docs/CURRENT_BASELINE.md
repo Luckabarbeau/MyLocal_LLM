@@ -14,8 +14,7 @@ pinned training profile after the model-centric refactor.
   checkout. Its weights, optimizer, RNG, tokenizer, provenance, and outputs
   cannot be inspected or verified here.
 - **Code-change boundary:** the model-centric refactor did not change Model B
-  mathematics or the foundation training algorithm. This documentation update
-  changes no training code.
+  mathematics or the foundation training algorithm.
 
 Do not describe older 338M or 500M experiments as current. Historical details
 belong in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md).
@@ -37,7 +36,7 @@ belong in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md).
 | Ordinary local window | 512 |
 | Long-local branch | one 4,096-token head |
 | Sparse original-token branch | stride 16, query head 1 |
-| Sparse layers | zero-based `2..17` |
+| Sparse layers | zero-based layers `2..17` (human-numbered layers 3–18) |
 | Maximum sparse keys at 65,536 | 4,096 per sparse head |
 
 Every layer has exact local attention and compressed historical attention. Only
@@ -110,42 +109,22 @@ the architecture or checkpoint schema.
 from the reusable profile. They are operational locations and must never be
 copied from a protected run into a regression command.
 
-## Model-centric boundaries
+## Operational boundaries
 
-The refactor preserves these ownership rules:
+The exact model and profile above are intentionally separated from operational
+tutorials:
 
-- `Model` owns architecture, weights, tokenizer, loading, inspection, scoring,
-  and generation entry points.
-- `GenerationSession` owns request-local KV/history and sampling state.
-- `TrainingRun` owns optimizer, schedule, RNG, counters, and data sampler state.
-- `ExtendedTrainer` and `train_model.py` remain the foundation production path.
-- A model facade is not a substitute for strict optimizer/RNG resume.
-- Specialist checkpoints contain specialist tensors, not a duplicate foundation.
+- [`MODEL_CENTERED_DEVELOPER_GUIDE.md`](MODEL_CENTERED_DEVELOPER_GUIDE.md) owns
+  model/session/training ownership, loading, scoring, execution, and HTTP API
+  semantics.
+- [`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) owns strict resume,
+  weights-only initialization, transactional publication, tokenizer/data
+  identity, and specialist foundation binding.
+- [`USER_GUIDE.md`](USER_GUIDE.md) owns launch, resume, inference, serving, and
+  specialist workflows.
 
-Specialist infrastructure is available, but full-size composed-model GPU
-performance and end-to-end generation remain separate acceptance work. Do not
-interpret CPU specialist tests as proof of production readiness.
-
-## Checkpoint baseline
-
-For current checkpoints:
-
-1. Strict resume uses the saved `config.json` as architecture authority.
-2. The model tensor-name set must match exactly; partial loading is not resume.
-3. Optimizer kind, master weights, Adam moments, Muon momentum groups, counters,
-   and modern train/validation RNG state belong to continuation.
-4. The tokenizer must match both checkpoint provenance and the packed-data
-   manifest. Vocabulary size equality alone is insufficient identity.
-5. An intentional data-mixture change is recorded as a data fork and may reset
-   data cursors while retaining model/optimizer state. That is not sample-exact
-   continuation.
-6. `--init-from` is weights-only initialization into a fresh optimizer, schedule,
-   counters, RNG streams, and destination.
-7. Active checkpoint directories must not be used for tests, specialist hashing,
-   conversion, or exploratory writes.
-
-See [`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) for the complete
-contract and safe placeholder commands.
+Specialist infrastructure exists, but CPU contracts do not prove full-size
+composed-model GPU performance or end-to-end generation readiness.
 
 ## Validation
 

@@ -11,11 +11,11 @@ The suite stays under one collection root so historical regressions can import
 shared helpers by module name. Pytest assigns markers automatically from stable
 filenames; individual files do not need marker boilerplate.
 
-> **Current GPU restriction:** the protected external training run is user-reported
-> at step 165; its checkpoint and host are not available in this workspace. Do not
-> run GPU tests or the GPU Model B regression gate on any device owned by training,
-> inference, or serving. Use the NumPy commands below when ownership is uncertain,
-> and run `nvidia-smi` before any CuPy test run.
+> **Current GPU restriction:** the protected-run status and verification boundary
+> are canonical in [`docs/CURRENT_BASELINE.md`](../docs/CURRENT_BASELINE.md). Do
+> not run GPU tests or the GPU Model B regression gate on any device owned by
+> training, inference, or serving. Use the NumPy commands below when ownership is
+> uncertain, and run `nvidia-smi` before any CuPy test run.
 
 ## Markers
 
@@ -98,12 +98,12 @@ Its exact, versioned selectors cover:
   adaptive fine-shape buckets, training-run behavior, residual specialists, and
   specialist composition/checkpoint behavior;
 - production-profile, training-path parity, specialist sampling, specialist
-  training-run, and specialist CLI contracts.
+  training-run, specialist CLI contracts, and the current 0107–0108 specialist
+  production, profile, logging, multibatch, Model B shape, and prepared-RoPE
+  contracts.
 
-The architecture contract protects the current 348,261,376-parameter Model B:
-20 layers, hidden size 1024, FFN size 4096, vocabulary size 32768, architectural
-context 65536, matrix-pool blocks of 128 tokens with four summaries, 512/4096
-local windows, and one sparse historical head at stride 16. CPU tests validate
+The architecture contract protects the exact Model B identity defined in
+[`docs/CURRENT_BASELINE.md`](../docs/CURRENT_BASELINE.md). CPU tests validate
 contracts and bounded numerical fixtures; they deliberately do not allocate the
 full production model or prove GPU speed.
 
@@ -150,11 +150,18 @@ parity; it is not a performance benchmark.
 - Measurement-only workloads belong in `benchmarks/`; tests should assert a stable
   correctness or API contract.
 
-Some historical regressions target research utilities that are not part of the
-current checkout. Load those modules with `pytest.importorskip` so an absent
-optional artifact produces a documented skip rather than breaking collection.
-`tests/test_source_audit_0078d.py` currently follows this policy for the absent
+Optional integrations must use `pytest.importorskip` at module or fixture scope
+with a reason, so missing packages such as Safetensors—or absent optional
+historical utilities—produce documented skips rather than collection failures.
+Do not skip missing dependencies required by the selected install profile.
+`tests/test_source_audit_0078d.py` follows this policy for the absent
 `benchmarks.audit_source_sampling_0078d` utility.
+
+Filename-inferred GPU markers are not yet a complete allocation boundary. Before
+reorganizing tests, add explicit item-level GPU markers or an opt-in fixture to
+Torch/CUDA smoke tests that can discover an isolated CUDA runtime even when the
+suite selects NumPy. This backlog item is tracked in
+[`docs/FUTURE_DEVELOPMENT.md`](../docs/FUTURE_DEVELOPMENT.md).
 
 For historical context and superseded validation decisions, see
 [`docs/DEVELOPMENT_LOG.md`](../docs/DEVELOPMENT_LOG.md).

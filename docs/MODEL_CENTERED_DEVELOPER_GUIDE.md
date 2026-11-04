@@ -1,33 +1,21 @@
 # Model-centered developer guide
 
-This guide describes the current model-centered implementation at `eb61df0`
-and its operational boundaries. It replaces older 500M/338M assumptions with
-the current sparse Model B and frozen-foundation specialist reality.
+This guide describes the current model-centered implementation and its
+operational boundaries. Commit `eb61df0` is the provenance of the latest
+specialist hardening discussed here, not an assertion that the working tree is
+identical to that commit.
 
 ## 1. Current Model B identity
 
-The production native architecture is registered as
-`model_b_348m_sparse16` and constructed by
-`ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l()`:
+The production architecture is registry ID `model_b_348m_sparse16`, constructed
+by `ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l()`. Its sparse branch
+covers zero-based layers `2..17` (human-numbered layers 3–18).
 
-- 348,261,376 parameters;
-- 20 decoder blocks, width 1024, dense FFN width 4096;
-- 16 query heads, 4 KV heads, head width 64;
-- matrix-pool dual-resolution attention with 128-token blocks;
-- local window 512, one long-local 4096 head, and four summaries per block;
-- stride-16 sparse original-token retrieval in foundation layers 3–18; and
-- a 32,768-token vocabulary for the current run family.
-
-The preset's maximum context and the selected training context are distinct. The
-current production profile trains at 8,192 tokens and saves that selected value
-in checkpoint configuration.
-
-The exact production environment and scientific CLI contract live in
-`mini_llm/production_profile_0105.py` and
-`scripts/0105_model_b_profile.env`. The externally managed production run is
-reported at step 165, but its checkpoint is not available in this workspace.
-It is protected and must not be loaded, mutated, resumed, benchmarked, or used
-as a specialist foundation from this checkout.
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) is the sole authority for exact
+geometry, parameter count, pinned profile, and protected external-run status.
+This guide focuses on API and implementation ownership. The protected run must
+not be loaded, mutated, resumed, benchmarked, or used as a specialist foundation
+from this checkout.
 
 ## 2. Ownership boundaries
 
@@ -279,7 +267,8 @@ The guarded trainer exists and is GPU-capable, but important limitations remain:
 
 - no suitable completed Model B foundation checkpoint is available in this
   workspace;
-- the external step-165 foundation run is protected and cannot be used;
+- the unavailable external foundation run described in
+  [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) is protected and cannot be used;
 - full 12-layer, 8K memory/performance acceptance remains hardware-dependent;
 - there is no specialist-aware `GenerationSession` or composed incremental
   generation path;
@@ -291,39 +280,15 @@ The guarded trainer exists and is GPU-capable, but important limitations remain:
 
 ## 7. Checkpoint identity and publication
 
-### Native checkpoint publication
+Native saves use staged sibling directories and atomic directory publication;
+specialist saves contain specialist state and bind to an immutable foundation
+content digest rather than copying foundation tensors. Callers must never write,
+hash, convert, or test against an actively published checkpoint.
 
-`mini_llm.checkpoint.save_checkpoint()` writes a complete staged sibling
-`<checkpoint>.pending-<uuid>` and then publishes by directory rename. The prior
-complete snapshot is retained at `<checkpoint>.previous`. If interruption leaves
-the active path absent, reads can fall back to `.previous`.
-
-Important limits:
-
-- staging and destination must share a filesystem;
-- publication needs additional disk for the staged and previous snapshots;
-- supporting files such as config/tokenizer are preserved into the staged
-  directory, using hard links where applicable;
-- writers must be serialized; there is no cross-process checkpoint lock;
-- ancillary files must not be written concurrently inside the checkpoint;
-- regular files are not individually `fsync`ed, so this is atomic publication,
-  not complete power-loss durability; and
-- no process may use publication to overwrite a protected or actively trained
-  checkpoint during validation.
-
-### Specialist checkpoints
-
-Specialist checkpoints serialize only residual-specialist parameters and their
-optimizer/training state, not another copy of the 348M foundation. They include:
-
-- specialist architecture;
-- ordered trainable parameter names;
-- the resolved foundation path for provenance; and
-- a SHA-256 over foundation `config.json` plus every frozen parameter file.
-
-Fingerprinting is intentionally expensive and occurs at specialist save/resume
-boundaries. Use a completed immutable foundation copy so hashing cannot race a
-foundation publisher.
+[`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) is the sole authority
+for native and specialist schemas, strict resume, weights-only initialization,
+transaction mechanics, recovery limits, disk requirements, tokenizer/data
+identity, and foundation binding.
 
 ## 8. HTTP and model API caveats
 

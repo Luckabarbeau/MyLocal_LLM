@@ -1,530 +1,548 @@
 # MyLocal_LLM User Guide
 
-This guide describes how to **run, train, resume, evaluate, tune, and debug** the
-current MyLocal_LLM implementation. The main `README.md` explains the project
-philosophy and architecture; this file is the operational reference.
+This is the operational guide for the current **Model B** workflow. The older
+`wide-500m-*` and 338M historical-hybrid examples elsewhere in the repository
+are research history, not the production launch recipe documented here.
 
-The project intentionally keeps low-level controls available because it is a
-research platform. Normal use, however, should not require a wall of environment
-variables. Starting with the 0062 runtime-profile cleanup, validated settings are
-applied automatically and the individual `MINI_LLM_*` variables are primarily
-**overrides for experiments and debugging**.
+Model B is the native preset
+`dual-resolution-matrix-pool-sparse-1024-20l`: 20 layers, width 1024, dense
+FFN 4096, matrix-pooled dual-resolution attention, and a stride-16 original-token
+head across layers 3–18. The implementation has 348,261,376 parameters. The
+current production training profile uses an 8,192-token training context even
+though the architecture preset can represent a larger context.
 
----
+> **Protected external run:** an externally managed Model B run is reported at
+> **step 165**. Its checkpoint is not available in this workspace.
+> Do not inspect, load, resume, overwrite, signal, benchmark against, or otherwise
+> touch the protected run. Wait for an explicitly published immutable checkpoint
+> copy or use a new, independent run directory.
 
-## 1. Runtime profiles
+## 1. Install and choose a backend
 
-The array backend is selected before Python imports the model implementation:
+Run commands from the repository root, where `train_model.py` is located.
+
+### CPU/reference development
 
 ```bash
-MINI_LLM_BACKEND=cupy   # GPU
-MINI_LLM_BACKEND=numpy  # CPU/reference
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+MINI_LLM_BACKEND=numpy python -c 'from mini_llm.backend import BACKEND_NAME; print(BACKEND_NAME)'
 ```
 
-Training and inference then apply a runtime profile. Select it with
-`--runtime-profile` or `MINI_LLM_RUNTIME_PROFILE`.
+NumPy is suitable for unit tests, API work, profile audits, and small numerical
+checks. It is not a practical backend for full Model B training.
 
-| Profile | Purpose |
+### NVIDIA GPU development and training
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[gpu,dev,streaming,external,triton-attention]'
+nvidia-smi
+MINI_LLM_BACKEND=cupy python -c 'from mini_llm.backend import BACKEND_NAME; print(BACKEND_NAME)'
+```
+
+The `gpu` extra installs the CUDA 13 CuPy package selected by `pyproject.toml`;
+the Triton extra is pinned by the project. Confirm that those choices match the
+machine's driver before launching training.
+
+`MINI_LLM_BACKEND` is process-global and is read during Python import. A Python
+process cannot switch from NumPy to CuPy after importing `mini_llm`; start a new
+process with the intended backend.
+
+### Runtime profiles
+
+Select a profile with `--runtime-profile` or `MINI_LLM_RUNTIME_PROFILE`:
+
+| Profile | Behavior |
 |---|---|
-| `auto` | Default. NumPy -> `reference`; CuPy inference -> `gpu-fast`; large CuPy training -> `consumer-gpu`. |
-| `reference` | No implicit optimization overrides. Useful for correctness tests and A/B comparisons. |
-| `gpu-fast` | Enables the validated CuPy/BF16 fused and grouped fast paths but does not move optimizer state or force LM-head chunking. |
-| `consumer-gpu` | `gpu-fast` plus memory-saving training defaults for large local models: full optimizer offload, 16 MiB staging, and a 1024-row chunked LM head. |
+| `auto` | NumPy resolves to `reference`; CuPy inference resolves to `gpu-fast`; a large CuPy training model resolves to `consumer-gpu`. |
+| `reference` | Applies no profile performance defaults. Use for correctness comparisons. |
+| `gpu-fast` | Enables validated CuPy/BF16 fast paths without forcing optimizer offload or the consumer LM-head policy. |
+| `consumer-gpu` | Adds memory-conscious training defaults, including full optimizer offload and chunked LM-head execution. It also applies Model B-specific matrix-pool defaults when the configuration matches. |
 
-**Explicit environment variables always win.** Profiles use `setdefault`, so a
-launch such as
+Profiles use `os.environ.setdefault`: an explicit `MINI_LLM_*` value always
+wins. That is why the production run sources the exact environment file rather
+than relying only on evolving profile defaults.
 
-```bash
-MINI_LLM_BACKEND=cupy \
-MINI_LLM_LOCAL_ATTN_QUERY_CHUNK=768 \
-python train_model.py ...
-```
+## 2. GPU ownership and safe operations
 
-keeps the explicit `768` even when `auto` resolves to `consumer-gpu`.
-
-For the current 768d wide models, the CuPy profile also defaults the local
-attention query chunk to `1536`, which is the best measured setting on the main
-RTX 5080 development system. Override it when VRAM headroom or another GPU makes
-a different tile preferable.
-
----
-
-## 2. First training launch
-
-Assuming the mixed packed shards are in `./token_shards_pretraining_65280`:
+Treat the GPU as an exclusively owned resource for Model B work. Before any
+CuPy training, inference, serving, GPU regression, or specialist run:
 
 ```bash
-mkdir -p checkpoints logs
-
-MINI_LLM_BACKEND=cupy \
-python train_model.py \
-    --model wide-500m-memory-64k \
-    --precision bf16-mixed \
-    --mixed-shard-root ./token_shards_pretraining_65280 \
-    --batch-size 1 \
-    --grad-accum-steps 4 \
-    --total-steps 20 \
-    --warmup-steps 2 \
-    --val-interval 10 \
-    --val-steps 2 \
-    --save-interval 20 \
-    --log-interval 1 \
-    --checkpoint-dir ./checkpoints/wide-500m-memory-64k_smoke \
-    --log-file ./logs/wide-500m-memory-64k_smoke.csv
+nvidia-smi
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 ```
 
-With `MINI_LLM_BACKEND=cupy`, `auto` recognizes this as a large local training
-configuration and supplies the validated fast paths and memory-saving defaults.
-The startup banner prints the resolved runtime profile.
-
-For the current long run, a representative command is therefore only:
+If another training process owns the device, do not launch a competing process,
+do not free its memory pool, and do not kill or signal it. Profile audits and
+CPU regressions are safe because they do not allocate the GPU:
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python train_model.py \
-    --model wide-500m-memory-64k \
-    --precision bf16-mixed \
-    --mixed-shard-root ./token_shards_pretraining_65280 \
-    --batch-size 2 \
-    --grad-accum-steps 32 \
-    --total-steps 160000 \
-    --warmup-steps 5000 \
-    --peak-lr 3e-4 \
-    --grad-clip 1.0 \
-    --weight-decay 0.1 \
-    --val-interval 1000 \
-    --val-steps 10 \
-    --save-interval 2500 \
-    --log-interval 10 \
-    --checkpoint-dir ./checkpoints/wide-500m-memory-64k_30b \
-    --log-file ./logs/wide-500m-memory-64k_30b.csv
+MINI_LLM_BACKEND=numpy .venv/bin/python scripts/run_0103a_regressions.py \
+  --mode cpu --report 0105_cpu_report.json
 ```
 
-The `wide-500m-memory-*` presets now carry the current routed-prefix defaults:
-4k current window, 128-token historical blocks, top-16 / 2k routed prefix,
-50% retrieval-batch probability, Gumbel exploration, router temperature
-`1.0 -> 0.25`, and a 50k-step router-temperature anneal.
-
----
-
-## 3. Resume training
-
-Resume from the checkpoint directory rather than starting a new optimizer:
+The GPU regression gate is only for an otherwise idle GPU with enough free VRAM:
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python train_model.py \
-    --resume-from ./checkpoints/wide-500m-memory-64k_30b \
-    --precision bf16-mixed \
-    --mixed-shard-root ./token_shards_pretraining_65280 \
-    --batch-size 2 \
-    --grad-accum-steps 32 \
-    --total-steps 160000 \
-    --warmup-steps 5000 \
-    --peak-lr 3e-4 \
-    --grad-clip 1.0 \
-    --weight-decay 0.1 \
-    --val-interval 1000 \
-    --val-steps 10 \
-    --save-interval 2500 \
-    --log-interval 10 \
-    --checkpoint-dir ./checkpoints/wide-500m-memory-64k_30b \
-    --log-file ./logs/wide-500m-memory-64k_30b.csv
+.venv/bin/python scripts/run_0103a_regressions.py \
+  --mode gpu --model-b-profile --report 0105_gpu_report.json
 ```
 
-The checkpoint restores model weights, optimizer state, step count, shard state,
-and RNG state. Keep schedule-defining arguments consistent with the original run.
+Passing selected GPU gates is not proof that a full production run has the
+expected throughput or memory headroom.
 
-`--init-from` is different: it initializes matching model weights from another
-checkpoint but starts a **fresh optimizer and training schedule**.
+## 3. Required Model B data contract
 
----
+Production commands below expect the current mixed-shard root at
+`./token_shards_ensemble_32k_mixed`. It must contain:
 
-## 4. Inference
+- `tokenizer.json`;
+- a complete `mixture_manifest.json` with format
+  `weighted_packed_mixture_v1`;
+- each registered source's train and validation shards; and
+- tokenizer vocabulary/hash values consistent with the manifest.
 
-### Short prompt
+The trainer derives EOS from the loaded tokenizer. Never assume that EOS is the
+last vocabulary entry or paste a numeric EOS from another model family. See
+[`DATA_PIPELINE.md`](DATA_PIPELINE.md) for tokenizer, shard, identity,
+provenance, deduplication, and Common Pile procedures.
+
+## 4. Exact production profile and read-only audit
+
+`scripts/0105_model_b_profile.env` contains the explicit environment from the
+current Model B production command. Source it in a **new shell**. Sourcing the
+file does not attach to or restart any existing process.
+
+The audit compares the exact environment and scientific CLI flags. It does not
+load a model, open a checkpoint, or use the GPU. Run it from the repository root
+so the expected relative mixture and benchmark paths match exactly:
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python inference.py \
-    --checkpoint ./checkpoints/wide-500m-memory-64k_30b \
-    --prompt "The purpose of numerical simulation is" \
-    --max-new-tokens 128 \
-    --strategy top-p \
-    --temperature 0.8 \
-    --top-p 0.95 \
-    --seed 42
+source scripts/0105_model_b_profile.env
+
+MODEL_B_FLAGS=(
+  --model dual-resolution-matrix-pool-sparse-1024-20l
+  --objective ar
+  --precision bf16-mixed
+  --runtime-profile consumer-gpu
+  --mixed-shard-root ./token_shards_ensemble_32k_mixed
+  --context-length 8192
+  --batch-size 1
+  --grad-accum-steps 512
+  --gradient-accumulation-weighting supervised_tokens
+  --optimizer hybrid-muon
+  --muon-momentum 0.95
+  --muon-ns-steps 5
+  --muon-matmul-precision bf16
+  --total-steps 100000
+  --warmup-steps 750
+  --peak-lr 1.5e-4
+  --grad-clip 1.0
+  --weight-decay 0.1
+  --val-interval 100
+  --val-steps 4
+  --val-per-source-steps 1
+  --val-fixed-mixed-steps 4
+  --val-fixed-mixed-seed 78078
+  --save-interval 50
+  --log-interval 1
+  --seed 42
+  --benchmark-suite ./benchmarks/configs/foundation_capabilities_0097_progressive.json
+)
+
+.venv/bin/python scripts/audit_0105_training_profile.py \
+  --report ./logs/model_b_profile_audit.json -- "${MODEL_B_FLAGS[@]}"
 ```
 
-`kv-cache` is already the default inference backend.
+A zero exit status and `"matches": true` mean the shell and flags match the
+frozen comparison contract. The audit deliberately excludes
+`--checkpoint-dir`, `--log-file`, and `--resume-from`: those are run locations
+and must never be copied from a protected run.
 
-### Long prompt / routed memory
+## 5. Safe launch of a new Model B run
+
+There is no allocation-free dry-run mode in `train_model.py`. The safe launch
+pattern is therefore:
+
+1. use a new shell and source the profile;
+2. pass the profile audit;
+3. verify exclusive GPU ownership;
+4. verify that the destination checkpoint path does not exist;
+5. launch with a new log and checkpoint location; and
+6. optionally bound the first invocation with `--max-run-steps 1`, which keeps
+   the 100,000-step schedule horizon and publishes a resumable checkpoint.
+
+Continuing the shell block from the previous section:
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python inference.py \
-    --checkpoint ./checkpoints/wide-500m-memory-64k_30b \
-    --prompt-file ./long_prompt.txt \
-    --max-new-tokens 512 \
-    --strategy top-p \
-    --temperature 0.8 \
-    --top-p 0.95 \
-    --seed 42
+CHECKPOINT_DIR=/absolute/path/to/new_model_b_run
+LOG_FILE=/absolute/path/to/logs/new_model_b_run.csv
+
+# Both checks must succeed. Never point either variable at the protected run.
+test ! -e "$CHECKPOINT_DIR"
+test ! -e "$LOG_FILE"
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+
+.venv/bin/python train_model.py \
+  "${MODEL_B_FLAGS[@]}" \
+  --checkpoint-dir "$CHECKPOINT_DIR" \
+  --log-file "$LOG_FILE" \
+  --max-run-steps 1
 ```
 
-For a routed-prefix checkpoint, inference automatically uses the trained memory
-horizon from `config.json`; `--max-context 65536` is therefore optional for the
-64k preset.
+The bounded invocation is a real optimizer update, not a dry run. If it passes,
+continue only through the strict resume procedure below. For a deliberately
+uninterrupted launch, omit `--max-run-steps 1`; all other flags remain identical.
 
-The routed prefix is deterministically refreshed every 128 generated tokens by
-default. For an exact but slower validation mode:
+A new run copies `config.json`, the exact tokenizer, and mixture metadata into
+the checkpoint directory. Checkpoint saves include model arrays, complete
+optimizer state, RNG state, sampler/source counters, schedule state, supervised
+token accounting, and data provenance.
+
+## 6. Strict Model B resume
+
+A strict resume means more than supplying `--resume-from`. Use:
+
+- the same `scripts/0105_model_b_profile.env`;
+- the original scientific flags, unchanged;
+- the same tokenizer and mixed-shard root;
+- the same `mixture_manifest.json` bytes and source files;
+- the original checkpoint directory as both input and output; and
+- the original log location and operational policy.
+
+`--total-steps 100000` remains the absolute schedule target, not “100,000 more
+steps.” Do not substitute `--init-from`: that is a weights-only warm start with
+a fresh optimizer and schedule.
 
 ```bash
-MINI_LLM_ROUTED_PREFIX_REFRESH_TOKENS=1 \
-MINI_LLM_BACKEND=cupy \
-python inference.py ...
+source scripts/0105_model_b_profile.env
+
+MODEL_B_FLAGS=(
+  --model dual-resolution-matrix-pool-sparse-1024-20l
+  --objective ar
+  --precision bf16-mixed
+  --runtime-profile consumer-gpu
+  --mixed-shard-root ./token_shards_ensemble_32k_mixed
+  --context-length 8192
+  --batch-size 1
+  --grad-accum-steps 512
+  --gradient-accumulation-weighting supervised_tokens
+  --optimizer hybrid-muon
+  --muon-momentum 0.95
+  --muon-ns-steps 5
+  --muon-matmul-precision bf16
+  --total-steps 100000
+  --warmup-steps 750
+  --peak-lr 1.5e-4
+  --grad-clip 1.0
+  --weight-decay 0.1
+  --val-interval 100
+  --val-steps 4
+  --val-per-source-steps 1
+  --val-fixed-mixed-steps 4
+  --val-fixed-mixed-seed 78078
+  --save-interval 50
+  --log-interval 1
+  --seed 42
+  --benchmark-suite ./benchmarks/configs/foundation_capabilities_0097_progressive.json
+)
+
+.venv/bin/python scripts/audit_0105_training_profile.py -- "${MODEL_B_FLAGS[@]}"
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+
+CHECKPOINT_DIR=/absolute/path/to/the_original_model_b_checkpoint
+LOG_FILE=/absolute/path/to/the_original_model_b_log.csv
+
+.venv/bin/python train_model.py \
+  "${MODEL_B_FLAGS[@]}" \
+  --resume-from "$CHECKPOINT_DIR" \
+  --checkpoint-dir "$CHECKPOINT_DIR" \
+  --log-file "$LOG_FILE"
 ```
 
----
+The resume loader rejects incomplete parameter sets, shape mismatches, missing
+optimizer/training state, incomplete optimizer components, and a tokenizer hash
+that differs from checkpoint provenance. The code can record a new data phase
+when a mixture changes, but that is **not** a strict resume; do not use that
+feature when exact continuation is required.
 
-## 5. Important training CLI arguments
+The protected step-165 run cannot be resumed from this checkout because its
+checkpoint is unavailable here. Do not fabricate a checkpoint path or start a
+replacement under the protected run's name.
 
-| Argument | Meaning |
-|---|---|
-| `--model` | Architecture preset. The current main model is `wide-500m-memory-64k`. |
-| `--precision` | `float32`, `float16`, or `bf16-mixed`. Current GPU training uses `bf16-mixed`. |
-| `--mixed-shard-root` | Root containing the mixed packed-shard manifest/tokenizer/source folders. |
-| `--batch-size` | Sequences in one GPU microbatch. |
-| `--grad-accum-steps` | Number of microbatches accumulated before one optimizer update. Effective batch = batch size × accumulation. |
-| `--total-steps` | Total optimizer-step target, including the already-completed steps after resume. |
-| `--warmup-steps` | Linear LR warmup length. |
-| `--peak-lr` | Peak learning rate before decay. |
-| `--grad-clip` | Global gradient-norm clipping threshold. |
-| `--weight-decay` | AdamW weight decay. |
-| `--val-interval` | Optimizer steps between validation runs. |
-| `--val-steps` | Validation batches per validation run. |
-| `--save-interval` | Optimizer steps between checkpoints. |
-| `--log-interval` | Optimizer steps between console/CSV summaries. |
-| `--checkpoint-dir` | Output checkpoint directory. |
-| `--resume-from` | Continue model + optimizer + schedule state from a checkpoint. |
-| `--init-from` | Load matching weights only; start a new optimizer/run. |
-| `--profile-steps` | Synchronized performance profiling for the first N executed optimizer steps. Keep `0` for long runs. |
-| `--numerical-debug` | Expensive NaN/Inf tracing. Use only for diagnosis. |
-| `--runtime-profile` | `auto`, `reference`, `gpu-fast`, or `consumer-gpu`. |
-| `--progressive-depth` | Enable 0064B progressive residual depth for a new run. The final/max depth remains the preset's `n_layers`. |
-| `--initial-active-layers` | Number of Transformer blocks executed at the start of a new progressive run. Default: 1. |
-| `--progressive-growth-steps` | Comma-separated completed optimizer steps after which one additional block becomes active, e.g. `1000,3000,7000`. Omit for manual-only growth. |
+## 7. Native inference
 
-Run `python train_model.py --help` for the complete CLI list.
-
-### Progressive-depth experiment
-
-0064B implements deterministic/manual growth only. It deliberately does **not**
-yet implement the future automatic plateau detector or adaptive token selection.
-A new block is independently random-initialized, but both learned residual gates
-start at exact zero when that block becomes active:
-
-```text
-y = x + alpha_attn * Attention(Norm(x))
-z = y + alpha_mlp  * MoE(Norm(y))
-
-new layer: alpha_attn = alpha_mlp = 0
-```
-
-The insertion therefore preserves the current network function exactly. All
-previously active blocks remain trainable. The new block receives fresh Adam
-moments/master state and a local Adam age of one on its first update; existing
-optimizer history is not rebuilt or reset.
-
-Example deterministic research run:
+Inference requires a complete native checkpoint with its matching tokenizer.
+Use a completed checkpoint or an immutable copy, never a path actively being
+published by another process.
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python train_model.py \
-    --model wide-500m-memory-64k \
-    --precision bf16-mixed \
-    --mixed-shard-root ./token_shards_pretraining_65280 \
-    --progressive-depth \
-    --initial-active-layers 1 \
-    --progressive-growth-steps 1000,3000,7000,12000 \
-    --batch-size 2 \
-    --grad-accum-steps 32 \
-    --total-steps 20000 \
-    --warmup-steps 1000 \
-    --checkpoint-dir ./checkpoints/progressive_test
+MINI_LLM_BACKEND=cupy .venv/bin/python inference.py \
+  --checkpoint /absolute/path/to/model_b_checkpoint \
+  --prompt 'The role of numerical stability in optimization is' \
+  --max-new-tokens 128 \
+  --strategy top-p \
+  --temperature 0.8 \
+  --top-p 0.95 \
+  --seed 42 \
+  --backend kv-cache \
+  --runtime-profile gpu-fast \
+  --execution-policy auto
 ```
 
-A growth step `N` means that `N` optimizer updates are completed at the previous
-depth; the next block is activated before update `N+1`. Checkpoints store the
-current active depth, the explicit growth schedule, and the per-parameter Adam
-birth steps. If `--progressive-growth-steps` is omitted on resume, the saved
-schedule is reused.
+For a long prompt, use `--prompt-file`. The cache horizon defaults to the
+checkpoint configuration; do not increase it merely because the architecture
+preset has a larger theoretical capacity. `--execution-policy strict-fast`
+fails when the requested verified fast path cannot execute; use it as an
+acceptance gate, not as a universal compatibility setting. `--backend reference`
+recomputes the full prefix and is intended for verification rather than speed.
 
-For the first scientific comparison, use an explicit schedule or call the
-trainer's growth method manually. Automatic growth based on validation
-improvement per FLOP belongs to the next patch once the base mechanism has been
-benchmarked.
+The loader is strict about canonical parameter completeness and shapes, but
+operators must still preserve the checkpoint/tokenizer pair as an artifact.
 
----
+## 8. Serving
 
-## 6. Important inference CLI arguments
+Create a separate registry JSON. Relative model paths are resolved relative to
+the registry file:
 
-| Argument | Meaning |
-|---|---|
-| `--checkpoint` | Checkpoint directory containing `config.json`, model arrays, and tokenizer. |
-| `--prompt` | Prompt text on the command line. |
-| `--prompt-file` | Read a long prompt from a UTF-8 file. |
-| `--max-new-tokens` | Generation budget. |
-| `--backend` | `kv-cache` (default) or slow `reference` full-prefix recomputation. |
-| `--strategy` | `greedy`, `temperature`, `top-k`, or `top-p`. |
-| `--temperature` | Sampling temperature. |
-| `--top-k` / `--top-p` | Sampling cutoff for the selected strategy. |
-| `--max-context` | Override the addressable inference horizon. Memory checkpoints already default to their trained horizon. |
-| `--runtime-profile` | Runtime optimization profile. CuPy inference `auto` resolves to `gpu-fast`. |
-
----
-
-# 7. Environment-variable reference
-
-The following variables are intentionally retained as research controls. In
-normal use, prefer a runtime profile and override only the setting you are
-actively testing.
-
-## 7.1 Backend and profile
-
-| Variable | Normal behavior | Purpose |
-|---|---|---|
-| `MINI_LLM_BACKEND` | `numpy` if omitted | Select `numpy` or `cupy`. GPU use currently requires setting `cupy` before process start. |
-| `MINI_LLM_RUNTIME_PROFILE` | `auto` | Same selection as `--runtime-profile`; the CLI option takes precedence when supplied. |
-| `MINI_LLM_BF16_MIXED_CONTEXT` | off | Experimental mixed BF16 context-storage path used by attention internals. Leave off unless benchmarking it explicitly. |
-
-## 7.2 Attention and QKV fast paths
-
-| Variable | Auto CuPy profile | Purpose |
-|---|---:|---|
-| `MINI_LLM_PACKED_QKV` | `1` | Compute Q/K/V from one packed projection path. |
-| `MINI_LLM_COMPACT_PACKED_V` | `1` | Avoid unnecessarily expanded V storage in the packed path. |
-| `MINI_LLM_FUSED_LOCAL_SOFTMAX` | `1` | CUDA local causal softmax path. |
-| `MINI_LLM_BF16_LOCAL_GEMM` | `1` | Keep local-attention GEMMs in BF16/Tensor-Core-compatible form. |
-| `MINI_LLM_FUSED_BF16_LOCAL_PIPELINE` | `1` | Fused BF16 local-attention pipeline. |
-| `MINI_LLM_FUSED_LOCAL_MULTI_CHUNK_SOFTMAX` | `1` | Fused local softmax for multi-chunk execution. |
-| `MINI_LLM_FUSED_INDEXED_SOFTMAX` | `1` | Fused softmax for indexed sparse attention. |
-| `MINI_LLM_FUSED_BF16_INDEXED_PIPELINE` | `1` | BF16 indexed-attention fused path. |
-| `MINI_LLM_FUSED_DILATED_MULTI_CHUNK_SOFTMAX` | `1` | Fused softmax for dilated multi-chunk attention. |
-| `MINI_LLM_LOCAL_ATTN_QUERY_CHUNK` | `1536` for current wide models | Local-attention query tile. Lower values usually reduce transient VRAM; higher values may improve throughput. |
-| `MINI_LLM_INDEXED_ATTN_QUERY_CHUNK` | module default `128` | Query chunk size for generic indexed attention. |
-| `MINI_LLM_DILATED_ATTN_QUERY_CHUNK` | module default `1024` | Query chunk size for dilated attention. |
-| `MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM` | `1` | Use direct-pointer grouped cuBLAS for the validated local path. |
-| `MINI_LLM_LOCAL_CUBLAS_MODE` | `grouped` | Choose grouped or experimental batched cuBLAS dispatcher. |
-| `MINI_LLM_CUBLAS_AUTOTUNE` | `0` | Enable/disable runtime cuBLAS autotuning. Current validated profile leaves it off. |
-| `MINI_LLM_CUBLAS_GROUPED_DILATED_GEMM` | `1` | Extend grouped cuBLAS execution to the dilated path. |
-
-## 7.3 Retrieval and context-router kernels
-
-| Variable | Auto CuPy profile | Purpose |
-|---|---:|---|
-| `MINI_LLM_DIRECT_RETRIEVAL_SCATTER` | `1` | Direct CUDA scatter for retrieval queries/KV gradients instead of generic indexing. |
-| `MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE` | `1` | BF16 Tensor-Core/fused-softmax retrieval-attention path. |
-| `MINI_LLM_DIRECT_QUERY_POOL` | `1` | Direct CUDA pooling for the top-level context-router query. |
-| `MINI_LLM_DIRECT_QUERY_POOL_BACKWARD` | `1` | Matching direct backward path for query pooling. |
-
-## 7.4 MoE / expert kernels
-
-| Variable | Auto CuPy profile | Purpose |
-|---|---:|---|
-| `MINI_LLM_FUSED_SWIGLU` | `1` | Fused BF16 SwiGLU activation/backward kernels. |
-| `MINI_LLM_FUSED_EXPERT_GEMM` | `0` | Experimental packed gate/up expert GEMM. Current measurements favor the normal expert GEMMs. |
-| `MINI_LLM_CONCURRENT_EXPERTS` | `0` | Run expert work on concurrent CUDA streams. Currently disabled by default. |
-| `MINI_LLM_EXPERT_STREAMS` | `2` | Number of expert streams when concurrent experts are enabled. |
-
-## 7.5 RMSNorm, loss, and LM head
-
-| Variable | Auto/consumer behavior | Purpose |
-|---|---:|---|
-| `MINI_LLM_FUSED_BF16_RMSNORM` | `1` | Fused training RMSNorm for FP32 residual -> BF16 branch activations. |
-| `MINI_LLM_DISABLE_FUSED_RMSNORM` | `0` | Inference/debug escape hatch for fused RMSNorm. |
-| `MINI_LLM_FUSED_BF16_CE` | `1` | Fused BF16 cross-entropy path. |
-| `MINI_LLM_INPLACE_BF16_CE` | `1` | Reuse compatible CE buffers to reduce memory traffic/allocation. |
-| `MINI_LLM_LOSS_TOKEN_CHUNK` | `512` | Token chunk used by the fallback/chunked loss implementation. |
-| `MINI_LLM_LM_HEAD_CHUNK_TOKENS` | `1024` in `consumer-gpu` training | Chunk/recompute the vocabulary projection and validation loss. `0` materializes the full logits tensor. |
-
-## 7.6 Optimizer and activation memory
-
-| Variable | Consumer profile | Purpose |
-|---|---:|---|
-| `MINI_LLM_OPTIMIZER_OFFLOAD` | `full` | `none`, `moments`, or `full`. Full offload keeps Adam history/master state in host memory with GPU staging. |
-| `MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB` | `16` | GPU staging chunk size for optimizer offload. Smaller saves VRAM but can add overhead. |
-| `MINI_LLM_ACTIVATION_CHECKPOINT` | `none` | `none` or `block`. Recompute block activations in backward to save VRAM at substantial compute cost. |
-
-## 7.7 Routed-prefix memory architecture
-
-Most of these are **architecture/curriculum overrides**. The
-`wide-500m-memory-*` presets already contain the current defaults, so they are
-not required in normal launch commands.
-
-| Variable | 64k preset default | Purpose |
-|---|---:|---|
-| `MINI_LLM_HIERARCHICAL_MEMORY` | enabled by preset | Force hierarchical-memory enable/disable. |
-| `MINI_LLM_MEMORY_INTEGRATION` | `routed_prefix` | `routed_prefix`, legacy `terminal_landmark`, or legacy `pretransformer_read`. |
-| `MINI_LLM_MEMORY_TRAINING` | `joint` | Memory training mode; routed-prefix uses joint LM training. |
-| `MINI_LLM_MEMORY_LENGTH` | `65536` | Total causal/addressable horizon. |
-| `MINI_LLM_MEMORY_RECENT_TOKENS` | `4096` | Recent/working context length. |
-| `MINI_LLM_MEMORY_TARGET_TOKENS` | `4096` | Continuous current-window target length. |
-| `MINI_LLM_MEMORY_BLOCK_SIZE` | `128` | Historical routing block size. |
-| `MINI_LLM_MEMORY_TOP_K_BLOCKS` | `16` | Maximum selected historical blocks; 16 × 128 = 2048-token routed prefix. |
-| `MINI_LLM_MEMORY_QUERY_TOKENS` | `4096` | Tokens pooled to construct the context-router query. |
-| `MINI_LLM_MEMORY_ROUTER_DIM` | `64` | Router projection dimension. |
-| `MINI_LLM_MEMORY_ROUTER_TEMPERATURE` | `1.0` | Initial soft surrogate/Gumbel routing temperature. |
-| `MINI_LLM_MEMORY_ROUTER_TEMPERATURE_MIN` | `0.25` | Final router temperature. |
-| `MINI_LLM_MEMORY_ROUTER_TEMPERATURE_ANNEAL_STEPS` | `50000` | Steps used to anneal router temperature. |
-| `MINI_LLM_MEMORY_ROUTER_SURROGATE_SCALE` | `1.0` | Scale of the straight-through router surrogate gradient. |
-| `MINI_LLM_MEMORY_ROUTER_GUMBEL_NOISE` | enabled | Stochastic Gumbel exploration during training. Inference remains deterministic. |
-| `MINI_LLM_MEMORY_RETRIEVAL_BATCH_PROBABILITY` | `0.5` | Requested fraction of training samples/batches using retrieval; short histories naturally use direct prefixes/no routing. |
-| `MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS` | `1` under CuPy profile | Print periodic router-selection diagnostics. |
-| `MINI_LLM_MEMORY_ROUTER_DIAGNOSTICS_INTERVAL` | `100` | Optimizer-step interval for router diagnostics. |
-
-Legacy external-reader / terminal-Landmark controls are kept for ablations:
-
-| Variable | Purpose |
-|---|---|
-| `MINI_LLM_MEMORY_READ_HEADS` | Number of external-memory read query heads. |
-| `MINI_LLM_MEMORY_READ_KV_HEADS` | K/V heads for the legacy memory reader. |
-| `MINI_LLM_MEMORY_READ_QUERY_CHUNK` | Query chunk size for that reader. |
-| `MINI_LLM_MEMORY_ATTENTION_LAYER` | Transformer layer used by terminal-Landmark memory. |
-| `MINI_LLM_MEMORY_MIN_ROUTER_HISTORY_BLOCKS` | Minimum eligible history blocks for legacy routing. |
-| `MINI_LLM_MEMORY_READER_RESIDUAL_SCALE` | Residual scaling for the legacy external-reader path. |
-
-## 7.8 Routed-prefix inference controls
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `MINI_LLM_ROUTED_PREFIX_PREFILL_CHUNK` | `4096` | Chunk size used to project/store long prompt history during prefill. |
-| `MINI_LLM_ROUTED_PREFIX_REFRESH_TOKENS` | checkpoint default `128` | Number of generated tokens between deterministic top-level reroutes/cache rebuilds. Use `1` for strict reference semantics. |
-| `MINI_LLM_TERMINAL_MEMORY_PREFILL_CHUNK` | `4096` | Legacy terminal-Landmark prefill chunk. |
-| `MINI_LLM_FUSED_DECODE_QKV_ROPE_STORE` | `1` | Fused single-token QKV unpack + RoPE + KV-cache insertion. |
-| `MINI_LLM_FUSED_SPARSE_DECODE` | `0` | Experimental fused one-token sparse-attention kernel; still opt-in. |
-| `MINI_LLM_FUSED_TERMINAL_MEMORY_DECODE` | `1` | Legacy terminal-memory decode fusion. |
-
-## 7.9 Profiling and numerical debugging
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `MINI_LLM_MEMORY_PROFILE` | `0` | Record GPU-memory boundaries for early optimizer steps. |
-| `MINI_LLM_MEMORY_PROFILE_STEPS` | `1` when memory profiling is enabled | Number of profiled optimizer steps. |
-| `MINI_LLM_LOCAL_DETAIL_PROFILE` | `0` | Fine-grained local-attention profiler scopes. |
-| `MINI_LLM_RETRIEVAL_ROUTER_DETAIL_PROFILE` | `0` | Fine-grained retrieval/router profiler scopes. |
-| `MINI_LLM_MOE_DETAIL_PROFILE` | `0` | Fine-grained MoE profiler scopes. |
-| `MINI_LLM_RMSNORM_DETAIL_PROFILE` | `0` | Fine-grained RMSNorm profiler scopes. |
-| `MINI_LLM_FINITE_TRACE_START` | `-1` | Begin expensive finite-value tracing at an optimizer step. |
-| `MINI_LLM_FINITE_TRACE_END` | same as start | Final finite-trace step. |
-
-### Strict flags
-
-Most optimized CUDA paths have a matching `*_STRICT` flag. Examples include:
-
-```text
-MINI_LLM_PACKED_QKV_STRICT
-MINI_LLM_FUSED_LOCAL_SOFTMAX_STRICT
-MINI_LLM_FUSED_BF16_LOCAL_PIPELINE_STRICT
-MINI_LLM_FUSED_INDEXED_SOFTMAX_STRICT
-MINI_LLM_FUSED_BF16_INDEXED_PIPELINE_STRICT
-MINI_LLM_DIRECT_RETRIEVAL_SCATTER_STRICT
-MINI_LLM_FUSED_BF16_RETRIEVAL_PIPELINE_STRICT
-MINI_LLM_DIRECT_QUERY_POOL_STRICT
-MINI_LLM_FUSED_SWIGLU_STRICT
-MINI_LLM_FUSED_BF16_CE_STRICT
-MINI_LLM_FUSED_BF16_RMSNORM_STRICT
-MINI_LLM_CUBLAS_GROUPED_LOCAL_GEMM_STRICT
-MINI_LLM_FUSED_DECODE_QKV_ROPE_STORE_STRICT
-MINI_LLM_FUSED_SPARSE_DECODE_STRICT
-MINI_LLM_FUSED_TERMINAL_MEMORY_DECODE_STRICT
+```json
+{
+  "models": [
+    {
+      "id": "model-b",
+      "format": "native",
+      "path": "./checkpoints/model_b_published_copy",
+      "chat_template": "plain",
+      "tool_format": "none",
+      "context_length": 8192,
+      "execution_policy": "auto",
+      "sampling": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "top_k": 40,
+        "repetition_penalty": 1.0,
+        "repetition_window": 256,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
+      }
+    }
+  ]
+}
 ```
 
-Normal optimized paths are allowed to fall back if a kernel cannot compile or a
-layout is unsupported. Setting the matching strict flag to `1` converts that
-fallback into an error. Strict mode is useful for kernel validation and
-benchmarking; it is intentionally **not** part of the normal runtime profile.
-
----
-
-# 8. Memory tuning recipes
-
-## Need a little more VRAM headroom
-
-Try, in order:
+Start a localhost-only server:
 
 ```bash
-MINI_LLM_LOCAL_ATTN_QUERY_CHUNK=1024
+MINI_LLM_BACKEND=cupy .venv/bin/python serve.py \
+  --registry /absolute/path/to/serving_models.json \
+  --host 127.0.0.1 --port 8000
 ```
 
-then:
+Check it with:
 
 ```bash
-MINI_LLM_LOCAL_ATTN_QUERY_CHUNK=768
+curl http://127.0.0.1:8000/v1/models
+curl http://127.0.0.1:8000/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model-b","prompt":"A stable optimizer","max_tokens":64}'
 ```
 
-and/or reduce optimizer staging:
+Binding beyond localhost requires `--api-key` or `MYLOCAL_LLM_API_KEY`. The
+service is a small compatibility surface, not a hardened public deployment. It
+keeps at most one local model GPU-resident and serializes local inference
+requests. See the developer guide for API limitations.
+
+## 9. Frozen-foundation specialist training
+
+The guarded specialist launcher added by `eb61df0` is executable on GPU, but it
+requires a **completed, immutable copy** of a sparse Model B foundation. It may
+never use the active protected run or a checkpoint directory another process is
+replacing. No suitable foundation checkpoint is available in this workspace at
+present.
+
+The foundation remains frozen. Only independent residual-specialist parameters
+are optimized; the specialist checkpoint stores a content fingerprint of the
+foundation and resume rejects a different foundation.
+
+### Dry run
+
+The dry run validates paths and prints the plan. It does not import the heavy
+model code, allocate a model, train, or write a checkpoint. The foundation and
+mixture paths must nevertheless exist, and the specialist destination must be
+new.
 
 ```bash
-MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB=8
+.venv/bin/python scripts/train_0105_specialist.py \
+  --foundation-checkpoint /absolute/path/to/immutable_model_b_copy \
+  --mixed-shard-root ./token_shards_ensemble_32k_mixed \
+  --specialist-checkpoint /absolute/path/to/new_specialist_smoke \
+  --specialist-id general \
+  --specialist-layers 2 \
+  --context-length 512 \
+  --batch-size 2 \
+  --grad-accum-steps 2 \
+  --total-steps 10000 \
+  --warmup-steps 100 \
+  --peak-lr 3e-4 \
+  --grad-clip 1.0 \
+  --weight-decay 0.1 \
+  --muon-momentum 0.95 \
+  --muon-ns-steps 5 \
+  --muon-matmul-precision bf16 \
+  --head-chunk-tokens 512 \
+  --shape-bucket fine \
+  --seed 42 \
+  --steps 1 \
+  --validation-batches 2
 ```
 
-The chunked LM head is already enabled by `consumer-gpu` for the wide model.
-Reduce it further if the vocabulary projection itself is the pressure point:
+### GPU smoke run
+
+Run only on an idle GPU after the dry run succeeds:
 
 ```bash
-MINI_LLM_LM_HEAD_CHUNK_TOKENS=512
+source scripts/0105_model_b_profile.env
+
+.venv/bin/python scripts/train_0105_specialist.py \
+  --foundation-checkpoint /absolute/path/to/immutable_model_b_copy \
+  --mixed-shard-root ./token_shards_ensemble_32k_mixed \
+  --specialist-checkpoint /absolute/path/to/new_specialist_smoke \
+  --specialist-id general \
+  --specialist-layers 2 \
+  --context-length 512 \
+  --batch-size 2 \
+  --grad-accum-steps 2 \
+  --total-steps 10000 \
+  --warmup-steps 100 \
+  --peak-lr 3e-4 \
+  --grad-clip 1.0 \
+  --weight-decay 0.1 \
+  --muon-momentum 0.95 \
+  --muon-ns-steps 5 \
+  --muon-matmul-precision bf16 \
+  --head-chunk-tokens 512 \
+  --shape-bucket fine \
+  --seed 42 \
+  --steps 1 \
+  --validation-batches 2 \
+  --log-interval 1 \
+  --profile-steps 1 \
+  --log-text-file ./logs/specialist_general_smoke.log \
+  --log-jsonl ./logs/specialist_general_smoke.jsonl \
+  --run
 ```
 
-Use block activation checkpointing only when these lighter options are
-insufficient; it trades substantial extra compute for memory.
+By default the current trainer enables whole-specialist activation checkpoint
+replay, matrix-pool attention-probability recomputation, and source-preserving
+length regrouping when both batch size and accumulation are greater than one.
+The `--no-*` switches disable those mechanisms and therefore become part of the
+resume configuration. `--train-foundation-ce` adds an exact frozen-foundation CE
+for each training minibatch but costs an additional frozen LM-head evaluation.
 
-## Debug a suspected optimized-kernel problem
+A 12-layer, 8,192-context run is a separate scientific experiment. Validate VRAM,
+finite gradients, throughput, and checkpoint/resume first; do not infer safe
+settings from the foundation's accumulation count.
 
-Run the same case with:
+### Specialist resume
+
+Resume uses `--resume --run`, not `--resume-from`. Repeat every option that
+constructs `SpecialistTrainingConfig` and every sampler/geometry option exactly.
+`--steps` is the number of optimizer updates in this invocation and may change;
+`--total-steps` remains the original schedule horizon.
 
 ```bash
-MINI_LLM_BACKEND=cupy \
-python train_model.py --runtime-profile reference ...
+source scripts/0105_model_b_profile.env
+
+.venv/bin/python scripts/train_0105_specialist.py \
+  --foundation-checkpoint /absolute/path/to/the_same_immutable_model_b_copy \
+  --mixed-shard-root ./token_shards_ensemble_32k_mixed \
+  --specialist-checkpoint /absolute/path/to/existing_specialist_smoke \
+  --specialist-id general \
+  --specialist-layers 2 \
+  --context-length 512 \
+  --batch-size 2 \
+  --grad-accum-steps 2 \
+  --total-steps 10000 \
+  --warmup-steps 100 \
+  --peak-lr 3e-4 \
+  --grad-clip 1.0 \
+  --weight-decay 0.1 \
+  --muon-momentum 0.95 \
+  --muon-ns-steps 5 \
+  --muon-matmul-precision bf16 \
+  --head-chunk-tokens 512 \
+  --shape-bucket fine \
+  --seed 42 \
+  --steps 10 \
+  --validation-batches 2 \
+  --log-interval 1 \
+  --log-text-file ./logs/specialist_general_smoke.log \
+  --log-jsonl ./logs/specialist_general_smoke.jsonl \
+  --resume --run
 ```
 
-Then re-enable one optimization at a time. This is the preferred A/B workflow.
+Resume verifies the specialist ID/layer count, exact training configuration,
+sampler manifest hash, source weights, context, batch size, EOS, shape bucket,
+RNG/cursors, optimizer update count, parameter schema, and foundation digest.
 
----
+## 10. Troubleshooting
 
-# 9. What should usually remain untouched
+### Profile audit reports mismatches
 
-For normal training of a named model preset, do not repeat architecture values
-on the command line/environment unless you are intentionally running an
-ablation. In particular, the current memory preset already defines:
+- Start a new shell and source `scripts/0105_model_b_profile.env` again.
+- Run from the repository root.
+- Use `--peak-lr 1.5e-4`; older notes showing `3e-4` are stale for the foundation.
+- Pass flags after the auditor's standalone `--`.
+- Remember that omitted options are mismatches; defaults are not treated as
+  equivalent by the audit.
 
-```text
-integration mode
-memory horizon
-block size
-number of routed blocks
-router dimensionality
-router temperature schedule
-Gumbel exploration
-retrieval probability
-inference refresh interval
-```
+### Backend is NumPy when CuPy was expected
 
-Keeping architecture in `ModelConfig` and hardware/runtime policy in the
-runtime profile makes checkpoints easier to reproduce and commands much easier
-to read.
+`MINI_LLM_BACKEND` was set after importing `mini_llm`, or it was omitted. Exit
+that Python process and start a new one with `MINI_LLM_BACKEND=cupy` already set.
 
----
+### Out of memory
 
-# 10. Recommended workflow
+First confirm that no other process owns the GPU. Do not change the protected
+run. For a new experimental run, reduce specialist batch/context/layers or use
+checkpointing/recomputation; changing foundation production flags means it is no
+longer the exact production profile. GPU pool endpoint logging is not a lifetime
+peak measurement.
 
-1. Use `auto` for normal work.
-2. Change one explicit `MINI_LLM_*` variable only when testing a hypothesis.
-3. Record that override with benchmark results.
-4. If the new behavior becomes consistently better and robust, promote it into
-   the appropriate runtime profile rather than permanently lengthening launch
-   commands.
-5. Keep architecture changes in model presets/configuration rather than runtime
-   performance profiles.
+### Resume rejects tokenizer or data
 
-This keeps the project both **easy to run** and **fully inspectable**.
+A tokenizer mismatch is fatal. For strict resume, restore the exact tokenizer,
+mixture manifest, and shards. A changed mixture may be recorded as a new data
+phase by the trainer, but it is not an exact continuation.
+
+### Resume reports incomplete parameters or optimizer state
+
+Use a complete published checkpoint directory. Do not reconstruct missing files
+by hand. If the active directory is absent but `<checkpoint>.previous` is
+complete, the checkpoint loader can recover through that publication fallback.
+Do not manipulate `.previous` while another writer is active.
+
+### Inference `strict-fast` fails
+
+The checkpoint/backend/shape did not execute a verified fast path. Retry with
+`--execution-policy auto` for compatibility, then investigate the execution
+report separately. Do not describe an automatic fallback as strict-fast success.
+
+### Specialist resume fails
+
+Repeat the original configuration exactly and use the same immutable foundation
+copy. Common causes are a changed `--batch-size`, context, shape bucket,
+activation/probability recomputation switch, mixture manifest, source weights,
+or foundation files.
+
+### A `.partial` data source remains after interruption
+
+Inspect it, then remove only that source's `.partial` directory before restarting
+that source. Never register partial output or delete completed source directories.
+See [`DATA_PIPELINE.md`](DATA_PIPELINE.md).

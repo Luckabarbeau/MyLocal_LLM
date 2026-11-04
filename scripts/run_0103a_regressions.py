@@ -9,6 +9,7 @@ can produce order-dependent results and misleading benchmark conclusions.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
@@ -36,6 +37,9 @@ CPU_SUITES = {
         "tests/test_0088a_openai_server.py",
         "tests/test_0088c_serving_sampling.py",
         "tests/test_generation_benchmark.py",
+    ),
+    "unified_benchmark": (
+        "tests/test_unified_benchmark_0103g.py",
     ),
     "matrix_pool_numerics": (
         "tests/test_matrix_pool_dual_resolution_0102o.py",
@@ -84,7 +88,7 @@ GPU_SUITES = {
 }
 
 
-def environment_for(mode: str, inherited: dict[str, str], *,
+def environment_for(mode: str, inherited: Mapping[str, str], *,
                     model_b_profile: bool = False) -> dict[str, str]:
     """Pin backend, without changing the parent's environment or fast flags."""
     if mode not in {"cpu", "gpu"}:

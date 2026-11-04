@@ -1,58 +1,45 @@
-# Documentation map
+# Documentation
 
-Use this page to distinguish current operational documentation from research
-history. Historical patch snapshots are preserved for provenance and should not
-be treated as required setup steps.
+This is the authoritative documentation index. Current behavior belongs in the focused guides below; historical implementation decisions and negative results belong in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md).
 
 ## Current guides
 
 | Document | Purpose |
 |---|---|
-| [`../README.md`](../README.md) | Project overview, architecture, and installation |
-| [`USER_GUIDE.md`](USER_GUIDE.md) | Training, resume, inference, and runtime controls |
-| [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | Current Model B identity, completed 0104 APIs and remaining GPU gates |
-| [`MODEL_CENTERED_DEVELOPER_GUIDE.md`](MODEL_CENTERED_DEVELOPER_GUIDE.md) | Unified model, generation, training and specialist interfaces |
-| [`EXTENDED_TRAINING.md`](EXTENDED_TRAINING.md) | Extended training workflow |
-| [`TOKENIZER_README.md`](TOKENIZER_README.md) | Tokenizer training and artifacts |
-| [`DEBUG_COMMANDS.md`](DEBUG_COMMANDS.md) | Focused diagnostics commands |
-| [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) | Planned research directions |
-| [`../tests/README.md`](../tests/README.md) | Test categories and safe test commands |
-| [`../benchmarks/README.md`](../benchmarks/README.md) | Evaluation and benchmark workflows |
+| [`../README.md`](../README.md) | Project overview, setup, current architecture, and safe quickstart |
+| [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | Exact Model B architecture, protected run status, and pinned production profile |
+| [`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) | Strict resume, weights-only initialization, checkpoint transactions, and foundation-bound specialists |
+| [`USER_GUIDE.md`](USER_GUIDE.md) | Current training, resume, inference, serving, and specialist operations |
+| [`MODEL_CENTERED_DEVELOPER_GUIDE.md`](MODEL_CENTERED_DEVELOPER_GUIDE.md) | Model, generation, training, loading, execution, and specialist API boundaries |
+| [`DATA_PIPELINE.md`](DATA_PIPELINE.md) | Tokenizers, packed shards, manifests, Common Pile preparation, and provenance |
+| [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) | Short forward-looking roadmap and open acceptance gates |
+| [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | Single durable human/agent change log and historical filename migration ledger |
+| [`research/README.md`](research/README.md) | Retained LaTeX/PDF research artifacts and their historical status |
+| [`../benchmarks/README.md`](../benchmarks/README.md) | Current evaluation and benchmark entry points |
+| [`../tests/README.md`](../tests/README.md) | Test categories, Model B regression coverage, and safe CPU/GPU workflows |
 
-## Research documentation
+## Documentation policy
 
-- [`research/`](research/) contains active predictive and probability-combination
-  design reports and experiment audits.
-- [`research/0090B_modular_residual_specialist_combination.tex`](research/0090B_modular_residual_specialist_combination.tex)
-  is the living LaTeX research note for frozen-foundation residual specialists,
-  learned combination, per-specialist historical memory, and the evidence ledger.
+Humans and coding agents must record durable architecture, behavior, compatibility, runtime-default, data-policy, or operational-safety changes in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md), newest first, using its mandatory template.
 
-## Operational entry points
+Do **not** create another numbered patch-report Markdown file. Update the applicable current guide and the development log instead. Full historical reports removed during consolidation remain recoverable through the migration ledger and Git history.
 
-Stable entry points remain at repository root because tests and existing runbooks
-address them there:
+## Protected run boundary
 
-- `train_model.py` — main training CLI.
-- `train_sft.py` — supervised fine-tuning CLI.
-- `inference.py` — inference CLI.
-- `generate_token_shards.py` and `generate_packed_cosmopedia_shards.py` — data preparation.
-- `benchmarks/run_checkpoint_evaluations.sh` and `benchmarks/run_fusion_evaluations.sh` — checkpoint evaluation.
-- `run_training.sh` — the single configurable training launcher.
+The external Model B run is user-reported at step 165 as of 2026-11-04. Its checkpoint and host are not available in this workspace, so that status is not independently verified here. Do not invent paths, claim checkpoint validation, or alter architecture/training contracts based on assumptions about the unavailable artifact.
 
-Run the launcher from the repository root. It requires an explicit
-`CHECKPOINT_DIR`, refuses unsafe fresh/resume combinations, and accepts additional
-`train_model.py` options after `--`.
+## Runtime and generated-data safety
 
-## Runtime data
-
-The following are generated state, not source organization targets:
+These paths contain generated state or potentially irreplaceable work, not documentation-cleanup targets:
 
 - `checkpoints/`
 - `logs/`
+- `data/` and external datasets
 - `token_shards*/`
-- `runtime/` — bounded streaming caches and optional generated snapshots
+- `runtime/`
 - `benchmarks/results/`
+- local pretrained/external model files
 
-Never delete or relocate these directories as part of routine cleanup. Before
-running GPU tests or benchmarks, check `nvidia-smi` and confirm that no important
-training or inference process owns the device.
+Never delete, move, rename, overwrite, or “tidy” them during routine code or documentation work. Do not write smoke tests into an active checkpoint directory. Use a fresh destination for migration/resume tests and verify the path first.
+
+Before GPU tests or benchmarks, inspect `nvidia-smi`. Do not compete with a training, inference, or serving process. A blocked or out-of-memory gate is not a pass.

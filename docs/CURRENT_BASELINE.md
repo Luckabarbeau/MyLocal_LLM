@@ -1,75 +1,171 @@
-# Production baseline and model-centered integration (0104)
+# Current baseline
 
-## Mathematical model (must not change during repository refactoring)
+This page is the concise source of truth for the current foundation model and its
+pinned training profile after the model-centric refactor.
 
-Model B, `dual_resolution_matrix_pool_sparse_1024_20l`, is the current
-348,261,376-parameter research foundation. Its architecture has 20 layers,
-1024 hidden dimensions, 4096-wide FFN, 128-token completed blocks with four
-learned matrix-pool summaries, 512-token local attention, one 4096-token
-long-local head, and the **stride-16 sparse historical head** in its established
-16-layer phase schedule. Block summaries must be causal and document-isolated;
-full-sequence and incremental inference must agree. Fine length bucketing is
-an execution/data policy, not an architectural parameter.
+## Status
 
-Do not change model mathematics or optimizer settings as part of 0104. Keep the
-live training checkout and checkpoint directory untouched while testing in a
-separate worktree.
+- **Current foundation:** Model B.
+- **Registry ID:** `model_b_348m_sparse16`.
+- **Training CLI model:** `dual-resolution-matrix-pool-sparse-1024-20l`.
+- **Exact parameter count:** **348,261,376**.
+- **Protected external run:** step **165**, reported by the user on **2026-11-04**.
+- **Verification boundary:** that external checkpoint is not available in this
+  checkout. Its weights, optimizer, RNG, tokenizer, provenance, and outputs
+  cannot be inspected or verified here.
+- **Code-change boundary:** the model-centric refactor did not change Model B
+  mathematics or the foundation training algorithm. This documentation update
+  changes no training code.
 
-## Model-centered operations available after 0104A–G
+Do not describe older 338M or 500M experiments as current. Historical details
+belong in [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md).
 
-- `Model.load`, `.inspect`, `.execution_info`: canonical native model loading.
-- `Model.session` and `.generate`: one request-scoped generation session path,
-  backed by existing numerical inference kernels.
-- `Model.score(ids, targets, loss_mask=..., dual_resolution_metadata=...)`:
-  teacher-forced average CE using the existing chunked native head. Callers
-  provide already shifted targets and correct document masks.
-- `Model.train(train_shard_paths=..., val_shard_paths=..., ...)`: thin
-  `TrainingRun` adapter to **the existing `ExtendedTrainer`**, not a new
-  training algorithm. `.train_steps`, `.save_checkpoint` and `.inspect` are
-  available on the returned run. This is a new training start; **resuming
-  an existing optimizer requires the legacy resume loader/launcher**.
-- `Model.save_weights(path)`: specialist-incompatible native weights-only
-  serialization; the caller must supply config/tokenizer for a standalone
-  reload. Use a fresh destination, not an active training checkpoint.
-- `FrozenResidualComposition`: a reference forward/backward for a frozen
-  foundation plus hidden-only residual specialist. Includes strict Model B
-  metadata forwarding and refuses multi-document specialist rows rather
-  than risking cross-document leakage.
-- Specialist-only save/load: records an exact SHA256 of foundation config and
-  parameter files; writes specialist weights, optional optimizer state and
-  optional training state without duplicating foundation parameters.
+## Model B architecture
 
-## Remaining production gates (do not claim these are complete)
+| Contract field | Value |
+|---|---:|
+| Layers | 20 |
+| `d_model` | 1,024 |
+| Dense SwiGLU `d_ff` | 4,096 |
+| Vocabulary | 32,768 |
+| Query heads | 16 |
+| KV heads | 4 |
+| Head dimension | 64 |
+| Architectural context horizon | 65,536 |
+| Matrix-pool block size | 128 completed tokens |
+| Learned summaries per completed block | 4 |
+| Ordinary local window | 512 |
+| Long-local branch | one 4,096-token head |
+| Sparse original-token branch | stride 16, query head 1 |
+| Sparse layers | zero-based `2..17` |
+| Maximum sparse keys at 65,536 | 4,096 per sparse head |
 
-1. **GPU Model B parity:** full-model numerical comparison and BF16 specialist
-   forward/backward at 2 layers and 12 layers. Compare document and sparse
-   attention paths, and verify no foundation weight/gradient mutation.
-2. **Specialist data-source integration:** route the existing document-first
-   mixture sampler through a shared training interface without instantiating
-   foundation optimizer states. The initial specialist requires single-document
-   rows until document-isolating attention is implemented.
-3. **Specialist TrainingRun:** add efficient GPU accumulation, scheduling,
-   checkpoint/resume and logging for independent trainable components using
-   the shared training interfaces. The reference composition is *not* a
-   production specialist-training launcher yet.
-4. **Performance parity:** on the RTX 5080 compare the old trainer and the
-   model facade for supervised tok/s, allocated VRAM, and model output. CUDA
-   Graph execution reporting and strict fallback checks must remain truthful.
-5. **Legacy de-duplication:** migrate remaining benchmark wrappers and training
-   launchers incrementally, preserving their CLI behavior, then archive or
-   remove dead experimental paths only after matching golden results.
-6. **Model execution framework:** the existing `mini_llm.backend` is still
-   process-global. Per-model simultaneous CuPy/NumPy/Torch execution and a
-   full shared operator dispatcher remain future backend work.
+Every layer has exact local attention and compressed historical attention. Only
+complete same-document blocks produce matrix-pool summaries, and a summary is
+visible only after the represented block has completed. This preserves causal
+and document-isolated behavior.
 
-## CPU acceptance
+The 4,096-token head is retained. In zero-based layers `2..17`, query head 1 is
+assigned deterministic sparse original-token history. The fixed phase schedule
+is:
 
-```bash
-MINI_LLM_BACKEND=numpy python3 scripts/run_0103a_regressions.py --mode cpu
+```text
+0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15
 ```
 
-## Historical reference
+Mapped to layers:
 
-Earlier 338M models and retired branches remain documented under `docs/research`
-and existing experiment notes. Their results are valuable but they are not
-production Model B configurations.
+```text
+layer:  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17
+phase:  0  8  4 12  2 10  6 14  1  9  5 13  3 11  7 15
+```
+
+The sparse branch uses existing GQA projections and adds no learned tensors.
+Same-document masking prevents cross-document attention. At the full horizon,
+each phase selects at most `65,536 / 16 = 4,096` original-token keys.
+
+Code authorities:
+
+- `mini_llm/config.py` — architecture preset;
+- `mini_llm/model_registry.py` — `model_b_348m_sparse16` registration;
+- `mini_llm/model/decoder_lm.py` and `mini_llm/inference_model.py` — phase wiring;
+- `tests/test_baseline_contract_0103a.py` — framework-neutral architecture contract;
+- `tests/test_model_b_config_roundtrip_0104b.py` — canonical config serialization.
+
+## Pinned training profile
+
+The comparison authority is `mini_llm/production_profile_0105.py`. Source
+`scripts/0105_model_b_profile.env` in a **new shell** for the matching environment.
+The environment file does not start, stop, or alter another process.
+
+| Setting | Pinned value |
+|---|---:|
+| Backend | `cupy` |
+| Objective | `ar` |
+| Precision | `bf16-mixed` |
+| Runtime profile | `consumer-gpu` |
+| Training context | 8,192 |
+| Batch size | 1 |
+| Gradient accumulation | 512 |
+| Accumulation weighting | `supervised_tokens` |
+| Optimizer | `hybrid-muon` |
+| Muon momentum | 0.95 |
+| Muon Newton–Schulz steps | 5 |
+| Muon matmul precision | `bf16` |
+| Total steps | 100,000 |
+| Warmup | 750 |
+| Peak LR | `1.5e-4` |
+| Gradient clip | 1.0 |
+| Weight decay | 0.1 |
+| Save interval | 50 |
+
+The frozen profile additionally pins validation cadence, seeds, benchmark suite,
+full optimizer offload with 16 MiB staging, fine dual-resolution shape bucketing,
+Triton local/global/compression kernels, prepared RoPE, fused matrix-pool
+backward, projection-gradient precision, LM-head chunking, and memory-trim
+behavior. Runtime flags are execution policy; they are not permission to change
+the architecture or checkpoint schema.
+
+`--checkpoint-dir`, `--log-file`, and `--resume-from` are intentionally excluded
+from the reusable profile. They are operational locations and must never be
+copied from a protected run into a regression command.
+
+## Model-centric boundaries
+
+The refactor preserves these ownership rules:
+
+- `Model` owns architecture, weights, tokenizer, loading, inspection, scoring,
+  and generation entry points.
+- `GenerationSession` owns request-local KV/history and sampling state.
+- `TrainingRun` owns optimizer, schedule, RNG, counters, and data sampler state.
+- `ExtendedTrainer` and `train_model.py` remain the foundation production path.
+- A model facade is not a substitute for strict optimizer/RNG resume.
+- Specialist checkpoints contain specialist tensors, not a duplicate foundation.
+
+Specialist infrastructure is available, but full-size composed-model GPU
+performance and end-to-end generation remain separate acceptance work. Do not
+interpret CPU specialist tests as proof of production readiness.
+
+## Checkpoint baseline
+
+For current checkpoints:
+
+1. Strict resume uses the saved `config.json` as architecture authority.
+2. The model tensor-name set must match exactly; partial loading is not resume.
+3. Optimizer kind, master weights, Adam moments, Muon momentum groups, counters,
+   and modern train/validation RNG state belong to continuation.
+4. The tokenizer must match both checkpoint provenance and the packed-data
+   manifest. Vocabulary size equality alone is insufficient identity.
+5. An intentional data-mixture change is recorded as a data fork and may reset
+   data cursors while retaining model/optimizer state. That is not sample-exact
+   continuation.
+6. `--init-from` is weights-only initialization into a fresh optimizer, schedule,
+   counters, RNG streams, and destination.
+7. Active checkpoint directories must not be used for tests, specialist hashing,
+   conversion, or exploratory writes.
+
+See [`CHECKPOINT_COMPATIBILITY.md`](CHECKPOINT_COMPATIBILITY.md) for the complete
+contract and safe placeholder commands.
+
+## Validation
+
+Safe CPU contract checks:
+
+```bash
+MINI_LLM_BACKEND=numpy pytest -q \
+  tests/test_baseline_contract_0103a.py \
+  tests/test_model_b_config_roundtrip_0104b.py \
+  tests/test_checkpoint_transactions_0104a.py \
+  tests/test_production_profile_0105a.py
+```
+
+Broader bounded CPU gate:
+
+```bash
+MINI_LLM_BACKEND=numpy python scripts/run_0103a_regressions.py \
+  --mode cpu --report /tmp/model_b_cpu.json
+```
+
+GPU gates must run only on an idle device with enough memory. Passing these
+checks protects selected contracts; it does not verify the unavailable external
+step-165 checkpoint or establish full-run throughput.

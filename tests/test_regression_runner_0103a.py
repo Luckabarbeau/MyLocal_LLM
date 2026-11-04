@@ -15,6 +15,7 @@ def test_cpu_suite_includes_baseline_sparse_head_and_checkpoint():
     assert "tests/test_baseline_contract_0103a.py" in paths
     assert "tests/test_checkpoint.py" in paths
     assert "tests/test_runtime_defaults.py" in paths
+    assert "tests/test_unified_benchmark_0103g.py" in paths
 
 
 def test_runtime_profile_is_always_its_own_process():

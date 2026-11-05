@@ -42,7 +42,8 @@ class AdamW:
     def __init__(
         self, parameters, lr=3e-4, beta1=DEFAULT_ADAM_BETA1,
         beta2=DEFAULT_ADAM_BETA2, eps=DEFAULT_ADAM_EPS,
-        weight_decay=0.1, numerical_debug=False
+        weight_decay=0.1, numerical_debug=False,
+        unembedding_lr_ratio=1.0, unembedding_parameter_name="output_proj.W",
     ):
         # 0074C: reject invalid optimizer hyperparameters at construction,
         # including direct Python callers that do not use the training CLI.
@@ -57,6 +58,10 @@ class AdamW:
         self.beta2 = float(beta2)
         self.eps = float(eps)
         self.weight_decay = float(weight_decay)
+        self.unembedding_lr_ratio = float(unembedding_lr_ratio)
+        if not math.isfinite(self.unembedding_lr_ratio) or self.unembedding_lr_ratio < 0.0:
+            raise ValueError("unembedding learning-rate ratio must be finite and nonnegative")
+        self.unembedding_parameter_name = str(unembedding_parameter_name)
         self.numerical_debug = bool(numerical_debug)
         self.step_index = 0
         # 0064B: Adam age is tracked per parameter so a block activated after
@@ -387,12 +392,19 @@ class AdamW:
                     f"at step {self.step_index}"
                 )
 
+    def _parameter_lr(self, parameter, eta):
+        """Scale the actual AdamW update, including decoupled weight decay."""
+        if parameter.name == self.unembedding_parameter_name:
+            return eta * self.unembedding_lr_ratio
+        return eta
+
     def _step_device_moments(self, eta, active_parameter_names=None):
         """Established all-device Adam path with per-parameter Adam age."""
         for i, p in enumerate(self.parameters):
             if active_parameter_names is not None and p.name not in active_parameter_names:
                 continue
-            step_size, eps_scaled = self._bias_correction(i, eta)
+            parameter_eta = self._parameter_lr(p, eta)
+            step_size, eps_scaled = self._bias_correction(i, parameter_eta)
             g = p.grad.astype("float32", copy=False)
             self._debug_check_gradient(g, i, p)
 
@@ -421,7 +433,7 @@ class AdamW:
             update *= step_size
 
             if p.decay and self.weight_decay != 0.0:
-                self.master_weights[i] *= (1.0 - eta * self.weight_decay)
+                self.master_weights[i] *= (1.0 - parameter_eta * self.weight_decay)
             self.master_weights[i] -= update
             self._debug_check_master(i, p)
             p.data[...] = self.master_weights[i].astype(p.data.dtype)
@@ -431,12 +443,13 @@ class AdamW:
         stream = xp.cuda.get_current_stream()
         one_minus_b1 = 1.0 - self.beta1
         one_minus_b2 = 1.0 - self.beta2
-        decay_factor = 1.0 - eta * self.weight_decay
 
         for i, p in enumerate(self.parameters):
             if active_parameter_names is not None and p.name not in active_parameter_names:
                 continue
-            step_size, eps_scaled = self._bias_correction(i, eta)
+            parameter_eta = self._parameter_lr(p, eta)
+            decay_factor = 1.0 - parameter_eta * self.weight_decay
+            step_size, eps_scaled = self._bias_correction(i, parameter_eta)
             g_flat = p.grad.reshape(-1)
             p_flat = p.data.reshape(-1)
             m_host = self.m[i].reshape(-1)
@@ -524,6 +537,17 @@ class AdamW:
             unknown = active - known
             if unknown:
                 raise ValueError(f"unknown active AdamW parameters: {sorted(unknown)}")
+
+        # A zero ratio fully freezes the output parameter and its optimizer
+        # moments. Keep its local Adam age unchanged during skipped steps.
+        if self.unembedding_lr_ratio == 0.0:
+            if active is None:
+                active = frozenset(
+                    p.name for p in self.parameters
+                    if p.name != self.unembedding_parameter_name
+                )
+            else:
+                active = active - {self.unembedding_parameter_name}
 
         self.step_index += 1
         if active is not None:

@@ -232,7 +232,8 @@ class HybridMuonAdamW:
 
     def __init__(self, parameters, *, lr, beta1, beta2, eps, weight_decay,
                  muon_momentum=0.95, muon_ns_steps=5, muon_matmul_precision="bf16",
-                 numerical_debug=False):
+                 numerical_debug=False, unembedding_lr_ratio=1.0,
+                 unembedding_parameter_name="output_proj.W"):
         self.parameters = list(parameters)
         if not 0 <= muon_momentum < 1 or not math.isfinite(muon_momentum):
             raise ValueError("Muon momentum must be finite and in [0,1)")
@@ -245,6 +246,8 @@ class HybridMuonAdamW:
             [p for p in self.parameters if p.name not in self.muon_names],
             lr=lr, beta1=beta1, beta2=beta2, eps=eps,
             weight_decay=weight_decay, numerical_debug=numerical_debug,
+            unembedding_lr_ratio=unembedding_lr_ratio,
+            unembedding_parameter_name=unembedding_parameter_name,
         )
         self.muon = _MuonMatrices(
             [p for p in self.parameters if p.name in self.muon_names],
@@ -254,6 +257,8 @@ class HybridMuonAdamW:
         )
         self.beta1, self.beta2, self.eps = self.adam.beta1, self.adam.beta2, self.adam.eps
         self.weight_decay = float(weight_decay)
+        self.unembedding_lr_ratio = self.adam.unembedding_lr_ratio
+        self.unembedding_parameter_name = self.adam.unembedding_parameter_name
         self.momentum = self.muon.momentum
         self.ns_steps = self.muon.ns_steps
         self.matmul_precision = self.muon.matmul_precision

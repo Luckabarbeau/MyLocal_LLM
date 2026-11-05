@@ -95,6 +95,7 @@ class ExtendedTrainer:
         warmup_steps: int = 1000,
         total_steps: int = 10000,
         peak_lr: float = 3e-4,
+        unembedding_lr_ratio: float = 1.0,
         grad_clip: float = 1.0,
         weight_decay: float = 0.1,
         checkpoint_dir: Optional[str] = None,
@@ -161,6 +162,7 @@ class ExtendedTrainer:
             warmup_steps: Warmup steps for learning rate schedule
             total_steps: Total training steps
             peak_lr: Peak learning rate
+            unembedding_lr_ratio: Multiplier for the output vocabulary weight update
             grad_clip: Gradient clipping norm
             weight_decay: Weight decay coefficient for AdamW
             checkpoint_dir: Directory for saving checkpoints (None = no save)
@@ -572,6 +574,20 @@ class ExtendedTrainer:
                 raise ValueError("full-history-only end step must follow its start step")
             if not self.full_history_only_parameters:
                 raise ValueError("full-history-only schedule requires full-history parameters")
+        # In a tied model the output weight IS embedding.W. The multiplier
+        # therefore also slows input embeddings; do not silently imply that
+        # a separate unembedding exists or change the checkpoint architecture.
+        unembedding_parameter_name = (
+            "embedding.W" if model.config.tie_embeddings else "output_proj.W"
+        )
+        if not math.isfinite(float(unembedding_lr_ratio)) or float(unembedding_lr_ratio) < 0:
+            raise ValueError("unembedding-lr-ratio must be finite and nonnegative")
+        if model.config.tie_embeddings and float(unembedding_lr_ratio) != 1.0:
+            print("WARNING: tied vocabulary weights: --unembedding-lr-ratio "
+                  "also scales input embedding.W updates (same tensor). "
+                  "The two learning rates cannot be separated without untying.")
+        self.unembedding_lr_ratio = float(unembedding_lr_ratio)
+        self.unembedding_parameter_name = unembedding_parameter_name
         if optimizer_kind not in {"adamw", "hybrid-muon"}:
             raise ValueError("optimizer_kind must be adamw or hybrid-muon")
         if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
@@ -584,11 +600,15 @@ class ExtendedTrainer:
                 weight_decay=weight_decay, numerical_debug=numerical_debug,
                 muon_momentum=muon_momentum, muon_ns_steps=muon_ns_steps,
                 muon_matmul_precision=muon_matmul_precision,
+                unembedding_lr_ratio=self.unembedding_lr_ratio,
+                unembedding_parameter_name=unembedding_parameter_name,
             ) if optimizer_kind == "hybrid-muon" else AdamW(
                 self.optimization_parameters,
                 lr=peak_lr, beta1=adam_beta1, beta2=adam_beta2,
                 eps=adam_eps, weight_decay=weight_decay,
                 numerical_debug=numerical_debug,
+                unembedding_lr_ratio=self.unembedding_lr_ratio,
+                unembedding_parameter_name=unembedding_parameter_name,
             )
         )
         self._refresh_parameter_partitions()
@@ -3651,6 +3671,7 @@ class ExtendedTrainer:
             "optimizer_parameter_birth_steps": (
                 self.optimizer.parameter_birth_step_state()
             ),
+            "unembedding_lr_ratio": self.unembedding_lr_ratio,
             "optimizer_kind": "hybrid-muon" if isinstance(
                 self.optimizer, HybridMuonAdamW) else "adamw",
             "muon_hyperparameters": ({
@@ -3977,6 +3998,8 @@ class ExtendedTrainer:
                     f"loss={avg_loss:.4f}, "
                     f"{depth_text}"
                     f"lr={lr:.6f}, "
+                    f"unembedding_lr={lr * self.unembedding_lr_ratio:.8g} "
+                    f"(ratio={self.unembedding_lr_ratio:g}), "
                     f"grad_norm={grad_norm:.4f}, "
                     f"grad_weighting={self.gradient_accumulation_weighting}, "
                     f"target_fill={100.0 * self._last_step_supervised_utilization:.1f}%, "

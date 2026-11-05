@@ -284,6 +284,12 @@ def parse_args():
         help="Peak learning rate",
     )
     parser.add_argument(
+        "--unembedding-lr-ratio", type=float, default=None,
+        help=("Multiplier for the scheduled unembedding learning rate "
+              "(new-run default 1.0; resume inherits checkpoint). "
+              "For tied models, the shared input/output embedding is scaled."),
+    )
+    parser.add_argument(
         "--grad-clip",
         type=float,
         default=1.0,
@@ -1911,6 +1917,18 @@ def main():
     adamw_hparams = resolve_adamw_hyperparameters(
         args, training_state if args.resume_from else None,
     )
+    saved_unembedding_ratio = (training_state or {}).get("unembedding_lr_ratio", 1.0)
+    unembedding_lr_ratio = (
+        args.unembedding_lr_ratio if args.unembedding_lr_ratio is not None
+        else saved_unembedding_ratio if args.resume_from else 1.0
+    )
+    if not math.isfinite(float(unembedding_lr_ratio)) or float(unembedding_lr_ratio) < 0:
+        raise ValueError("--unembedding-lr-ratio must be finite and nonnegative")
+    if args.resume_from and float(unembedding_lr_ratio) != float(saved_unembedding_ratio):
+        print(f"Unembedding LR ratio changed on resume: "
+              f"{float(saved_unembedding_ratio):g} -> {float(unembedding_lr_ratio):g}")
+    print(f"Unembedding learning-rate ratio: {float(unembedding_lr_ratio):g} "
+          f"(parameter: {'embedding.W (tied input/output)' if config.tie_embeddings else 'output_proj.W'})")
     saved_kind = (training_state or {}).get("optimizer_kind", "adamw")
     if saved_kind not in {"adamw", "hybrid-muon"}:
         raise ValueError("unknown optimizer kind in checkpoint: " + str(saved_kind))
@@ -2067,6 +2085,7 @@ def main():
         adam_beta1=adamw_hparams["beta1"],
         adam_beta2=adamw_hparams["beta2"],
         adam_eps=adamw_hparams["eps"],
+        unembedding_lr_ratio=unembedding_lr_ratio,
         optimizer_kind=optimizer_kind,
         muon_momentum=muon_momentum,
         muon_ns_steps=muon_ns_steps,

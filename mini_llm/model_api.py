@@ -19,14 +19,22 @@ from .model_contracts import (
 
 
 def _validate_backend(requested_backend: str, device: str) -> str:
-    from .backend import BACKEND_NAME
+    if requested_backend not in {"auto", "numpy", "cupy", "torch", "pytorch"}:
+        raise ValueError("backend must be auto, numpy, cupy, or pytorch")
+    if requested_backend in {"torch", "pytorch"}:
+        try:
+            import torch
+        except ImportError as exc:
+            raise UnsupportedExecutionBackend(
+                "PyTorch was requested but torch is not installed"
+            ) from exc
+        if device not in {"auto", "cpu", "cuda"}:
+            raise ValueError("device must be auto, cpu, or cuda")
+        if device == "cuda" and not torch.cuda.is_available():
+            raise UnsupportedExecutionBackend("PyTorch CUDA was requested but is unavailable")
+        return "pytorch"
 
-    if requested_backend not in {"auto", "numpy", "cupy", "torch"}:
-        raise ValueError("backend must be auto, numpy, cupy, or torch")
-    if requested_backend == "torch":
-        raise UnsupportedExecutionBackend(
-            "PyTorch adapter is planned but is not implemented in 0103-0"
-        )
+    from .backend import BACKEND_NAME
     if requested_backend != "auto" and requested_backend != BACKEND_NAME:
         raise UnsupportedExecutionBackend(
             f"Process backend is {BACKEND_NAME!r}, requested {requested_backend!r}; "
@@ -53,7 +61,7 @@ class Model:
     def __init__(self, native_model: Any, *, tokenizer: Any = None,
                  model_id: str = "native", checkpoint: str | None = None,
                  context_length: int | None = None,
-                 execution_policy: str = "auto"):
+                 execution_policy: str = "auto", backend: str | None = None):
         if not callable(getattr(native_model, "parameters", None)) or not hasattr(native_model, "config"):
             raise TypeError("Native model must provide .config and .parameters()")
         self._native_model = native_model
@@ -63,6 +71,7 @@ class Model:
         self._context_length = int(context_length or native_model.config.context_length)
         self.spec = ArchitectureSpec.from_config(native_model.config)
         self.execution_policy = execution_policy
+        self.backend = backend or "native"
         self._last_execution_report = None
 
     @classmethod
@@ -82,7 +91,32 @@ class Model:
         serving. GGUF/Safetensors sources use load_pretrained_weights from
         model_loading until a common generation facade is available in 0103E.
         """
-        _validate_backend(backend, device)
+        selected_backend = _validate_backend(backend, device)
+        if selected_backend == "pytorch":
+            import torch
+            from .backends.pytorch.checkpoint import load_checkpoint
+            from .backends.pytorch.model import TorchDecoderLanguageModel
+            actual_device = (
+                "cuda" if device == "auto" and torch.cuda.is_available() else
+                "cpu" if device == "auto" else device
+            )
+            from .model_loading import read_native_config
+            config = read_native_config(path)
+            dtype = "bfloat16" if actual_device == "cuda" else config.dtype
+            loaded = load_checkpoint(
+                path,
+                model_factory=lambda cfg: TorchDecoderLanguageModel(
+                    cfg, dtype=dtype, device=actual_device
+                ),
+                device=actual_device, dtype=dtype, skip_optimizer=True,
+            )
+            return cls(
+                loaded.model, tokenizer=loaded.tokenizer,
+                model_id=model_id or loaded.checkpoint.name,
+                checkpoint=str(loaded.checkpoint),
+                context_length=loaded.context_length,
+                execution_policy=execution_policy, backend="pytorch",
+            )
         from .model_loading import load_native_checkpoint
         loaded = load_native_checkpoint(path, execution_policy=execution_policy)
         return cls(loaded.model, tokenizer=loaded.tokenizer,
@@ -101,16 +135,30 @@ class Model:
                             accessible_weights=True)
 
     def inspect(self) -> ModelInfo:
-        params = self._native_model.parameters()
-        shapes = tuple((p.name, tuple(int(v) for v in p.shape)) for p in params)
+        if self.backend == "pytorch":
+            params = list(self._native_model.canonical_named_parameters())
+            shapes = tuple((name, tuple(int(v) for v in p.shape)) for name, p in params)
+            count = sum(int(p.numel()) for _, p in params)
+        else:
+            params = self._native_model.parameters()
+            shapes = tuple((p.name, tuple(int(v) for v in p.shape)) for p in params)
+            count = sum(int(p.size) for p in params)
         return ModelInfo(self.model_id, self.spec,
-                         sum(int(p.size) for p in params), shapes,
+                         count, shapes,
                          self.capabilities, self.checkpoint)
 
     def execution_info(self) -> ExecutionReport:
         """Last observed session, otherwise an explicitly unverified baseline."""
         if self._last_execution_report is not None:
             return self._last_execution_report
+        if self.backend == "pytorch":
+            parameter = next(self._native_model.parameters())
+            return ExecutionReport(
+                backend="pytorch", device=str(parameter.device),
+                dtype=str(parameter.dtype),
+                active_optimizations=("native-pytorch-ops",),
+                notes=("No completed inference session has been observed",),
+            )
         from .backend import BACKEND_NAME
         return ExecutionReport(
             backend=BACKEND_NAME,
@@ -174,6 +222,19 @@ class Model:
         allocated. Callers own target shifting, EOS masks and document metadata.
         Other providers without a native decoder must reject this operation.
         """
+        if self.backend == "pytorch":
+            import torch
+            parameter = next(self._native_model.parameters())
+            ids = torch.as_tensor(token_ids, device=parameter.device, dtype=torch.long)
+            targets = torch.as_tensor(target_ids, device=parameter.device, dtype=torch.long)
+            if ids.ndim != 2 or targets.ndim != 2 or ids.shape != targets.shape:
+                raise ValueError("token_ids and target_ids must have equal [batch, seq] shapes")
+            with torch.no_grad():
+                return float(self._native_model.forward_loss(
+                    ids, targets, loss_mask=loss_mask,
+                    position_ids=position_ids,
+                    dual_resolution_metadata=dual_resolution_metadata,
+                ).item())
         from .backend import xp
         ids = xp.asarray(token_ids, dtype=xp.int32)
         targets = xp.asarray(target_ids, dtype=xp.int32)
@@ -202,6 +263,12 @@ class Model:
 
         Composite specialist trainers are not yet supported by this adapter.
         """
+        if self.backend == "pytorch":
+            from .backends.pytorch.training import TorchTrainingRun
+            return TorchTrainingRun.from_model(
+                self, train_shard_paths=train_shard_paths,
+                val_shard_paths=val_shard_paths, **training_options,
+            )
         from .training_run import TrainingRun
         return TrainingRun.from_native(
             self, train_shard_paths=train_shard_paths,
@@ -217,6 +284,15 @@ class Model:
         """
         if not self.capabilities.generate:
             raise UnsupportedModelOperation("Generation requires a tokenizer")
+        if self.backend == "pytorch":
+            from .backends.pytorch.inference import TorchGeneratorAdapter, sample_token
+            from .generation import GenerationSession
+            return GenerationSession(
+                TorchGeneratorAdapter(
+                    self._native_model, self.tokenizer, self._context_length
+                ),
+                sampler=sample_token,
+            )
         from .backend import BACKEND_NAME
         from .inference_policy import configure_inference
         configure_inference(self._native_model.config, backend=BACKEND_NAME,
@@ -233,6 +309,10 @@ class Model:
         already exist at ``path`` or be supplied by the calling application;
         this method deliberately does not fabricate tokenizer metadata.
         """
+        if self.backend == "pytorch":
+            from .backends.pytorch.checkpoint import save_checkpoint
+            save_checkpoint(path, self._native_model, tokenizer=self.tokenizer)
+            return path
         from .checkpoint import save_checkpoint
         save_checkpoint(path, {p.name: p.data for p in self._native_model.parameters()})
         return path

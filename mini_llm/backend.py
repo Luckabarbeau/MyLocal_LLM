@@ -1,4 +1,4 @@
-"""Backend selection for NumPy (reference) or CuPy (GPU)."""
+"""Process backend selection for NumPy, CuPy, or explicit PyTorch execution."""
 
 import os
 import numpy as _np
@@ -21,8 +21,16 @@ if _BACKEND == "cupy":
 elif _BACKEND == "numpy":
     xp = _np
     BACKEND_NAME = "numpy"
+elif _BACKEND in {"torch", "pytorch"}:
+    try:
+        import torch as xp
+    except ImportError as exc:
+        raise RuntimeError(
+            "MINI_LLM_BACKEND=pytorch was requested but PyTorch is not installed."
+        ) from exc
+    BACKEND_NAME = "pytorch"
 else:
-    raise ValueError("MINI_LLM_BACKEND must be 'numpy' or 'cupy'.")
+    raise ValueError("MINI_LLM_BACKEND must be 'numpy', 'cupy', or 'pytorch'.")
 
 
 def asnumpy(x):
@@ -35,18 +43,24 @@ def asnumpy(x):
     """
     if BACKEND_NAME == "cupy" and isinstance(x, xp.ndarray):
         return x.get()
+    if BACKEND_NAME == "pytorch" and isinstance(x, xp.Tensor):
+        return x.detach().cpu().float().numpy() if x.dtype == xp.bfloat16 else x.detach().cpu().numpy()
     return _np.asarray(x)
 
 
 def scalar(x):
     if BACKEND_NAME == "cupy":
         return float(x.get())
+    if BACKEND_NAME == "pytorch" and isinstance(x, xp.Tensor):
+        return float(x.detach().item())
     return float(x)
 
 
 def synchronize():
     if BACKEND_NAME == "cupy":
         xp.cuda.Stream.null.synchronize()
+    elif BACKEND_NAME == "pytorch" and xp.cuda.is_available():
+        xp.cuda.synchronize()
 
 
 class RandomStream:
@@ -54,9 +68,14 @@ class RandomStream:
 
     def __init__(self, seed: int):
         self.seed = int(seed)
-        self.rng = xp.random.RandomState(self.seed)
+        if BACKEND_NAME == "pytorch":
+            self.rng = xp.Generator(device="cpu").manual_seed(self.seed)
+        else:
+            self.rng = xp.random.RandomState(self.seed)
 
     def normal(self, shape, std=1.0, dtype=None):
+        if BACKEND_NAME == "pytorch":
+            return xp.randn(tuple(shape), generator=self.rng, dtype=resolve_dtype(dtype or "float32")) * float(std)
         x = self.rng.normal(0.0, float(std), size=shape)
         if dtype is not None:
             x = x.astype(resolve_dtype(dtype))
@@ -65,6 +84,12 @@ class RandomStream:
 
 def resolve_dtype(dtype):
     """Resolve public dtype names to backend-compatible dtype objects."""
+    if BACKEND_NAME == "pytorch":
+        aliases = {
+            "bfloat16": xp.bfloat16, "bf16": xp.bfloat16,
+            "float16": xp.float16, "float32": xp.float32,
+        }
+        return aliases.get(dtype, dtype)
     if dtype in ("bfloat16", "bf16"):
         if _ml_dtypes is None:
             raise RuntimeError(
@@ -77,6 +102,8 @@ def resolve_dtype(dtype):
 
 def dtype_name(dtype):
     """Return a stable lowercase dtype name for NumPy/CuPy/ml_dtypes dtypes."""
+    if BACKEND_NAME == "pytorch" and isinstance(dtype, xp.dtype):
+        return str(dtype).removeprefix("torch.").lower()
     return str(_np.dtype(dtype)).lower()
 
 
@@ -91,6 +118,18 @@ def is_bfloat16_dtype(dtype):
 
 def validate_bfloat16_backend():
     """Fail fast if the selected backend cannot execute a BF16 GEMM."""
+    if BACKEND_NAME == "pytorch":
+        if not xp.cuda.is_available():
+            raise RuntimeError("PyTorch BF16 training requires a CUDA device")
+        try:
+            a = xp.ones((16, 16), device="cuda", dtype=xp.bfloat16)
+            b = xp.ones((16, 16), device="cuda", dtype=xp.bfloat16)
+            c = a @ b
+            if not bool(xp.isfinite(c).all().item()):
+                raise RuntimeError("BF16 GEMM returned non-finite values")
+        except Exception as exc:
+            raise RuntimeError(f"BF16 mixed precision is not usable with PyTorch: {exc}") from exc
+        return xp.bfloat16
     if _ml_dtypes is None:
         raise RuntimeError(
             "BF16 mixed precision requires ml-dtypes. "

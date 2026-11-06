@@ -68,8 +68,8 @@ def _checkpoint_previous(path):
     return path.with_name(path.name + ".previous")
 
 
-def _resolve_checkpoint_path(path):
-    """Recover reads after interruption between old and new directory renames."""
+def resolve_checkpoint_path(path):
+    """Resolve the complete checkpoint used after an interrupted publication."""
     path = Path(path)
     if path.is_dir():
         return path
@@ -77,6 +77,10 @@ def _resolve_checkpoint_path(path):
     if not path.exists() and backup.is_dir():
         return backup
     return path
+
+
+# Private compatibility alias for older internal callers.
+_resolve_checkpoint_path = resolve_checkpoint_path
 
 
 def save_checkpoint(
@@ -165,7 +169,7 @@ def load_checkpoint(
     Returns:
         Tuple of (model_params, optimizer_state, training_state)
     """
-    path = _resolve_checkpoint_path(path)
+    path = resolve_checkpoint_path(path)
     
     # Load model parameters
     params_path = path / "model_params"

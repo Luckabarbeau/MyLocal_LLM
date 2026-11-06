@@ -44,6 +44,7 @@ from mini_llm.optim.adamw import (
     AdamW, DEFAULT_ADAM_BETA1, DEFAULT_ADAM_BETA2, DEFAULT_ADAM_EPS,
 )
 from mini_llm.train_extended import ExtendedTrainer
+from mini_llm.checkpoint import resolve_checkpoint_path
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer, FastBPETokenizer
 from mini_llm.runtime_defaults import (
     apply_runtime_defaults, format_runtime_profile, format_runtime_fast_paths,
@@ -357,6 +358,11 @@ def parse_args():
         help="Resume training from checkpoint directory",
     )
     parser.add_argument(
+        "--allow-nonexact-resume", action="store_true",
+        help=("Explicitly allow a versioned checkpoint's scientific/runtime "
+              "contract to change; differences are printed and checkpointed."),
+    )
+    parser.add_argument(
         "--init-from",
         default=None,
         help=(
@@ -509,6 +515,16 @@ def parse_args():
                         default="./logs/gradient_convergence.csv",
                         help="Separate observational convergence CSV")
 
+    parser.add_argument("--component-update-monitor", action="store_true",
+                        help="Read-only sampled component gradient/update diagnostics")
+    parser.add_argument("--component-update-interval", type=int, default=1000,
+                        help="Measure realized FP32 master updates every N steps")
+    parser.add_argument("--component-update-output",
+                        default="./logs/component_updates.csv",
+                        help="Separate component gradient/update CSV")
+    parser.add_argument("--component-update-sample-elements", type=int, default=16384,
+                        help="Maximum deterministic sampled elements per parameter")
+
     # 0074B: read-only counterfactual AdamW direction diagnostics.
     parser.add_argument("--adamw-update-monitor", action="store_true",
                         help="Compare hypothetical AdamW updates at gradient-noise accumulation points")
@@ -574,6 +590,22 @@ def resolve_adamw_hyperparameters(args, training_state=None):
             stacklevel=2,
         )
     return resolved
+
+
+def validate_checkpoint_step_coherence(training_state, optimizer_state):
+    """Require both saved counters while preserving historical counter offsets."""
+    if training_state is None or optimizer_state is None:
+        raise ValueError("resume requires complete optimizer and training state")
+    if "step" not in training_state or "step" not in optimizer_state:
+        raise ValueError("resume checkpoint is missing trainer or optimizer step")
+    trainer_step = int(training_state["step"])
+    optimizer_step = int(optimizer_state["step"])
+    if trainer_step != optimizer_step:
+        print(
+            "WARNING: preserving checkpoint trainer/optimizer step offset: "
+            f"{trainer_step} != {optimizer_step}"
+        )
+    return trainer_step
 
 
 def model_config_from_name(name: str) -> ModelConfig:
@@ -1148,7 +1180,10 @@ def main():
     # Resolve the architecture first so its native context length can be used
     # when --context-length is omitted.
     if args.resume_from:
-        checkpoint_path = Path(args.resume_from)
+        requested_checkpoint_path = Path(args.resume_from)
+        checkpoint_path = resolve_checkpoint_path(requested_checkpoint_path)
+        if checkpoint_path != requested_checkpoint_path:
+            print(f"Recovered interrupted checkpoint publication from: {checkpoint_path}")
         config_path = checkpoint_path / "config.json"
         if config_path.exists():
             with open(config_path, "r") as f:
@@ -1667,8 +1702,7 @@ def main():
                 "resume checkpoint parameter set differs from current architecture; "
                 f"missing={missing[:8]} extra={extra[:8]}"
             )
-        if optimizer_state is None or training_state is None:
-            raise ValueError("resume requires complete optimizer and training state")
+        validate_checkpoint_step_coherence(training_state, optimizer_state)
         saved_optimizer_kind = training_state.get("optimizer_kind")
         if saved_optimizer_kind not in {"adamw", "hybrid-muon"}:
             raise ValueError("unknown or missing checkpoint optimizer kind")
@@ -2075,6 +2109,10 @@ def main():
         gradient_convergence_points=args.gradient_convergence_points,
         gradient_convergence_groups=args.gradient_convergence_groups,
         gradient_convergence_output=args.gradient_convergence_output,
+        component_update_monitor=args.component_update_monitor,
+        component_update_interval=args.component_update_interval,
+        component_update_output=args.component_update_output,
+        component_update_sample_elements=args.component_update_sample_elements,
         gradient_noise_monitor=args.gradient_noise_monitor,
         gradient_noise_interval=args.gradient_noise_interval,
         gradient_noise_output=args.gradient_noise_output,
@@ -2100,6 +2138,19 @@ def main():
         local_mixture_manifest_sha256=mixture_sha,
         training_objective=training_objective,
     )
+    if args.resume_from:
+        trainer.resume_contract_history = list(
+            (training_state or {}).get("resume_contract_history", [])
+        )
+        contract_changes = trainer.validate_training_resume_contract(
+            training_state or {}, allow_changes=args.allow_nonexact_resume,
+        )
+        if contract_changes:
+            trainer.resume_contract_history.append({
+                "step": int(start_step),
+                "parent_checkpoint": str(checkpoint_path),
+                "changes": contract_changes,
+            })
     if training_objective is not None and args.resume_from:
         trainer.validate_block_proposal_resume_contract(training_state or {})
     trainer.gradient_weighting_history = gradient_weighting_history

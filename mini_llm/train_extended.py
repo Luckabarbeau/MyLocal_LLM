@@ -49,6 +49,7 @@ from mini_llm.optim.schedule import WarmupCosineSchedule
 from mini_llm.backend import synchronize
 from mini_llm.diagnostics.gradient_noise import GradientNoiseMonitor
 from mini_llm.diagnostics.gradient_convergence import GradientConvergenceMonitor
+from mini_llm.diagnostics.component_updates import ComponentUpdateMonitor
 from mini_llm.diagnostics.moe_usage import (
     ExpertUsageCollector, EXPERT_USAGE_COLUMNS, summarize_usage,
 )
@@ -118,6 +119,10 @@ class ExtendedTrainer:
         gradient_convergence_points: str = "auto",
         gradient_convergence_groups: str = "attention,ffn",
         gradient_convergence_output: str = "./logs/gradient_convergence.csv",
+        component_update_monitor: bool = False,
+        component_update_interval: int = 1000,
+        component_update_output: str = "./logs/component_updates.csv",
+        component_update_sample_elements: int = 16384,
         gradient_noise_monitor: bool = False,
         gradient_noise_interval: int = 100,
         gradient_noise_output: str = "./logs/gradient_noise.csv",
@@ -638,6 +643,15 @@ class ExtendedTrainer:
                 loss_scale=self.loss_scale,
             ) if gradient_convergence_monitor else None
         )
+        self.component_updates = (
+            ComponentUpdateMonitor(
+                self.optimization_parameters, self.optimizer,
+                interval=component_update_interval,
+                output=component_update_output,
+                sample_elements=component_update_sample_elements,
+            ) if component_update_monitor else None
+        )
+        self.resume_contract_history = []
 
         # Learning rate schedule
         self.scheduler = WarmupCosineSchedule(
@@ -959,6 +973,8 @@ class ExtendedTrainer:
             self.gradient_noise.refresh(self.optimization_parameters)
         if self.gradient_convergence is not None:
             self.gradient_convergence.refresh(self.optimization_parameters)
+        if self.component_updates is not None:
+            self.component_updates.refresh(self.optimization_parameters)
         block = self.model.blocks[layer_idx]
         print(
             "Progressive depth: activated layer "
@@ -2689,6 +2705,11 @@ class ExtendedTrainer:
         noise_active = noise is not None and noise.begin(self.step)
         convergence = self.gradient_convergence
         convergence_active = convergence is not None and convergence.begin(self.step)
+        component_updates = self.component_updates
+        component_updates_active = (
+            component_updates is not None and component_updates.begin(self.step)
+        )
+        component_update_rows = []
         if memory_active:
             self._record_memory_snapshot(memory_records, "step_start")
 
@@ -3254,6 +3275,8 @@ class ExtendedTrainer:
                         f"max_abs={row['max_abs']:.6e}"
                     )
             self.optimizer.zero_grad()
+            if component_updates_active:
+                component_updates.cancel()
             print(
                 f"WARNING: Nonfinite gradient at step {self.step}; "
                 f"norm={_array_to_float(grad_norm_backend) if grad_norm_backend is not None else 'unknown'}; "
@@ -3268,8 +3291,14 @@ class ExtendedTrainer:
             None if step_parameters is self.optimization_parameters
             else {p.name for p in step_parameters}
         )
+        if component_updates_active:
+            component_updates.capture_before(
+                step_parameters, learning_rate=lr, clip_scale=grad_scale,
+            )
         with performance_scope("train.optimizer_step"):
             self.optimizer.step(lr=lr, active_parameter_names=active_names)
+        if component_updates_active:
+            component_update_rows = component_updates.finish()
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_optimizer_step")
         refresh_backbone_buffers = not (
@@ -3329,6 +3358,8 @@ class ExtendedTrainer:
             self._merge_routing_mode_stats(self.routing_modes_total, step_routing_modes)
             self._merge_routing_mode_stats(self._routing_modes_interval, step_routing_modes)
         self.step += 1
+        if component_updates_active:
+            component_updates.commit(component_update_rows)
         if noise_active:
             noise.commit(noise_rows)
         if convergence_active:
@@ -3407,6 +3438,102 @@ class ExtendedTrainer:
         # Sync grad_norm only at the end (necessary for logging)
         return avg_loss, float(_array_to_float(grad_norm_backend))
     
+    def training_resume_contract(self):
+        """Versioned scientific/runtime contract required for exact AR resume."""
+        parameters = list(self.optimizer.parameters)
+        signature = "\n".join(
+            f"{parameter.name}|{tuple(parameter.shape)}|{int(parameter.decay)}"
+            for parameter in parameters
+        )
+        hybrid = isinstance(self.optimizer, HybridMuonAdamW)
+        offload_mode = (
+            self.optimizer.adam.offload_mode if hybrid else self.optimizer.offload_mode
+        )
+        return {
+            "version": 1,
+            "backend": BACKEND_NAME,
+            "model_dtype": str(self.model.dtype),
+            "batch_size": int(self.batch_size),
+            "grad_accum_steps": int(self.grad_accum_steps),
+            "seq_length": int(self.seq_length),
+            "gradient_accumulation_weighting": self.gradient_accumulation_weighting,
+            "loss_scale": float(self.loss_scale),
+            "grad_clip": float(self.grad_clip),
+            "optimizer_kind": "hybrid-muon" if hybrid else "adamw",
+            "weight_decay": float(self.optimizer.weight_decay),
+            "adam_beta1": float(self.optimizer.beta1),
+            "adam_beta2": float(self.optimizer.beta2),
+            "adam_eps": float(self.optimizer.eps),
+            "unembedding_lr_ratio": float(self.unembedding_lr_ratio),
+            "muon_momentum": float(self.optimizer.momentum) if hybrid else None,
+            "muon_ns_steps": int(self.optimizer.ns_steps) if hybrid else None,
+            "muon_matmul_precision": self.optimizer.matmul_precision if hybrid else None,
+            "muon_group_names": sorted(self.optimizer.muon_names) if hybrid else [],
+            "optimizer_offload_mode": offload_mode,
+            "scheduler": {
+                "peak_lr": float(self.scheduler.peak_lr),
+                "warmup_steps": int(self.scheduler.warmup_steps),
+                "total_steps": int(self.scheduler.total_steps),
+                "min_lr": float(self.scheduler.min_lr),
+            },
+            "ar_compact_target": bool(self.ar_compact_target),
+            "ar_accum_length_buckets": bool(self.ar_accum_length_buckets),
+            "dual_accum_length_buckets": bool(self.dual_accum_length_buckets),
+            "dual_shape_bucket": self.dual_shape_bucket,
+            "parameter_signature_sha256": hashlib.sha256(
+                signature.encode("utf-8")
+            ).hexdigest(),
+            "runtime_environment": {
+                key: value for key, value in sorted(os.environ.items())
+                if key.startswith("MINI_LLM_")
+            },
+        }
+
+    def validate_training_resume_contract(self, training_state, *, allow_changes=False):
+        """Reject silent scientific/runtime drift for versioned checkpoints."""
+        saved = (training_state or {}).get("training_resume_contract")
+        if saved is None:
+            print("WARNING: legacy checkpoint lacks training_resume_contract; "
+                  "exact runtime/schedule reproducibility cannot be verified")
+            return []
+        if int(saved.get("version", -1)) != 1:
+            raise ValueError("unsupported training resume contract version")
+
+        def flatten(value, prefix=""):
+            rows = {}
+            if isinstance(value, dict):
+                for key in sorted(value):
+                    path = f"{prefix}.{key}" if prefix else str(key)
+                    rows.update(flatten(value[key], path))
+            else:
+                rows[prefix] = value
+            return rows
+
+        expected = flatten(saved)
+        actual = flatten(self.training_resume_contract())
+        mismatches = []
+        for key in sorted(set(expected) | set(actual)):
+            if expected.get(key) != actual.get(key):
+                mismatches.append({
+                    "field": key,
+                    "checkpoint": expected.get(key),
+                    "current": actual.get(key),
+                })
+        if mismatches and not allow_changes:
+            preview = "; ".join(
+                f"{row['field']}: {row['checkpoint']!r} -> {row['current']!r}"
+                for row in mismatches[:8]
+            )
+            raise ValueError(
+                "non-exact checkpoint resume configuration; pass "
+                f"--allow-nonexact-resume for an intentional fork ({preview})"
+            )
+        if mismatches:
+            print("WARNING: intentional non-exact checkpoint resume:")
+            for row in mismatches:
+                print(f"  {row['field']}: {row['checkpoint']!r} -> {row['current']!r}")
+        return mismatches
+
     def block_proposal_resume_contract(self):
         """Fields which must match to call an 0080 optimizer resume exact.
 
@@ -3619,6 +3746,8 @@ class ExtendedTrainer:
             "ar_accum_length_buckets": bool(self.ar_accum_length_buckets),
             "ar_compact_target": bool(self.ar_compact_target),
             "gradient_weighting_history": getattr(self, "gradient_weighting_history", []),
+            "training_resume_contract": self.training_resume_contract(),
+            "resume_contract_history": list(self.resume_contract_history),
             "total_steps": self.total_steps,
             "current_train_shard_idx": self.current_train_shard_idx,
             "current_val_shard_idx": self.current_val_shard_idx,

@@ -1,0 +1,3291 @@
+{
+  "schema": "model-b-parameter-group-inventory-v1",
+  "model": "model_b_348m_sparse16",
+  "architecture_parameter_count": 348261376,
+  "array_count": 302,
+  "muon_array_count": 220,
+  "adamw_array_count": 82,
+  "entries": [
+    {
+      "name": "embedding.W",
+      "shape": [
+        32768,
+        1024
+      ],
+      "parameter_count": 33554432,
+      "optimizer": "adamw",
+      "effective_learning_rate": "unembedding_lr_ratio * scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.0.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.0.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.0.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.0.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.0.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.1.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.1.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.1.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.1.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.2.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.2.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.2.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.2.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.3.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.3.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.3.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.3.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.4.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.4.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.4.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.4.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.5.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.5.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.5.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.5.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.6.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.6.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.6.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.6.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.7.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.7.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.7.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.7.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.8.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.8.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.8.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.8.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.9.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.9.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.9.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.9.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.10.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.10.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.10.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.10.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.11.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.11.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.11.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.11.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.12.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.12.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.12.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.12.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.13.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.13.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.13.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.13.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.14.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.14.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.14.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.14.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.15.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.15.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.15.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.15.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.16.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.16.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.16.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.16.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.17.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.17.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.17.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.17.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.18.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.18.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.18.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.18.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.norm1.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.19.attention.Wq",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.Wk",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.Wv",
+      "shape": [
+        1024,
+        256
+      ],
+      "parameter_count": 262144,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.Wo",
+      "shape": [
+        1024,
+        1024
+      ],
+      "parameter_count": 1048576,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.matrix_pool.score",
+      "shape": [
+        1024,
+        4
+      ],
+      "parameter_count": 4096,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.matrix_pool.position_bias",
+      "shape": [
+        128,
+        4
+      ],
+      "parameter_count": 512,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.19.attention.global.Wq",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.global.Wk",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.global.Wv",
+      "shape": [
+        1024,
+        128
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.attention.global.Wo",
+      "shape": [
+        128,
+        1024
+      ],
+      "parameter_count": 131072,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.norm2.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    },
+    {
+      "name": "blocks.19.dense_ffn.expert.W_gate",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.dense_ffn.expert.W_up",
+      "shape": [
+        1024,
+        4096
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "blocks.19.dense_ffn.expert.W_down",
+      "shape": [
+        4096,
+        1024
+      ],
+      "parameter_count": 4194304,
+      "optimizer": "muon",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.1
+    },
+    {
+      "name": "final_norm.gamma",
+      "shape": [
+        1024
+      ],
+      "parameter_count": 1024,
+      "optimizer": "adamw",
+      "effective_learning_rate": "scheduled_lr",
+      "weight_decay": 0.0
+    }
+  ]
+}

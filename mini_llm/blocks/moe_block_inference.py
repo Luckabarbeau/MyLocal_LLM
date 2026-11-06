@@ -15,7 +15,8 @@ class MoEInference:
     """
 
     def __init__(
-        self, d_model, d_ff, n_experts, k, dtype="float32"
+        self, d_model, d_ff, n_experts, k, dtype="float32", *,
+        expert_executor=None, layer_id=0
     ):
         """
         Initialize MoE for inference.
@@ -43,7 +44,9 @@ class MoEInference:
             d_model=d_model,
             d_ff=d_ff,
             n_experts=n_experts,
-            dtype=dtype
+            dtype=dtype,
+            expert_executor=expert_executor,
+            layer_id=layer_id,
         )
 
     def set_weights(self, moe):
@@ -53,6 +56,8 @@ class MoEInference:
         Args:
             moe: Training MoE instance
         """
+        if self.experts.expert_executor is not None:
+            raise RuntimeError("Managed experts use their host provider; set the router separately")
         self.router.set_weights(moe.router)
         self.experts.set_weights(moe.experts)
 

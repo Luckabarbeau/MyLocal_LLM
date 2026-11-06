@@ -1,4 +1,4 @@
-"""GGUF Llama F32/F16/Q8_0 loader for the native NumPy/CuPy inference engine.
+"""Legacy dense GGUF Llama loader for the native NumPy/CuPy inference engine.
 
 Weights from llama.cpp's GGUF conversion have interleaved Q/K RoPE rows,
 whereas ExternalLlamaModel expects original Hugging Face rotate_half rows.
@@ -13,6 +13,8 @@ from pathlib import Path
 import hashlib
 
 import numpy as np
+
+from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
 
 from .config import ExternalLlamaConfig
 from .llama_model import ExternalLlamaModel
@@ -149,7 +151,7 @@ class GGUFWeightMap(Mapping):
                 raise ValueError(f"Unsupported GGUF tensor name: {raw_name}")
             if canonical in names:
                 raise ValueError(f"Duplicate mapped GGUF tensor: {canonical}")
-            if tensor.tensor_type.name not in {"F32", "F16", "Q8_0"}:
+            if tensor.tensor_type.name not in {"F32", "F16", *BLOCK_FORMATS}:
                 raise ValueError(
                     f"Unsupported GGUF tensor type {tensor.tensor_type.name} for {raw_name}"
                 )
@@ -170,11 +172,30 @@ class GGUFWeightMap(Mapping):
     def tensor_types(self):
         return list(self._dtypes)
 
+    def get_packed(self, name):
+        """Return the original mmap-backed packed bytes without dequantizing.
+
+        This is the API for future quantized operators / expert providers.
+        It is intentionally different from the legacy dense `__getitem__`.
+        """
+        tensor = self._tensors[name]
+        if tensor.tensor_type.name not in BLOCK_FORMATS:
+            raise TypeError(f"{name} is not a packed GGUF tensor")
+        return PackedGGUFWeight(tensor.data, self.shape_of(name), tensor.tensor_type.name)
+
     def __getitem__(self, name):
         tensor = self._tensors[name]
         shape = self.shape_of(name)
-        if tensor.tensor_type.name == "Q8_0":
+        if tensor.tensor_type.name == "Q8_0" and shape[-1] % 32:
+            # Legacy unit fixtures have total-element Q8 blocks that cross
+            # synthetic tensor rows. Retain historical dense import behavior;
+            # get_packed() correctly rejects those non-GGUF row layouts.
             values = _dequantize_q8_0(tensor.data, int(np.prod(shape))).reshape(shape)
+        elif tensor.tensor_type.name in BLOCK_FORMATS:
+            # Compatibility only. A full model imported through the current
+            # Llama `set_weights` still expands every tensor. External MoE
+            # execution MUST use get_packed() and quantized kernels instead.
+            values = self.get_packed(name).dequantize_reference()
         else:
             values = np.asarray(tensor.data)
             if values.shape != shape:
@@ -216,7 +237,7 @@ def load_gguf_model(path, *, dtype="float32", hash_weights=False):
         "format": "gguf",
         "tensor_types": tensors.tensor_types,
         "runtime_dtype": dtype,
-        "quantized_weights_dequantized": "Q8_0" in tensors.tensor_types,
+        "quantized_weights_dequantized": any(t in BLOCK_FORMATS for t in tensors.tensor_types),
         "file_sha256": file_hash,
     }
     return model, provenance

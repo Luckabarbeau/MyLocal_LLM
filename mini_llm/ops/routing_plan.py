@@ -44,6 +44,9 @@ class RoutingPlan:
         self.n_experts = int(n_experts)
         self.k = int(k)
         self.N = int(N)
+        self._active_experts = tuple(
+            i for i, count in enumerate(self.expert_sizes) if count > 0
+        )
 
     @classmethod
     def from_router_outputs(
@@ -113,6 +116,10 @@ class RoutingPlan:
             k=k,
             N=N,
         )
+
+    def active_expert_ids(self):
+        """Active expert IDs only; avoids 512+ empty Python dispatches/layer."""
+        return self._active_experts
 
     def get_expert_assignments(self, expert_idx: int):
         """Return token ids, top-k slot ids, and weights for one expert."""

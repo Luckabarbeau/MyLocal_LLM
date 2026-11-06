@@ -49,3 +49,6 @@ markers = [
     "gpu: tests that explicitly target CuPy, CUDA, or GPU behavior",
     "slow: audits, benchmarks, production checks, and extended workflows",
 ]
+
+[tool.setuptools.package-data]
+"mini_llm.ops" = ["native_packed_cpu.cpp"]

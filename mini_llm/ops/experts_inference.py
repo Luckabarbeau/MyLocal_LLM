@@ -2,6 +2,7 @@
 
 
 import os
+from contextlib import nullcontext
 
 from mini_llm.backend import xp, BACKEND_NAME
 from mini_llm.ops.experts import _fused_swiglu_forward
@@ -94,7 +95,8 @@ class ExpertsInference:
     Only evaluates the selected experts, not all experts.
     """
 
-    def __init__(self, d_model, d_ff, n_experts, dtype="float32"):
+    def __init__(self, d_model, d_ff, n_experts, dtype="float32", *,
+                 expert_executor=None, layer_id=0):
         """
         Initialize experts for inference.
         
@@ -107,13 +109,15 @@ class ExpertsInference:
         self.d_model = d_model
         self.d_ff = d_ff
         self.n_experts = n_experts
-        
+        self.expert_executor = expert_executor
+        self.layer_id = int(layer_id)
+
         # Create inference experts.  The sparse objects remain the prefill
         # implementation/reference path; decode additionally uses persistent
         # stacked weights so all experts can be evaluated in batched matmuls
         # without any GPU->CPU expert-id synchronization.
         self.experts = []
-        for i in range(n_experts):
+        for i in range(n_experts if expert_executor is None else 0):
             expert = ExpertFFNInference(
                 d_model=d_model,
                 d_ff=d_ff,
@@ -123,6 +127,8 @@ class ExpertsInference:
 
     def set_weights(self, experts):
         """Set weights from the training Experts module."""
+        if self.expert_executor is not None:
+            raise RuntimeError("Managed experts load from their host provider; do not set resident weights")
         for i in range(self.n_experts):
             self.experts[i].set_weights(experts.experts[i])
 
@@ -146,14 +152,64 @@ class ExpertsInference:
         routing_plan = RoutingPlan.from_router_outputs(
             expert_indices, weights, k, n_experts=self.n_experts
         )
-        for exp_idx in range(self.n_experts):
-            if routing_plan.get_assignment_count(exp_idx) == 0:
-                continue
-
-            token_indices, _, expert_weights = (
-                routing_plan.get_expert_assignments(exp_idx)
-            )
-            expert_out = self.experts[exp_idx].forward(x_flat[token_indices])
-            y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
+        # Protect selected GPU experts from eviction while their launches and
+        # routed reductions are pending. The optional executor records a single
+        # CUDA completion event for the MoE layer when this scope exits.
+        scope = (self.expert_executor.dispatch_scope(self.layer_id, routing_plan.active_expert_ids())
+                 if self.expert_executor is not None else nullcontext())
+        with scope:
+            if self.expert_executor is not None and getattr(
+                self.expert_executor, "overlaps_cpu_gpu", False
+            ):
+                # Submit every selected CPU expert before waiting for any result.
+                # Resident GPU experts enqueue kernels on the caller's stream
+                # while CPU workers concurrently run offloaded experts. The
+                # final scatter remains ordered by expert id, preserving the
+                # deterministic reduction order of the synchronous dispatcher.
+                jobs = []
+                try:
+                    for exp_idx in routing_plan.active_expert_ids():
+                        token_indices, _, expert_weights = (
+                            routing_plan.get_expert_assignments(exp_idx)
+                        )
+                        pending = self.expert_executor.submit(
+                            self.layer_id, exp_idx, x_flat[token_indices]
+                        )
+                        jobs.append((token_indices, expert_weights, pending))
+                except Exception:
+                    # A provider or GPU kernel may fail after some workers were
+                    # submitted. Drain them before allowing their inputs to die.
+                    for _, _, pending in jobs:
+                        try:
+                            self.expert_executor.resolve(pending)
+                        except Exception:
+                            pass
+                    raise
+                # Drain all started workers, including on exceptions, so a failed
+                # expert never leaves outstanding tasks writing to discarded GPU
+                # buffers or reading activations from the next inference step.
+                error = None
+                for token_indices, expert_weights, pending in jobs:
+                    try:
+                        expert_out = self.expert_executor.resolve(pending)
+                        if error is None:
+                            y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
+                    except Exception as exc:
+                        if error is None:
+                            error = exc
+                if error is not None:
+                    raise error
+            else:
+                for exp_idx in routing_plan.active_expert_ids():
+                    token_indices, _, expert_weights = (
+                        routing_plan.get_expert_assignments(exp_idx)
+                    )
+                    if self.expert_executor is None:
+                        expert_out = self.experts[exp_idx].forward(x_flat[token_indices])
+                    else:
+                        expert_out = self.expert_executor.forward(
+                            self.layer_id, exp_idx, x_flat[token_indices]
+                        )
+                    y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
 
         return y_flat.reshape(batch_size, seq_len, d_model)

@@ -8,6 +8,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from mini_llm.backends.pytorch.model import TorchDecoderLanguageModel
+from mini_llm.backends.pytorch.training import chunked_lm_head_loss_sum
 from mini_llm.config import ModelConfig
 
 
@@ -75,6 +76,34 @@ def test_model_b_forward_backward_preserves_pool_and_sparse_gradient_paths():
         assert torch.isfinite(attention.matrix_pool.score.grad).all()
         assert attention.global_module.Wq.grad is not None
         assert torch.isfinite(attention.Wq.grad).all()
+
+
+def test_chunked_lm_head_matches_full_loss_and_tied_weight_gradients():
+    torch.manual_seed(8)
+    hidden = torch.randn(2, 5, 7, requires_grad=True)
+    weight = torch.randn(11, 7, requires_grad=True)
+    targets = torch.randint(0, 11, (2, 5))
+    mask = torch.tensor([[1, 1, 1, 0, 0], [1, 0, 1, 1, 1]], dtype=torch.float32)
+
+    expected_hidden = hidden.detach().clone().requires_grad_(True)
+    expected_weight = weight.detach().clone().requires_grad_(True)
+    expected_logits = expected_hidden @ expected_weight.transpose(0, 1)
+    expected = torch.sum(
+        torch.nn.functional.cross_entropy(
+            expected_logits.reshape(-1, 11), targets.reshape(-1), reduction="none"
+        ).reshape_as(targets) * mask
+    )
+    expected.backward()
+
+    actual = chunked_lm_head_loss_sum(
+        hidden, weight, targets, mask, chunk_tokens=3,
+        weight_is_vocab_by_hidden=True,
+    )
+    actual.backward()
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(hidden.grad, expected_hidden.grad)
+    torch.testing.assert_close(weight.grad, expected_weight.grad)
 
 
 def test_token_weighted_loss_ignores_unsupervised_rows():

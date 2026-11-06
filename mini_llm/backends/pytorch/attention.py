@@ -11,6 +11,9 @@ import math
 from typing import Any, Callable
 
 
+_COMPILED_FLEX_ATTENTION = None
+
+
 def _torch():
     try:
         import torch
@@ -74,23 +77,38 @@ def _materialize_mask(mask_mod: Callable, batch: int, heads: int, q_len: int,
 
 
 def flex_attention_with_mask(q, k, v, mask_mod: Callable, *, scale: float,
-                             enable_gqa: bool = False):
+                             enable_gqa: bool = False,
+                             block_mask_cache: dict | None = None,
+                             cache_key: Any = None):
     """Execute FlexAttention on CUDA and an exact dense PyTorch reference on CPU."""
     torch = _torch()
     if q.device.type == "cuda":
         try:
             from torch.nn.attention.flex_attention import create_block_mask, flex_attention
-            block_mask = create_block_mask(
-                mask_mod,
-                B=int(q.shape[0]),
-                H=int(q.shape[1]),
-                Q_LEN=int(q.shape[2]),
-                KV_LEN=int(k.shape[2]),
-                device=q.device,
-                BLOCK_SIZE=128,
-                _compile=True,
+            global _COMPILED_FLEX_ATTENTION
+            if _COMPILED_FLEX_ATTENTION is None:
+                _COMPILED_FLEX_ATTENTION = torch.compile(
+                    flex_attention, mode="max-autotune", dynamic=True
+                )
+            block_mask = (
+                block_mask_cache.get(cache_key)
+                if block_mask_cache is not None and cache_key is not None
+                else None
             )
-            return flex_attention(
+            if block_mask is None:
+                block_mask = create_block_mask(
+                    mask_mod,
+                    B=int(q.shape[0]),
+                    H=int(q.shape[1]),
+                    Q_LEN=int(q.shape[2]),
+                    KV_LEN=int(k.shape[2]),
+                    device=q.device,
+                    BLOCK_SIZE=128,
+                    _compile=True,
+                )
+                if block_mask_cache is not None and cache_key is not None:
+                    block_mask_cache[cache_key] = block_mask
+            return _COMPILED_FLEX_ATTENTION(
                 q, k, v, block_mask=block_mask, scale=float(scale),
                 enable_gqa=bool(enable_gqa),
             )

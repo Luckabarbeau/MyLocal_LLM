@@ -21,9 +21,9 @@ def run(args, *, config_from_name):
         )
     if args.objective not in {None, "ar"}:
         raise NotImplementedError("PyTorch currently supports the autoregressive objective only")
-    if args.mixed_shard_root or args.stream_registry:
+    if args.stream_registry:
         raise NotImplementedError(
-            "PyTorch mixed/streaming source orchestration is not yet implemented"
+            "PyTorch remote streaming source orchestration is not yet implemented"
         )
     if args.init_from or args.block_proposal_init_from_v1:
         raise NotImplementedError("PyTorch CLI supports new runs and strict resume only")
@@ -55,7 +55,7 @@ def run(args, *, config_from_name):
     else:
         config = config_from_name(args.model)
         model = TorchDecoderLanguageModel(config, dtype=dtype, device=device)
-        shard_dir = Path(args.shard_dir)
+        shard_dir = Path(args.mixed_shard_root or args.shard_dir)
         tokenizer_path = Path(args.tokenizer_path) if args.tokenizer_path else shard_dir / "tokenizer.json"
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"tokenizer not found: {tokenizer_path}")
@@ -64,11 +64,11 @@ def run(args, *, config_from_name):
         except Exception:
             tokenizer = SimpleBPETokenizer.load(str(tokenizer_path))
 
-    shard_dir = Path(args.shard_dir)
-    train_paths = sorted(shard_dir.glob("train_shard_*.bin"))
-    val_paths = sorted(shard_dir.glob("val_shard_*.bin"))
+    shard_dir = Path(args.mixed_shard_root or args.shard_dir)
+    train_paths = sorted(shard_dir.rglob("train_shard_*.bin"))
+    val_paths = sorted(shard_dir.rglob("val_shard_*.bin"))
     if not train_paths or not val_paths:
-        legacy = sorted(shard_dir.glob("shard_*.bin"))
+        legacy = sorted(shard_dir.rglob("shard_*.bin"))
         if len(legacy) < 2:
             raise FileNotFoundError(f"training/validation shards not found in {shard_dir}")
         train_paths, val_paths = legacy[:-1], legacy[-1:]
@@ -118,7 +118,9 @@ def run(args, *, config_from_name):
     steps = int(args.max_run_steps or args.total_steps)
     print(
         f"PyTorch backend: device={device}, dtype={dtype}, "
-        f"parameters={sum(p.numel() for p in model.parameters()):,}"
+        f"parameters={sum(p.numel() for p in model.parameters()):,}, "
+        f"train_shards={len(train_paths)}, val_shards={len(val_paths)}, "
+        f"sparse_stride={config.dual_resolution.sparse_retrieval_stride}"
     )
     results = run.train_steps(steps, log_interval=args.log_interval)
     if run.checkpoint_dir is not None:

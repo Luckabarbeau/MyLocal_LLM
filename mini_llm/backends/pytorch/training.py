@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import time
 from typing import Any, Iterable
@@ -18,6 +19,50 @@ def _torch():
     except ImportError as exc:
         raise RuntimeError("PyTorch training requires torch") from exc
     return torch
+
+
+def chunked_lm_head_loss_sum(
+    hidden, projection_weight, targets, weights, *, chunk_tokens: int,
+    weight_is_vocab_by_hidden: bool,
+):
+    """Memory-bounded BF16 projection and FP32 CE with backward recomputation."""
+    torch = _torch()
+    if hidden.ndim != 3 or targets.shape != hidden.shape[:2] or weights.shape != targets.shape:
+        raise ValueError("hidden, targets, and weights have incompatible shapes")
+    rows = int(hidden.shape[0] * hidden.shape[1])
+    chunk_tokens = max(1, min(rows, int(chunk_tokens)))
+    flat_hidden = hidden.reshape(rows, hidden.shape[-1])
+    flat_targets = targets.reshape(rows)
+    flat_weights = weights.reshape(rows)
+
+    def chunk_loss(chunk_hidden, weight, chunk_targets, chunk_weights):
+        logits = (
+            chunk_hidden @ weight.transpose(0, 1)
+            if weight_is_vocab_by_hidden else chunk_hidden @ weight
+        )
+        losses = torch.nn.functional.cross_entropy(
+            logits.float(), chunk_targets, reduction="none"
+        )
+        return torch.sum(losses * chunk_weights)
+
+    loss_sum = hidden.new_zeros((), dtype=torch.float32)
+    for start in range(0, rows, chunk_tokens):
+        stop = min(start + chunk_tokens, rows)
+        arguments = (
+            flat_hidden[start:stop], projection_weight,
+            flat_targets[start:stop], flat_weights[start:stop],
+        )
+        if torch.is_grad_enabled() and (
+            arguments[0].requires_grad or projection_weight.requires_grad
+        ):
+            tile_loss = torch.utils.checkpoint.checkpoint(
+                chunk_loss, *arguments, use_reentrant=False,
+                preserve_rng_state=False,
+            )
+        else:
+            tile_loss = chunk_loss(*arguments)
+        loss_sum = loss_sum + tile_loss
+    return loss_sum
 
 
 def prepare_dual_resolution_metadata(inputs, valid_lengths, block_size):
@@ -53,10 +98,16 @@ class TorchTrainer:
     def __init__(self, model, *, lr=1e-3, beta1=0.9, beta2=0.95, eps=1e-8,
                  weight_decay=0.1, muon_momentum=0.95, muon_ns_steps=5,
                  muon_matmul_precision="bf16", grad_accum_steps=1,
-                 max_grad_norm=1.0, optimizer_offload="none", optimizer=None):
+                 max_grad_norm=1.0, optimizer_offload="none", optimizer=None,
+                 lm_head_chunk_tokens=None):
         self.model = model
         self.grad_accum_steps = int(grad_accum_steps)
         self.max_grad_norm = float(max_grad_norm)
+        self.lm_head_chunk_tokens = int(
+            lm_head_chunk_tokens
+            if lm_head_chunk_tokens is not None
+            else os.environ.get("MINI_LLM_LM_HEAD_CHUNK_TOKENS", "1024")
+        )
         if self.grad_accum_steps < 1:
             raise ValueError("grad_accum_steps must be positive")
         named = list(model.canonical_named_parameters())
@@ -88,17 +139,25 @@ class TorchTrainer:
         count = weights.sum()
         if not bool(count > 0):
             raise ValueError("microbatch has no supervised tokens")
-        logits = self.model(
+        dual_resolution_metadata = batch.get("dual_resolution_metadata")
+        if isinstance(dual_resolution_metadata, dict):
+            dual_resolution_metadata.pop("_pytorch_block_mask_cache", None)
+        hidden = self.model.forward_body(
             token_ids,
             position_ids=batch.get("position_ids"),
             document_ids=batch.get("document_ids"),
-            dual_resolution_metadata=batch.get("dual_resolution_metadata"),
+            dual_resolution_metadata=dual_resolution_metadata,
         )
-        losses = torch.nn.functional.cross_entropy(
-            logits.float().reshape(-1, logits.shape[-1]), targets.reshape(-1),
-            reduction="none",
-        ).reshape_as(targets)
-        return torch.sum(losses * weights), count, token_ids.numel()
+        tied = bool(self.model.config.tie_embeddings)
+        projection_weight = (
+            self.model.embedding.W if tied else self.model.output_proj.W
+        )
+        loss_sum = chunked_lm_head_loss_sum(
+            hidden, projection_weight, targets, weights,
+            chunk_tokens=self.lm_head_chunk_tokens,
+            weight_is_vocab_by_hidden=tied,
+        )
+        return loss_sum, count, token_ids.numel()
 
     def train_step(self, microbatches: Iterable[dict[str, Any]]):
         torch = _torch()
@@ -243,14 +302,28 @@ class TorchTrainingRun:
                 self._sample(self.train_shards[(self.step + index) % len(self.train_shards)])
                 for index in range(self.grad_accum_steps)
             ]
+            torch = _torch()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+                torch.cuda.synchronize()
             started = time.perf_counter()
             result = self.trainer.train_step(batches)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             result["time_s"] = time.perf_counter() - started
+            result["executed_tokens_per_s"] = result["executed_tokens"] / result["time_s"]
+            result["supervised_tokens_per_s"] = result["supervised_tokens"] / result["time_s"]
+            result["peak_vram_bytes"] = (
+                int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0
+            )
             results.append(result)
             if log_interval and self.step % int(log_interval) == 0:
                 print(
                     f"step {self.step} loss={result['loss']:.6f} "
-                    f"supervised_tokens={result['supervised_tokens']:.0f}"
+                    f"time_s={result['time_s']:.3f} "
+                    f"executed_tok_s={result['executed_tokens_per_s']:.1f} "
+                    f"supervised_tok_s={result['supervised_tokens_per_s']:.1f} "
+                    f"peak_vram_gib={result['peak_vram_bytes'] / 2**30:.3f}"
                 )
         return results
 
@@ -276,5 +349,6 @@ class TorchTrainingRun:
 
 
 __all__ = [
-    "TorchTrainer", "TorchTrainingRun", "prepare_dual_resolution_metadata",
+    "TorchTrainer", "TorchTrainingRun", "chunked_lm_head_loss_sum",
+    "prepare_dual_resolution_metadata",
 ]

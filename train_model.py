@@ -32,8 +32,27 @@ import json
 import math
 import warnings
 import os
+import sys
 import time
 from pathlib import Path
+
+
+def _bootstrap_backend_from_cli():
+    """Apply explicit CLI backend before importing the process-global backend.
+
+    CLI selection takes precedence over MINI_LLM_BACKEND. The full parser still
+    validates the value and exposes it in ``args.backend``.
+    """
+    for index, value in enumerate(sys.argv[1:]):
+        if value.startswith("--backend="):
+            os.environ["MINI_LLM_BACKEND"] = value.split("=", 1)[1]
+            return
+        if value == "--backend" and index + 2 <= len(sys.argv) - 1:
+            os.environ["MINI_LLM_BACKEND"] = sys.argv[index + 2]
+            return
+
+
+_bootstrap_backend_from_cli()
 
 import numpy as np
 
@@ -90,6 +109,13 @@ def parse_args():
         ],
         default="mini",
         help="Model size configuration",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["numpy", "cupy", "pytorch"],
+        default=None,
+        help=("Execution backend. Explicit CLI selection overrides "
+              "MINI_LLM_BACKEND; otherwise the environment/default is used."),
     )
     parser.add_argument(
         "--precision",
@@ -1146,6 +1172,9 @@ def build_training_objective(model, args, *, checkpoint_state=None):
 
 def main():
     args = parse_args()
+    if BACKEND_NAME == "pytorch":
+        from mini_llm.backends.pytorch.cli import run
+        return run(args, config_from_name=model_config_from_name)
     if sum(bool(x) for x in (args.resume_from,args.init_from,args.block_proposal_init_from_v1))>1:
         raise ValueError('--resume-from, --init-from and --block-proposal-init-from-v1 are mutually exclusive')
 

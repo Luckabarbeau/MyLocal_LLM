@@ -322,6 +322,11 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
         v = (x @ self.Wv).reshape(batch, length, self.n_kv_heads, self.d_head)
         q = apply_rope(q, positions, self.rope_base)
         k = apply_rope(k, positions, self.rope_base)
+        block_mask_cache = None
+        if dual_resolution_metadata is not None:
+            block_mask_cache = dual_resolution_metadata.setdefault(
+                "_pytorch_block_mask_cache", {}
+            )
         mask = local_mask_mod(
             metadata["document_ids"], local_window=self.local_window,
             long_local_window=self.long_local_window,
@@ -332,6 +337,13 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
         local_context = flex_attention_with_mask(
             q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3),
             v.permute(0, 2, 1, 3), mask, scale=self.scale, enable_gqa=True,
+            block_mask_cache=block_mask_cache,
+            cache_key=(
+                "local", batch, length, self.n_q_heads,
+                self.local_window, self.long_local_window,
+                self.long_local_heads, self.sparse_head, self.sparse_stride,
+                self.sparse_phase,
+            ),
         ).permute(0, 2, 1, 3)
         local_delta = local_context.reshape(batch, length, self.d_model) @ self.Wo
         local_state = residual_input.float() + local_delta.float()
@@ -369,6 +381,10 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
         global_context = flex_attention_with_mask(
             qg.permute(0, 2, 1, 3), kg.permute(0, 2, 1, 3),
             vg.permute(0, 2, 1, 3), global_mask, scale=self.scale,
+            block_mask_cache=block_mask_cache,
+            cache_key=(
+                "global", batch, length, int(kg.shape[1]), self.global_heads,
+            ),
         ).permute(0, 2, 1, 3)
         global_delta = global_context.reshape(batch, length, -1) @ global_module.Wo
         return local_delta + global_delta.to(local_delta.dtype)
@@ -445,7 +461,8 @@ class OutputProjection(_torch().nn.Module):
 class TorchDecoderLanguageModel(_torch().nn.Module):
     """PyTorch autograd implementation preserving native architecture identity."""
     def __init__(self, config, *, dtype="bfloat16", device=None,
-                 activation_checkpointing: bool = True):
+                 activation_checkpointing: bool = True,
+                 checkpointed_layers: int | None = None):
         super().__init__()
         torch = _torch()
         if config.memory_context.enabled:
@@ -470,6 +487,18 @@ class TorchDecoderLanguageModel(_torch().nn.Module):
             if config.progressive_depth else int(config.n_layers)
         )
         self.activation_checkpointing = bool(activation_checkpointing)
+        if checkpointed_layers is None:
+            self.checkpointed_layers = (
+                len(self.blocks) if self.activation_checkpointing else 0
+            )
+        else:
+            self.checkpointed_layers = int(checkpointed_layers)
+            if not 0 <= self.checkpointed_layers <= len(self.blocks):
+                raise ValueError("checkpointed_layers must lie in [0, n_layers]")
+            if not self.activation_checkpointing and self.checkpointed_layers:
+                raise ValueError(
+                    "checkpointed_layers must be zero when activation checkpointing is disabled"
+                )
         if device is not None:
             self.to(device=device)
 
@@ -523,13 +552,17 @@ class TorchDecoderLanguageModel(_torch().nn.Module):
         x = self.embedding.W[token_ids]
         if self.compute_dtype != torch.float32:
             x = x.float()
-        for block in self.blocks[:self.active_layers]:
+        for layer_index, block in enumerate(self.blocks[:self.active_layers]):
             def run(hidden, block=block):
                 return block(
                     hidden, position_ids=position_ids, document_ids=document_ids,
                     dual_resolution_metadata=dual_resolution_metadata,
                 )
-            if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+            if (
+                layer_index < self.checkpointed_layers
+                and self.training
+                and torch.is_grad_enabled()
+            ):
                 x = torch.utils.checkpoint.checkpoint(run, x, use_reentrant=False)
             else:
                 x = run(x)

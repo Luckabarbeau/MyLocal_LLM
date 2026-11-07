@@ -29,6 +29,61 @@
       }
     },
     {
+      "id": "ptb_1024",
+      "type": "corpus",
+      "enabled": true,
+      "every_supervised_tokens": 500000000,
+      "parameters": {
+        "data": "../benchmarks/ptb/ptb.test.txt",
+        "data_format": "text",
+        "dataset_name": "Penn Treebank test",
+        "context_length": 1024,
+        "stride": 1024,
+        "batch_size": 8
+      }
+    },
+    {
+      "id": "pg19_4096",
+      "type": "corpus",
+      "enabled": true,
+      "every_supervised_tokens": 500000000,
+      "parameters": {
+        "data": "../benchmarks/pg19-test/pg19_test.jsonl",
+        "data_format": "jsonl",
+        "text_field": "text",
+        "dataset_name": "PG-19 test",
+        "context_length": 4096,
+        "stride": 4096,
+        "batch_size": 8
+      }
+    },
+    {
+      "id": "c4_validation_4096",
+      "type": "corpus",
+      "enabled": true,
+      "every_supervised_tokens": 500000000,
+      "parameters": {
+        "data": "../benchmarks/c4-validation/c4_validation_first_5000.jsonl",
+        "data_format": "jsonl",
+        "text_field": "text",
+        "dataset_name": "C4 validation fixed 5000",
+        "context_length": 4096,
+        "stride": 4096,
+        "batch_size": 8
+      }
+    },
+    {
+      "id": "lambada_openai",
+      "type": "lambada",
+      "enabled": true,
+      "every_supervised_tokens": 500000000,
+      "parameters": {
+        "data": "../benchmarks/lambada-openai/lambada_test_en.jsonl",
+        "text_field": "text",
+        "context_length": 4096
+      }
+    },
+    {
       "id": "generation_full",
       "type": "generation",
       "enabled": true,

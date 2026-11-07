@@ -18,7 +18,7 @@ import re
 import time
 from pathlib import Path
 
-from evaluate_wikitext import load_model, load_tokenizer, single_token_nll
+from benchmarks.evaluate_wikitext import load_model, load_tokenizer, single_token_nll
 from mini_llm.backend import BACKEND_NAME, xp, synchronize
 from mini_llm.inference_model import InferenceModel
 from mini_llm.runtime_defaults import apply_runtime_defaults, format_runtime_profile

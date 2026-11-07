@@ -23,7 +23,7 @@ import numpy as np
 from mini_llm.backend import xp, asnumpy
 
 
-SUPPORTED = {'wikitext', 'generation', 'reference_continuation',
+SUPPORTED = {'wikitext', 'corpus', 'lambada', 'generation', 'reference_continuation',
              'python_code', 'cpp_code', 'math', 'logic', 'terminal', 'narrative',
              'long_retrieval'}
 
@@ -140,7 +140,170 @@ def run_wikitext(model, tokenizer, *, data, context_length, stride=None,
     }
 
 
+def run_corpus(model, tokenizer, *, data, data_format, context_length,
+               dataset_name='External corpus', text_field='text', stride=None,
+               max_documents=None, max_tokens=None, batch_size=1):
+    """Score a fixed text/JSONL snapshot with WikiText-identical NLL math."""
+    from benchmarks.evaluate_corpus import iter_documents
+    from benchmarks.evaluate_wikitext import suffix_nll
+    path = Path(data)
+    context = int(context_length)
+    stride = context if stride is None else int(stride)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if data_format not in ('text', 'jsonl'):
+        raise ValueError('corpus data_format must be text or jsonl')
+    if not 1 <= stride <= context:
+        raise ValueError('corpus stride must be in [1,context]')
+    if max_documents is not None and int(max_documents) <= 0:
+        raise ValueError('max_documents must be positive')
+    if max_tokens is not None and int(max_tokens) < 2:
+        raise ValueError('max_tokens must be at least 2')
+    batch_size = int(batch_size)
+    if batch_size <= 0:
+        raise ValueError('batch_size must be positive')
+
+    nll = 0.0
+    scored = windows = source_documents = tokenized_documents = token_count = raw_bytes = 0
+    forward_batches = 0
+    pending = []
+
+    def score_pending():
+        nonlocal nll, scored, windows, forward_batches
+        if not pending:
+            return
+        lengths = [len(arr) - 1 for arr, _ in pending]
+        padded_length = max(lengths)
+        batch_inputs = np.zeros((len(pending), padded_length), dtype=np.int64)
+        batch_targets = np.zeros_like(batch_inputs)
+        for row, ((arr, _), length) in enumerate(zip(pending, lengths)):
+            batch_inputs[row, :length] = arr[:-1]
+            batch_targets[row, :length] = arr[1:]
+        inputs = xp.asarray(batch_inputs)
+        targets = xp.asarray(batch_targets)
+        logits = model.forward(inputs, return_cache=False)
+        for row, ((_, suffix_start), length) in enumerate(zip(pending, lengths)):
+            current_nll, current_count = suffix_nll(
+                logits[row:row + 1, :length],
+                targets[row:row + 1, :length], suffix_start)
+            nll += current_nll
+            scored += current_count
+        windows += len(pending)
+        forward_batches += 1
+        pending.clear()
+        del inputs, targets, logits
+
+    with _plain_4096_model(model):
+        for document in iter_documents(path, data_format, text_field):
+            if max_documents is not None and source_documents >= int(max_documents):
+                break
+            if max_tokens is not None and token_count >= int(max_tokens):
+                break
+            source_documents += 1
+            raw_bytes += len(document.encode('utf-8'))
+            ids = tokenizer.encode(document)
+            if max_tokens is not None:
+                ids = ids[:max(0, int(max_tokens) - token_count)]
+            if not ids:
+                continue
+            tokenized_documents += 1
+            token_count += len(ids)
+            if len(ids) < 2:
+                continue
+            for target_start in range(1, len(ids), stride):
+                target_end = min(target_start + stride, len(ids))
+                begin = max(0, target_end - context - 1)
+                arr = np.asarray(ids[begin:target_end], dtype=np.int64)
+                pending.append((arr, target_start - (begin + 1)))
+                if len(pending) == batch_size:
+                    score_pending()
+        score_pending()
+    if scored == 0:
+        raise ValueError('corpus benchmark had no scoreable tokens')
+    ce = nll / scored
+    complete = max_documents is None and max_tokens is None
+    return {
+        'dataset_name': dataset_name, 'cross_entropy': ce,
+        'perplexity': math.exp(ce),
+        'bits_per_byte': (nll / (raw_bytes * math.log(2))
+                          if complete and raw_bytes else None),
+        'scored_tokens': scored, 'tokenizer_tokens': token_count,
+        'source_documents': source_documents,
+        'tokenized_documents': tokenized_documents,
+        'raw_bytes': raw_bytes, 'windows': windows,
+        'forward_batches': forward_batches, 'batch_size': batch_size,
+        'context_length': context, 'stride': stride,
+        'memory_mode': 'plain', 'data_format': data_format,
+        'dataset_sha256': _sha256(path),
+    }
+
+
+def run_lambada(model, tokenizer, *, data, context_length=4096,
+                text_field='text', max_examples=None):
+    """Score exact final-word prediction and target-token NLL in process."""
+    from benchmarks.evaluate_lambada import iter_lambada, split_lambada_target
+    from benchmarks.evaluate_wikitext import suffix_nll
+    path = Path(data)
+    context = int(context_length)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if context < 2:
+        raise ValueError('LAMBADA context_length must be at least 2')
+    if max_examples is not None and int(max_examples) <= 0:
+        raise ValueError('max_examples must be positive')
+
+    examples = exact = skipped = target_tokens = 0
+    total_nll = 0.0
+    target_lengths = []
+    with _plain_4096_model(model):
+        for text in iter_lambada(path, text_field):
+            if max_examples is not None and examples >= int(max_examples):
+                break
+            try:
+                context_ids, target_ids, _ = split_lambada_target(tokenizer, text)
+            except ValueError:
+                skipped += 1
+                continue
+            if len(target_ids) >= context:
+                skipped += 1
+                continue
+            context_ids = context_ids[-(context - len(target_ids)):]
+            if not context_ids:
+                skipped += 1
+                continue
+            sequence = np.asarray(context_ids + target_ids, dtype=np.int64)
+            inputs = xp.asarray(sequence[:-1][None, :])
+            targets = xp.asarray(sequence[1:][None, :])
+            logits = model.forward(inputs, return_cache=False)
+            suffix_start = len(context_ids) - 1
+            current_nll, current_count = suffix_nll(logits, targets, suffix_start)
+            prediction = asnumpy(xp.argmax(
+                logits.reshape(-1, int(logits.shape[-1]))[suffix_start:], axis=-1))
+            actual = sequence[len(context_ids):]
+            exact += int(np.array_equal(np.asarray(prediction), actual))
+            examples += 1
+            target_tokens += current_count
+            total_nll += current_nll
+            target_lengths.append(len(target_ids))
+            del inputs, targets, logits
+    if examples == 0 or target_tokens == 0:
+        raise ValueError('LAMBADA benchmark had no scoreable examples')
+    ce = total_nll / target_tokens
+    return {
+        'examples': examples, 'skipped': skipped,
+        'exact_accuracy': exact / examples,
+        'exact_matches': exact, 'cross_entropy': ce,
+        'perplexity': math.exp(ce), 'scored_tokens': target_tokens,
+        'mean_target_tokens': sum(target_lengths) / len(target_lengths),
+        'context_length': context, 'memory_mode': 'plain',
+        'dataset_sha256': _sha256(path),
+    }
+
+
 def _generator(model, tokenizer, *, max_context=None):
+    external_factory = getattr(model, 'create_benchmark_generator', None)
+    if external_factory is not None:
+        return external_factory(max_context=max_context)
     from inference import TextGenerator
     memory_cfg = model.config.memory_context
     if memory_cfg.enabled and memory_cfg.integration_mode in {
@@ -395,6 +558,10 @@ class LiveBenchmarkScheduler:
                 raise ValueError(f'{name} parameters must be an object')
             allowed = {
                 'wikitext': {'data', 'context_length', 'stride', 'document_mode', 'max_tokens'},
+                'corpus': {'data', 'data_format', 'context_length', 'dataset_name',
+                           'text_field', 'stride', 'max_documents', 'max_tokens',
+                           'batch_size'},
+                'lambada': {'data', 'context_length', 'text_field', 'max_examples'},
                 'generation': {'prompt_suite', 'prompt_ids', 'seeds', 'strategies',
                                'max_new_tokens', 'temperature', 'top_k', 'top_p', 'use_kv_cache',
                                'max_context', 'require_native_cuda_graph_decode',
@@ -425,6 +592,10 @@ class LiveBenchmarkScheduler:
                 raise ValueError(f'{name} unknown parameters: {sorted(set(params)-allowed)}')
             if kind == 'wikitext' and not {'data', 'context_length'} <= set(params):
                 raise ValueError(f'{name}: wikitext requires data/context_length')
+            if kind == 'corpus' and not {'data', 'data_format', 'context_length'} <= set(params):
+                raise ValueError(f'{name}: corpus requires data/data_format/context_length')
+            if kind == 'lambada' and 'data' not in params:
+                raise ValueError(f'{name}: lambada requires data')
             if kind == 'generation' and 'prompt_suite' not in params:
                 raise ValueError(f'{name}: generation requires prompt_suite')
             if kind == 'reference_continuation' and 'references' not in params:
@@ -513,7 +684,8 @@ class LiveBenchmarkScheduler:
                     from benchmarks.long_retrieval_0097 import run_long_retrieval
                     fn = run_long_retrieval
                 else:
-                    fn = {'wikitext': run_wikitext, 'generation': run_generation,
+                    fn = {'wikitext': run_wikitext, 'corpus': run_corpus,
+                          'lambada': run_lambada, 'generation': run_generation,
                           'reference_continuation': run_reference}[kind]
             result = fn(model, self.tokenizer, **benchmark.get('parameters', {}))
             from benchmarks.live_report import (summary_metrics, reference_html,

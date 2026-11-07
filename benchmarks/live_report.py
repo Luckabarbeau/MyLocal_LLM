@@ -8,8 +8,12 @@ import numpy as np
 
 
 def summary_metrics(kind, result):
-    if kind == 'wikitext':
+    if kind in ('wikitext', 'corpus'):
         return {k: result[k] for k in ('cross_entropy', 'perplexity', 'bits_per_byte', 'scored_tokens')}
+    if kind == 'lambada':
+        return {k: result[k] for k in (
+            'cross_entropy', 'perplexity', 'scored_tokens', 'examples',
+            'exact_accuracy', 'mean_target_tokens')}
     if kind == 'generation':
         summary = result['summary']['overall']
         metrics = {k: summary.get(k) for k in (
@@ -147,6 +151,7 @@ small{color:#556}
 def rebuild_summary_csv(root, config_hash):
     columns = ('benchmark_id', 'benchmark_type', 'optimizer_step', 'supervised_tokens_total',
                'cross_entropy', 'perplexity', 'bits_per_byte', 'scored_tokens',
+               'examples', 'exact_accuracy', 'mean_target_tokens',
                'mean_repeated_8gram_rate', 'mean_distinct_4', 'repeat_8gram_onset_fraction',
                'mean_reference_nll', 'mean_top1_accuracy', 'mean_top5_accuracy',
                'reference_count', 'reference_scored_tokens',

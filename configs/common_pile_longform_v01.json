@@ -17,14 +17,24 @@
       }
     },
     "full": {
-      "long_form_fraction": 0.12,
+      "long_form_fraction": 0.135,
+      "legacy_reduction_sources": [
+        "cosmopedia_v2",
+        "wikipedia",
+        "finepdfs",
+        "pes2o"
+      ],
+      "legacy_weight_overrides": {
+        "fineweb_edu": 0.1938,
+        "fineweb": 0.1452
+      },
       "weights": {
-        "long_project_gutenberg": 0.030,
-        "long_doab": 0.030,
-        "long_pressbooks": 0.015,
-        "long_uk_hansard": 0.025,
-        "long_pre_1929_books": 0.015,
-        "long_usgpo": 0.005
+        "long_project_gutenberg": 0.03125,
+        "long_doab": 0.028125,
+        "long_pressbooks": 0.00625,
+        "long_uk_hansard": 0.021875,
+        "long_pre_1929_books": 0.0375,
+        "long_usgpo": 0.010
       }
     }
   },
@@ -103,6 +113,7 @@
       "utf8_bytes": 36100000000,
       "reported_documents": 2148548,
       "reconstruction": "usgpo_parts",
+      "allow_intentional_cap": true,
       "license": "Public Domain per document metadata"
     }
   }

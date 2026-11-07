@@ -11,7 +11,7 @@ import json
 import math
 from pathlib import Path
 
-from evaluate_wikitext import (
+from benchmarks.evaluate_wikitext import (
     load_model,
     load_tokenizer,
     run_autoregressive_evaluation,

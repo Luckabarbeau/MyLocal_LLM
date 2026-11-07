@@ -1,12 +1,8 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "archive" / "experimental"))
-
 from pathlib import Path
 
 import numpy as np
 
-from generate_packed_cosmopedia_shards import (
+from mini_llm.data.packed_shard_preparation import (
     PackedShardWriter,
     is_validation_document,
 )

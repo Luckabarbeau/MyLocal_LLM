@@ -99,34 +99,7 @@ These items should not change model execution or durable artifact formats.
 - **Prerequisites:** inventory all direct/indirect CUDA checks and add explicit
   markers or an opt-in fixture before changing marker selection rules.
 
-### 6. Decide the SFT workflow
-
-- **Affected files:** `train_sft.py` and its documented but absent
-  `prepare_smoltalk.py` input workflow.
-- **Benefit:** removes a misleading orphan entry point or restores a complete,
-  testable supervised-fine-tuning path.
-- **Risk:** medium because SFT data masking, tokenizer pairing, and checkpoint
-  initialization can affect durable outputs.
-- **Required gates:** CLI smoke test, tiny deterministic train/resume fixture,
-  source/output path-separation checks, tokenizer/provenance validation, and
-  documentation review.
-- **Prerequisites:** determine whether users still rely on the script. If kept,
-  restore or replace the preparation workflow and add fail-closed protection
-  against source/output overlap. If removed, migrate any unique behavior first.
-
-### 7. Classify old launchers
-
-- **Affected files:** `run_training.sh` and any launcher defaulting to retired
-  model families or absent checkpoint paths.
-- **Benefit:** prevents accidental launches with historical defaults and makes
-  the production entry point unambiguous.
-- **Risk:** low to medium for external users relying on implicit defaults.
-- **Required gates:** shell syntax/dry-run checks and documented invocation
-  migration.
-- **Prerequisites:** either require an explicit model/profile or label the script
-  clearly as legacy/general. Do not silently retarget it to Model B.
-
-### 8. Test the pinned environment mirror
+### 6. Test the pinned environment mirror
 
 - **Affected files:** `mini_llm/production_profile_0105.py`,
   `scripts/0105_model_b_profile.env`, and profile tests.

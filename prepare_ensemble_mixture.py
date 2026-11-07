@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """0080BM: Shared tokenizer and thin orchestration of per-source packed shards.
 
-The ONLY packing engine is pack_text_corpus in generate_packed_cosmopedia_shards.py.
+The only packing engine is ``mini_llm.data.packed_shard_preparation``.
 Each input file is packed into its own shard subdirectory; data mixture weights
 live solely in mixture_manifest.json, so they can change without retokenizing.
 
@@ -29,7 +29,7 @@ import json
 import math
 from pathlib import Path
 
-from generate_packed_cosmopedia_shards import (
+from mini_llm.data.packed_shard_preparation import (
     pack_text_corpus,
     file_sha256,
     is_validation_document,

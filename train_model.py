@@ -1410,7 +1410,7 @@ def main():
             }:
                 raise RuntimeError(
                     f"{args.model} requires pre-generated packed shards. "
-                    "Run generate_packed_cosmopedia_shards.py or use "
+                    "Prepare them with prepare_ensemble_mixture.py and pass "
                     "--mixed-shard-root."
                 )
             print("\nGenerating legacy token shards...")

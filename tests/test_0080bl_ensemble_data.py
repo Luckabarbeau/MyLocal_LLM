@@ -73,7 +73,7 @@ def test_tokenizer_samples_exclude_validation_and_respect_source_weights(tmp_pat
     assert len(sample) == 20
     assert sum(s.startswith('first') for s in sample) == 15
     assert sum(s.startswith('second') for s in sample) == 5
-    from generate_packed_cosmopedia_shards import is_validation_document
+    from mini_llm.data.packed_shard_preparation import is_validation_document
     assert all(not is_validation_document(s, 0.2, 42) for s in sample)
 
 

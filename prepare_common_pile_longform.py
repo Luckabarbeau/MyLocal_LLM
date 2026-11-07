@@ -29,7 +29,7 @@ from typing import Iterable, Iterator
 
 import numpy as np
 
-from generate_packed_cosmopedia_shards import (
+from mini_llm.data.packed_shard_preparation import (
     PackedShardWriter,
     file_sha256,
     is_validation_document,

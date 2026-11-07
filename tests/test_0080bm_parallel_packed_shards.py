@@ -9,7 +9,7 @@ import pytest
 from mini_llm.data.mixed_shards import load_weighted_shard_sources
 from mini_llm.data.text_corpus import TextCorpusSource
 from mini_llm.tokenizer.tokenizer import SimpleBPETokenizer
-from generate_packed_cosmopedia_shards import pack_text_corpus, is_validation_document
+from mini_llm.data.packed_shard_preparation import pack_text_corpus, is_validation_document
 from prepare_ensemble_mixture import pack_shards, reweight_mixture
 
 

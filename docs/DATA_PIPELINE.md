@@ -104,11 +104,11 @@ match the pinned configuration.
 
 ## 3. Create a new mixed-shard run family
 
-Use `prepare_ensemble_mixture.py` for the current multi-source workflow. It owns
-shared-tokenizer training, per-source packed shards, resumable source-level
-orchestration, and the root mixture manifest. The older
-`generate_token_shards.py` remains a single-corpus helper; it is not the
-preferred production Model B mixture workflow.
+Use `prepare_ensemble_mixture.py` for the current multi-source workflow. It is
+the sole public entry point for shared-tokenizer training, per-source packed
+shards, resumable source-level orchestration, and the root mixture manifest.
+The former context-truncating single-corpus generator and standalone tokenizer
+trainer were removed to avoid maintaining incompatible parallel pipelines.
 
 Choose a **new output root** for a new tokenizer family. Do not train a new
 tokenizer inside an existing mixture or checkpoint family.

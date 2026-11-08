@@ -101,6 +101,7 @@ class CorpusSourceSpec:
     path: Path
     weight: float
     text_column: Optional[str] = None
+    group_column: Optional[str] = None
 
 
 @dataclass
@@ -119,11 +120,13 @@ class TextCorpusSource:
         name: str,
         path: Path,
         text_column: Optional[str] = None,
+        group_column: Optional[str] = None,
         parquet_batch_size: int = 1024,
     ):
         self.name = str(name)
         self.path = Path(path).expanduser().resolve()
         self.text_column = text_column
+        self.group_column = group_column
         self.parquet_batch_size = int(parquet_batch_size)
         if self.parquet_batch_size <= 0:
             raise ValueError("parquet_batch_size must be positive")
@@ -368,18 +371,86 @@ class TextCorpusSource:
         else:
             yield from self._iter_text_file(path)
 
+    def _iter_grouped_documents(self, path: Path) -> Iterator[tuple[str, str]]:
+        if self.group_column is None:
+            raise RuntimeError("grouped document reader requires group_column")
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix == ".gz":
+            suffix = path.with_suffix("").suffix.lower()
+        if suffix == ".parquet":
+            try:
+                import pyarrow.parquet as pq
+            except ImportError as exc:
+                raise ImportError("Parquet corpus reading requires pyarrow>=16.0") from exc
+            parquet = pq.ParquetFile(path)
+            names = parquet.schema_arrow.names
+            text_column = self.choose_text_column(names, self.text_column)
+            if self.group_column not in names:
+                raise ValueError(
+                    f"group column {self.group_column!r} is not present; available columns: {names}"
+                )
+            columns = list(dict.fromkeys((text_column, self.group_column)))
+            for batch in parquet.iter_batches(batch_size=self.parquet_batch_size, columns=columns):
+                values = batch.to_pydict()
+                for text_value, group_value in zip(values[text_column], values[self.group_column]):
+                    if text_value is None or text_value == "":
+                        continue
+                    if group_value is None or group_value == "":
+                        raise ValueError(f"empty group key in {path}")
+                    yield str(text_value), str(group_value)
+            return
+        if suffix not in _JSON_SUFFIXES and suffix not in _JSONL_SUFFIXES:
+            raise ValueError("group_column is supported only for JSON, JSONL, and Parquet corpora")
+        selected_column: Optional[str] = self.text_column
+        for value in self._iter_json_values(path):
+            if not isinstance(value, dict):
+                raise ValueError(f"grouped corpus records must be objects: {path}")
+            if selected_column is None:
+                selected_column = self.choose_text_column(list(value.keys()))
+            if selected_column not in value or self.group_column not in value:
+                raise ValueError(
+                    f"text/group columns {selected_column!r}/{self.group_column!r} are not "
+                    f"present in {path}; available columns: {list(value.keys())}"
+                )
+            text_value = value[selected_column]
+            group_value = value[self.group_column]
+            if text_value is None or text_value == "":
+                continue
+            if group_value is None or group_value == "":
+                raise ValueError(f"empty group key in {path}")
+            yield str(text_value), str(group_value)
+
+    def iter_file_documents(self, path: Path) -> Iterator[tuple[str, str]]:
+        """Yield ``(text, split_key)`` without changing legacy text-only behavior."""
+
+        if self.group_column is None:
+            for text in self.iter_file_texts(path):
+                yield text, text
+        else:
+            yield from self._iter_grouped_documents(path)
+
+    def iter_documents(
+        self,
+        *,
+        seed: int = 42,
+        shuffle_files: bool = True,
+    ) -> Iterator[tuple[str, str]]:
+        files = self.discover_files()
+        if shuffle_files:
+            rng = random.Random(f"{int(seed)}:{self.name}")
+            rng.shuffle(files)
+        for path in files:
+            yield from self.iter_file_documents(path)
+
     def iter_texts(
         self,
         *,
         seed: int = 42,
         shuffle_files: bool = True,
     ) -> Iterator[str]:
-        files = self.discover_files()
-        if shuffle_files:
-            rng = random.Random(f"{int(seed)}:{self.name}")
-            rng.shuffle(files)
-        for path in files:
-            yield from self.iter_file_texts(path)
+        for text, _ in self.iter_documents(seed=seed, shuffle_files=shuffle_files):
+            yield text
 
     def inspect(self) -> Dict[str, object]:
         files = self.discover_files()

@@ -215,6 +215,7 @@ def pack_text_corpus(
             queue = deque()
             this_train = this_val = 0
             current_batch = []
+            current_split_keys = []
 
             def commit(encoded, flags):
                 nonlocal this_train, this_val
@@ -231,8 +232,10 @@ def pack_text_corpus(
                 if not current_batch:
                     return
                 texts = current_batch[:]
-                flags = [is_validation_document(text, val_ratio, seed) for text in texts]
+                split_keys = current_split_keys[:]
+                flags = [is_validation_document(key, val_ratio, seed) for key in split_keys]
                 current_batch.clear()
+                current_split_keys.clear()
                 if pool is None:
                     commit(tokenizer.encode_batch(texts), flags)
                 else:
@@ -241,10 +244,16 @@ def pack_text_corpus(
                         drain_one()
 
             try:
-                for text in reader.iter_file_texts(source_path):
+                documents = (
+                    reader.iter_file_documents(source_path)
+                    if hasattr(reader, "iter_file_documents")
+                    else ((text, text) for text in reader.iter_file_texts(source_path))
+                )
+                for text, split_key in documents:
                     if not text:
                         continue
                     current_batch.append(text)
+                    current_split_keys.append(split_key)
                     n_total += 1
                     if len(current_batch) >= batch_documents:
                         submit_batch()

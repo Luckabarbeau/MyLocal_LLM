@@ -54,8 +54,12 @@ def sources_from_config(mix_config: Path, data_root: Path, weight_key: str,
         weight = float(entry[weight_key])
         if weight < 0:
             raise ValueError(f"negative {weight_key} for {name}")
-        reader = TextCorpusSource(name, data_root / relative,
-                                  text_column=entry.get("text_column"))
+        reader = TextCorpusSource(
+            name,
+            data_root / relative,
+            text_column=entry.get("text_column"),
+            group_column=entry.get("group_column"),
+        )
         sources.append((name, reader, weight))
     total = sum(weight for _, _, weight in sources)
     if total <= 0:
@@ -70,8 +74,8 @@ def training_texts(sources, sample_documents, val_ratio, seed):
     targets[-1] += sample_documents - sum(targets)
     for (name, reader, _), count in zip(sources, targets):
         seen = 0
-        for text in reader.iter_texts(seed=seed):
-            if is_validation_document(text, val_ratio, seed):
+        for text, split_key in reader.iter_documents(seed=seed):
+            if is_validation_document(split_key, val_ratio, seed):
                 continue
             yield text
             seen += 1
@@ -166,6 +170,7 @@ def pack_shards(args):
                                       "pretraining_weight", include_zero=True)
     source_lookup = {name: (reader, weight) for name, reader, weight in all_sources}
     source_paths = {name: str(reader.path) for name, reader, _ in all_sources}
+    source_group_columns = {name: reader.group_column for name, reader, _ in all_sources}
     requested = getattr(args, "source", None) or list(source_lookup)
     if len(set(requested)) != len(requested):
         raise ValueError("duplicate --source entries are not allowed")
@@ -183,7 +188,8 @@ def pack_shards(args):
                 manifest.get("preprocessing_seed") != args.seed or
                 manifest.get("validation_ratio") != args.val_ratio or
                 set(manifest.get("expected_sources", ())) != set(source_lookup) or
-                manifest.get("source_paths") != source_paths):
+                manifest.get("source_paths") != source_paths or
+                manifest.get("source_group_columns", source_group_columns) != source_group_columns):
             raise ValueError("partial mixture provenance differs; use a new root")
     else:
         manifest = dict(format_version="weighted_packed_mixture_v1",
@@ -192,7 +198,8 @@ def pack_shards(args):
                         token_dtype="uint16", preprocessing_seed=args.seed,
                         validation_ratio=args.val_ratio,
                         expected_sources=list(source_lookup),
-                        source_paths=source_paths, sources={})
+                        source_paths=source_paths,
+                        source_group_columns=source_group_columns, sources={})
     # A partial dataset can resume by packing only remaining sources. Mixture
     # weights are metadata and may change without touching existing binaries.
     for done_name, done_entry in manifest["sources"].items():

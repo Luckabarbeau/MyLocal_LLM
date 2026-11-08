@@ -140,6 +140,8 @@ benchmarks/*.txt
 # - prepare_external_benchmarks.py
 
 token_shards_ensemble_32k_mixed/
+token_shards_coding_algorithms_32k/
+token_shards_coding_instruction_32k/
 
 token_shards_ensemble_32k_fineweb_edu_smoke/
 

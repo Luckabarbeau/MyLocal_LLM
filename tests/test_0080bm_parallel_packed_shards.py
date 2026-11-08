@@ -71,6 +71,45 @@ def test_parallel_is_deterministic_and_keeps_original_file_boundaries(tmp_path):
                for p in s["source_files"])
 
 
+def test_group_column_keeps_related_structured_documents_in_one_split(tmp_path):
+    root, _, tokenizer_path, _, _ = _setup(tmp_path)
+    train_group = val_group = None
+    for index in range(10_000):
+        candidate = f"problem-{index}"
+        if is_validation_document(candidate, 0.2, 42):
+            val_group = val_group or candidate
+        else:
+            train_group = train_group or candidate
+        if train_group and val_group:
+            break
+    assert train_group and val_group
+    grouped = root / "grouped"
+    grouped.mkdir()
+    path = grouped / "records.jsonl"
+    with path.open("w") as handle:
+        for group in (train_group, train_group, val_group, val_group):
+            handle.write(json.dumps({"text": f"solution for {group}", "problem_id": group}) + "\n")
+    reader = TextCorpusSource(
+        "grouped", grouped, text_column="text", group_column="problem_id"
+    )
+    assert [group for _, group in reader.iter_file_documents(path)] == [
+        train_group, train_group, val_group, val_group
+    ]
+    result = pack_text_corpus(
+        reader,
+        output_dir=tmp_path / "grouped_shards",
+        tokenizer_path=tokenizer_path,
+        val_ratio=0.2,
+        seed=42,
+        batch_documents=2,
+        shard_size_mb=0.001,
+        workers=2,
+        pending_batches=2,
+    )
+    assert result["train_documents"] == 2
+    assert result["val_documents"] == 2
+
+
 def test_independent_source_packing_and_manifest_only_reweight(tmp_path):
     root, _, tokenizer_path, config, tokenizer = _setup(tmp_path)
     out = tmp_path / "out"

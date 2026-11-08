@@ -163,6 +163,37 @@ def test_scheduler_once_per_crossed_threshold(tmp_path, monkeypatch):
     assert calls == [2, 2]
 
 
+def test_scheduler_releases_benchmark_memory_before_and_after_failure(tmp_path, monkeypatch):
+    config = tmp_path / 'suite.json'
+    config.write_text(json.dumps({
+        'version': 1, 'on_error': 'continue',
+        'output_root': str(tmp_path/'results'),
+        'benchmarks': [{
+            'id': 'w1', 'type': 'wikitext', 'every_optimizer_steps': 1,
+            'parameters': {'data': 'unused', 'context_length': 2},
+        }],
+    }))
+    boundaries = []
+    monkeypatch.setattr(
+        live_suite, '_release_benchmark_device_memory',
+        lambda: boundaries.append('release'),
+    )
+    monkeypatch.setattr(
+        live_suite, 'run_wikitext',
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('intentional')),
+    )
+    scheduler = live_suite.LiveBenchmarkScheduler(
+        json.loads(config.read_text()), object(), 0, suite_path=config,
+    )
+
+    events = scheduler.run_selected(
+        object(), step=1, supervised_tokens_total=0, provenance='measured',
+    )
+
+    assert events[0]['status'] == 'error'
+    assert boundaries == ['release', 'release']
+
+
 def test_generation_config_prompt_ids_exist():
     root = Path(__file__).resolve().parents[1]
     suite = json.loads((root/'benchmarks/configs/foundation_live_0092.json').read_text())

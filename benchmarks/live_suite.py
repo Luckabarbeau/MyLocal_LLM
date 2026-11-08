@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from mini_llm.backend import xp, asnumpy
+from mini_llm.backend import xp, asnumpy, synchronize
 
 
 SUPPORTED = {'wikitext', 'corpus', 'lambada', 'generation', 'reference_continuation',
@@ -37,6 +37,19 @@ def _atomic_json(path, payload):
 
 def _sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _release_benchmark_device_memory():
+    """Release benchmark-only caches and idle allocator blocks at safe boundaries."""
+    from mini_llm.ops.attention import GQAAttention
+
+    if xp is not np:
+        synchronize()
+    GQAAttention.clear_caches()
+    gc.collect()
+    if xp is not np:
+        getattr(xp, 'get_default_memory_pool')().free_all_blocks()
+        getattr(xp, 'get_default_pinned_memory_pool')().free_all_blocks()
 
 
 @contextlib.contextmanager
@@ -670,6 +683,7 @@ class LiveBenchmarkScheduler:
         print(f'[0093] Benchmark {name} at step={step} tokens={total:,.0f}', flush=True)
         before = time.perf_counter()
         try:
+            _release_benchmark_device_memory()
             kind = benchmark['type']
             if kind in ('math', 'logic', 'python_code', 'cpp_code', 'terminal', 'narrative'):
                 from benchmarks.capability_suite import (
@@ -720,7 +734,7 @@ class LiveBenchmarkScheduler:
             if self.suite.get('on_error', 'raise') == 'raise':
                 raise
         finally:
-            gc.collect()
+            _release_benchmark_device_memory()
         return event
 
     def maybe_run(self, trainer):

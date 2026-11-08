@@ -37,21 +37,65 @@ import time
 from pathlib import Path
 
 
+def _cli_option_value(name):
+    """Return a raw CLI option value before argparse and backend imports."""
+    arguments = sys.argv[1:]
+    for index, value in enumerate(arguments):
+        if value.startswith(name + "="):
+            return value.split("=", 1)[1]
+        if value == name and index + 1 < len(arguments):
+            return arguments[index + 1]
+    return None
+
+
+def _bootstrap_resume_environment_from_cli():
+    """Restore an exact checkpoint runtime before importing backend modules."""
+    if "--allow-nonexact-resume" in sys.argv[1:]:
+        return False
+    resume_from = _cli_option_value("--resume-from")
+    if resume_from is None:
+        return False
+    checkpoint_path = Path(resume_from).expanduser()
+    if not checkpoint_path.is_dir() and not checkpoint_path.exists():
+        previous = checkpoint_path.with_name(checkpoint_path.name + ".previous")
+        if previous.is_dir():
+            checkpoint_path = previous
+    state_path = checkpoint_path / "training_state.json"
+    if not state_path.is_file():
+        return False
+    with state_path.open(encoding="utf-8") as handle:
+        state = json.load(handle)
+    saved_environment = (
+        state.get("training_resume_contract", {}).get("runtime_environment")
+    )
+    if saved_environment is None:
+        return False
+    if not isinstance(saved_environment, dict) or any(
+        not isinstance(key, str) or not key.startswith("MINI_LLM_")
+        or not isinstance(value, str)
+        for key, value in saved_environment.items()
+    ):
+        raise ValueError("checkpoint runtime_environment is malformed")
+    for key in list(os.environ):
+        if key.startswith("MINI_LLM_"):
+            del os.environ[key]
+    os.environ.update(saved_environment)
+    print(f"Restored runtime environment from checkpoint: {checkpoint_path}", flush=True)
+    return True
+
+
 def _bootstrap_backend_from_cli():
     """Apply explicit CLI backend before importing the process-global backend.
 
     CLI selection takes precedence over MINI_LLM_BACKEND. The full parser still
     validates the value and exposes it in ``args.backend``.
     """
-    for index, value in enumerate(sys.argv[1:]):
-        if value.startswith("--backend="):
-            os.environ["MINI_LLM_BACKEND"] = value.split("=", 1)[1]
-            return
-        if value == "--backend" and index + 2 <= len(sys.argv) - 1:
-            os.environ["MINI_LLM_BACKEND"] = sys.argv[index + 2]
-            return
+    backend = _cli_option_value("--backend")
+    if backend is not None:
+        os.environ["MINI_LLM_BACKEND"] = backend
 
 
+_bootstrap_resume_environment_from_cli()
 _bootstrap_backend_from_cli()
 
 import numpy as np
@@ -386,7 +430,8 @@ def parse_args():
     parser.add_argument(
         "--allow-nonexact-resume", action="store_true",
         help=("Explicitly allow a versioned checkpoint's scientific/runtime "
-              "contract to change; differences are printed and checkpointed."),
+              "contract to change; skips automatic checkpoint-environment "
+              "restoration, then prints and checkpoints differences."),
     )
     parser.add_argument(
         "--init-from",

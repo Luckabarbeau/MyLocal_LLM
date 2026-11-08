@@ -1,6 +1,7 @@
 """Checkpoint reproducibility and read-only component update diagnostics."""
 
 import csv
+import json
 import os
 
 import numpy as np
@@ -49,6 +50,53 @@ def _shard(path):
         15, 16, 17, 18, 19, 20, 21, 22, 127,
     ], dtype=np.uint16).tofile(path)
     return path
+
+
+def test_resume_bootstrap_restores_saved_runtime_before_backend_import(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "model"
+    checkpoint.mkdir()
+    (checkpoint / "training_state.json").write_text(json.dumps({
+        "training_resume_contract": {
+            "runtime_environment": {
+                "MINI_LLM_BACKEND": "cupy",
+                "MINI_LLM_SAVED_FAST_PATH": "1",
+            },
+        },
+    }))
+    environment = {"MINI_LLM_STALE": "1", "UNRELATED": "preserved"}
+    monkeypatch.setattr(train_model.os, "environ", environment)
+    monkeypatch.setattr(train_model.sys, "argv", [
+        "train_model.py", "--resume-from", str(checkpoint),
+        "--backend", "numpy",
+    ])
+
+    assert train_model._bootstrap_resume_environment_from_cli()
+    train_model._bootstrap_backend_from_cli()
+
+    assert environment == {
+        "MINI_LLM_BACKEND": "numpy",
+        "MINI_LLM_SAVED_FAST_PATH": "1",
+        "UNRELATED": "preserved",
+    }
+
+
+def test_nonexact_resume_bootstrap_preserves_explicit_environment(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "model"
+    checkpoint.mkdir()
+    (checkpoint / "training_state.json").write_text(json.dumps({
+        "training_resume_contract": {
+            "runtime_environment": {"MINI_LLM_SAVED": "1"},
+        },
+    }))
+    environment = {"MINI_LLM_EXPLICIT": "1"}
+    monkeypatch.setattr(train_model.os, "environ", environment)
+    monkeypatch.setattr(train_model.sys, "argv", [
+        "train_model.py", "--resume-from", str(checkpoint),
+        "--allow-nonexact-resume",
+    ])
+
+    assert not train_model._bootstrap_resume_environment_from_cli()
+    assert environment == {"MINI_LLM_EXPLICIT": "1"}
 
 
 def test_public_checkpoint_resolution_recovers_previous(tmp_path):

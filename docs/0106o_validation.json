@@ -1,0 +1,158 @@
+{
+  "patch": "0106O",
+  "date": "2026-11-10",
+  "status": "individual_hybrid_decoder_layers_and_shared_routed_moe_cpu_verified_gpu_pending",
+  "production_files": [
+    "mini_llm/external/qwen3next_moe.py",
+    "mini_llm/external/qwen3next_decoder.py",
+    "mini_llm/ops/router_inference.py",
+    "mini_llm/external/qwen3next_gguf.py"
+  ],
+  "new_test_files": [
+    "tests/test_0106o_router_inference.py",
+    "tests/test_0106o_qwen3next_decoder.py",
+    "tests/test_0106o_decoder_benchmark.py"
+  ],
+  "benchmark": "benchmarks/benchmark_0106o_decoder_layer.py",
+  "reuses_existing_expert_executor_and_training_router_equations": true,
+  "native_inference_selected_weight_renormalization_default": false,
+  "qwen_explicit_selected_weight_renormalization": true,
+  "qwen_normalization_floor": 0.00006103515625,
+  "qwen_hidden_and_executor_dtype": "float32",
+  "training_optimizer_or_checkpoint_behavior_changed": false,
+  "layer_state_native_storage": ["GenerationState KV", "DeltaMixerState convolution/delta"],
+  "state_runtime_failures_transactional": false,
+  "executor_lifecycle_owner": "caller",
+  "sources": {
+    "freshly_verified_local_llama_cpp_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "local_reference_files_unmodified": true,
+    "qwen3next_cpp_regions": ["155-193", "570-609"],
+    "llama_graph_cpp_regions": ["2033-2053", "2115-2156", "2313-2357"],
+    "conversion_qwen_py_region": "394-402",
+    "retained_transformers_revision_not_freshly_reverified": "86fdf1595ab819a7baa1d06f2902d00aa94feeb6",
+    "retained_transformers_source_sha256": "015adb95dd1de62c23af10a635ebe5b53e72e8f4cdf2b1c4d04bfcacb6254b88",
+    "retained_strata_revision": "504b143342a9fe1aa8320a7b31e11f5c0ac265c3",
+    "external_runtime_used_or_release_binary_downloaded": false
+  },
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -x -q tests/test_0106o_router_inference.py tests/test_0106o_qwen3next_decoder.py tests/test_0106o_decoder_benchmark.py",
+      "passed": 46, "failed": 0, "elapsed_seconds": 1.24
+    },
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0080ap_unified_expert_routing.py tests/test_0080ao_deep_top1_moe.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py",
+      "passed": 728, "skipped": 72, "failed": 0, "elapsed_seconds": 4.31
+    }
+  ],
+  "numerical_audit": {
+    "initial_failure": "One synthetic four-layer FP32 vs FP64 near-cancellation value, 1/320 elements",
+    "runtime": -0.019347863271832466,
+    "reference": -0.019367861736830555,
+    "absolute_error": 0.00001999846499808943,
+    "relative_error_approximate": 0.00103256,
+    "rtol": 0.0004, "atol": 0.000008,
+    "normalized_tolerance_ratio": 1.2699740420102206,
+    "runtime_dtype": "float32", "reference_dtype": "float64",
+    "finite_difference_step": null,
+    "matched_input_per_layer_max_tolerance_ratios": [0.07085778727434935, 0.04112148963855802, 0.05452568168335692, 0.01360459650404195],
+    "layer_boundary_rounding_alone_resolved_failure": false,
+    "production_defect_established": false,
+    "localized_test_fixture_change": "Scale only mixer output projection weights by 1/16 to bound residual amplification",
+    "unscaled_output_max_abs_approximate": 29.291286,
+    "scaled_output_max_abs_approximate": 1.914098,
+    "scaled_experiment_max_abs_errors_full_chunks_steps": [0.0000010473609943217888, 0.0000014821028400772984, 0.0000012247415109301052],
+    "tolerances_or_production_math_changed": false,
+    "latest_relevant_retest_passed": true
+  },
+  "localized_production_correction": {
+    "failure": "Invalid executor dtype/dimensions caused decoder mixer payload reads before rejection",
+    "change": "Construct validated MoE adapter before mixer adapter",
+    "regressions": "Direct MoE and both decoder layer types reject incompatible executors without payload reads",
+    "latest_relevant_retest_passed": true
+  },
+  "gpu": {
+    "validation": "pending",
+    "reason": "Existing user Strata process active at 100 percent GPU utilization",
+    "reported_total_gpu_used_mib": 15497,
+    "reported_strata_allocation_mib": 14166,
+    "gpu_allocation_or_test_requested_this_increment": false,
+    "existing_process_stopped": false
+  },
+  "actual_checkpoint": {
+    "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+    "routed_experts_per_layer": 512, "top_k": 10,
+    "routed_width": 512, "shared_width": 512, "d_model": 2048,
+    "requested_256_expert_iq1m_target": false,
+    "independent_full_model_logits_parity": false
+  },
+  "benchmark_results": [
+    {
+      "artifact": "benchmarks/results/0106o_synthetic_decoder_cpu.json",
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106o_decoder_layer.py --cpu-workers 2 --profile detailed --output benchmarks/results/0106o_synthetic_decoder_cpu.json",
+      "passed": true, "independent_fp64_reference": true,
+      "layer_ids": [0, 1, 2, 3], "prefix_tokens": 2, "continuation_tokens": 4, "batch": 2,
+      "header_working_set_estimate_bytes": 701488,
+      "peak_process_rss_bytes": 137113600,
+      "maximum_output_fp64_abs_error": 0.00000233411902406111,
+      "maximum_output_streaming_abs_error": 0.0000024437904357910156,
+      "maximum_all_comparisons_abs_error": 0.000013738870620727539,
+      "maximum_all_comparisons_tolerance_ratio": 0.7579346518147514,
+      "observed_cpu_wall_ms": {"full": 3.1868360019871034, "chunks": 5.3513840030063875, "steps": 10.098904996993951},
+      "routed_assignments_per_mode": 64
+    },
+    {
+      "artifact": "benchmarks/results/0106o_real_recurrent_layer_cpu.json",
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106o_decoder_layer.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 0 --tokens 4 --profile detailed --output benchmarks/results/0106o_real_recurrent_layer_cpu.json",
+      "passed": true, "independent_fp64_reference": false,
+      "layer_ids": [0], "prefix_tokens": 2, "continuation_tokens": 4, "batch": 1, "cpu_workers": 0,
+      "header_working_set_estimate_bytes": 508420864,
+      "peak_process_rss_bytes": 840159232,
+      "maximum_output_streaming_abs_error": 0.00000011920928955078125,
+      "maximum_all_comparisons_abs_error": 0.00000011920928955078125,
+      "maximum_all_comparisons_tolerance_ratio": 0.003512068887573533,
+      "observed_cpu_wall_ms": {"full": 281.4939109957777, "chunks": 172.32955699728336, "steps": 175.705294997897},
+      "routed_assignments_per_mode": 40
+    },
+    {
+      "artifact": "benchmarks/results/0106o_real_attention_layer_cpu.json",
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106o_decoder_layer.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 3 --tokens 4 --profile detailed --output benchmarks/results/0106o_real_attention_layer_cpu.json",
+      "passed": true, "independent_fp64_reference": false,
+      "layer_ids": [3], "prefix_tokens": 2, "continuation_tokens": 4, "batch": 1, "cpu_workers": 0,
+      "header_working_set_estimate_bytes": 471787520,
+      "peak_process_rss_bytes": 767750144,
+      "maximum_output_streaming_abs_error": 0.0000019073486328125,
+      "maximum_all_comparisons_abs_error": 0.0000019073486328125,
+      "maximum_all_comparisons_tolerance_ratio": 0.027483980137657366,
+      "observed_cpu_wall_ms": {"full": 211.27444000012474, "chunks": 161.29476300557144, "steps": 164.36214299756102},
+      "routed_assignments_per_mode": 40
+    },
+    {
+      "artifact": "benchmarks/results/0106o_real_mixed_bf16_layer_cpu.json",
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106o_decoder_layer.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 46 --tokens 2 --cpu-workers 2 --profile summary --output benchmarks/results/0106o_real_mixed_bf16_layer_cpu.json",
+      "passed": true, "independent_fp64_reference": false,
+      "layer_ids": [46], "prefix_tokens": 2, "continuation_tokens": 2, "batch": 1, "cpu_workers": 2,
+      "formats_exercised": ["BF16", "Q4_K", "Q5_K", "Q6_K", "Q8_0", "F32"],
+      "header_working_set_estimate_bytes": 439083776,
+      "peak_process_rss_bytes": 947240960,
+      "maximum_output_streaming_abs_error": 0.0000019073486328125,
+      "maximum_all_comparisons_abs_error": 0.0000035762786865234375,
+      "maximum_all_comparisons_tolerance_ratio": 0.17007173852693386,
+      "observed_cpu_wall_ms": {"full": 106.95752200263087, "chunks": 60.115084997960366, "steps": 56.63771100080339},
+      "routed_assignments_per_mode": 20
+    }
+  ],
+  "benchmark_tolerance": {"rtol": 0.0004, "atol": 0.000008},
+  "benchmark_header_estimate_budget_bytes": 536870912,
+  "header_estimate_is_hard_process_rss_limit": false,
+  "memory_note": "Actual RSS includes interpreter, GGUF metadata, allocator and library overhead; estimate excludes those and OS page-cache accounting",
+  "performance_claim": "Uncontrolled CPU correctness-smoke timings under concurrent Strata workload, not model throughput or worker-count speedup",
+  "full_model_decode_available": false,
+  "remaining": [
+    "New complete-layer CUDA parity when GPU is free",
+    "Whole-model hybrid layer/session orchestration and executor ownership",
+    "Embeddings, final normalization and output head",
+    "Tokenizer and existing generation/session integration",
+    "Independent full logits and incremental decoding parity",
+    "Exact requested target metadata/remapping, IQ formats, ngrams and hierarchical memory budgets"
+  ]
+}

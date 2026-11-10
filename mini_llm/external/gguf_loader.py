@@ -17,6 +17,7 @@ import numpy as np
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
 
 from .config import ExternalLlamaConfig
+from .gguf_tensor import decode_gguf_dense
 from .llama_model import ExternalLlamaModel
 
 
@@ -151,7 +152,7 @@ class GGUFWeightMap(Mapping):
                 raise ValueError(f"Unsupported GGUF tensor name: {raw_name}")
             if canonical in names:
                 raise ValueError(f"Duplicate mapped GGUF tensor: {canonical}")
-            if tensor.tensor_type.name not in {"F32", "F16", *BLOCK_FORMATS}:
+            if tensor.tensor_type.name not in {"F32", "F16", "BF16", *BLOCK_FORMATS}:
                 raise ValueError(
                     f"Unsupported GGUF tensor type {tensor.tensor_type.name} for {raw_name}"
                 )
@@ -197,9 +198,7 @@ class GGUFWeightMap(Mapping):
             # execution MUST use get_packed() and quantized kernels instead.
             values = self.get_packed(name).dequantize_reference()
         else:
-            values = np.asarray(tensor.data)
-            if values.shape != shape:
-                raise ValueError(f"GGUF {name}: tensor data {values.shape} != metadata {shape}")
+            values = decode_gguf_dense(tensor)
         if name.endswith("self_attn.q_proj.weight"):
             values = _restore_hf_rope_rows(values, self.config.num_attention_heads)
         elif name.endswith("self_attn.k_proj.weight"):
@@ -207,8 +206,8 @@ class GGUFWeightMap(Mapping):
         return values
 
 
-def load_gguf_model(path, *, dtype="float32", hash_weights=False):
-    """Return (ExternalLlamaModel, provenance) for a supported GGUF checkpoint.
+def load_gguf_model(path, *, dtype="float32", hash_weights=False, **qwen_options):
+    """Return (external model, provenance) for a supported GGUF checkpoint.
 
     Default FP32 permits checking the quantization error independently of BF16
     inference. For the RTX 5080, dtype='float16' reduces weights + KV-cache VRAM.
@@ -221,9 +220,22 @@ def load_gguf_model(path, *, dtype="float32", hash_weights=False):
     if not path.is_file():
         raise FileNotFoundError(f"GGUF model not found: {path}")
     reader = GGUFReader(str(path))
-    tensors = GGUFWeightMap(reader)
-    model = ExternalLlamaModel(tensors.config, dtype=dtype)
-    model.set_weights(tensors)
+    architecture = _metadata(reader, 'general.architecture')
+    if architecture in ('qwen3next', 'qwen3_next'):
+        from .qwen3next_gguf import Qwen3NextGGUFIndex
+        from .qwen3next_model import Qwen3NextGGUFModel
+        index = Qwen3NextGGUFIndex(reader, source_path=path)
+        model = Qwen3NextGGUFModel.from_index(index, dtype=dtype, **qwen_options)
+        tensor_types = sorted({t.tensor_type.name for t in index.tensors.values()})
+        dequantized = False  # Packed matrices retained; only selected embedding rows decoded.
+    else:
+        if qwen_options:
+            raise TypeError('Qwen runtime options cannot be applied to a Llama GGUF')
+        tensors = GGUFWeightMap(reader)
+        model = ExternalLlamaModel(tensors.config, dtype=dtype)
+        model.set_weights(tensors)
+        tensor_types = tensors.tensor_types
+        dequantized = any(t in BLOCK_FORMATS for t in tensor_types)
     file_hash = None
     if hash_weights:
         digest = hashlib.sha256()
@@ -233,11 +245,11 @@ def load_gguf_model(path, *, dtype="float32", hash_weights=False):
         file_hash = digest.hexdigest()
     provenance = {
         "source_path": str(path),
-        "architecture": "llama",
+        "architecture": architecture,
         "format": "gguf",
-        "tensor_types": tensors.tensor_types,
+        "tensor_types": tensor_types,
         "runtime_dtype": dtype,
-        "quantized_weights_dequantized": any(t in BLOCK_FORMATS for t in tensors.tensor_types),
+        "quantized_weights_dequantized": dequantized,
         "file_sha256": file_hash,
     }
     return model, provenance

@@ -5,6 +5,7 @@ import numpy as _np
 
 from mini_llm.backend import xp, BACKEND_NAME, is_bfloat16_dtype, is_low_precision_dtype
 from mini_llm.ops.rope import get_rope_cos_sin
+from mini_llm.ops.projected_attention_inference import grouped_attention_forward
 from mini_llm.ops.indexed_attention import (
     local_window_attention_forward,
     dilated_attention_forward,
@@ -317,79 +318,10 @@ class GQAAttentionInference:
         return x
 
     def _attention(self, q, k_native, v_native, causal_mask=None):
-        """Attend with native Hkv K/V tensors; never physically repeat them."""
-        b, t_query, _, _ = q.shape
-        t_key = k_native.shape[2]
-
-        bf16_attention = is_bfloat16_dtype(q.dtype)
-
-        if t_query == 1:
-            # Decode fast path. CuPy's N-D BF16 matmul currently fails, so
-            # promote only the batched attention products to FP32.
-            q_decode = q[:, 0, :, :].reshape(
-                b, self.n_kv_heads, self.group_size, self.d_head
-            )
-            q_scores = q_decode.astype(xp.float32, copy=False) if bf16_attention else q_decode
-            k_scores = k_native.astype(xp.float32, copy=False) if bf16_attention else k_native
-            scores_decode = xp.matmul(
-                q_scores * self.scale,
-                k_scores.swapaxes(-2, -1),
-            )  # [B,Hkv,G,Tk]
-            scores = scores_decode.reshape(
-                b, self.n_q_heads, 1, t_key
-            )
-        else:
-            q_grouped = self._group_queries(q)  # [B,Hkv,G,Tq,D]
-            q_scores = q_grouped.astype(xp.float32, copy=False) if bf16_attention else q_grouped
-            k_scores = k_native.astype(xp.float32, copy=False) if bf16_attention else k_native
-            q_scaled = q_scores * self.scale
-            scores_grouped = xp.matmul(
-                q_scaled,
-                k_scores[:, :, xp.newaxis, :, :].swapaxes(-2, -1),
-            )                                  # [B,Hkv,G,Tq,Tk]
-            scores = scores_grouped.reshape(
-                b, self.n_q_heads, t_query, t_key
-            )
-
-        if causal_mask is not None:
-            scores = xp.where(
-                causal_mask[None, None, :, :], scores, -xp.inf
-            )
-
-        scores_f32 = scores.astype(xp.float32)
-        scores_f32 -= xp.max(scores_f32, axis=-1, keepdims=True)
-        probs = xp.exp(scores_f32)
-        probs /= xp.sum(probs, axis=-1, keepdims=True)
-
-        # Keep CuPy's unsupported N-D BF16 matmul out of P@V as well.
-        # The result is cast back to the branch compute dtype before the large
-        # output projection GEMM.
-        if t_query == 1:
-            probs_decode = probs.reshape(
-                b, self.n_kv_heads, self.group_size, t_key
-            )
-            v_compute = v_native.astype(xp.float32, copy=False) if bf16_attention else v_native
-            probs_compute = probs_decode if bf16_attention else probs_decode.astype(self.dtype, copy=False)
-            context_decode = xp.matmul(
-                probs_compute,
-                v_compute,
-            )  # [B,Hkv,G,D]
-            context = context_decode.reshape(
-                b, 1, self.n_q_heads, self.d_head
-            )
-            return context.astype(q.dtype, copy=False) if bf16_attention else context
-
-        probs_grouped = probs.reshape(
-            b, self.n_kv_heads, self.group_size, t_query, t_key
-        )
-        v_compute = v_native.astype(xp.float32, copy=False) if bf16_attention else v_native
-        probs_compute = probs_grouped if bf16_attention else probs_grouped.astype(self.dtype, copy=False)
-        context_grouped = xp.matmul(
-            probs_compute,
-            v_compute[:, :, xp.newaxis, :, :],
-        )
-        context = self._ungroup_queries(context_grouped)
-        return context.astype(q.dtype, copy=False) if bf16_attention else context
+        """Shared native-head attention; legacy dtype/softmax policy unchanged."""
+        return grouped_attention_forward(q, k_native, v_native, scale=self.scale,
+                                         causal_mask=causal_mask,
+                                         probability_dtype=self.dtype)
 
     def _project_and_store(
         self, x, k_cache, v_cache, start_pos, *, single_token_decode=False,

@@ -1,0 +1,87 @@
+{
+  "patch": "0106I",
+  "date": "2026-11-09",
+  "status": "focused_tests_pass_larger_mixed_packed_gpu_parity_unresolved",
+  "strata_repository": "https://github.com/Niko1221/Strata",
+  "strata_revision": "504b143342a9fe1aa8320a7b31e11f5c0ac265c3",
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py",
+      "passed": 205,
+      "skipped": 33,
+      "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106i_routing_trace.py tests/test_0106d_async_experts.py::test_cuda_copy_worker_and_mixed_cpu_gpu_experts",
+      "passed": 15,
+      "skipped": 0,
+      "failed": 0
+    }
+  ],
+  "event_api_fix": {
+    "cupy_version": "14.2.0",
+    "completion_api": "Event.done",
+    "device_synchronization_added": false,
+    "cpu_fake_event_query_supported": true
+  },
+  "cpu_benchmark": {
+    "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106i_routing_trace.py --output benchmarks/results/0106i_cpu.json",
+    "scope": "synthetic single MoE layer; not full-model generation",
+    "raw_local_artifact": "benchmarks/results/0106i_cpu.json",
+    "configuration": {
+      "format": "Q4_0",
+      "dtype": "float32",
+      "d_model": 64,
+      "d_ff": 64,
+      "experts": 8,
+      "top_k": 2,
+      "tokens": 128,
+      "warmup": 8,
+      "workers": 2,
+      "cpu_backend": "native",
+      "device_budget_bytes": 0
+    },
+    "results": [
+      {"mode": "disabled", "mean_layer_token_ms": 0.08308696093450862, "max_abs_error": 0.0},
+      {"mode": "summary", "mean_layer_token_ms": 0.10677045312590394, "max_abs_error": 0.0},
+      {"mode": "detailed", "mean_layer_token_ms": 0.10618330468759041, "max_abs_error": 0.0}
+    ],
+    "comparison_limitations": "Fixed mode order, one short run; not statistically controlled throughput comparison"
+  },
+  "gpu_benchmark_failure": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106i_routing_trace.py --tokens 128 --d-model 256 --d-ff 256 --n-experts 16 --top-k 4 --device-budget-mib 1 --output benchmarks/results/0106i_gpu.json",
+    "hardware": "NVIDIA GeForce RTX 5080",
+    "dtype": "float32",
+    "format": "Q4_0",
+    "assertion": "numpy.testing.assert_array_equal summary versus disabled",
+    "mismatched_elements": 1024,
+    "total_elements": 32768,
+    "max_abs_error": 0.0038457,
+    "max_relative_error": 562.8196,
+    "example_index": [68, 0, 0],
+    "summary_value": 0.001226971042342484,
+    "disabled_value": 0.0030300903599709272,
+    "disabled_layer_token_ms_unverified_candidate": 0.7628,
+    "detailed_mode_completed": false,
+    "gpu_json_written": false,
+    "production_correction_attempted_for_this_failure": false,
+    "reason_no_correction": "No specific defect localized; isolated packed expert kernels agree with reference",
+    "next_experiment": "Replay same inputs/routes with fixed residency after warmup; compare workers=0 and workers=2 against CPU oracle to isolate staging from dynamic cache mutation"
+  },
+  "isolated_packed_expert_parity": {
+    "format": "Q4_0",
+    "dtype": "float32",
+    "d_model": 256,
+    "d_ff": 256,
+    "experts": 16,
+    "input_seed": 10609,
+    "input_standard_deviation": 0.02,
+    "weight_seed_formula": "106090 + 3*expert_id + projection_index",
+    "reference": "PackedGGUFWeight.dequantize_reference plus NumPy SwiGLU",
+    "max_native_cpu_abs_error": 1.4551915228366852e-9,
+    "max_gpu_abs_error": 1.0477378964424133e-9,
+    "uses_cache_or_workers": false
+  },
+  "full_qwen_inference_available": false,
+  "target_qwen38_metadata_available": false
+}

@@ -31,6 +31,8 @@ def make_weight(fmt, rows, columns, seed):
     scale = np.frombuffer(np.float16(.015).tobytes(), dtype=np.uint8)
     if fmt == "Q3_K":
         raw[:, 108:110] = scale
+    elif fmt == "Q6_K":
+        raw[:, 208:210] = scale
     elif fmt in ("Q4_K", "Q5_K"):
         raw[:, :2] = scale
         raw[:, 2:4] = scale

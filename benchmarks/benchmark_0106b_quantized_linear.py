@@ -48,6 +48,8 @@ def main():
     raw = rng.integers(0, 256, size=(args.n * args.k // qk, qb), dtype=np.uint8)
     if args.format == "Q3_K":
         raw[:, 108:110] = [0, 56]
+    elif args.format == "Q6_K":
+        raw[:, 208:210] = [0, 56]
     elif args.format in ("Q4_K", "Q5_K"):
         raw[:, :4] = [0, 56, 0, 52]
     else:

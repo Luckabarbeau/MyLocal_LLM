@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from mini_llm.backend import BACKEND_NAME
+from mini_llm.diagnostics.quantized_numerics import packed_swiglu_reference
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
 from mini_llm.ops.quantized_linear import quantized_linear, packed_to_device
 from mini_llm.ops.expert_residency import ExpertKey, HeterogeneousExpertExecutor
@@ -18,6 +19,8 @@ def _packed_weight(fmt, rows, cols, seed=106):
     if fmt == "Q3_K":
         scales = np.array([0, 56], np.uint8)  # 0.5 float16
         raw[:, 108:110] = scales
+    elif fmt == "Q6_K":
+        raw[:, 208:210] = np.array([0, 56], np.uint8)
     elif fmt in ("Q4_K", "Q5_K"):
         raw[:, 0:2] = np.array([0, 56], np.uint8)
         raw[:, 2:4] = np.array([0, 52], np.uint8)  # 0.25 float16
@@ -102,10 +105,12 @@ def test_triton_kernel_matches_cpu_oracle(fmt, block_k):
     weight = _packed_weight(fmt, 13, k, seed=17)
     rng = np.random.default_rng(33)
     x = rng.normal(0, 0.2, size=(2, 3, k)).astype(np.float32)
-    expected = quantized_linear(x, weight)
+    reference_weight = weight.dequantize_reference().astype(np.float64)
     qw = packed_to_device(weight)
     assert qw.nbytes == weight.nbytes
     for dtype in (cp.float16, cp.float32):
+        # Compare the actual stored input, not the original FP32 random sample.
+        expected = (x.astype(dtype).astype(np.float64) @ reference_weight.T).astype(dtype)
         cu_x = cp.asarray(x, dtype=dtype)
         got = quantized_linear(cu_x, qw, block_k=block_k)
         assert got.dtype == dtype
@@ -169,9 +174,9 @@ def test_resident_packed_expert_keeps_quantized_bytes_on_gpu(fmt, monkeypatch):
     # Establish reference first; executing a GPU-cached expert afterwards must
     # never invoke the CPU dequantization machinery.
     xx = np.random.default_rng(111).normal(0, 0.01, (2, d)).astype(np.float32)
-    g = xx @ gate.dequantize_reference().T
-    u = xx @ up.dequantize_reference().T
-    expected = ((g / (1 + np.exp(-g))) * u) @ down.dequantize_reference().T
+    # FP32 BLAS accumulation is not an oracle for cancellation-heavy entries.
+    # Promote before accumulation and honor the stored FP32 hidden/output.
+    expected = packed_swiglu_reference(xx, gate, up, down)["output"]
     provider_calls = []
     def provider(k):
         provider_calls.append(k)

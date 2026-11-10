@@ -1,0 +1,82 @@
+{
+  "patch": "0106M",
+  "date": "2026-11-09",
+  "status": "generic_recurrent_primitives_and_qwen_cpu_mixer_verified_gpu_pending",
+  "components": {
+    "causal_depthwise_conv": "mini_llm/ops/causal_conv_inference.py",
+    "gated_delta_and_projected_mixer": "mini_llm/ops/gated_delta_inference.py",
+    "gated_rmsnorm": "mini_llm/ops/gated_norm_inference.py",
+    "qwen_metadata_projection_adapter": "mini_llm/external/qwen3next_mixer.py",
+    "generation_state_hook": "optional per-layer recurrent_states dictionary"
+  },
+  "low_level_operators_contain_qwen_or_gguf_branches": false,
+  "training_or_optimizer_behavior_changed": false,
+  "generic_state_layout": "batch,value_heads,key_dim,value_dim",
+  "state_accumulation_dtypes": ["float32", "float64"],
+  "qwen_adapter_hidden_dtype": "float32 only",
+  "shared_backend_fix": "Native packed GEMV returns correctly shaped empty batches without calling C++; nonempty math unchanged",
+  "packed_empty_chunk_reproduction": "Passed after one localized wrapper guard; state unchanged",
+  "sources": {
+    "transformers_revision": "86fdf1595ab819a7baa1d06f2902d00aa94feeb6",
+    "transformers_qwen3next_source_sha256": "015adb95dd1de62c23af10a635ebe5b53e72e8f4cdf2b1c4d04bfcacb6254b88",
+    "local_llama_cpp_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "strata_revision": "504b143342a9fe1aa8320a7b31e11f5c0ac265c3",
+    "transformers_runtime_used": false,
+    "reference": "Independent CPU FP64 scalar convolution and affine delta recurrence"
+  },
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106m_gated_delta.py tests/test_0106m_causal_conv.py tests/test_0106m_qwen3next_mixer.py",
+      "passed": 159, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py",
+      "passed": 483, "skipped": 51, "failed": 0, "elapsed_seconds": 1.41
+    }
+  ],
+  "synthetic_smoke": {
+    "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106m_recurrent_mixer.py --output benchmarks/results/0106m_synthetic_mixer_cpu.json",
+    "batch": 2, "prefix_tokens": 3, "tokens": 16,
+    "key_heads": 2, "value_heads": 6, "key_dim": 3, "value_dim": 2,
+    "state_bytes": 864,
+    "independent_fp64_output_max_abs_error": 3.212170783528645e-7,
+    "chunk_vs_sequence_output_max_abs_error": 8.940696716308594e-8,
+    "step_vs_sequence_output_max_abs_error": 1.9371509552001953e-7,
+    "step_vs_sequence_memory_max_abs_error": 6.51925802230835e-9,
+    "initial_state_nonzero": true,
+    "passed": true
+  },
+  "actual_checkpoint_smoke": {
+    "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106m_recurrent_mixer.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 0 --tokens 4 --cpu-backend native --output benchmarks/results/0106m_real_qwen_mixer_cpu.json",
+    "layer": 0, "batch": 1, "prefix_tokens": 3, "tokens": 4,
+    "d_model": 2048, "key_heads": 16, "value_heads": 32,
+    "key_dim": 128, "value_dim": 128, "conv_kernel": 4,
+    "state_bytes": 2195456, "packed_projection_bytes": 35725312,
+    "initial_state_nonzero": true,
+    "sequence_chunk_step_output_max_abs_error": 0.0,
+    "sequence_chunk_step_history_max_abs_error": 0.0,
+    "sequence_chunk_step_memory_max_abs_error": 0.0,
+    "final_lengths": {"sequence": 7, "chunk": 7, "step": 7},
+    "independent_model_or_logits_parity_run": false,
+    "observed_sequence_cpu_ms_uncontrolled": 50.796592000551755,
+    "observed_token_steps_cpu_ms_uncontrolled": 49.96231099903525,
+    "passed": true
+  },
+  "smoke_tolerance": {"rtol": 0.0003, "atol": 0.000005},
+  "gpu_validation": {
+    "status": "pending",
+    "reason": "Existing user Strata process occupied 14210 MiB at initial GPU resource check",
+    "gpu_allocations_or_tests_run": false,
+    "existing_process_stopped": false
+  },
+  "performance_claim": "None: CPU correctness smokes under concurrent Strata workload, not controlled throughput benchmarks",
+  "full_model_decode_available": false,
+  "remaining": [
+    "GPU numerical validation when resources are available",
+    "Generalized gated full attention and partial RoPE/head geometry",
+    "Complete decoder norms/residuals/shared and routed MoE wiring",
+    "Generation/session integration beyond optional recurrent-state reset hook",
+    "Tokenizer and end-to-end prefill/incremental/logit parity",
+    "Exact requested Qwen3.8 target metadata and quantization mapping"
+  ]
+}

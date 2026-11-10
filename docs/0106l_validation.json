@@ -1,0 +1,115 @@
+{
+  "patch": "0106L",
+  "date": "2026-11-09",
+  "status": "packed_q6k_and_gguf_bf16_verified_including_installed_model_expert",
+  "hardware": "NVIDIA GeForce RTX 5080",
+  "independent_decoder_reference": "gguf 0.19.0, gguf.quants.Q6_K",
+  "q6k_layout": {
+    "elements": 256, "bytes": 210,
+    "low_offset": 0, "high_offset": 128, "signed_scales_offset": 192,
+    "fp16_scale_offset": 208,
+    "equation": "weight = (fp32(d) * fp32(signed_scale[lane//16])) * fp32(unsigned_six_bits - 32)"
+  },
+  "training_or_router_policy_changed": false,
+  "bf16_loading": {
+    "representation": "bit expansion to FP32, not numeric FP16 conversion",
+    "tested_payload_patterns": 65536,
+    "index_construction_remains_lazy": true,
+    "qwen_accessor": "Qwen3NextGGUFIndex.non_expert_weight",
+    "routed_bank_expansion_allowed": false,
+    "ngram_loading_supported": false
+  },
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106l_q6k_packed.py tests/test_0106l_gguf_bf16.py",
+      "passed": 57, "skipped": 13, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106b_quantized_linear.py tests/test_0106c_fused_packed_expert.py tests/test_0106g_q5k_packed.py tests/test_0106h_triton_cupy_pointer.py -k 'gpu or triton'",
+      "passed": 52, "deselected": 33, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106l_q6k_packed.py tests/test_0106i_routing_trace.py tests/test_0106j_async_buffer_ownership.py tests/test_0106d_async_experts.py::test_cuda_copy_worker_and_mixed_cpu_gpu_experts",
+      "passed": 48, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py",
+      "passed": 298, "skipped": 50, "failed": 0
+    }
+  ],
+  "reference_correction": {
+    "test": "test_triton_kernel_matches_cpu_oracle Q6_K cases",
+    "dtype": "float16",
+    "index": [0, 2, 2],
+    "gpu_value": 178.0,
+    "legacy_reference": 176.91973876953125,
+    "legacy_abs_error": 1.08026123046875,
+    "legacy_requested_tolerance": 0.7307592163085939,
+    "matched_input_fp64_reference_rounded_to_fp16": 178.0,
+    "tolerance_changed": false,
+    "kernel_equation_changed_in_response": false
+  },
+  "benchmarks": [
+    {
+      "artifact": "benchmarks/results/0106l_synthetic_q6_gpu.json",
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106l_formats.py --iterations 50 --output benchmarks/results/0106l_synthetic_q6_gpu.json",
+      "formats": ["Q6_K", "Q6_K", "Q6_K"],
+      "d_model": 512, "d_ff": 256, "iterations": 50,
+      "packed_bytes": 322560, "dense_reference_bytes": 1572864,
+      "native_cpu_ms": 0.47313604000009946,
+      "cached_dense_blas_ms": 0.02012359998843749,
+      "dequant_every_call_ms": 1.7498988600164012,
+      "gpu_host_wall_ms": 0.048208879998128396,
+      "gpu_stream_interval_ms": 0.048024959564208984,
+      "native_cpu_max_abs_error": 1.1205673217773438e-5,
+      "gpu_max_abs_error": 1.9073486328125e-6,
+      "passed": true
+    },
+    {
+      "artifact": "benchmarks/results/0106l_real_qwen_layer46_gpu.json",
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106l_formats.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 46 --expert 0 --iterations 20 --output benchmarks/results/0106l_real_qwen_layer46_gpu.json",
+      "formats": ["Q5_K", "Q5_K", "Q6_K"],
+      "d_model": 2048, "d_ff": 512, "iterations": 20,
+      "packed_bytes": 2301952, "dense_reference_bytes": 12582912,
+      "native_cpu_ms": 3.3143758500045806,
+      "cached_dense_blas_ms": 0.2680936499928066,
+      "dequant_every_call_ms": 11.802579400000468,
+      "gpu_host_wall_ms": 0.0560762000077375,
+      "gpu_stream_interval_ms": 0.05562880039215088,
+      "native_cpu_max_abs_error": 4.656612873077393e-10,
+      "gpu_max_abs_error": 5.820766091346741e-11,
+      "passed": true
+    },
+    {
+      "artifact": "benchmarks/results/0106l_synthetic_mixed_cpu.json",
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106l_formats.py --mixed --iterations 30 --output benchmarks/results/0106l_synthetic_mixed_cpu.json",
+      "formats": ["Q4_K", "Q5_K", "Q6_K"],
+      "native_cpu_ms": 0.3606403666405337,
+      "native_cpu_max_abs_error": 8.940696716308594e-7,
+      "gpu": "explicitly skipped",
+      "passed": true
+    }
+  ],
+  "benchmark_scope": {
+    "dtype": "float32", "tokens": 1,
+    "oracle": "0106K matched-storage FP64 arithmetic",
+    "rtol": 0.0002, "atol": 0.00002,
+    "compilation_and_upload_included": false,
+    "full_layer_or_model_inference": false,
+    "native_cpu_is_simd_optimized": false
+  },
+  "actual_model_inventory": {
+    "architecture": "qwen3next", "layers": 48, "experts_per_layer": 512,
+    "tensor_counts": {"BF16": 5, "F32": 361, "Q4_K": 130, "Q5_K": 49, "Q6_K": 1, "Q8_0": 297},
+    "unsupported_routed_formats": {},
+    "bf16_sample": {
+      "name": "blk.46.ffn_down_shexp.weight", "shape": [2048, 512],
+      "source_bytes": 2097152, "decoded_bytes": 4194304,
+      "dtype": "float32", "finite": true, "exact_bit_expansion": true
+    },
+    "full_model_materialized_or_hashed": false
+  },
+  "full_qwen_inference_available": false,
+  "target_qwen38_metadata_available": false,
+  "recommended_next_step": "Reference-correct Qwen gated recurrent mixer/state graph and full-sequence versus incremental parity"
+}

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from mini_llm.backend import BACKEND_NAME
+from mini_llm.diagnostics.quantized_numerics import packed_swiglu_reference
 from mini_llm.ops.quantized_linear import (
     PackedExpertFFNInference, packed_to_device, quantized_linear, quantized_swiglu,
 )
@@ -19,6 +20,8 @@ def make_quant(fmt, n, k, seed):
     scale_bytes = np.float16(.025).tobytes()
     if fmt == "Q3_K":
         raw[:, 108:110] = np.frombuffer(scale_bytes, dtype=np.uint8)
+    elif fmt == "Q6_K":
+        raw[:, 208:210] = np.frombuffer(scale_bytes, dtype=np.uint8)
     elif fmt == "Q4_K":
         raw[:, :2] = np.frombuffer(scale_bytes, dtype=np.uint8)
         raw[:, 2:4] = np.frombuffer(np.float16(.0125).tobytes(), dtype=np.uint8)
@@ -87,7 +90,9 @@ def test_triton_fused_gate_up_matches_cpu(gate_fmt, up_fmt, dtype):
     g = make_quant(gate_fmt, f, d, 171)
     u = make_quant(up_fmt, f, d, 172)
     x = np.random.default_rng(173).normal(0, .07, (2, 3, d)).astype(np.float32)
-    expected = quantized_swiglu(x, g, u)
+    # Match device input/output rounding; fused gate/up have no FP16 storage
+    # boundary between their FP32 accumulators and the activation.
+    expected = packed_swiglu_reference(x, g, u, storage_dtype=dtype)["output"]
     got = quantized_swiglu(cp.asarray(x, dtype=dtype), packed_to_device(g), packed_to_device(u))
     assert got.dtype == dtype
     assert got.shape == (2, 3, f)

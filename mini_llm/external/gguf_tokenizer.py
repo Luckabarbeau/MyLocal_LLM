@@ -1,12 +1,22 @@
 """Rebuild a supported byte-level BPE tokenizer from GGUF metadata.
 
-No model weights or network access are required.  Only the explicitly
-validated GGUF GPT-2 BPE/SmolLM pre-tokenizer variant is supported; other
-algorithms are rejected rather than silently approximated.
+No model weights or network access are required. Only the explicitly
+supported GGUF GPT-2 BPE/SmolLM and Qwen2 pre-tokenizer variants are accepted;
+other algorithms are rejected rather than silently approximated.
 """
 
 from dataclasses import dataclass
 from typing import Optional
+
+
+_SUPPORTED_VARIANTS = frozenset({("gpt2", "smollm"), ("gpt2", "qwen2")})
+# llama.cpp 171e8846b4af9766c354064cb776cb34a50f053f:
+# src/llama-vocab.cpp, LLAMA_VOCAB_PRE_TYPE_QWEN2 (not QWEN35, which adds \p{M}).
+_QWEN2_PATTERN = (
+    r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+    r"|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+|\s+(?!\S)|\s+"
+)
 
 
 @dataclass(frozen=True)
@@ -41,10 +51,10 @@ def tokenizer_spec_from_gguf(reader, *, vocab_size=None):
     """Parse and validate tokenizer metadata without requiring tokenizers."""
     model = _value(reader, "tokenizer.ggml.model")
     pre = _value(reader, "tokenizer.ggml.pre")
-    if (model, pre) != ("gpt2", "smollm"):
+    if (model, pre) not in _SUPPORTED_VARIANTS:
         raise ValueError(
             f"Unsupported GGUF tokenizer (model={model!r}, pre={pre!r}); "
-            "only the verified SmolLM GPT-2 BPE variant is supported"
+            "supported GPT-2 BPE pre-tokenizers are 'smollm' and 'qwen2'"
         )
     tokens = _array(reader, "tokenizer.ggml.tokens")
     merges = _array(reader, "tokenizer.ggml.merges")
@@ -108,7 +118,13 @@ class GGUFTokenizer:
         return self._tokenizer.token_to_id(token)
 
     def chat_prompt(self, text):
-        """Format one user message for verified SmolLM2 ChatML-style tokens."""
+        """Format one user message only for verified SmolLM2 ChatML framing."""
+        if (self.spec.model, self.spec.pre) != ("gpt2", "smollm"):
+            raise ValueError(
+                "GGUF chat framing is not validated for "
+                f"model={self.spec.model!r}, pre={self.spec.pre!r}; "
+                "use raw completion encode/decode with explicit framing"
+            )
         # SmolLM2-Instruct uses this plain ChatML form, independently of whether
         # the GGUF has a metadata template. Do not guess for other model families.
         if self.token_to_id("<|im_start|>") is None or self.token_to_id("<|im_end|>") is None:
@@ -132,12 +148,19 @@ def load_gguf_tokenizer(reader, *, vocab_size=None):
         unk_token=spec.tokens[unknown_id] if unknown_id is not None else None,
     )
     tokenizer = Tokenizer(bpe)
-    # SmolLM pre-tokenization is GPT-2 byte-level BPE with additional single-
-    # digit isolation. Ref: llama.cpp's LLAMA_VOCAB_PRE_TYPE_SMOLLM regexes.
-    tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
-        pre_tokenizers.Split(Regex(r"\p{N}"), behavior="isolated"),
-        pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True),
-    ])
+    if spec.pre == "smollm":
+        # Preserve the existing SmolLM digit isolation + GPT-2 pipeline.
+        tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
+            pre_tokenizers.Split(Regex(r"\p{N}"), behavior="isolated"),
+            pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True),
+        ])
+    elif spec.pre == "qwen2":
+        # Split Unicode text first; byte encoding must not run GPT-2's regex
+        # again, which would change Qwen contractions, code and CR/LF groups.
+        tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
+            pre_tokenizers.Split(Regex(_QWEN2_PATTERN), behavior="isolated"),
+            pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
+        ])
     tokenizer.decoder = decoders.ByteLevel()
     specials = [AddedToken(value, single_word=False, lstrip=False, rstrip=False,
                            normalized=False, special=True)

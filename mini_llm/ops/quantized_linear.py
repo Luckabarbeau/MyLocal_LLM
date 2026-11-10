@@ -3,7 +3,7 @@
 Execution contract:
     y[..., N] = x[..., K] @ W[N, K].T
 
-The CuPy/Triton decode GEMV operates on packed Q8_0/Q4_0/Q3_K/Q4_K/Q5_K
+The CuPy/Triton decode GEMV operates on packed Q8_0/Q4_0/Q3_K/Q4_K/Q5_K/Q6_K
 bytes *directly*, reconstructing only lane-local dequantized values inside the
 kernel. No floating-point weight matrix is allocated on the GPU.  The NumPy
 route deliberately uses the small-matrix reference dequantizer; it is for
@@ -123,6 +123,20 @@ if triton is not None:
                 high = 0
             v = ((q >> ((within % 64) // 32 * 4)) & 15) | high
             wv = d * sc.to(tl.float32) * v.to(tl.float32) - dmin * mn.to(tl.float32)
+        elif FORMAT == 5:  # Q6_K: signed 6-bit values, signed scales per 16
+            lo = tl.load(W + block + 208, valid, 0).to(tl.uint16)
+            hi = tl.load(W + block + 209, valid, 0).to(tl.uint16)
+            d = (lo | (hi << 8)).to(tl.float16, bitcast=True).to(tl.float32)
+            scale = tl.load(W + block + 192 + within // 16, valid, 0).to(tl.int32)
+            scale = tl.where(scale >= 128, scale - 256, scale)
+            low = tl.load(W + block + (within // 128) * 64 + within % 64,
+                          valid, 0).to(tl.int32)
+            low = (low >> ((within % 128) // 64 * 4)) & 15
+            high = tl.load(W + block + 128 + (within // 128) * 32 + within % 32,
+                           valid, 0).to(tl.int32)
+            high = (high >> ((within % 128) // 32 * 2)) & 3
+            quant = (low | (high << 4)) - 32
+            wv = (d * scale.to(tl.float32)) * quant.to(tl.float32)
         else:  # FORMAT == 3, Q3_K: 2 low bits + high/sign mask
             lo = tl.load(W + block + 108, valid, 0).to(tl.uint16)
             hi = tl.load(W + block + 109, valid, 0).to(tl.uint16)
@@ -147,8 +161,10 @@ if triton is not None:
         QK: tl.constexpr, QBYTES: tl.constexpr,
         FORMAT: tl.constexpr, BK: tl.constexpr,
     ):
-        token = tl.program_id(0)
-        row = tl.program_id(1)
+        # Flatten token/output pairs: vocabularies can exceed grid-Y's 65535 limit.
+        program = tl.program_id(0)
+        token = program // N
+        row = program % N
         lane = tl.arange(0, BK)
         acc = tl.full((BK,), 0.0, tl.float32)
         for tile in range(tl.cdiv(K, BK)):
@@ -228,7 +244,15 @@ def _triton_cupy_pointer(array):
     return _TritonCuPyPointer(array, dtype)
 
 
-_FORMAT_ID = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4}
+_FORMAT_ID = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
+
+
+def _launch_on_cupy_stream(kernel, grid, *args):
+    # Triton 3.8's JIT runner chooses its driver stream, not CuPy's current
+    # stream. Compile/cache without launching, then use the compiled runner's
+    # explicit stream argument. Do not mutate Triton's process-global driver.
+    compiled = kernel.warmup(*args, grid=grid, num_warps=4)
+    compiled[(*grid, 1)](*args, stream=int(xp.cuda.get_current_stream().ptr))
 
 
 def quantized_linear(x, weight, *, block_k=512, cpu_packed_backend="reference"):
@@ -280,11 +304,11 @@ def quantized_linear(x, weight, *, block_k=512, cpu_packed_backend="reference"):
     out = xp.empty((m, n), dtype=x.dtype)
     if m:
         qk, qb = BLOCK_FORMATS[weight.quant_type]
-        _packed_linear_decode_kernel[(m, n)](
+        _launch_on_cupy_stream(
+            _packed_linear_decode_kernel, (m * n, 1),
             _triton_cupy_pointer(x), _triton_cupy_pointer(weight.data),
             _triton_cupy_pointer(out), k, n, m, qk, qb,
             _FORMAT_ID[weight.quant_type], block_k,
-            num_warps=4,
         )
     return out.reshape(shape)
 
@@ -335,11 +359,12 @@ def quantized_swiglu(x, gate, up, *, block_k=512):
     if m:
         gq, gb = BLOCK_FORMATS[gate.quant_type]
         uq, ub = BLOCK_FORMATS[up.quant_type]
-        _packed_gate_up_swiglu_kernel[(m, f)](
+        _launch_on_cupy_stream(
+            _packed_gate_up_swiglu_kernel, (m, f),
             _triton_cupy_pointer(x), _triton_cupy_pointer(gate.data),
             _triton_cupy_pointer(up.data), _triton_cupy_pointer(out), k, f,
             gq, gb, _FORMAT_ID[gate.quant_type],
-            uq, ub, _FORMAT_ID[up.quant_type], block_k, num_warps=4,
+            uq, ub, _FORMAT_ID[up.quant_type], block_k,
         )
     return out.reshape(x.shape[:-1] + (f,))
 

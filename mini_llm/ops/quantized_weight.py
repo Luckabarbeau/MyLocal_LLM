@@ -22,6 +22,7 @@ BLOCK_FORMATS = {
     "Q3_K": (256, 110),
     "Q4_K": (256, 144),
     "Q5_K": (256, 176),
+    "Q6_K": (256, 210),
 }
 
 
@@ -120,6 +121,19 @@ class PackedGGUFWeight:
             qs = qs.astype(np.float32)
             return ((d * scales.reshape(n, 8, 1)) * qs
                     - (dmin * minima.reshape(n, 8, 1))).reshape(self.shape)
+        if self.quant_type == "Q6_K":
+            # Two 128-value halves: low nibbles cover 64 lanes each,
+            # high two-bit planes cover 32. Signed scales apply per 16 lanes.
+            lane = np.arange(256)
+            low = rows[:, (lane // 128) * 64 + lane % 64]
+            low = (low >> ((lane % 128) // 64 * 4)) & 15
+            high = rows[:, 128 + (lane // 128) * 32 + lane % 32]
+            high = (high >> ((lane % 128) // 32 * 2)) & 3
+            quants = (low | (high << 4)).astype(np.float32) - 32
+            scales = rows[:, 192:208].copy().view(np.int8).astype(np.float32)
+            d = _f16_from_bytes(rows[:, 208:210]).reshape(n, 1, 1)
+            return ((d * scales.reshape(n, 16, 1))
+                    * quants.reshape(n, 16, 16)).reshape(self.shape)
         # Q3_K: low two bits in qs and a sign/third-bit mask, 16 six-bit scales.
         hmask = rows[:, :32]
         qs = rows[:, 32:96]

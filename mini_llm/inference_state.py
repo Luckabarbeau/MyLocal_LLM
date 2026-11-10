@@ -94,11 +94,17 @@ class GenerationState:
     routed_prefix_tokens_since_refresh: int = 0
     routed_prefix_refresh_count: int = 0
 
+    # Optional caller-owned per-layer recurrent operator states. Empty for
+    # native KV-only models; reset retains their preallocated backend buffers.
+    recurrent_states: dict = field(default_factory=dict)
+
     def reset(self):
         """Reset generation state without deallocating cache."""
         self._cuda_graph_decode_count = 0
         self.length = 0
         self.retrieval_routes.clear()
+        for state in self.recurrent_states.values():
+            state.reset()
         self.historical_reader_routes.clear()
         self.full_history_current_kv.clear()
         self.full_history_historical_kv.clear()

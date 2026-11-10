@@ -32,20 +32,32 @@ class FakeCuPyArray:
 class FakeKernel:
     def __init__(self):
         self.calls = []
+        self.warmups = []
+
+    def warmup(self, *args, grid, num_warps):
+        self.warmups.append((grid, args, {'num_warps': num_warps}))
+        return FakeCompiledKernel(self)
+
+
+class FakeCompiledKernel:
+    def __init__(self, kernel):
+        self.kernel = kernel
 
     def __getitem__(self, grid):
         def run(*args, **kwargs):
-            self.calls.append((grid, args, kwargs))
-            for tensor in args[:self.pointers]:
+            self.kernel.calls.append((grid, args, kwargs))
+            for tensor in args[:self.kernel.pointers]:
                 assert isinstance(tensor, ql._TritonCuPyPointer)
                 assert tensor.data_ptr() == tensor.array.data.ptr
                 assert hasattr(tensor, 'dtype')
         return run
 
 
-@pytest.fixture
-def gpu_stub(monkeypatch):
+@pytest.fixture(params=[0, 0x10609], ids=['default-stream', 'nondefault-stream'])
+def gpu_stub(monkeypatch, request):
+    stream = SimpleNamespace(ptr=request.param)
     stub = SimpleNamespace(
+        cuda=SimpleNamespace(get_current_stream=lambda: stream),
         ndarray=FakeCuPyArray,
         uint8=np.uint8,
         asarray=lambda x, dtype=None: FakeCuPyArray(np.asarray(x, dtype=dtype)),
@@ -77,9 +89,11 @@ def test_quantized_linear_wraps_all_gpu_pointers(gpu_stub, dtype):
     packed = ql.packed_to_device(_weight('Q5_K', 7, 256))
     y = ql.quantized_linear(x, packed)
     assert y.shape == (2, 7)
-    assert len(gemv.calls) == 1
-    grid, args, _ = gemv.calls[0]
-    assert grid == (2, 7)
+    assert len(gemv.calls) == len(gemv.warmups) == 1
+    grid, args, kwargs = gemv.calls[0]
+    assert grid == (14, 1, 1)
+    assert kwargs == {'stream': int(stub.cuda.get_current_stream().ptr)}
+    assert gemv.warmups[0] == ((14, 1), args, {'num_warps': 4})
     assert [t.dtype for t in args[:3]] == [
         'tl.fp16' if dtype is np.float16 else 'tl.fp32',
         'tl.uint8',
@@ -97,14 +111,28 @@ def test_fused_swiglu_wraps_every_gpu_pointer(gpu_stub, gfmt, ufmt):
     up = ql.packed_to_device(_weight(ufmt, 8, 256))
     out = ql.quantized_swiglu(x, gate, up)
     assert out.shape == (1, 8)
-    assert len(fused.calls) == 1
-    grid, args, _ = fused.calls[0]
-    assert grid == (1, 8)
+    assert len(fused.calls) == len(fused.warmups) == 1
+    grid, args, kwargs = fused.calls[0]
+    assert grid == (1, 8, 1)
+    assert kwargs == {'stream': int(stub.cuda.get_current_stream().ptr)}
+    assert fused.warmups[0] == ((1, 8), args, {'num_warps': 4})
     assert [t.dtype for t in args[:4]] == [
         'tl.fp16', 'tl.uint8', 'tl.uint8', 'tl.fp16',
     ]
     assert args[1].array is gate.data
     assert args[2].array is up.data
+
+
+def test_kernel_warmup_does_not_execute(gpu_stub):
+    stub, gemv, _ = gpu_stub
+    operand = ql._triton_cupy_pointer(stub.asarray(np.zeros(3, dtype=np.float32)))
+    args = (operand, operand, operand)
+    compiled = gemv.warmup(*args, grid=(1, 3), num_warps=4)
+    assert isinstance(compiled, FakeCompiledKernel)
+    assert gemv.warmups == [((1, 3), args, {'num_warps': 4})]
+    assert not gemv.calls
+    compiled[(1, 3, 1)](*args, stream=int(stub.cuda.get_current_stream().ptr))
+    assert gemv.calls == [((1, 3, 1), args, {'stream': int(stub.cuda.get_current_stream().ptr)})]
 
 
 def test_reject_numpy_host_operand_before_triton_launch(gpu_stub):
@@ -113,6 +141,7 @@ def test_reject_numpy_host_operand_before_triton_launch(gpu_stub):
     with pytest.raises((ValueError, TypeError), match='CuPy'):
         ql.quantized_linear(np.zeros((1, 256), dtype=np.float16), packed)
     assert not gemv.calls
+    assert not gemv.warmups
 
 
 def test_pointer_adapter_rejects_unsupported_dtypes(gpu_stub):

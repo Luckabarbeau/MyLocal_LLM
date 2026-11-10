@@ -1,8 +1,8 @@
 """Lazy, mmap-backed Qwen3-Next GGUF expert index for the shared backend.
 
-This is a checkpoint/weight adapter, NOT a Qwen3-Next decoder. In particular,
-DeltaNet, gated attention, recurrent state, shared experts, and tokenization
-must be implemented/validated before full text generation is possible.
+This is a checkpoint/weight adapter, not a model runtime. qwen3next_model
+composes the separate mixer/attention/decoder adapters for supported headers;
+report() checks compatibility without allocating a complete model.
 
 No tensor is dequantized while indexing. The GGUFReader must stay alive for
 as long as any returned PackedGGUFWeight references its mmap-backed bytes.
@@ -14,6 +14,8 @@ import math
 
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
 from mini_llm.ops.expert_residency import ExpertKey
+
+from .gguf_tensor import decode_gguf_dense
 
 
 def _meta(reader, name, default=None):
@@ -133,6 +135,21 @@ class Qwen3NextGGUFIndex:
                 if _shape(self.tensors[up_name]) != (self.expert_count, self.d_ff, self.d_model):
                     raise ValueError(f'{up_name}: unexpected shape {_shape(self.tensors[up_name])}')
 
+    def non_expert_weight(self, name):
+        """Decode one requested non-expert tensor on CPU, without caching.
+
+        Routed banks must go through expert_weights() so this accessor cannot
+        accidentally expand all experts. This is not full Qwen inference.
+        """
+        if name.endswith('_exps.weight'):
+            raise ValueError(f'{name}: routed expert banks require expert_weights()')
+        if 'ngram' in name:
+            raise NotImplementedError(f'{name}: ngram tables are unsupported')
+        tensor = self.tensors[name]
+        if tensor.tensor_type.name in BLOCK_FORMATS:
+            return _packed(tensor).dequantize_reference()
+        return decode_gguf_dense(tensor)
+
     def expert_weights(self, layer_id: int, expert_id: int):
         """Return three zero-copy *packed* matrices; no full-file dequant."""
         layer_id = int(layer_id)
@@ -182,6 +199,12 @@ class Qwen3NextGGUFIndex:
             sample_error = str(exc)
         device_budget = int(float(device_budget_gib) * 1024**3)
         ram_budget = int(float(ram_budget_gib) * 1024**3)
+        from .qwen3next_model import inspect_qwen3next_model
+        decode_blockers = []
+        try:
+            inspect_qwen3next_model(self)
+        except (ValueError, NotImplementedError) as exc:
+            decode_blockers.append(str(exc))
         return {
             'source': self.source_path,
             'architecture': self.architecture,
@@ -201,12 +224,8 @@ class Qwen3NextGGUFIndex:
             'host_budget_bytes': ram_budget,
             'estimated_device_cache_experts': (device_budget // sum(sample_sizes)
                                                if sample_sizes else None),
-            'full_model_decode_available': False,
-            'full_model_decode_blockers': [
-                'Gated DeltaNet recurrent decode and state',
-                'Gated attention and KV state',
-                'shared MoE expert path and layer wiring',
-                'quantized non-expert projection coverage',
-                'tokenizer and end-to-end logits parity',
-            ],
+            'full_model_decode_available': not decode_blockers,
+            'full_model_decode_blockers': decode_blockers,
+            'full_model_decode_validation': (
+                'Header compatibility only; hardware budgets and numerical parity are separate checks'),
         }

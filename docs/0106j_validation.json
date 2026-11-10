@@ -1,0 +1,73 @@
+{
+  "patch": "0106J",
+  "date": "2026-11-09",
+  "status": "hybrid_q4_0_parity_gate_resolved_legacy_q3k_q4k_numerical_checks_unresolved",
+  "hardware": "NVIDIA GeForce RTX 5080",
+  "runtime": {"cupy": "14.2.0", "triton": "3.8.0"},
+  "fixes": [
+    "Allocate CPU-worker GPU destination on caller stream before recording existing ready event",
+    "Launch both packed Triton kernels with explicit current CuPy stream through compiled runner"
+  ],
+  "new_device_synchronization": false,
+  "training_or_kernel_math_changed": false,
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py",
+      "passed": 222, "skipped": 34, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106j_async_buffer_ownership.py",
+      "passed": 9, "failed": 0, "elapsed_seconds": 3.55
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106b_quantized_linear.py tests/test_0106c_fused_packed_expert.py tests/test_0106g_q5k_packed.py tests/test_0106h_triton_cupy_pointer.py -k 'gpu or triton'",
+      "passed": 45, "failed": 4, "deselected": 31
+    }
+  ],
+  "original_0106i_gpu_gate": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106i_routing_trace.py --tokens 128 --d-model 256 --d-ff 256 --n-experts 16 --top-k 4 --device-budget-mib 1 --output benchmarks/results/0106i_gpu.json",
+    "passed": true,
+    "comparison": "Original exact equality assertions, unchanged",
+    "measurements": [
+      {"mode": "disabled", "layer_token_ms": 1.050153117187591, "max_abs_vs_disabled": 0.0},
+      {"mode": "summary", "layer_token_ms": 0.9879919531243786, "max_abs_vs_disabled": 0.0},
+      {"mode": "detailed", "layer_token_ms": 1.1201747421871744, "max_abs_vs_disabled": 0.0}
+    ]
+  },
+  "oracle_benchmark": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106j_async_parity.py --cpu-backend native --output benchmarks/results/0106j_async_parity_gpu.json",
+    "completed_cases": 48,
+    "failed_cases": 0,
+    "matrix": {
+      "residency": ["fixed", "dynamic"],
+      "caller_stream": ["default", "non-default"],
+      "workers": [0, 2],
+      "repeats": 2,
+      "profiling": ["disabled", "summary", "detailed"]
+    },
+    "configuration": {
+      "tokens": 128, "d_model": 256, "d_ff": 256,
+      "experts": 16, "top_k": 4, "format": "Q4_0", "dtype": "float32",
+      "gpu_cache_budget_bytes": 1048576, "retained_expert_bytes": 995328,
+      "input_seed": 10609, "weight_seed": "106090 + expert_id * 3 + projection"
+    },
+    "max_abs_vs_numpy_oracle": 1.57160684466362e-9,
+    "max_abs_vs_disabled_mode": 0.0,
+    "rtol": 0.0001,
+    "atol": 0.0000001,
+    "scope": "Synthetic single layer; not full-model throughput or a statistically controlled speedup comparison"
+  },
+  "legacy_numerical_failures": {
+    "pre_0106j_launch_reference_check": "All four exact cases also fail with legacy JIT runner restored in-memory in a separate process; source files unchanged",
+    "cases": [
+      {"test": "test_resident_packed_expert_keeps_quantized_bytes_on_gpu[Q3_K]", "dtype": "float32", "example_actual": -14.101455688476562, "example_reference": -14.098133087158203, "max_abs_among_violations": 0.0033226, "rtol": 0.00002, "atol": 0.002},
+      {"test": "test_resident_packed_expert_keeps_quantized_bytes_on_gpu[Q4_K]", "dtype": "float32", "example_actual": 7506.140625, "example_reference": 7506.56005859375, "max_abs_among_violations": 0.4194336, "rtol": 0.00002, "atol": 0.002},
+      {"test": "test_triton_fused_gate_up_matches_cpu[float16-Q4_K-Q4_K]", "dtype": "float16", "reference_input_dtype": "float32", "max_abs_among_violations": 0.07406708, "violating_elements": 9, "total_elements": 1536, "rtol": 0.02, "atol": 0.006},
+      {"test": "test_triton_fused_gate_up_matches_cpu[float16-Q3_K-Q4_K]", "dtype": "float16", "reference_input_dtype": "float32", "max_abs_among_violations": 0.01021945, "violating_elements": 3, "total_elements": 1536, "rtol": 0.02, "atol": 0.006}
+    ],
+    "tolerances_or_kernel_math_changed": false,
+    "next_experiment": "Matched-input FP64 oracle with explicit device input/output rounding and intermediate error comparison"
+  },
+  "full_qwen_inference_available": false,
+  "target_qwen38_metadata_available": false
+}

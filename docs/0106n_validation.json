@@ -1,0 +1,148 @@
+{
+  "patch": "0106N",
+  "date": "2026-11-10",
+  "status": "generic_attention_and_both_qwen_token_mixers_cpu_cuda_verified_decoder_pending",
+  "components": {
+    "partial_rotary_embedding": "mini_llm/ops/rotary_inference.py",
+    "projected_grouped_attention": "mini_llm/ops/projected_attention_inference.py",
+    "native_shared_attention_math": "mini_llm/ops/attention_inference.py",
+    "lazy_projection_helper": "mini_llm/external/gguf_projection.py",
+    "qwen_full_attention_adapter": "mini_llm/external/qwen3next_attention.py",
+    "recurrent_shared_helper_callsite": "mini_llm/external/qwen3next_mixer.py",
+    "metadata_report": "mini_llm/external/qwen3next_gguf.py"
+  },
+  "model_specific_branches_in_new_generic_operators": false,
+  "training_or_optimizer_behavior_changed": false,
+  "native_constructor_and_optimized_decode_paths_changed": false,
+  "native_default_softmax_dtype": "float32",
+  "projected_fp64_softmax_dtype": "float64",
+  "qwen_hidden_dtype": "float32",
+  "sources": {
+    "transformers_revision": "86fdf1595ab819a7baa1d06f2902d00aa94feeb6",
+    "transformers_qwen3next_source_sha256": "015adb95dd1de62c23af10a635ebe5b53e72e8f4cdf2b1c4d04bfcacb6254b88",
+    "local_llama_cpp_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "strata_revision": "504b143342a9fe1aa8320a7b31e11f5c0ac265c3",
+    "revision_note": "Retained pins from source inspection, not a claim of current upstream HEAD",
+    "external_runtime_or_binary_used": false,
+    "synthetic_reference": "Independent CPU FP64 scalar grouped attention and affine delta recurrence, matched storage precision"
+  },
+  "resource_check": {
+    "device": "NVIDIA GeForce RTX 5080",
+    "reported_total_mib": 16303,
+    "initial_used_mib": 1257,
+    "strata_compute_process_present": false,
+    "existing_process_stopped": false,
+    "private_cupy_pool_limit_bytes": 268435456,
+    "context_and_library_memory_in_pool_measurement": false
+  },
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py",
+      "passed": 664,
+      "skipped": 72,
+      "failed": 0,
+      "elapsed_seconds": 3.04
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -x -q tests/test_0106n_recurrent_gpu.py tests/test_0106n_attention_gpu.py tests/test_0106n_projected_attention.py",
+      "passed": 38,
+      "failed": 0,
+      "elapsed_seconds": 4.92,
+      "after_dense_owner_correction": true
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -x -q tests/test_0106b_quantized_linear.py tests/test_0106c_fused_packed_expert.py tests/test_0106d_async_experts.py tests/test_0106g_q5k_packed.py tests/test_0106j_async_buffer_ownership.py tests/test_0106l_q6k_packed.py -k 'triton_kernel or triton_fused or gpu or resident_packed_expert'",
+      "passed": 51,
+      "deselected": 56,
+      "failed": 0,
+      "elapsed_seconds": 4.29
+    },
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -x -q tests/test_0106n_qwen3next_attention.py -k dense_loading_lazy_and_weight_owner_unchanged",
+      "passed": 3,
+      "deselected": 61,
+      "failed": 0,
+      "elapsed_seconds": 0.13
+    }
+  ],
+  "localized_correction": {
+    "classification": "array ownership metadata",
+    "regression_observed": "F32 index owner writeability changed from True to False after adapter forward",
+    "cause": "asarray returned the same F32 owner array; adapter then applied setflags(write=False)",
+    "change": "One zero-copy view in shared dense projection loading; array flags now adapter-local",
+    "retained_owner_contents_and_writeability": true,
+    "numerical_tolerances_changed": false,
+    "kernel_equations_changed": false,
+    "latest_relevant_retest_passed": true
+  },
+  "actual_checkpoint": {
+    "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+    "requested_iq1m_target": false,
+    "routed_experts_per_layer": 512,
+    "full_model_or_reference_logits_parity": false
+  },
+  "actual_recurrent_gpu_smoke": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106n_recurrent_gpu.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 0 --tokens 4 --output benchmarks/results/0106n_real_recurrent_gpu.json",
+    "passed": true,
+    "layer": 0,
+    "input_chunk_tokens": 4,
+    "timed_tokens_per_mode": 8,
+    "initial_prefix_tokens": 3,
+    "non_default_stream": true,
+    "pool_peak_reserved_bytes": 46500352,
+    "maximum_cpu_output_abs_error": 2.7939677238464355e-9,
+    "maximum_all_comparisons_abs_error": 2.980232238769531e-7,
+    "maximum_all_comparisons_tolerance_ratio": 0.03076172806263252,
+    "rtol": 0.0003,
+    "atol": 0.000005,
+    "cuda_event_ms": {
+      "full": 5.014848232269287,
+      "chunks": 9.355999946594238,
+      "steps": 5.861311912536621,
+      "repeat": 3.0374081134796143
+    },
+    "synchronized_wall_ms": {
+      "full": 5.023506004363298,
+      "chunks": 9.368555998662487,
+      "steps": 5.872964000445791,
+      "repeat": 3.0486289979307912
+    }
+  },
+  "actual_attention_gpu_smoke": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106n_attention_gpu.py --model /home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf --layer 3 --tokens 4 --output benchmarks/results/0106n_real_attention_gpu.json",
+    "passed": true,
+    "layer": 3,
+    "initial_prefix_tokens": 2,
+    "continuation_tokens": 4,
+    "non_default_stream": true,
+    "pool_peak_reserved_bytes": 29682688,
+    "maximum_cpu_output_abs_error": 7.152557373046875e-7,
+    "maximum_all_comparisons_abs_error": 1.6689300537109375e-6,
+    "maximum_all_comparisons_tolerance_ratio": 0.17134015363028132,
+    "output_tolerance": {"rtol": 0.00003, "atol": 0.000006},
+    "kv_tolerance": {"rtol": 0.00002, "atol": 0.000003},
+    "cuda_event_ms": {
+      "prefix_cold": 317.3752136230469,
+      "full": 2.943552017211914,
+      "chunks": 2.056351900100708,
+      "steps": 5.01478385925293
+    },
+    "synchronized_wall_ms": {
+      "prefix_cold": 317.3865209973883,
+      "full": 2.9589699988719076,
+      "chunks": 2.066018001642078,
+      "steps": 5.024595004215371
+    }
+  },
+  "timing_scope": "Single-layer correctness smoke, fixed execution order, no controlled throughput or full-model tokens/s claim",
+  "exact_ownership_checks_tolerance": {"rtol": 0, "atol": 0},
+  "full_model_decode_available": false,
+  "remaining": [
+    "Hybrid decoder norms/residuals and per-layer recurrent/KV state composition",
+    "Shared and routed MoE integration through existing executor",
+    "Embeddings, final normalization, output head, tokenizer and generation integration",
+    "Complete independent logits and incremental generation parity",
+    "Actual requested pruned target metadata, expert mapping, ngram semantics and mixed IQ quantization",
+    "Whole-model memory budgets, controlled trace and throughput benchmarks, optional SSD storage"
+  ]
+}

@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace {
-constexpr int Q8_0 = 0, Q4_0 = 1, Q4_K = 2, Q3_K = 3, Q5_K = 4;
+constexpr int Q8_0 = 0, Q4_0 = 1, Q4_K = 2, Q3_K = 3, Q5_K = 4, Q6_K = 5;
 
 inline float fp16(const uint8_t* p) noexcept {
     const uint16_t h = uint16_t(p[0]) | (uint16_t(p[1]) << 8);
@@ -32,7 +32,7 @@ inline float fp16(const uint8_t* p) noexcept {
 
 inline float packed_dot(const uint8_t* w, int fmt, int k, const float* x) noexcept {
     const int qk = (fmt == Q8_0 || fmt == Q4_0) ? 32 : 256;
-    const int qb = fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : 110;
+    const int qb = fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : fmt == Q6_K ? 210 : 110;
     float sum = 0.0f;
     for (int b = 0; b < k / qk; ++b, w += qb, x += qk) {
         if (fmt == Q8_0) {
@@ -78,6 +78,21 @@ inline float packed_dot(const uint8_t* w, int fmt, int k, const float* x) noexce
                     sum += (scale * float(v) - minimum) * x[i];
                 }
             }
+        } else if (fmt == Q6_K) {
+            const float d = fp16(w + 208);
+            for (int group = 0; group < 16; ++group) {
+                int sc = int(w[192 + group]);
+                if (sc >= 128) sc -= 256;
+                const float scale = d * float(sc);
+                for (int j = 0; j < 16; ++j) {
+                    const int i = group * 16 + j;
+                    const unsigned low = (w[(i / 128) * 64 + i % 64]
+                                          >> ((i % 128) / 64 * 4)) & 15;
+                    const unsigned high = (w[128 + (i / 128) * 32 + i % 32]
+                                           >> ((i % 128) / 32 * 2)) & 3;
+                    sum += (scale * float(int(low | (high << 4)) - 32)) * x[i];
+                }
+            }
         } else { // Q3_K
             const float d = fp16(w + 108);
             for (int group = 0; group < 16; ++group) {
@@ -99,11 +114,11 @@ inline float packed_dot(const uint8_t* w, int fmt, int k, const float* x) noexce
     return sum;
 }
 inline bool valid(int fmt, int n, int k) noexcept {
-    return fmt >= 0 && fmt <= 4 && n > 0 && k > 0 &&
+    return fmt >= 0 && fmt <= 5 && n > 0 && k > 0 &&
         (k % ((fmt == Q8_0 || fmt == Q4_0) ? 32 : 256) == 0);
 }
 inline int block_bytes(int fmt) noexcept {
-    return fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : 110;
+    return fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : fmt == Q6_K ? 210 : 110;
 }
 inline int row_bytes(int fmt, int k) noexcept {
     return k / ((fmt == Q8_0 || fmt == Q4_0) ? 32 : 256) * block_bytes(fmt);

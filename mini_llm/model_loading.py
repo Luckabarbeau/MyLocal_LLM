@@ -136,28 +136,37 @@ def load_native_checkpoint(checkpoint: str | Path, *,
 
 
 def load_pretrained_weights(path: str | Path, *, format: str, dtype: str = "float16") -> LoadedPretrained:
-    """Reuse existing in-process Llama-family GGUF/Safetensors engines.
+    """Reuse in-process Llama/Safetensors and hierarchical Qwen3-Next GGUF adapters.
 
-    Unsupported GGUF architectures fail in the existing Llama loader. Other
-    GGUF architectures may eventually use a remote llama.cpp adapter.
+    Qwen3-Next requires explicit dtype='float32'; native/Llama defaults are unchanged.
     """
     path = Path(path).expanduser().resolve()
     if format == "gguf":
         from gguf import GGUFReader
         from tokenizers import Tokenizer
         from .external import load_gguf_model
-        from .external.gguf_loader import GGUFWeightMap
+        from .external.gguf_loader import GGUFWeightMap, _metadata
         from .external.gguf_tokenizer import load_gguf_tokenizer
-        inspected = GGUFWeightMap(GGUFReader(str(path)))
+        reader = GGUFReader(str(path))
+        qwen_index = None
+        if _metadata(reader, 'general.architecture') in ('qwen3next', 'qwen3_next'):
+            from .external.qwen3next_gguf import Qwen3NextGGUFIndex
+            from .external.qwen3next_model import inspect_qwen3next_model, Qwen3NextGGUFModel
+            qwen_index = Qwen3NextGGUFIndex(reader, source_path=path)
+            config, _, _, _ = inspect_qwen3next_model(qwen_index)
+        else:
+            config = GGUFWeightMap(reader).config
         try:
-            tokenizer = load_gguf_tokenizer(inspected.reader,
-                                            vocab_size=inspected.config.vocab_size)
+            tokenizer = load_gguf_tokenizer(reader, vocab_size=config.vocab_size)
         except ValueError:
             sibling = path.parent / "tokenizer.json"
             if not sibling.is_file():
                 raise ValueError("GGUF tokenizer metadata unsupported; supply adjacent tokenizer.json")
             tokenizer = Tokenizer.from_file(str(sibling))
-        engine, _ = load_gguf_model(path, dtype=dtype)
+        if qwen_index is not None:
+            engine = Qwen3NextGGUFModel.from_index(qwen_index, dtype=dtype)
+        else:
+            engine, _ = load_gguf_model(path, dtype=dtype)
     elif format == "safetensors":
         from tokenizers import Tokenizer
         from .external import load_safetensors_model

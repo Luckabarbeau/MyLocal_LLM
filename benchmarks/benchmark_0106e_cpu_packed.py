@@ -24,6 +24,8 @@ def make_weight(fmt, n, k, seed):
     scale = np.frombuffer(np.float16(.02).tobytes(), dtype=np.uint8)
     if fmt == "Q3_K":
         data[:, 108:110] = scale
+    elif fmt == "Q6_K":
+        data[:, 208:210] = scale
     else:
         data[:, :2] = scale
         if fmt in ("Q4_K", "Q5_K"):

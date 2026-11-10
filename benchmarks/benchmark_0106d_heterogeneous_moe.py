@@ -35,6 +35,8 @@ def packed_weight(fmt, n, k, seed):
     raw = rng.integers(0, 256, (n * k // qk, qb), dtype=np.uint8)
     if fmt == "Q3_K":
         raw[:, 108:110] = np.frombuffer(np.float16(.025).tobytes(), dtype=np.uint8)
+    elif fmt == "Q6_K":
+        raw[:, 208:210] = np.frombuffer(np.float16(.025).tobytes(), dtype=np.uint8)
     elif fmt in ("Q4_K", "Q5_K"):
         raw[:, 0:2] = np.frombuffer(np.float16(.025).tobytes(), dtype=np.uint8)
         raw[:, 2:4] = np.frombuffer(np.float16(.01).tobytes(), dtype=np.uint8)

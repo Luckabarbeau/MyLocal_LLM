@@ -1,0 +1,100 @@
+{
+  "patch": "0106K",
+  "date": "2026-11-09",
+  "status": "four_legacy_numerical_checks_resolved_by_matched_precision_reference",
+  "conclusion": "Observed failures are explained by input/storage precision mismatch and cancellation-sensitive FP32 reference accumulation; no production-kernel defect demonstrated",
+  "hardware": "NVIDIA GeForce RTX 5080",
+  "production_kernel_or_inference_code_changed": false,
+  "training_code_changed": false,
+  "tolerances_changed": false,
+  "oracle": {
+    "module": "mini_llm/diagnostics/quantized_numerics.py",
+    "function": "packed_swiglu_reference",
+    "arithmetic": "float64",
+    "storage_boundaries": ["input", "hidden", "output"],
+    "fused_gate_up_has_fp16_intermediate_storage": false,
+    "decoder": "PackedGGUFWeight.dequantize_reference; not an independent decoder audit"
+  },
+  "gpu_audit": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106k_matched_precision.py --output benchmarks/results/0106k_matched_precision_gpu.json",
+    "measured_cases": 4,
+    "matched_reference_failures": 0,
+    "cases": [
+      {
+        "name": "resident_full_fp32_Q3_K",
+        "dtype": "float32",
+        "legacy_violations": 1,
+        "elements": 512,
+        "legacy_max_abs_error_all_entries": 0.0048828125,
+        "matched_max_abs_error": 0.00115966796875,
+        "matched_max_tolerance_ratio": 0.43337257702416065,
+        "rtol": 0.00002,
+        "atol": 0.002,
+        "down_cancellation_ratios_at_legacy_failures": [998.5198067135252]
+      },
+      {
+        "name": "resident_full_fp32_Q4_K",
+        "dtype": "float32",
+        "legacy_violations": 2,
+        "elements": 512,
+        "legacy_max_abs_error_all_entries": 16.0,
+        "matched_max_abs_error": 2.0,
+        "matched_max_tolerance_ratio": 0.2503618370498799,
+        "rtol": 0.00002,
+        "atol": 0.002,
+        "down_cancellation_ratios_at_legacy_failures": [327.2776846008981, 165.341280683788]
+      },
+      {
+        "name": "fused_fp16_Q4_K_Q4_K",
+        "dtype": "float16",
+        "legacy_violations": 9,
+        "elements": 1536,
+        "legacy_max_abs_error_all_entries": 0.30426025390625,
+        "matched_max_abs_error": 9.5367431640625e-7,
+        "matched_max_tolerance_ratio": 0.00015832113732838782,
+        "rtol": 0.02,
+        "atol": 0.006,
+        "input_rounding_output_effect_max_abs": 0.24334639717085338,
+        "hidden_storage_rounding_max_abs": 0.24769779286748417
+      },
+      {
+        "name": "fused_fp16_Q3_K_Q4_K",
+        "dtype": "float16",
+        "legacy_violations": 3,
+        "elements": 1536,
+        "legacy_max_abs_error_all_entries": 0.0410003662109375,
+        "matched_max_abs_error": 6.103515625e-5,
+        "matched_max_tolerance_ratio": 0.007822033102844092,
+        "rtol": 0.02,
+        "atol": 0.006,
+        "input_rounding_output_effect_max_abs": 0.036430640799160585,
+        "hidden_storage_rounding_max_abs": 0.02977268855002535
+      }
+    ]
+  },
+  "cpu_audit": {
+    "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python benchmarks/benchmark_0106k_matched_precision.py --output benchmarks/results/0106k_matched_precision_cpu.json",
+    "completed": true,
+    "gpu_measurements": "explicitly skipped"
+  },
+  "tests": [
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106k_matched_precision.py",
+      "passed": 15, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106b_quantized_linear.py tests/test_0106c_fused_packed_expert.py tests/test_0106g_q5k_packed.py tests/test_0106h_triton_cupy_pointer.py -k 'gpu or triton'",
+      "passed": 49, "deselected": 31, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106i_routing_trace.py tests/test_0106j_async_buffer_ownership.py tests/test_0106d_async_experts.py::test_cuda_copy_worker_and_mixed_cpu_gpu_experts",
+      "passed": 24, "failed": 0
+    },
+    {
+      "command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pytest -q tests/test_0106*.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py",
+      "passed": 237, "skipped": 34, "failed": 0
+    }
+  ],
+  "performance_measurement_attempted": false,
+  "full_qwen_inference_available": false
+}

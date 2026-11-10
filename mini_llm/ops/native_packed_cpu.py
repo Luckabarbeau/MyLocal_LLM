@@ -22,7 +22,7 @@ import numpy as np
 
 from mini_llm.ops.quantized_weight import PackedGGUFWeight
 
-_FORMAT = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4}
+_FORMAT = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
 _LOCK = threading.Lock()
 _LIB = None
 _FAILURE = None
@@ -111,6 +111,8 @@ def packed_cpu_linear(x: np.ndarray, weight: PackedGGUFWeight, *, backend="nativ
         raise TypeError("CPU activation must be FP16, FP32 or FP64")
     input32 = np.ascontiguousarray(x.reshape(-1, weight.shape[1]), dtype=np.float32)
     output32 = np.empty((input32.shape[0], weight.shape[0]), np.float32)
+    if input32.shape[0] == 0:
+        return output32.astype(x.dtype, copy=False).reshape(x.shape[:-1] + (weight.shape[0],))
     rc = lib.mylocal_packed_gemv(
         weight.data.ctypes.data, _FORMAT[weight.quant_type], weight.shape[0],
         weight.shape[1], input32.ctypes.data, input32.shape[0], output32.ctypes.data,

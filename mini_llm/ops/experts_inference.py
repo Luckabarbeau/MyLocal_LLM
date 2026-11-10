@@ -157,7 +157,10 @@ class ExpertsInference:
         # CUDA completion event for the MoE layer when this scope exits.
         scope = (self.expert_executor.dispatch_scope(self.layer_id, routing_plan.active_expert_ids())
                  if self.expert_executor is not None else nullcontext())
-        with scope:
+        profiler = getattr(self.expert_executor, "routing_profiler", None)
+        trace_scope = (profiler.layer_scope(self.layer_id, routing_plan, expert_indices, weights)
+                       if profiler is not None else nullcontext())
+        with trace_scope, scope:
             if self.expert_executor is not None and getattr(
                 self.expert_executor, "overlaps_cpu_gpu", False
             ):
@@ -191,7 +194,8 @@ class ExpertsInference:
                 error = None
                 for token_indices, expert_weights, pending in jobs:
                     try:
-                        expert_out = self.expert_executor.resolve(pending)
+                        with profiler.wait_scope("resolve_wait") if profiler is not None else nullcontext():
+                            expert_out = self.expert_executor.resolve(pending)
                         if error is None:
                             y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
                     except Exception as exc:

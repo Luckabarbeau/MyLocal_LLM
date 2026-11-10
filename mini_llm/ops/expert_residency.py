@@ -13,7 +13,7 @@ paths never instantiate this layer.
 
 from collections import Counter, OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import math
 import threading
@@ -117,7 +117,9 @@ class AdaptiveExpertCache:
         busy = set(self._protected)
         for event, keys in self._inflight_groups:
             try:
-                completed = bool(event.query())
+                # CuPy exposes nonblocking completion as .done; CPU test
+                # fences and other event adapters may provide query().
+                completed = bool(event.done if hasattr(event, "done") else event.query())
             except Exception:
                 # An unfamiliar/unqueryable event must not lead to use-after-free.
                 completed = False
@@ -358,7 +360,11 @@ class HeterogeneousExpertExecutor:
         host_dequant_budget_bytes: int = 0,
         cpu_packed_backend: str = "reference",
         idle_eviction_requests: int = 0,
+        routing_profiler=None,
     ):
+        if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
+            raise ValueError("Routing trace model identity does not match executor")
+        self.routing_profiler = routing_profiler
         if int(cpu_workers) != cpu_workers or cpu_workers < 0:
             raise ValueError("cpu_workers must be a nonnegative integer")
         if not model_id:
@@ -503,12 +509,23 @@ class HeterogeneousExpertExecutor:
             result = h @ np.asarray(down, dtype=dtype)
         return np.asarray(result, dtype=x_host.dtype)
 
-    def _cpu_forward(self, key, weights, x):
-        """Synchronous reference route, compatible with the original API."""
-        return xp.asarray(self._cpu_forward_numpy(key, weights, asnumpy(x)),
-                          dtype=x.dtype)
+    def _run_cpu(self, key, weights, x, trace=None):
+        with trace.span("cpu_compute") if trace is not None else nullcontext():
+            return self._cpu_forward_numpy(key, weights, x)
 
-    def _copy_compute_copy(self, key, weights, x, ready_event, device_id):
+    def _cpu_forward(self, key, weights, x, trace=None):
+        """Synchronous reference route, compatible with the original API."""
+        with trace.span("activation_d2h", gpu=True) if trace is not None else nullcontext():
+            host_x = asnumpy(x)
+        host_y = self._run_cpu(key, weights, host_x, trace)
+        with trace.span("activation_h2d", gpu=True) if trace is not None else nullcontext():
+            output = xp.asarray(host_y, dtype=x.dtype)
+        if trace is not None and BACKEND_NAME == "cupy":
+            trace.activation_bytes("d2h", x.nbytes)
+            trace.activation_bytes("h2d", output.nbytes)
+        return output
+
+    def _copy_compute_copy(self, key, weights, x, ready_event, device_id, gpu_y, trace=None):
         """One CuPy worker: staged D2H, host GEMV, staged H2D.
 
         The input-ready event handles producer-stream ordering (including
@@ -516,7 +533,9 @@ class HeterogeneousExpertExecutor:
         copies independent of main-stream GPU expert kernels. Both copies
         complete before the Future resolves: output lifetime and main-stream
         consumption therefore require no cross-stream synchronization and
-        pinned buffers cannot be recycled while DMA is outstanding.
+        pinned buffers cannot be recycled while DMA is outstanding. The caller
+        allocates gpu_y before recording ready_event so the worker cannot write
+        a recycled caller-stream buffer before its previous readers complete.
         """
         with xp.cuda.Device(device_id):
             stream = getattr(self._worker_local, "stream", None)
@@ -527,19 +546,45 @@ class HeterogeneousExpertExecutor:
             host_x = np.frombuffer(in_mem, dtype=x.dtype,
                                    count=int(x.size)).reshape(x.shape)
             stream.wait_event(ready_event)
-            x.get(out=host_x, stream=stream, blocking=False)
-            stream.synchronize()  # CPU must not read before D2H completes.
-            host_y = self._cpu_forward_numpy(key, weights, host_x)
+            with stream:
+                with trace.span("activation_d2h", gpu=True) if trace is not None else nullcontext():
+                    x.get(out=host_x, stream=stream, blocking=False)
+            with trace.span("d2h_wait") if trace is not None else nullcontext():
+                stream.synchronize()  # CPU must not read before D2H completes.
+            host_y = self._run_cpu(key, weights, host_x, trace)
             out_mem = xp.cuda.alloc_pinned_memory(int(host_y.nbytes))
             host_out = np.frombuffer(out_mem, dtype=host_y.dtype,
                                      count=int(host_y.size)).reshape(host_y.shape)
             np.copyto(host_out, host_y)
-            gpu_y = xp.empty(host_y.shape, dtype=x.dtype)
-            gpu_y.set(host_out, stream=stream)
-            stream.synchronize()  # Guarantees host buffer reuse and visibility.
+            with stream:
+                with trace.span("activation_h2d", gpu=True) if trace is not None else nullcontext():
+                    gpu_y.set(host_out, stream=stream)
+            with trace.span("h2d_wait") if trace is not None else nullcontext():
+                stream.synchronize()  # Guarantees host buffer reuse and visibility.
+            if trace is not None:
+                trace.activation_bytes("d2h", x.nbytes)
+                trace.activation_bytes("h2d", gpu_y.nbytes)
             return gpu_y
 
-    def _select(self, layer_id, expert_id, x):
+    def _prepare(self, layer_id, expert_id, x):
+        if self.routing_profiler is None:
+            return (*self._select(layer_id, expert_id, x), None)
+        trace = self.routing_profiler.new_expert(layer_id, expert_id,
+                                                math.prod(x.shape[:-1]))
+        before = dict(self.cache.counters)
+        resident_before = set(self.cache.resident)
+        with trace.span("selection"):
+            key, expert, weights = self._select(layer_id, expert_id, x, trace)
+        trace.selected(key, expert, self.cache, before, resident_before,
+                       cache_enabled=bool(BACKEND_NAME == "cupy" and
+                                          self.cache.device_budget_bytes))
+        return key, expert, weights, trace
+
+    def _materialize(self, weights, trace):
+        with trace.span("promotion", gpu=True) if trace is not None else nullcontext():
+            return self._device_expert(weights)
+
+    def _select(self, layer_id, expert_id, x, trace=None):
         if x.shape[-1] != self.d_model:
             raise ValueError("Expert input has incorrect hidden width")
         key = ExpertKey(self.model_id, int(layer_id), int(expert_id))
@@ -554,7 +599,7 @@ class HeterogeneousExpertExecutor:
                 size = sum(w.nbytes for w in weights)
             else:
                 size = sum(w.size for w in weights) * np.dtype(self.compute_dtype).itemsize
-            expert = self.cache.request(key, size, lambda: self._device_expert(weights))
+            expert = self.cache.request(key, size, lambda: self._materialize(weights, trace))
             if expert is not None:
                 return key, expert, None
         if weights is None:
@@ -570,10 +615,11 @@ class HeterogeneousExpertExecutor:
         """
         if self._pool is None:
             return self.forward(layer_id, expert_id, x)
-        key, expert, weights = self._select(layer_id, expert_id, x)
+        key, expert, weights, trace = self._prepare(layer_id, expert_id, x)
         if expert is not None:
             self.counters["gpu_experts"] += 1
-            output = expert.forward(x)
+            with trace.span("gpu_compute", gpu=True) if trace is not None else nullcontext():
+                output = expert.forward(x)
             self._record_direct_gpu_use(key)
             return output
         self.counters["cpu_submitted"] += 1
@@ -581,11 +627,14 @@ class HeterogeneousExpertExecutor:
             # Record after the gather that produced this expert's activations;
             # a worker stream must wait for this event before reading x.
             device_id = int(xp.cuda.runtime.getDevice())
+            # Pool reuse is stream-ordered. Allocate on the consuming stream
+            # before its ready fence, not later on the worker's default stream.
+            gpu_y = xp.empty(x.shape, dtype=x.dtype)
             ready = xp.cuda.Event(disable_timing=True)
             ready.record(xp.cuda.get_current_stream())
             return self._pool.submit(self._copy_compute_copy, key, weights,
-                                     x, ready, device_id)
-        return self._pool.submit(self._cpu_forward_numpy, key, weights, x)
+                                     x, ready, device_id, gpu_y, trace)
+        return self._pool.submit(self._run_cpu, key, weights, x, trace)
 
     @staticmethod
     def resolve(work):
@@ -594,9 +643,10 @@ class HeterogeneousExpertExecutor:
 
     def forward(self, layer_id: int, expert_id: int, x):
         """Synchronous entry point retained for existing callers."""
-        key, expert, weights = self._select(layer_id, expert_id, x)
+        key, expert, weights, trace = self._prepare(layer_id, expert_id, x)
         if expert is not None:
-            output = expert.forward(x)
+            with trace.span("gpu_compute", gpu=True) if trace is not None else nullcontext():
+                output = expert.forward(x)
             self._record_direct_gpu_use(key)
             return output
-        return self._cpu_forward(key, weights, x)
+        return self._cpu_forward(key, weights, x, trace)

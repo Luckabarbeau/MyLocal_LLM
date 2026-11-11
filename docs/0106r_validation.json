@@ -1,0 +1,199 @@
+{
+  "patch": "0106R",
+  "date": "2026-11-10",
+  "baseline_revision": "f133d3f2bafd47d7edc21b3fdb452a90a347a2db",
+  "status": "guarded_generation_verified_short_cache_comparison_measured",
+  "production_equations_changed": false,
+  "numerical_tolerances_changed": false,
+  "training_or_native_inference_changed": false,
+  "production_defaults_changed": false,
+  "strict_real_model_reference_parity_claimed": false,
+  "strata_new_review_or_execution": false,
+  "prior_strata_source_revision": "504b143342a9fe1aa8320a7b31e11f5c0ac265c3",
+  "files": [
+    "benchmarks/benchmark_0106r_generation.py",
+    "mini_llm/diagnostics/generation_profile.py",
+    "mini_llm/diagnostics/host_memory.py",
+    "tests/test_0106r_generation_benchmark.py",
+    "tests/test_0106r_generation_profile.py",
+    "tests/test_0106r_host_memory.py",
+    "docs/0106r_guarded_generation_profiling.md",
+    "docs/0106r_validation.json"
+  ],
+  "tests": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106r_generation_benchmark.py tests/test_0106r_generation_profile.py tests/test_0106r_host_memory.py",
+      "passed": 137,
+      "failed": 0,
+      "seconds": 0.56
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106*.py tests/test_0080ap_unified_expert_routing.py tests/test_0080ao_deep_top1_moe.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_0085h_gguf_wikitext.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py tests/test_canonical_model_loading_0103c.py",
+      "passed": 1166,
+      "skipped": 79,
+      "failed": 0,
+      "seconds": 8.82,
+      "source_linked_llama_reference_integration_enabled": false
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106j_async_buffer_ownership.py tests/test_0106k_matched_precision.py tests/test_0106l_q6k_packed.py tests/test_0106n_attention_gpu.py tests/test_0106n_recurrent_gpu.py tests/test_0106o_qwen3next_decoder.py tests/test_0106p_embedding_inference.py tests/test_0106p_large_packed_output.py tests/test_0106p_model_memory.py",
+      "passed": 79,
+      "skipped": 193,
+      "failed": 0,
+      "seconds": 9.35
+    }
+  ],
+  "synthetic_generation": {
+    "cpu_command": "MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106r_generation.py --synthetic --context 32 --max-new-tokens 4 --requests 2 --prefill-chunk-tokens 2 --expert-cache-mib 1 --output benchmarks/results/0106r_synthetic_cpu.json",
+    "cuda_command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106r_generation.py --synthetic --context 32 --max-new-tokens 4 --requests 2 --prefill-chunk-tokens 2 --expert-cache-mib 1 --device-budget-mib 512 --device-reserve-mib 2048 --output benchmarks/results/0106r_synthetic_cuda.json",
+    "passed": true,
+    "cpu_cuda_greedy_ids_equal": true,
+    "warm_ids_equal_first": true,
+    "generated_ids": [47, 219, 210, 204],
+    "prompt_tokens": 5,
+    "decode_forward_calls": 3,
+    "per_request_final_state_length": 8
+  },
+  "synthetic_logit_parity": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106p_qwen_model.py --output benchmarks/results/0106r_synthetic_cuda_parity.json",
+    "passed": true,
+    "rtol": 0.0004,
+    "atol": 0.000008,
+    "cuda_dtype": "float32",
+    "full_cpu_float32_max_abs_error": 0.0000021457672119140625,
+    "full_independent_float64_max_abs_error": 0.0000012486889634510945,
+    "prefill_cpu_float32_max_abs_error": 0.0000005960464477539062,
+    "decode_cpu_float32_max_abs_error": 0.0000019073486328125,
+    "real_model_logit_replay_run": false
+  },
+  "real_workload": {
+    "model": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+    "model_bytes": 49608478720,
+    "hardware": "NVIDIA RTX 5080 16 GB",
+    "backend": "cupy",
+    "activations": "float32",
+    "prompt": "def add(a, b):\n    return",
+    "prompt_tokens": 8,
+    "max_new_tokens": 16,
+    "requests_per_process": 2,
+    "context": 64,
+    "cpu_workers": 2,
+    "cpu_packed_backend": "native",
+    "device_pool_limit_bytes": 4294967296,
+    "device_free_reserve_bytes": 2147483648,
+    "host_available_reserve_bytes": 17179869184,
+    "rss_guard_ceiling_bytes": 12884901888,
+    "real_model_processes_run_serially": true,
+    "reference_process_or_full_file_hash_run": false,
+    "full_forward_validation_replay_run": false,
+    "all_four_generated_id_lists_equal": true,
+    "generated_ids": [264, 488, 293, 271, 750, 32256, 2877, 11, 293, 982, 262, 470, 264, 481, 293, 271],
+    "completion": " a + b\n\ndef subtract(a, b):\n    return a - b\n\n",
+    "warm_decode_throughput_improvement_percent": 21.429658603499124,
+    "configurations": [
+      {
+        "cache_mib": 256,
+        "artifact": "benchmarks/results/0106r_real_generation_256.json",
+        "load_ms": 412.37315100443084,
+        "decode_memory_plan_bytes": 3035419136,
+        "private_pool_final_reserved_bytes": 2860093952,
+        "process_peak_rss_gib": 10.627510070800781,
+        "minimum_request_observed_available_ram_gib": 52.84770965576172,
+        "process_final_swap_bytes": 0,
+        "requests": [
+          {
+            "label": "first_use",
+            "first_sampled_token_ms": 9148.671617003856,
+            "prefill_tokens_per_s": 0.8748290939080555,
+            "decode_forward_tokens_per_s": 1.3931208223232754,
+            "completion_tokens_per_s_end_to_end": 0.8029033042499097,
+            "decode_forward_calls": 15,
+            "decode_assignments": 7200,
+            "decode_cache_hits": 946,
+            "decode_cpu_assignments": 5290,
+            "decode_promotions": 964,
+            "decode_evictions": 964,
+            "decode_expert_transferred_bytes": 1834131456
+          },
+          {
+            "label": "warm",
+            "first_sampled_token_ms": 4303.008110000519,
+            "prefill_tokens_per_s": 1.8601730526703355,
+            "decode_forward_tokens_per_s": 1.43780134997632,
+            "completion_tokens_per_s_end_to_end": 1.0847184872994429,
+            "decode_forward_calls": 15,
+            "decode_assignments": 7200,
+            "decode_cache_hits": 1401,
+            "decode_cpu_assignments": 5578,
+            "decode_promotions": 221,
+            "decode_evictions": 221,
+            "decode_expert_transferred_bytes": 420421632,
+            "decode_expert_host_inclusive_ms": 8937.794272,
+            "decode_mixer_host_inclusive_ms": 787.689109,
+            "decode_cpu_worker_overlapping_ms": 13449.994524489739,
+            "decode_resolve_wait_host_ms": 6142.103079546359,
+            "decode_selection_host_ms": 888.8858467689715
+          }
+        ]
+      },
+      {
+        "cache_mib": 1024,
+        "artifact": "benchmarks/results/0106r_real_generation_1024.json",
+        "load_ms": 195.68619699566625,
+        "decode_memory_plan_gib": 3.5769543647766113,
+        "private_pool_final_reserved_gib": 3.463779926300049,
+        "process_peak_rss_gib": 10.674522399902344,
+        "minimum_request_observed_available_ram_gib": 52.60692596435547,
+        "process_final_swap_bytes": 0,
+        "requests": [
+          {
+            "label": "first_use",
+            "first_sampled_token_ms": 2235.1730469963513,
+            "prefill_tokens_per_s": 3.5848287589451884,
+            "decode_forward_tokens_per_s": 1.7643484849238031,
+            "completion_tokens_per_s_end_to_end": 1.4883478353073678,
+            "decode_forward_calls": 15,
+            "decode_assignments": 7200,
+            "decode_cache_hits": 2904,
+            "decode_cpu_assignments": 2613,
+            "decode_promotions": 1683,
+            "decode_evictions": 1684,
+            "decode_expert_transferred_bytes": 3208650752
+          },
+          {
+            "label": "warm",
+            "first_sampled_token_ms": 3651.678024994908,
+            "prefill_tokens_per_s": 2.1922801975200787,
+            "decode_forward_tokens_per_s": 1.745917270672747,
+            "completion_tokens_per_s_end_to_end": 1.3054609584838879,
+            "decode_forward_calls": 15,
+            "decode_assignments": 7200,
+            "decode_cache_hits": 3575,
+            "decode_cpu_assignments": 3052,
+            "decode_promotions": 573,
+            "decode_evictions": 573,
+            "decode_expert_transferred_bytes": 1093427200,
+            "decode_expert_host_inclusive_ms": 7367.071899,
+            "decode_mixer_host_inclusive_ms": 617.96866,
+            "decode_cpu_worker_overlapping_ms": 7928.0962905759225,
+            "decode_resolve_wait_host_ms": 3498.7066728062928,
+            "decode_selection_host_ms": 1717.3180754616624
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "Short single-prompt comparison, not a statistically controlled multi-workload throughput claim",
+    "First use is not disk-cold; page and JIT caches were not cleared",
+    "Warm retains model/cache/history but creates fresh request state; not necessarily steady-state residency",
+    "Host RAM guards are sampled soft checks, not hard OS limits; cgroup ancestors are not inspected",
+    "Recorded memory_plan estimates single-token decode, not multi-token prefill peak workspace",
+    "Private pool observations exclude driver/context/global allocations and are not whole-device peak VRAM",
+    "memory_observation_ms excludes the final out-of-request state-release sample",
+    "Host stage/worker intervals overlap and are not isolated GPU kernel time",
+    "Real quantized independent-reference strict numerical equivalence remains unestablished",
+    "Qwen chat framing, longer contexts, serving load and Qwen3.8/SSD/ngram paths remain unvalidated or deferred"
+  ],
+  "next_experiment": "Matched workload and 1024 MiB cache: compare two versus four native CPU expert workers under the same memory guards, then profile measured selection/admission overhead"
+}

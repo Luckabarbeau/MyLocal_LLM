@@ -572,7 +572,11 @@ class HeterogeneousExpertExecutor:
         trace = self.routing_profiler.new_expert(layer_id, expert_id,
                                                 math.prod(x.shape[:-1]))
         before = dict(self.cache.counters)
-        resident_before = set(self.cache.resident)
+        key = ExpertKey(self.model_id, int(layer_id), int(expert_id))
+        # A plain hit cannot evict anything. Avoid a full cache snapshot/scan
+        # for every observed hit; idle eviction and misses still need it.
+        resident_before = ({key} if key in self.cache.resident and
+                           not self.cache.idle_eviction_requests else set(self.cache.resident))
         with trace.span("selection"):
             key, expert, weights = self._select(layer_id, expert_id, x, trace)
         trace.selected(key, expert, self.cache, before, resident_before,
@@ -635,6 +639,35 @@ class HeterogeneousExpertExecutor:
             return self._pool.submit(self._copy_compute_copy, key, weights,
                                      x, ready, device_id, gpu_y, trace)
         return self._pool.submit(self._run_cpu, key, weights, x, trace)
+
+    def try_forward_grouped(self, layer_id, expert_ids, x, routing_weights, slots):
+        """Batch compatible resident decode experts inside the caller's scope.
+
+        Eligibility is observational: a miss/unsupported layout changes no
+        request counters and falls through to ordinary hybrid dispatch.
+        """
+        if (BACKEND_NAME != "cupy" or not self._dispatch_depth or
+                self.cache.idle_eviction_requests or x.shape[0] != 1):
+            return None
+        from .grouped_quantized_experts import (
+            supports_grouped_quantized_experts, grouped_quantized_experts_forward)
+        keys = tuple(ExpertKey(self.model_id, int(layer_id), int(e)) for e in expert_ids)
+        if not keys or any(key not in self.cache.resident for key in keys):
+            return None
+        experts = [self.cache.resident[key][0] for key in keys]
+        if (any(not isinstance(expert, PackedExpertFFNInference) or not expert.fuse_gate_up
+                for expert in experts) or
+                not supports_grouped_quantized_experts(x, experts, routing_weights)):
+            return None
+        tickets = [self._prepare(layer_id, expert_id, x)[3] for expert_id in expert_ids]
+        trace = tickets[0]
+        # One group interval, not E copies of the same kernel time.
+        with trace.span("grouped_gpu_compute", gpu=True) if trace is not None else nullcontext():
+            output = grouped_quantized_experts_forward(x, experts, routing_weights,
+                                                       routing_slots=slots)
+        self.counters["gpu_experts"] += len(experts)
+        self.counters["grouped_gpu_dispatches"] += 1
+        return output
 
     @staticmethod
     def resolve(work):

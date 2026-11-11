@@ -4,7 +4,7 @@
 import os
 from contextlib import nullcontext
 
-from mini_llm.backend import xp, BACKEND_NAME
+from mini_llm.backend import xp, BACKEND_NAME, asnumpy
 from mini_llm.ops.experts import _fused_swiglu_forward
 from mini_llm.ops.routing_plan import RoutingPlan
 from mini_llm.ops.silu import silu
@@ -88,6 +88,31 @@ class ExpertFFNInference:
         return y
 
 
+class _SingletonRoutingPlan:
+    """Host-only unique decode routes, with the RoutingTrace plan contract."""
+
+    def __init__(self, expert_ids):
+        self.N = 1
+        self.k = len(expert_ids)
+        self.slots = {expert: slot for slot, expert in enumerate(expert_ids)}
+        self._active_experts = tuple(sorted(self.slots))
+
+    @classmethod
+    def from_router_outputs(cls, expert_indices, n_experts):
+        # Read only the selected IDs once, never weights or per-expert scalars.
+        expert_ids = asnumpy(expert_indices).reshape(-1).tolist()
+        if (len(set(expert_ids)) != len(expert_ids)
+                or any(e < 0 or e >= n_experts for e in expert_ids)):
+            return None
+        return cls(expert_ids)
+
+    def active_expert_ids(self):
+        return self._active_experts
+
+    def get_assignment_count(self, expert_idx):
+        return int(expert_idx in self.slots)
+
+
 class ExpertsInference:
     """
     Mixture of Expert FFN layers for inference with sparse evaluation.
@@ -135,10 +160,10 @@ class ExpertsInference:
     def forward(self, x, weights, expert_indices):
         """Sparse inference dispatch matching the training forward semantics.
 
-        Both prompt prefill and one-token decode use the same RoutingPlan-based
-        sparse top-k dispatch.  BF16 decode deliberately avoids the previous
-        all-expert FP32 path because that changes the numerical path relative
-        to the BF16 training forward.
+        Managed one-token decode reuses its input row for unique top-k routes.
+        Native inference, prefill, and repeated IDs retain RoutingPlan dispatch.
+        Both paths reduce in ascending expert order with the same dtype and
+        routing-weight multiply/add boundaries as the training forward.
         """
         batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
@@ -148,10 +173,16 @@ class ExpertsInference:
         weights_flat = weights.reshape(N, k)
         y_flat = xp.zeros((N, d_model), dtype=x.dtype)
 
-        # Group assignments once, exactly as in the training dispatcher.
-        routing_plan = RoutingPlan.from_router_outputs(
-            expert_indices, weights, k, n_experts=self.n_experts
+        singleton_plan = (
+            _SingletonRoutingPlan.from_router_outputs(expert_indices, self.n_experts)
+            if self.expert_executor is not None and N == 1 else None
         )
+        # Repeated IDs need the general dispatcher's indexed-update semantics.
+        routing_plan = singleton_plan
+        if routing_plan is None:
+            routing_plan = RoutingPlan.from_router_outputs(
+                expert_indices, weights, k, n_experts=self.n_experts
+            )
         # Protect selected GPU experts from eviction while their launches and
         # routed reductions are pending. The optional executor records a single
         # CUDA completion event for the MoE layer when this scope exits.
@@ -161,6 +192,13 @@ class ExpertsInference:
         trace_scope = (profiler.layer_scope(self.layer_id, routing_plan, expert_indices, weights)
                        if profiler is not None else nullcontext())
         with trace_scope, scope:
+            grouped = getattr(self.expert_executor, "try_forward_grouped", None)
+            if singleton_plan is not None and grouped is not None:
+                active = singleton_plan.active_expert_ids()
+                output = grouped(self.layer_id, active, x_flat, weights_flat.reshape(-1),
+                                 tuple(singleton_plan.slots[e] for e in active))
+                if output is not None:
+                    return output.reshape(batch_size, seq_len, d_model)
             if self.expert_executor is not None and getattr(
                 self.expert_executor, "overlaps_cpu_gpu", False
             ):
@@ -172,11 +210,19 @@ class ExpertsInference:
                 jobs = []
                 try:
                     for exp_idx in routing_plan.active_expert_ids():
-                        token_indices, _, expert_weights = (
-                            routing_plan.get_expert_assignments(exp_idx)
-                        )
+                        if singleton_plan is not None:
+                            slot = singleton_plan.slots[exp_idx]
+                            token_indices = None
+                            expert_weights = weights_flat[:, slot:slot + 1]
+                            expert_input = x_flat
+                        else:
+                            token_indices, _, expert_weights = (
+                                routing_plan.get_expert_assignments(exp_idx)
+                            )
+                            expert_weights = expert_weights[:, xp.newaxis]
+                            expert_input = x_flat[token_indices]
                         pending = self.expert_executor.submit(
-                            self.layer_id, exp_idx, x_flat[token_indices]
+                            self.layer_id, exp_idx, expert_input
                         )
                         jobs.append((token_indices, expert_weights, pending))
                 except Exception:
@@ -197,7 +243,10 @@ class ExpertsInference:
                         with profiler.wait_scope("resolve_wait") if profiler is not None else nullcontext():
                             expert_out = self.expert_executor.resolve(pending)
                         if error is None:
-                            y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
+                            if singleton_plan is not None:
+                                y_flat += expert_weights * expert_out
+                            else:
+                                y_flat[token_indices] += expert_weights * expert_out
                     except Exception as exc:
                         if error is None:
                             error = exc
@@ -205,15 +254,22 @@ class ExpertsInference:
                     raise error
             else:
                 for exp_idx in routing_plan.active_expert_ids():
-                    token_indices, _, expert_weights = (
-                        routing_plan.get_expert_assignments(exp_idx)
-                    )
-                    if self.expert_executor is None:
-                        expert_out = self.experts[exp_idx].forward(x_flat[token_indices])
-                    else:
+                    if singleton_plan is not None:
+                        slot = singleton_plan.slots[exp_idx]
                         expert_out = self.expert_executor.forward(
-                            self.layer_id, exp_idx, x_flat[token_indices]
+                            self.layer_id, exp_idx, x_flat
                         )
-                    y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
+                        y_flat += weights_flat[:, slot:slot + 1] * expert_out
+                    else:
+                        token_indices, _, expert_weights = (
+                            routing_plan.get_expert_assignments(exp_idx)
+                        )
+                        if self.expert_executor is None:
+                            expert_out = self.experts[exp_idx].forward(x_flat[token_indices])
+                        else:
+                            expert_out = self.expert_executor.forward(
+                                self.layer_id, exp_idx, x_flat[token_indices]
+                            )
+                        y_flat[token_indices] += expert_weights[:, xp.newaxis] * expert_out
 
         return y_flat.reshape(batch_size, seq_len, d_model)

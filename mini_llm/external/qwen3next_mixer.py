@@ -8,6 +8,7 @@ This is only the recurrent token mixer, not a decoder or generation session.
 
 from dataclasses import dataclass
 import math
+import os
 from numbers import Integral, Real
 from typing import Any
 
@@ -158,6 +159,9 @@ class Qwen3NextRecurrentMixerInference:
         mixer.cpu_packed_backend = cpu_packed_backend
         mixer.projection_weights = {}
         mixer._device_projections = {}
+        mixer._graph_decode_enabled = (BACKEND_NAME == 'cupy' and os.environ.get(
+            'MINI_LLM_RECURRENT_GRAPH', '1').lower() in {'1', 'true', 'on', 'yes'})
+        mixer._decode_graph = None
         for suffix in _PROJECTIONS:
             tensor = tensors[suffix]
             kind = tensor.tensor_type.name
@@ -203,6 +207,41 @@ class Qwen3NextRecurrentMixerInference:
 
     def forward(self, hidden, state):
         """Project [B,T,D], mutate only explicit state, and return [B,T,D]."""
+        self._validate_hidden(hidden, 3)
+        if self._graph_decode_enabled and hidden.shape[1] == 1:
+            from mini_llm.ops.causal_conv_inference import CausalConvState
+            from mini_llm.ops.gated_delta_inference import DeltaMixerState, DeltaRuleState
+            from mini_llm.ops.inference_graph import CapturedArrayInference
+            if isinstance(state, DeltaMixerState):
+                mutable = (state.conv.history, state.delta.memory)
+                expected = ((hidden.shape[0], self.spec.conv_kernel_size - 1, self.spec.qkv_channels),
+                            (hidden.shape[0], self.spec.n_value_heads, self.spec.key_dim, self.spec.value_dim))
+                eligible = (hidden.flags.c_contiguous and state.length >= 0 and
+                    (self._decode_graph is None or self._decode_graph.accepts_current_stream()) and
+                    all(isinstance(s.length, Integral) and not isinstance(s.length, bool) and s.length >= 0
+                        for s in (state.conv, state.delta)) and
+                    all(a.shape == shape and a.dtype == xp.float32 and a.flags.c_contiguous
+                        for a, shape in zip(mutable, expected)))
+                if eligible:
+                    if self._decode_graph is None or not self._decode_graph.matches(hidden, mutable):
+                        def enqueue(x, arrays):
+                            scratch = DeltaMixerState(CausalConvState(arrays[0]), DeltaRuleState(arrays[1]))
+                            return self._forward_uncaptured(x, scratch)
+                        # Capture the portable graph: its state arithmetic is
+                        # established, and it creates no global pending-event refs.
+                        fused = self.mixer._decode_fastpath_enabled
+                        self.mixer._decode_fastpath_enabled = False
+                        try:
+                            self._decode_graph = CapturedArrayInference(enqueue, hidden, mutable)
+                        finally:
+                            self.mixer._decode_fastpath_enabled = fused
+                    output = self._decode_graph.forward(hidden, mutable)
+                    state.conv.length = int(state.conv.length) + 1
+                    state.delta.length = int(state.delta.length) + 1
+                    return output
+        return self._forward_uncaptured(hidden, state)
+
+    def _forward_uncaptured(self, hidden, state):
         self._validate_hidden(hidden, 3)
         spec = self.spec
         batch, time = hidden.shape[:2]

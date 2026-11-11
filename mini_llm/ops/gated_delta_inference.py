@@ -14,6 +14,8 @@ from mini_llm.ops.causal_conv_inference import (
     CausalDepthwiseConv1DInference, _float_array, _positive_int,
 )
 from mini_llm.ops.gated_norm_inference import GatedRMSNormInference
+from mini_llm.ops.gated_delta_decode import decode_enabled, try_decode
+from mini_llm.ops.inference_matmul import matmul_inference
 
 
 def l2_normalize(x, eps=1e-6):
@@ -134,10 +136,10 @@ class GatedDeltaRuleInference:
             v = value[:, t].astype(self.state_dtype, copy=False)
             decay = xp.exp(log_decay[:, t].astype(self.state_dtype, copy=False))
             memory *= decay[..., None, None]
-            prediction = xp.matmul(k[..., None, :], memory)[..., 0, :]
+            prediction = matmul_inference(k[..., None, :], memory)[..., 0, :]
             correction = (v - prediction) * beta[:, t].astype(self.state_dtype, copy=False)[..., None]
             memory += k[..., :, None] * correction[..., None, :]
-            readout = xp.matmul((q * self.query_scale)[..., None, :], memory)[..., 0, :]
+            readout = matmul_inference((q * self.query_scale)[..., None, :], memory)[..., 0, :]
             output[:, t] = readout.astype(value.dtype, copy=False)
         state.length = int(state.length) + time
         return output
@@ -192,6 +194,7 @@ class GatedDeltaMixerInference:
             activation="silu", compute_dtype=state_dtype)
         self.norm = GatedRMSNormInference(self.rule.value_dim, eps=rms_eps,
             gate_activation=gate_activation, compute_dtype=state_dtype)
+        self._decode_fastpath_enabled = decode_enabled()
 
     def set_weights(self, conv_weight, norm_weight, conv_bias=None):
         _float_array(norm_weight, "norm_weight")
@@ -226,6 +229,10 @@ class GatedDeltaMixerInference:
         self.rule._validate(*self._split(qkv), log_decay, beta, state.delta)
         if self.norm.norm.gamma is None:
             raise RuntimeError("set_weights must be called before forward")
+        if self._decode_fastpath_enabled:
+            decoded = try_decode(self, qkv, gate, log_decay, beta, state)
+            if decoded is not None:
+                return decoded
         convolved = self.conv.forward(qkv, state.conv)
         query, key, value = self._split(convolved)
         query = l2_normalize(query.astype(self.rule.state_dtype, copy=False), self.l2_eps)

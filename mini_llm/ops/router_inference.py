@@ -4,6 +4,7 @@ import math
 
 from mini_llm.backend import xp
 from mini_llm.ops.router import expert_topk_forward
+from mini_llm.ops.router_decode import decode_enabled, try_normalized_topk
 
 
 class RouterInference:
@@ -26,6 +27,7 @@ class RouterInference:
             raise ValueError("normalization_floor must be finite and positive")
         self.renormalize_selected = renormalize_selected
         self.normalization_floor = float(normalization_floor)
+        self._decode_fastpath_enabled = decode_enabled()
         self.W_router = None
         self.b_router = None
 
@@ -39,6 +41,10 @@ class RouterInference:
         logits = (x2 @ self.W_router + self.b_router).reshape(
             batch_size, seq_len, self.n_experts
         )
+        if self.renormalize_selected and self._decode_fastpath_enabled and x.dtype == xp.float32:
+            decoded = try_normalized_topk(logits, self.k, self.normalization_floor)
+            if decoded is not None:
+                return decoded
         weights, indices, _ = expert_topk_forward(
             logits, self.k,
             output_dtype=None if self.renormalize_selected else x.dtype,

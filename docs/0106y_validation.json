@@ -1,0 +1,146 @@
+{
+  "patch": "0106Y",
+  "base_revision": "cbd41e463154f924e3d7441224d5d496baaf1d9b",
+  "delivery": "Incremental working-tree changes, no commit or branch",
+  "strata_source": {
+    "repository": "https://github.com/Niko1221/Strata",
+    "revision": "6c642df7530a5a4ba2f6ae52deaa5be436271195",
+    "commit_timestamp_utc": "2026-11-11T06:43:08Z",
+    "inspection_only": true,
+    "upstream_code_or_release_binaries_executed": false,
+    "relevant_paths": [
+      "docs/DETAILS.md", "docs/EXPERTDEC.md", "src/core/verify.cpp",
+      "src/core/graph.cpp", "src/kernels/cuda/verify_kernels.cu",
+      "src/kernels/cuda/s2_expert_grouped.cu", "src/kernels/cuda/iq_kernels.cu",
+      "include/strata/kernels/s2_expert_grouped.hpp"
+    ]
+  },
+  "defaults": {
+    "eligible_cupy_qwen3next_recurrent_graphs": true,
+    "explicit_graph_opt_out": "MINI_LLM_RECURRENT_GRAPH=0",
+    "alternate_caller_stream": "Eager fallback, not unsafe graph scratch reuse",
+    "executor_indexed_routing_slots": true
+  },
+  "changed_files": [
+    "mini_llm/external/qwen3next_mixer.py",
+    "mini_llm/ops/inference_graph.py",
+    "mini_llm/ops/grouped_quantized_experts.py",
+    "mini_llm/ops/expert_residency.py",
+    "tests/test_0106w_recurrent_graph.py",
+    "tests/test_0106t_grouped_dispatch.py",
+    "tests/test_0106t_grouped_quantized_experts.py",
+    "tests/test_0106y_indexed_routes.py",
+    "benchmarks/benchmark_0106y_grouped_dispatch.py"
+  ],
+  "tests": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106y_indexed_routes.py tests/test_0106x_inference_matmul.py tests/test_0106w_recurrent_graph.py tests/test_0106u_shared_swiglu.py tests/test_0106u_fp32_rmsnorm.py tests/test_0106u_gated_delta_decode.py tests/test_0106t_grouped_dispatch.py tests/test_0106t_grouped_quantized_experts.py tests/test_0106s_singleton_dispatch.py tests/test_0106s_hit_trace_cost.py tests/test_0106v_router_decode.py tests/test_0106o_router_inference.py tests/test_0106i_routing_trace.py tests/test_0106j_async_buffer_ownership.py tests/test_0106n_recurrent_gpu.py tests/test_0106p_model_benchmark.py tests/test_0106r_generation_benchmark.py tests/test_0106r_generation_profile.py",
+      "passed": 385,
+      "skipped": 11,
+      "failed": 0,
+      "duration_s": 8.40
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106*.py tests/test_0080ap_unified_expert_routing.py tests/test_0080ao_deep_top1_moe.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_0085h_gguf_wikitext.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py tests/test_canonical_model_loading_0103c.py",
+      "passed": 1346,
+      "skipped": 177,
+      "failed": 0,
+      "duration_s": 9.35
+    }
+  ],
+  "microbenchmark": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106y_grouped_dispatch.py --output benchmarks/results/0106y_grouped_dispatch.json",
+    "d_model": 2048,
+    "d_ff": 512,
+    "experts": 10,
+    "formats": ["Q4_K", "Q4_K", "Q6_K"],
+    "iterations": 50,
+    "max_abs_error": 0,
+    "materialized": {
+      "enqueue_ms": 0.14504762017168105,
+      "completion_ms": 0.1481314201373607,
+      "event_ms": 0.14478976249694825,
+      "kernel_graph_event_ms": 0.07353343963623046
+    },
+    "indexed": {
+      "enqueue_ms": 0.10755455994512886,
+      "completion_ms": 0.10836012021172792,
+      "event_ms": 0.10489791870117188,
+      "kernel_graph_event_ms": 0.08181952476501465
+    },
+    "scope": "Synthetic, not model throughput. Replay excludes metadata preparation/allocation; CUDA events still include scheduling gaps. Indexed replay is slower in this measurement."
+  },
+  "real_model": {
+    "model_path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+    "device": "NVIDIA GeForce RTX 5080",
+    "prompt": "def add(a, b):\n    return",
+    "prompt_tokens": 8,
+    "new_tokens": 16,
+    "decode_calls_per_request": 15,
+    "requests_per_run": 2,
+    "context": 64,
+    "profile_mode": "summary routing plus inclusive host stages",
+    "speculation": false,
+    "expert_cache_mib": 8192,
+    "main_device_pool_limit_mib": 12288,
+    "device_reserve_mib": 2048,
+    "host_reserve_mib": 16384,
+    "observational_rss_guard_mib": 12288,
+    "before": {
+      "artifact": "benchmarks/results/0106y_before_indexed_routes.json",
+      "graph_environment": "MINI_LLM_RECURRENT_GRAPH=1",
+      "warm_decode_tokens_per_s": 21.525265751523047,
+      "warm_decode_mean_ms": 46.45703386631794,
+      "warm_end_to_end_tokens_per_s": 14.236737252640308,
+      "peak_rss_bytes": 11457130496
+    },
+    "after": {
+      "artifact": "benchmarks/results/0106y_default_indexed_routes.json",
+      "graph_environment": "Unset; default enabled",
+      "warm_decode_tokens_per_s": 21.48964453829179,
+      "warm_decode_mean_ms": 46.53404099905553,
+      "warm_end_to_end_tokens_per_s": 14.174692324527308,
+      "peak_rss_bytes": 11493965824,
+      "graphs": 36,
+      "combined_private_pools_reserved_bytes": 9088803328
+    },
+    "all_four_requests_match_baseline_ids": true,
+    "token_ids": [264, 488, 293, 271, 750, 32256, 2877, 11, 293, 982, 262, 470, 264, 481, 293, 271],
+    "each_warm_decode": {
+      "gpu_hit_assignments": 7200,
+      "routed_assignments": 7200,
+      "cpu_expert_assignments": 0,
+      "transferred_expert_bytes": 0,
+      "promoted_experts": 0,
+      "evicted_experts": 0
+    },
+    "conclusion": "Effectively flat end-to-end speed; no decode gain from indexed routes established. Default graph improvement was established in 0106X.",
+    "final_source_scope": "Real-model run preceded stream-eligibility safeguard; final alternate-stream fallback covered by final CUDA suite. Single-stream arithmetic/path unchanged."
+  },
+  "synthetic_default_parity": {
+    "command": "MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106p_qwen_model.py --max-new-tokens 4 --context 32 --expert-cache-mib 16 --device-budget-mib 512 --device-reserve-mib 2048 --output benchmarks/results/0106y_default_synthetic_parity.json",
+    "passed": true,
+    "rtol": 0.0004,
+    "atol": 0.000008,
+    "prefill_cpu_max_abs_error": 7.152557373046875e-7,
+    "largest_decode_cpu_max_abs_error": 2.086162567138672e-6,
+    "full_cpu_max_abs_error": 1.7881393432617188e-6,
+    "full_independent_fp64_max_abs_error": 1.6435697358235801e-6,
+    "matched_greedy_ids": [48, 28, 55, 9]
+  },
+  "user_reported_performance_targets": {
+    "model": "Qwen3.8-Flash-Next, reportedly more active parameters than installed Qwen-Coder 80B",
+    "q3_decode_tokens_per_s": 80,
+    "q4_decode_tokens_per_s_range": [30, 40],
+    "independently_reproduced_here": false
+  },
+  "remaining": [
+    "30 tokens/s not reached",
+    "Persistent GPU expert directory and stable expert scratch/graph replay not implemented",
+    "No route-readback removal or activation quantization",
+    "Short repeated all-hit workload is favorable, not representative production locality",
+    "Separate graph pools remain outside main pool hard cap",
+    "Uninstrumented serving baseline should be measured separately",
+    "No full-repository CUDA run or strict independent real-model reference parity"
+  ]
+}

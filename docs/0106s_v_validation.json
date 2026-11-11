@@ -1,0 +1,113 @@
+{
+  "patches": ["0106S", "0106T", "0106U", "0106V"],
+  "date": "2026-11-11",
+  "baseline_revision": "cbd41e463154f924e3d7441224d5d496baaf1d9b",
+  "status": "verified_short_workload_improved_to_20_19_tps_experimental_graph_unresolved",
+  "target_decode_tokens_per_s": 30,
+  "target_reached": false,
+  "numerical_tolerances_weakened": false,
+  "training_backend_replaced": false,
+  "speculative_decoding": false,
+  "real_model_reference_or_logit_replay_run": false,
+  "model": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+  "hardware": "RTX 5080 16 GB",
+  "workload": {
+    "prompt": "def add(a, b):\n    return",
+    "prompt_tokens": 8,
+    "generated_tokens": 16,
+    "decode_forward_calls": 15,
+    "requests_per_process": 2,
+    "context": 64,
+    "expert_cache_mib": 8192,
+    "device_private_pool_limit_mib": 12288,
+    "free_vram_reserve_mib": 2048,
+    "host_ram_reserve_mib": 16384,
+    "rss_soft_ceiling_mib": 12288,
+    "cpu_workers": 2,
+    "profiling": "summary plus inclusive host stages",
+    "all_warm_decode_assignments_gpu_hits": true,
+    "warm_decode_assignments": 7200,
+    "warm_decode_expert_upload_bytes": 0,
+    "all_generated_ids_match_baseline": true,
+    "generated_ids": [264, 488, 293, 271, 750, 32256, 2877, 11, 293, 982, 262, 470, 264, 481, 293, 271]
+  },
+  "progression": [
+    {"stage": "8GiB baseline", "artifact": "benchmarks/results/0106s_baseline_cache8192.json", "first_decode_tps": 3.0678428592893736, "warm_decode_tps": 3.2304515992668774},
+    {"stage": "singleton dispatch", "artifact": "benchmarks/results/0106s_singleton_cache8192.json", "first_decode_tps": 3.638469059210049, "warm_decode_tps": 3.6941731347035325},
+    {"stage": "constant-cost hit tracing", "artifact": "benchmarks/results/0106s_hit_trace_cache8192.json", "first_decode_tps": 5.538881278537234, "warm_decode_tps": 8.621649135723748},
+    {"stage": "grouped packed experts", "artifact": "benchmarks/results/0106t_grouped_cache8192.json", "first_decode_tps": 5.2468478545272355, "warm_decode_tps": 11.434435268284629},
+    {"stage": "recurrent RMSNorm shared fusion", "artifact": "benchmarks/results/0106u_fused_cache8192.json", "first_decode_tps": 7.069287935169102, "warm_decode_tps": 17.182774042780824},
+    {"stage": "normalized router fusion", "artifact": "benchmarks/results/0106v_router_cache8192.json", "first_decode_tps": 7.752527565342801, "warm_decode_tps": 20.193267611805066}
+  ],
+  "latest_verified_model_measurement": {
+    "warm_mean_forward_ms": 49.52145532976525,
+    "private_pool_reserved_bytes": 8989087744,
+    "reported_process_peak_rss_bytes": 11421093888,
+    "host_inclusive_stage_ms_per_token": {
+      "norm1": 0.7431845333333332,
+      "mixer": 17.012769666666667,
+      "norm2": 0.6271593333333333,
+      "router": 2.0254551333333333,
+      "experts": 19.469450133333332,
+      "moe": 28.78093266666667
+    },
+    "stage_times_nested_not_additive": true,
+    "isolated_gpu_kernel_times_claimed": false,
+    "measurement_precedes_experimental_W_wrapper": true
+  },
+  "focused_tests": [
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106u_shared_swiglu.py tests/test_0106u_fp32_rmsnorm.py tests/test_0106u_gated_delta_decode.py tests/test_0106t_grouped_dispatch.py tests/test_0106t_grouped_quantized_experts.py tests/test_0106s_singleton_dispatch.py tests/test_0106s_hit_trace_cost.py tests/test_0106i_routing_trace.py tests/test_0106j_async_buffer_ownership.py",
+      "passed": 206, "skipped": 10, "failed": 0, "seconds": 3.62
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106v_router_decode.py tests/test_0106o_router_inference.py",
+      "passed": 43, "failed": 0, "seconds": 0.78,
+      "initial_failure": "NVRTC could not open math.h",
+      "localized_correction": "Remove header dependency; construct NaN/infinity with CUDA intrinsics"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106v_router_decode.py tests/test_0106o_router_inference.py",
+      "passed": 20, "skipped": 23, "failed": 0, "seconds": 0.12
+    }
+  ],
+  "numerical_evidence": {
+    "grouped_default_tile_vs_sequential_gpu": "bitwise equal for tested quantization formats",
+    "fp32_rmsnorm_max_abs_vs_fp32": 2.38e-7,
+    "fp32_rmsnorm_max_abs_vs_fp64": 7.27e-7,
+    "nine_step_recurrent_128_output_max_abs_vs_fp32": 1.43e-6,
+    "nine_step_recurrent_128_output_max_abs_vs_fp64": 1.69e-6,
+    "nine_step_recurrent_128_memory_max_abs_vs_fp32": 1.49e-8,
+    "nine_step_recurrent_128_memory_max_abs_vs_fp64": 4.00e-8,
+    "raw_convolution_history_exact": true,
+    "router_selected_ids_exact_in_tests": true,
+    "router_probability_rtol": 2e-7,
+    "router_probability_atol": 2e-7,
+    "strict_real_model_independent_reference_parity": null
+  },
+  "experimental_0106W": {
+    "status": "unresolved_not_part_of_verified_speedup",
+    "enabled_by_default": false,
+    "enable_environment": "MINI_LLM_RECURRENT_GRAPH=1",
+    "files": ["mini_llm/ops/inference_graph.py", "mini_llm/external/qwen3next_mixer.py", "tests/test_0106w_recurrent_graph.py"],
+    "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -x -q -p no:cacheprovider tests/test_0106w_recurrent_graph.py",
+    "passed": 2, "skipped": 1, "failed": 1,
+    "failing_test": "test_full_tiny_hybrid_model_graph_parity_reset_fork_and_new_requests",
+    "failure_type": "NotImplementedError",
+    "failure_message": "calling cuBLAS API during stream capture is currently unsupported",
+    "failure_path": "Qwen3NextRecurrentMixerInference._forward_uncaptured -> project_gguf_linear -> hidden @ weight.T -> CuPy cuBLAS capture rejection",
+    "known_working": ["isolated private array graph replay", "capture/warmup leaves caller state unchanged", "allocation failure leaves caller state unchanged"],
+    "why_no_local_retry": "Dense projections and portable recurrent matmuls both invoke cuBLAS; correcting only the first call would not establish a complete capture-compatible path",
+    "next_experiment": "Implement capture-compatible FP32 dense projection and capture-safe recurrent primitives, then rerun the exact tiny-model graph test before benchmarking a real model"
+  },
+  "limitations": [
+    "30 tokens/s not reached",
+    "Experimental W test still fails; complete test success is not claimed",
+    "No new full-repository regression run after these optimizations",
+    "Short repeated prompt has unusually favorable all-resident warm routing",
+    "First-use times are not comparable disk-cold starts",
+    "RAM guards are soft observations, not hard OS limits",
+    "Private pool figures are not whole-process VRAM usage",
+    "Longer/new-prompt CPU misses and long-horizon numerical behavior remain to be measured"
+  ]
+}

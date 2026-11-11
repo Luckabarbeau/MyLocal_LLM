@@ -308,6 +308,12 @@ def main(argv=None):
             if pool is not None:
                 report.update(pool_reserved_bytes=int(pool.total_bytes()), pool_used_bytes=int(pool.used_bytes()),
                               pool_limit_bytes=int(pool.get_limit()))
+                graphs = [dict(layer_id=block.layer_id, **block.mixer._decode_graph.statistics())
+                          for block in model.blocks if getattr(block.mixer, '_decode_graph', None) is not None]
+                report['recurrent_graphs'] = graphs
+                report['graph_pool_reserved_bytes'] = sum(g['pool_reserved_bytes'] for g in graphs)
+                report['combined_private_pools_reserved_bytes'] = (
+                    report['pool_reserved_bytes'] + report['graph_pool_reserved_bytes'])
     except Exception as exc:
         report.update(status='host_memory_guard_stopped' if isinstance(exc, host.MemoryBudgetError) else 'failed',
                       failed=True, failure=dict(stage=stage, type=type(exc).__name__, message=str(exc)),

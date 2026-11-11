@@ -1,0 +1,139 @@
+{
+  "patch": "0106X",
+  "base_revision": "cbd41e463154f924e3d7441224d5d496baaf1d9b",
+  "delivery": "Incremental working-tree changes; no commit or branch",
+  "status": "Verified within recorded CPU/CUDA scopes; recurrent graphs remain opt-in",
+  "changes": [
+    "mini_llm/ops/inference_matmul.py",
+    "tests/test_0106x_inference_matmul.py",
+    "mini_llm/external/gguf_projection.py",
+    "mini_llm/ops/gated_delta_inference.py",
+    "benchmarks/benchmark_0106r_generation.py"
+  ],
+  "prior_0106w_components_validated": [
+    "mini_llm/ops/inference_graph.py",
+    "mini_llm/external/qwen3next_mixer.py",
+    "tests/test_0106w_recurrent_graph.py"
+  ],
+  "tests": [
+    {
+      "backend": "cupy",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106x_inference_matmul.py tests/test_0106w_recurrent_graph.py tests/test_0106u_shared_swiglu.py tests/test_0106u_fp32_rmsnorm.py tests/test_0106u_gated_delta_decode.py tests/test_0106t_grouped_dispatch.py tests/test_0106t_grouped_quantized_experts.py tests/test_0106s_singleton_dispatch.py tests/test_0106s_hit_trace_cost.py tests/test_0106v_router_decode.py tests/test_0106o_router_inference.py tests/test_0106i_routing_trace.py tests/test_0106j_async_buffer_ownership.py tests/test_0106n_recurrent_gpu.py tests/test_0106p_model_benchmark.py",
+      "passed": 297,
+      "skipped": 11,
+      "failed": 0,
+      "duration_s": 7.66
+    },
+    {
+      "backend": "numpy",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B -m pytest -q -p no:cacheprovider tests/test_0106*.py tests/test_0080ap_unified_expert_routing.py tests/test_0080ao_deep_top1_moe.py tests/test_0085b_external_llama.py tests/test_0085c_external_safetensors.py tests/test_0085f_external_gguf.py tests/test_0085g_gguf_tokenizer.py tests/test_0085h_gguf_wikitext.py tests/test_moe_experts.py tests/test_moe_router.py tests/test_topk.py tests/test_generation_session_0103e.py tests/test_inference_policy_0103d.py tests/test_inference_rope_base.py tests/test_rmsnorm_inference.py tests/test_native_dual_cuda_graph_decode.py tests/test_canonical_model_loading_0103c.py",
+      "passed": 1337,
+      "skipped": 159,
+      "failed": 0,
+      "duration_s": 9.06
+    }
+  ],
+  "corrected_failures": [
+    {
+      "scope": "Direct compiled Triton launch",
+      "failure": "IndexError: tuple index out of range",
+      "cause": "Direct compiled launch requires a three-dimensional grid",
+      "localized_correction": "grid = (N, batch_count, 1)",
+      "retest": "X/W CUDA: 28 passed, 1 skipped"
+    },
+    {
+      "scope": "Nine shared-SwiGLU injected-NumPy fallback tests under CuPy",
+      "failure": "TypeError: Argument 'a' has incorrect type (expected cupy ndarray, got numpy.ndarray)",
+      "cause": "Projection backend was intentionally injected as NumPy while imported matmul helper retained CuPy",
+      "localized_correction": "Use matmul_inference only for CUDA-array dense projections; retain hidden @ weight.T fallback",
+      "retest": "Exact broader CUDA command: 297 passed, 11 skipped"
+    }
+  ],
+  "synthetic_parity": {
+    "command": "MINI_LLM_RECURRENT_GRAPH=1 MINI_LLM_BACKEND=cupy OPENBLAS_NUM_THREADS=1 .venv/bin/python -B benchmarks/benchmark_0106p_qwen_model.py --max-new-tokens 4 --context 32 --expert-cache-mib 16 --device-budget-mib 512 --device-reserve-mib 2048 --output benchmarks/results/0106x_synthetic_graph_parity.json",
+    "passed": true,
+    "non_default_stream": true,
+    "rtol": 0.0004,
+    "atol": 0.000008,
+    "prefill_cpu_max_abs_error": 7.152557373046875e-7,
+    "decode_cpu_largest_max_abs_error": 2.086162567138672e-6,
+    "full_cpu_max_abs_error": 1.7881393432617188e-6,
+    "full_independent_fp64_max_abs_error": 1.6435697358235801e-6,
+    "matched_greedy_ids": [48, 28, 55, 9],
+    "scope": "Tiny synthetic model; not independent real-GGUF reference parity"
+  },
+  "real_model": {
+    "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
+    "device": "NVIDIA GeForce RTX 5080",
+    "prompt": "def add(a, b):\n    return",
+    "prompt_tokens": 8,
+    "new_tokens": 16,
+    "context": 64,
+    "requests_per_configuration": 2,
+    "decode_forward_calls_per_request": 15,
+    "expert_cache_mib": 8192,
+    "main_pool_limit_mib": 12288,
+    "device_reserve_mib": 2048,
+    "host_available_reserve_mib": 16384,
+    "observational_rss_guard_mib": 12288,
+    "cpu_workers": 2,
+    "speculative_decoding": false,
+    "all_four_request_ids_match_baseline": true,
+    "token_ids": [264, 488, 293, 271, 750, 32256, 2877, 11, 293, 982, 262, 470, 264, 481, 293, 271],
+    "ordinary": {
+      "artifact": "benchmarks/results/0106x_eager_cache8192.json",
+      "first_use_decode_tokens_per_s": 6.786707416789063,
+      "warm_decode_tokens_per_s": 19.38546,
+      "warm_end_to_end_tokens_per_s": 13.5015,
+      "warm_first_sample_ms": 399.627,
+      "main_pool_reserved_bytes": 8925934080,
+      "peak_rss_bytes": 11471704064,
+      "warm_decode_stage_host_ms_per_token": {
+        "mixer": 17.411138,
+        "router": 2.086778,
+        "experts": 20.865771,
+        "moe_inclusive": 30.38168
+      }
+    },
+    "recurrent_graph": {
+      "artifact": "benchmarks/results/0106x_graph_cache8192.json",
+      "enable_environment": "MINI_LLM_RECURRENT_GRAPH=1",
+      "default_enabled": false,
+      "first_use_decode_tokens_per_s": 7.34239,
+      "warm_decode_tokens_per_s": 21.974489930612837,
+      "warm_decode_mean_ms": 45.50731339647124,
+      "warm_end_to_end_tokens_per_s": 14.500822897500312,
+      "warm_first_sample_ms": 408.7468440120574,
+      "graphs": 36,
+      "main_pool_reserved_bytes": 8923836928,
+      "graph_pool_reserved_bytes": 164966400,
+      "combined_private_pools_reserved_bytes": 9088803328,
+      "peak_rss_bytes": 11448328192,
+      "warm_decode_stage_host_ms_per_token": {
+        "mixer": 9.662329,
+        "router": 2.059013,
+        "experts": 22.587668,
+        "moe_inclusive": 32.17777
+      }
+    },
+    "each_warm_decode": {
+      "expert_assignments": 7200,
+      "gpu_hit_assignments": 7200,
+      "cpu_expert_assignments": 0,
+      "promoted_experts": 0,
+      "evicted_experts": 0,
+      "transferred_expert_bytes": 0
+    }
+  },
+  "limitations": [
+    "30 decode tokens/s not reached",
+    "Short repeated prompt with perfect warm expert hit rate; not representative of new/long workloads",
+    "Single runs without run-to-run confidence intervals",
+    "Inclusive nested host times are not additive or isolated GPU compute times",
+    "Separate graph private pools are outside main pool cap; no aggregate hard graph-pool budget",
+    "Graph replay is opt-in, serial and bound to one stream",
+    "No fresh full-repository CUDA suite or strict real-GGUF llama.cpp reference parity",
+    "No fair matched Strata comparison performed"
+  ],
+  "next_experiment": "Warmed grouped packed-expert microbenchmark separating host dispatch from CUDA-event compute time at actual Qwen shapes before modifying kernels"
+}

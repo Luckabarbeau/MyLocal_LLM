@@ -10,9 +10,7 @@ from mini_llm.backend import dtype_name, xp
 from mini_llm.ops.experts_inference import ExpertsInference
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS
 from mini_llm.ops.router_inference import RouterInference
-from mini_llm.ops.silu import silu
-
-from .gguf_projection import project_gguf_linear
+from .gguf_projection import project_gguf_linear, project_gguf_swiglu
 from .qwen3next_gguf import _meta, _shape
 from .qwen3next_mixer import _positive_integer
 
@@ -137,9 +135,13 @@ class Qwen3NextMoEInference:
             return xp.empty_like(hidden)
         weights, ids = self.router.forward(hidden)
         routed = self.experts.forward(hidden, weights, ids)
-        gate = self._project(hidden, 'ffn_gate_shexp.weight')
-        up = self._project(hidden, 'ffn_up_shexp.weight')
-        shared = self._project(silu(gate) * up, 'ffn_down_shexp.weight')
+        gate, up = _SHARED[:2]
+        shared_hidden = project_gguf_swiglu(
+            hidden, self.index, f'blk.{self.layer_id}.' + gate,
+            f'blk.{self.layer_id}.' + up,
+            self.projection_weights, self._device_projections, gate, up,
+            cpu_packed_backend=self.cpu_packed_backend)
+        shared = self._project(shared_hidden, 'ffn_down_shexp.weight')
         admission = hidden @ self.shared_gate
         sigmoid = xp.exp(-xp.logaddexp(xp.float32(0), -admission))
         return routed + shared * sigmoid[..., None]

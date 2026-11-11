@@ -4,6 +4,7 @@ The CuPy/float16 path uses a fused CUDA kernel.  Values stay in FP16 in
 memory, while the sum-of-squares reduction and normalization arithmetic are
 performed in FP32 registers/shared memory.  This avoids materializing full
 FP32 copies of the activation tensor during autoregressive inference.
+Contiguous CuPy FP32 inputs/weights also use a single row-wise CUDA kernel.
 """
 
 import os
@@ -15,6 +16,7 @@ from mini_llm.backend import (
 
 
 _FUSED_FP16_RMSNORM_KERNEL = None
+_FUSED_FP32_RMSNORM_KERNEL = None
 _FUSED_RESIDUAL_RMSNORM_MODULE = None
 _FUSED_RESIDUAL_RMSNORM_DISABLED = False
 
@@ -73,6 +75,62 @@ void rmsnorm_fp16_fused(
     }
 }
 """
+
+
+_FUSED_FP32_RMSNORM_SOURCE = r"""
+extern "C" __global__
+void rmsnorm_fp32_fused(
+    const float* __restrict__ x,
+    const float* __restrict__ gamma,
+    float* __restrict__ y,
+    const int d_model,
+    const float eps)
+{
+    const int tid = (int)threadIdx.x;
+    const long long base = (long long)blockIdx.x * d_model;
+    float sum_sq = 0.0f;
+    for (long long col = tid; col < d_model; col += blockDim.x) {
+        const float value = x[base + col];
+        sum_sq += value * value;
+    }
+
+    for (int offset = 16; offset > 0; offset >>= 1)
+        sum_sq += __shfl_down_sync(0xffffffffu, sum_sq, offset);
+    __shared__ float warp_sums[8];
+    const int lane = tid & 31;
+    const int warp = tid >> 5;
+    if (lane == 0) warp_sums[warp] = sum_sq;
+    __syncthreads();
+    if (warp == 0) {
+        sum_sq = lane < 8 ? warp_sums[lane] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1)
+            sum_sq += __shfl_down_sync(0xffffffffu, sum_sq, offset);
+        if (lane == 0) {
+            // Match the reference graph, not an rsqrt or scaled-square variant.
+            const float mean_sq = __fdiv_rn(sum_sq, (float)d_model);
+            warp_sums[0] = __fdiv_rn(1.0f, __fsqrt_rn(mean_sq + eps));
+        }
+    }
+    __syncthreads();
+    const float inv_rms = warp_sums[0];
+    for (long long col = tid; col < d_model; col += blockDim.x)
+        y[base + col] = (x[base + col] * inv_rms) * gamma[col];
+}
+"""
+
+
+def _get_fused_fp32_rmsnorm_kernel():
+    """Compile/cache the FP32 kernel; RawKernel launches on the current stream."""
+    global _FUSED_FP32_RMSNORM_KERNEL
+    if BACKEND_NAME != "cupy":
+        return None
+    if _FUSED_FP32_RMSNORM_KERNEL is None:
+        _FUSED_FP32_RMSNORM_KERNEL = xp.RawKernel(
+            _FUSED_FP32_RMSNORM_SOURCE,
+            "rmsnorm_fp32_fused",
+            options=("-std=c++11", "--fmad=false"),
+        )
+    return _FUSED_FP32_RMSNORM_KERNEL
 
 
 _FUSED_RESIDUAL_RMSNORM_SOURCE = r"""
@@ -251,8 +309,9 @@ class RMSNormInference:
 
     On CuPy with FP16 input and FP16 gamma, the default path is a fused CUDA
     kernel that keeps tensors in FP16 memory but performs the reduction and
-    normalization arithmetic in FP32.  The NumPy path, FP32 path, and unusual
-    dtype/layout cases retain the reference implementation.
+    normalization arithmetic in FP32. Contiguous CuPy FP32 inputs with FP32
+    weights use a fused FP32 kernel. The NumPy path and unusual dtype/layout
+    cases retain the reference implementation.
     """
 
     _FUSED_THREADS = 256
@@ -277,6 +336,8 @@ class RMSNormInference:
             BACKEND_NAME == "cupy"
             and disable_fused.lower() not in {"1", "true", "yes", "on"}
         )
+
+        self._fused_fp32_enabled = self._fused_fp16_enabled
 
         # Will be set externally from the training model.
         self.gamma = None
@@ -322,6 +383,32 @@ class RMSNormInference:
                 _np.int32(self.d_model),
                 _np.float32(self.eps),
             ),
+        )
+        return y
+
+    def _can_use_fused_fp32(self, x):
+        """Only accept the contiguous FP32 row/vector contract; never copy views."""
+        if not self._fused_fp32_enabled or BACKEND_NAME != "cupy":
+            return False
+        if not isinstance(x, xp.ndarray) or not isinstance(self.gamma, xp.ndarray):
+            return False
+        if x.dtype != xp.float32 or self.gamma.dtype != xp.float32:
+            return False
+        if x.ndim == 0 or self.d_model <= 0 or x.size == 0:
+            return False
+        if x.shape[-1] != self.d_model or self.gamma.shape != (self.d_model,):
+            return False
+        if not x.flags.c_contiguous or not self.gamma.flags.c_contiguous:
+            return False
+        return self.d_model <= 2147483647 and x.size // self.d_model <= 2147483647
+
+    def _forward_fused_fp32(self, x):
+        """FP32 square/mean/sqrt/reciprocal/scale with one block per row."""
+        y = xp.empty_like(x)
+        _get_fused_fp32_rmsnorm_kernel()(
+            (int(x.size // self.d_model),),
+            (self._FUSED_THREADS,),
+            (x, self.gamma, y, _np.int32(self.d_model), _np.float32(self.eps)),
         )
         return y
 
@@ -408,7 +495,7 @@ class RMSNormInference:
         return residual_out, self.forward_residual(residual_out)
 
     def _forward_reference(self, x):
-        """Portable/reference implementation used outside the fused FP16 path."""
+        """Portable/reference implementation used outside the fused paths."""
         input_dtype = x.dtype
 
         if is_low_precision_dtype(input_dtype):
@@ -447,4 +534,6 @@ class RMSNormInference:
         """
         if self._can_use_fused_fp16(x):
             return self._forward_fused_fp16(x)
+        if self._can_use_fused_fp32(x):
+            return self._forward_fused_fp32(x)
         return self._forward_reference(x)

@@ -35,6 +35,13 @@ try:
 except ImportError as exc:
     raise RuntimeError("0102C Triton kernels require Triton") from exc
 
+from ..backend import BACKEND_NAME, xp
+
+# HIP does not accept NVIDIA's tf32x3 mode. Preserve FP32 semantics for the
+# generic compressor/reference branch; Model B's BF16 dots are unaffected.
+_FP32_DOT_PRECISION = tl.constexpr(
+    'ieee' if BACKEND_NAME == 'cupy' and xp.cuda.runtime.is_hip else 'tf32x3'
+)
 _LOG2E = 1.4426950408889634
 _D = 64
 _BM = 32
@@ -166,7 +173,7 @@ def _forward(
                 scores = tl.dot(q, tl.trans(k)) * SCALE_LOG2
             else:
                 scores = tl.dot(q.to(tl.float32), tl.trans(k.to(tl.float32)),
-                                input_precision='tf32x3') * SCALE_LOG2
+                                input_precision=_FP32_DOT_PRECISION)*SCALE_LOG2
             scores = tl.where(allowed, scores, -float('inf'))
             new_maximum = tl.maximum(maximum, tl.max(scores, axis=1))
             safe_maximum = tl.where(new_maximum == -float('inf'), 0., new_maximum)
@@ -179,7 +186,7 @@ def _forward(
                 accumulator = tl.dot(p.to(tl.bfloat16), v, accumulator)
             else:
                 accumulator = tl.dot(p, v.to(tl.float32), accumulator,
-                                     input_precision='tf32x3')
+                                     input_precision=_FP32_DOT_PRECISION)
             maximum = new_maximum
     nonempty = denominator > 0.
     result = accumulator / tl.where(nonempty[:,None], denominator[:,None], 1.)
@@ -270,14 +277,14 @@ def _dq(
                 s=tl.dot(q,tl.trans(k))*SCALE_LOG2
                 dp=tl.dot(dout.to(tl.bfloat16),tl.trans(v))
             else:
-                s=tl.dot(q.to(tl.float32),tl.trans(k.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
-                dp=tl.dot(dout.to(tl.float32),tl.trans(v.to(tl.float32)),input_precision='tf32x3')
+                s=tl.dot(q.to(tl.float32),tl.trans(k.to(tl.float32)),input_precision=_FP32_DOT_PRECISION)*SCALE_LOG2
+                dp=tl.dot(dout.to(tl.float32),tl.trans(v.to(tl.float32)),input_precision=_FP32_DOT_PRECISION)
             p=tl.where(valid,tl.exp2(s-lse[:,None]),0.)
             ds=p*(dp-delta[:,None])
             if BF16:
                 acc=tl.dot(ds.to(tl.bfloat16),k,acc)
             else:
-                acc=tl.dot(ds,k.to(tl.float32),acc,input_precision='tf32x3')
+                acc=tl.dot(ds,k.to(tl.float32),acc,input_precision=_FP32_DOT_PRECISION)
     tl.store(DQ+batch*dqsb+m[:,None]*dqst+head*dqsh+d[None,:],
              acc*SCALE,mask=m[:,None]<NQ)
 
@@ -361,16 +368,16 @@ def _dkdv(
                     st=tl.dot(k,tl.trans(q))*SCALE_LOG2
                     dp=tl.dot(v,tl.trans(dout.to(tl.bfloat16)))
                 else:
-                    st=tl.dot(k.to(tl.float32),tl.trans(q.to(tl.float32)),input_precision='tf32x3')*SCALE_LOG2
-                    dp=tl.dot(v.to(tl.float32),tl.trans(dout.to(tl.float32)),input_precision='tf32x3')
+                    st=tl.dot(k.to(tl.float32),tl.trans(q.to(tl.float32)),input_precision=_FP32_DOT_PRECISION)*SCALE_LOG2
+                    dp=tl.dot(v.to(tl.float32),tl.trans(dout.to(tl.float32)),input_precision=_FP32_DOT_PRECISION)
                 p=tl.where(tl.trans(valid),tl.exp2(st-lse[None,:]),0.)
                 ds=p*(dp-delta[None,:])
                 if BF16:
                     dvacc=tl.dot(p.to(tl.bfloat16),dout.to(tl.bfloat16),dvacc)
                     dkacc=tl.dot(ds.to(tl.bfloat16),q,dkacc)
                 else:
-                    dvacc=tl.dot(p,dout.to(tl.float32),dvacc,input_precision='tf32x3')
-                    dkacc=tl.dot(ds,q.to(tl.float32),dkacc,input_precision='tf32x3')
+                    dvacc=tl.dot(p,dout.to(tl.float32),dvacc,input_precision=_FP32_DOT_PRECISION)
+                    dkacc=tl.dot(ds,q.to(tl.float32),dkacc,input_precision=_FP32_DOT_PRECISION)
     if ADD_DKDV:
         dkacc=dkacc*SCALE+tl.load(
             DK+batch*dksb+kn[:,None]*dkst+kvhead*dksh+d[None,:],
@@ -537,6 +544,10 @@ def backward(dout,cache,*,dq=None,dk=None,dv=None,add_dkdv=False):
     common=(*map(_ptr,(q,k,v,*cache.metadata,cache.output,dout,cache.lse)),)
     bm = _SPARSE_BM if cache.sparse_stride else _BM
     bn = _SPARSE_BN if cache.sparse_stride else _BN
+    hip_bf16_global = (cp.cuda.runtime.is_hip and cache.global_mask
+                       and str(q.dtype) == 'bfloat16')
+    if hip_bf16_global and os.environ.get('MINI_LLM_HIP_DENSE_BACKWARD_TILES', '1') == '1':
+        bm = bn = 32
     q_tile_offset = cache.history_block_size // bm if cache.bounded and not cache.sparse_stride else 0
     q_tiles = triton.cdiv(max(0, nq - q_tile_offset * bm), bm)
     config=dict(NQ=nq,NK=nk,GROUP=q.shape[2]//k.shape[2],
@@ -553,6 +564,10 @@ def backward(dout,cache,*,dq=None,dk=None,dv=None,add_dkdv=False):
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*dostr[:3],*lstr[:3],
         *dqstr[:3],*qds[:2],*qps[:2],*kds[:2],*kes[:2],*kvs[:2],
         HQ=q.shape[2],**config)
+    if hip_bf16_global and os.environ.get('MINI_LLM_HIP_DENSE_KV_BACKWARD', '1') == '1':
+        from .triton_hip_dense_kv import backward as hip_kv_backward
+        dk, dv = hip_kv_backward(dout, cache, dk=dk, dv=dv, add_dkdv=add_dkdv)
+        return dq, dk, dv
     _dkdv[(triton.cdiv(nk,bn),q.shape[0]*k.shape[2])](
         *common,_ptr(dk),_ptr(dv),
         *qstr[:3],*kstr[:3],*vstr[:3],*ostr[:3],*dostr[:3],*lstr[:3],

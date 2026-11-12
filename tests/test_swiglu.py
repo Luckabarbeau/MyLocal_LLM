@@ -1,7 +1,7 @@
 import numpy as np
 from mini_llm.backend import xp, RandomStream, BACKEND_NAME, asnumpy, synchronize
 from mini_llm.ops.swiglu import SwiGLU
-from mini_llm.ops.experts import _fused_swiglu_forward
+from mini_llm.ops.experts import _fused_swiglu_forward, _fused_swiglu_backward
 
 
 def test_fused_fp16_swiglu_matches_reference(monkeypatch):
@@ -41,6 +41,37 @@ def test_fused_bf16_swiglu_even_and_odd_match_scalar_reference(monkeypatch):
         expected = g_rounded / (1.0 + np.exp(-g_rounded)) * u_rounded
         expected = xp.asarray(expected).astype("bfloat16")
         np.testing.assert_array_equal(asnumpy(actual), asnumpy(expected))
+
+
+def test_fused_bf16_swiglu_backward_contiguous_and_packed(monkeypatch):
+    if BACKEND_NAME != "cupy":
+        return
+    monkeypatch.setenv("MINI_LLM_FUSED_SWIGLU", "1")
+    monkeypatch.setenv("MINI_LLM_FUSED_SWIGLU_STRICT", "1")
+    random = np.random.default_rng(107)
+    for packed in (False, True):
+        values = xp.asarray(random.normal(size=(3, 514)), dtype="bfloat16")
+        g, u = values[:, :257], values[:, 257:]
+        if not packed:
+            g, u = xp.ascontiguousarray(g), xp.ascontiguousarray(u)
+        dh = xp.asarray(random.normal(size=g.shape), dtype="bfloat16")
+        h = _fused_swiglu_forward(g, u)
+        result = _fused_swiglu_backward(dh, g, u)
+        assert h is not None and result is not None
+        dg, du = result
+        assert h.dtype == dg.dtype == du.dtype == g.dtype
+        assert h.flags.c_contiguous and dg.flags.c_contiguous and du.flags.c_contiguous
+        gf, uf, dhf = [asnumpy(a.astype("float32")) for a in (g, u, dh)]
+        sigmoid = 1.0 / (1.0 + np.exp(-gf))
+        # G -> SiLU(G), H = SiLU(G) * U, then reverse both product paths.
+        expected = (
+            (dhf * uf) * (sigmoid + gf * sigmoid * (1.0 - sigmoid)),
+            dhf * (gf * sigmoid),
+        )
+        for actual, reference in zip((dg, du), expected):
+            reference = asnumpy(xp.asarray(reference).astype("bfloat16").astype("float32"))
+            np.testing.assert_allclose(asnumpy(actual.astype("float32")), reference,
+                                       rtol=0.008, atol=0.008)
 
 
 def test_swiglu_backward_direction():

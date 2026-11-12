@@ -29,7 +29,7 @@ def parse_args(argv=None):
     p.add_argument('--model-context', type=int, default=None,
                    help='configured maximum context; defaults to --context. Use a larger '
                         'block-aligned value to exercise shorter production buckets')
-    p.add_argument('--architecture', choices=('dual-resolution', 'matrix-pool'),
+    p.add_argument('--architecture', choices=('dual-resolution', 'matrix-pool', 'matrix-pool-sparse'),
                    default='dual-resolution')
     p.add_argument('--batch-size', type=int, default=1)
     p.add_argument('--layers', type=int, default=20)
@@ -58,6 +58,8 @@ def parse_args(argv=None):
                    default='auto',
                    help='apply the same runtime defaults as train_model; explicit '
                         'MINI_LLM_* environment values still win')
+    p.add_argument('--profile-operations', action='store_true',
+                   help='intrusive synchronized operator timings; not throughput measurement')
     p.add_argument('--profile-global-branch', action='store_true',
                    help='record deferred CUDA-event and host timings for Model B '
                         'pooling, global projections, attention, and integration')
@@ -70,6 +72,7 @@ def parse_args(argv=None):
     p.add_argument('--optimizer-step', action='store_true',
                    help='also construct a real AdamW optimizer and apply one update; '
                         'use MINI_LLM_OPTIMIZER_OFFLOAD=full for a 16GB GPU')
+    p.add_argument('--optimizer-kind', choices=('adamw', 'hybrid-muon'), default='adamw')
     p.add_argument('--lr', type=float, default=1e-4)
     p.add_argument('--tiny', action='store_true',
                    help='small 2-layer/32-wide CPU/GPU contract model for fast tests')
@@ -102,7 +105,9 @@ def parse_args(argv=None):
 def build_config(args, *, backend_name):
     from mini_llm.config import ModelConfig
     model_context = args.context if args.model_context is None else args.model_context
-    base = (ModelConfig.dual_resolution_matrix_pool_1024_20l()
+    base = (ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l()
+            if args.architecture == 'matrix-pool-sparse'
+            else ModelConfig.dual_resolution_matrix_pool_1024_20l()
             if args.architecture == 'matrix-pool'
             else ModelConfig.dual_resolution_1024_20l())
     if args.tiny:
@@ -202,8 +207,16 @@ def run(args):
     # Use the same public APIs as ExtendedTrainer, with a bounded LM head.
     optimizer = None
     if args.optimizer_step:
-        from mini_llm.optim import AdamW
-        optimizer = AdamW(model.optimization_parameters(), lr=args.lr)
+        if args.optimizer_kind == 'hybrid-muon':
+            from mini_llm.optim.hybrid_muon import HybridMuonAdamW
+            optimizer = HybridMuonAdamW(
+                model.optimization_parameters(), lr=args.lr, beta1=0.9,
+                beta2=0.95, eps=1e-8, weight_decay=0.1,
+                muon_momentum=0.95, muon_ns_steps=5, muon_matmul_precision='bf16',
+            )
+        else:
+            from mini_llm.optim import AdamW
+            optimizer = AdamW(model.optimization_parameters(), lr=args.lr)
         sample('optimizer_initialized')
     # The 0102D default remains one cold pass for backward compatibility.
     # For performance comparisons use --warmup-iterations 1 --repeat-iterations 3;
@@ -213,7 +226,7 @@ def run(args):
         model.refresh_compute_buffers()
     measured = []
     loss_value = None
-    configure_performance_profiler(False, reset=args.profile_global_branch)
+    configure_performance_profiler(False, reset=args.profile_global_branch or args.profile_operations)
     for iteration in range(args.warmup_iterations + args.repeat_iterations):
         record = iteration >= args.warmup_iterations
         pool_backward_mode = None
@@ -226,7 +239,7 @@ def run(args):
             os.environ['MINI_LLM_DUAL_RESOLUTION_GLOBAL_BOUNDED'] = str(
                 bounded_global_mode
             )
-        if args.profile_global_branch and record and not measured:
+        if (args.profile_global_branch or args.profile_operations) and record and not measured:
             configure_performance_profiler(True, reset=True)
         model.zero_grad()
         synchronize()
@@ -274,7 +287,7 @@ def run(args):
                    if bounded_global_mode is not None else {}),
             })
     synchronize()
-    profile_rows = PERFORMANCE_PROFILER.rows() if args.profile_global_branch else []
+    profile_rows = PERFORMANCE_PROFILER.rows() if (args.profile_global_branch or args.profile_operations) else []
     configure_performance_profiler(False)
     forward_ms = median(row['forward_ms'] for row in measured)
     loss_ms = median(row['loss_ms'] for row in measured)
@@ -333,7 +346,10 @@ def run(args):
         update_ms = (time.perf_counter()-t0)*1000
         sample('after_optimizer_update')
     result = {
-        'architecture': ('dual-resolution-matrix-pool-1024-20l'
+        'optimizer_kind': args.optimizer_kind if optimizer is not None else None,
+        'architecture': ('dual-resolution-matrix-pool-sparse-1024-20l'
+                         if args.architecture == 'matrix-pool-sparse'
+                         else 'dual-resolution-matrix-pool-1024-20l'
                          if args.architecture == 'matrix-pool'
                          else 'dual-resolution-1024-20l'),
         'backend': BACKEND_NAME, 'dtype': str(config.dtype),
@@ -377,7 +393,8 @@ def run(args):
         'warmup_iterations': args.warmup_iterations,
         'repeat_iterations': args.repeat_iterations,
         'iteration_timings_ms': measured,
-        'global_branch_profile': profile_rows,
+        'global_branch_profile': profile_rows if args.profile_global_branch else [],
+        'operation_profile': profile_rows if args.profile_operations else [],
         'alternating_fused_pool_backward': alternating_pool_backward,
         'alternating_bounded_global': alternating_bounded_global,
         'head_chunk_tokens': args.head_chunk_tokens,

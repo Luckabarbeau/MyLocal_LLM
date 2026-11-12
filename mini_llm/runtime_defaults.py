@@ -403,6 +403,17 @@ def apply_runtime_defaults(
         and _is_model_b_training_family(config, precision=precision)
     ):
         _setdefaults(_MODEL_B_CONSUMER_TRAINING_DEFAULTS, applied)
+        from .backend import xp as backend_xp
+        runtime = getattr(getattr(backend_xp, 'cuda', None), 'runtime', None)
+        if bool(getattr(runtime, 'is_hip', False)):
+            # Materialize HIP policy so checkpoint resume contracts record it.
+            _setdefaults({
+                'MINI_LLM_HIP_SPLIT_KV_BACKWARD': '2',
+                'MINI_LLM_HIP_DQ_LOOP_STAGES': '1',
+                'MINI_LLM_HIP_DENSE_BACKWARD_TILES': '1',
+                'MINI_LLM_HIP_DENSE_KV_BACKWARD': '1',
+                'MINI_LLM_HIP_FP32_PROJECTION_WGRAD': '1',
+            }, applied)
     if not training and _is_model_b_training_family(config, precision=precision):
         _setdefaults(_MODEL_B_INFERENCE_DEFAULTS, applied)
     if training:

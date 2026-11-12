@@ -5,6 +5,7 @@ from ..backend import (
     xp, BACKEND_NAME, is_low_precision_dtype, is_bfloat16_dtype,
 )
 from ..init import matrix_parameter
+from .hip_bf16_source import adapt_bf16_source
 from .rope import (
     PreparedRoPEPositions, clear_rope_cache, rope_backward, rope_forward,
 )
@@ -188,11 +189,14 @@ def _get_packed_qkv_rope_forward_kernel():
         }
     }
     """
+    code = adapt_bf16_source(code, is_hip=xp.cuda.runtime.is_hip)
     try:
         _PACKED_QKV_ROPE_FWD_KERNEL = xp.RawKernel(
             code,
             "packed_qkv_rope_forward_bf16",
-            options=("--std=c++11",),
+            # HIP contraction can bypass the native graph's BF16 round trips.
+            options=("--std=c++11", "-ffp-contract=off")
+            if xp.cuda.runtime.is_hip else ("--std=c++11",),
         )
     except Exception:
         _PACKED_QKV_ROPE_FWD_DISABLED = True

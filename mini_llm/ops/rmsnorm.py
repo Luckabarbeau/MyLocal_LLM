@@ -11,6 +11,7 @@ from ..backend import (
 )
 from ..init import ones_parameter
 from ..performance_profiler import PERFORMANCE_PROFILER
+from .hip_bf16_source import adapt_bf16_source
 
 
 _FUSED_BF16_RMSNORM_MODULE = None
@@ -269,6 +270,7 @@ def _get_fused_bf16_rmsnorm_module():
     }
     """
 
+    code = adapt_bf16_source(code, is_hip=xp.cuda.runtime.is_hip)
     names = (
         "rmsnorm_f32_to_bf16_forward",
         "residual_add_rmsnorm_f32_bf16_forward",

@@ -31,7 +31,7 @@ def _fused_swiglu_enabled(dtype):
 
 
 def _get_fused_swiglu_module():
-    """Compile header-free BF16 SwiGLU CUDA kernels lazily."""
+    """Compile fused low-precision SwiGLU kernels for CUDA or HIP lazily."""
     global _FUSED_SWIGLU_MODULE, _FUSED_SWIGLU_DISABLED
     if BACKEND_NAME != "cupy" or _FUSED_SWIGLU_DISABLED:
         return None
@@ -205,6 +205,8 @@ def _get_fused_swiglu_module():
         }
     }
     """
+    if xp.cuda.runtime.is_hip:
+        code = code.replace("#include <cuda_fp16.h>", "#include <hip/hip_fp16.h>")
     try:
         module = xp.RawModule(
             code=code,

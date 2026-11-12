@@ -9,6 +9,7 @@ CUDA/CuPy only, BF16, 16Q/4KV, D64, short window 512. Never imports PyTorch.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from os import environ
 from typing import Iterable
 
 import numpy as np
@@ -276,6 +277,7 @@ def _dq_kernel(
     window: tl.constexpr,
     block_m: tl.constexpr,
     block_n: tl.constexpr,
+    loop_stages: tl.constexpr = 2,
 ):
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
@@ -328,7 +330,7 @@ def _dq_kernel(
     key_begin = tl.maximum(0, q_start - window + 1)
     key_begin = (key_begin // block_n) * block_n
     key_end = tl.minimum(n_ctx, q_start + block_m)
-    for key_start in tl.range(key_begin, key_end, block_n, num_stages=2):
+    for key_start in tl.range(key_begin, key_end, block_n, num_stages=loop_stages):
         key_offsets = key_start + offs_n
         key_mask = key_offsets[:, None] < n_ctx
         k_block = tl.load(
@@ -425,11 +427,20 @@ def _dkdv_kernel(
     skip_head: tl.constexpr,
     block_m: tl.constexpr,
     block_n: tl.constexpr,
+    split_query_heads: tl.constexpr = False,
 ):
     pid_n = tl.program_id(0)
     pid_bkv = tl.program_id(1)
-    batch = pid_bkv // 4
-    kv_head = pid_bkv % 4
+    if split_query_heads:
+        batch = pid_bkv // 16
+        output_head = pid_bkv % 16
+        kv_head = output_head // 4
+        first_head = output_head
+    else:
+        batch = pid_bkv // 4
+        kv_head = pid_bkv % 4
+        output_head = kv_head
+        first_head = kv_head * 4
     offs_n = pid_n * block_n + tl.arange(0, block_n)
     offs_m_base = tl.arange(0, block_m)
     offs_d = tl.arange(0, 64)
@@ -457,8 +468,8 @@ def _dkdv_kernel(
     dk_acc = tl.zeros((block_n, 64), tl.float32)
     dv_acc = tl.zeros((block_n, 64), tl.float32)
 
-    for group_offset in tl.static_range(0, 4):
-        original_head = kv_head * 4 + group_offset
+    for group_offset in tl.static_range(0, 1 if split_query_heads else 4):
+        original_head = first_head + group_offset
         head_enabled = ((active_mask & (1 << original_head)) != 0) & (original_head != skip_head)
         is_long_head = (original_head < long_heads).to(tl.int1)
         head_window = tl.where(is_long_head, long_window, local_window)
@@ -521,7 +532,7 @@ def _dkdv_kernel(
         d_k
         + batch * dk_sb
         + offs_n[:, None] * dk_st
-        + kv_head * dk_sh
+        + output_head * dk_sh
         + offs_d[None, :],
         dk_acc * scale,
         mask=key_mask,
@@ -530,11 +541,29 @@ def _dkdv_kernel(
         d_v
         + batch * dv_sb
         + offs_n[:, None] * dv_st
-        + kv_head * dv_sh
+        + output_head * dv_sh
         + offs_d[None, :],
         dv_acc,
         mask=key_mask,
     )
+
+
+@triton.jit
+def _reduce_query_head_kv_kernel(
+    partial_dk, partial_dv, d_k, d_v,
+    n_elements: tl.constexpr, block: tl.constexpr,
+):
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    mask = offsets < n_elements
+    # Contiguous [B,T,4,64] output maps to four [B,T,16,64] heads.
+    source = (offsets // 256) * 1024 + ((offsets // 64) % 4) * 256 + offsets % 64
+    dk_acc = tl.load(partial_dk + source, mask=mask, other=0.0)
+    dv_acc = tl.load(partial_dv + source, mask=mask, other=0.0)
+    for head_offset in tl.static_range(1, 4):
+        dk_acc += tl.load(partial_dk + source + head_offset * 64, mask=mask, other=0.0)
+        dv_acc += tl.load(partial_dv + source + head_offset * 64, mask=mask, other=0.0)
+    tl.store(d_k + offsets, dk_acc, mask=mask)
+    tl.store(d_v + offsets, dv_acc, mask=mask)
 
 
 def _element_strides(array):
@@ -670,6 +699,11 @@ def local_attention_backward(d_out, cache):
         )
     )
     grid = triton.cdiv(length, 64)
+    # The 64x64 backward tiles spill heavily on HIP (especially the two
+    # simultaneous dK/dV accumulators); smaller tiles preserve ownership and
+    # masking while reducing live state. Keep the established CUDA geometry.
+    backward_tile = 32 if cp.cuda.runtime.is_hip else 64
+    backward_grid = triton.cdiv(length, backward_tile)
     active_mask = (0xFFFF if cache.skip_head < 0 else
                    0xFFFF & ~(1 << cache.skip_head))
     _delta_kernel[(grid, batch * 16)](
@@ -693,7 +727,7 @@ def local_attention_backward(d_out, cache):
             if hi > lo
         ]
     for head_begin, head_count, head_window in head_groups:
-        _dq_kernel[(grid, batch * head_count)](
+        _dq_kernel[(backward_grid, batch * head_count)](
             _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(d_out),
             _ptr(cache.lse_log2), _ptr(delta), _ptr(dq),
             _ptr(cache.unused_head_indices),
@@ -702,17 +736,42 @@ def local_attention_backward(d_out, cache):
             n_ctx=length, scale=cache.scale, scale_log2=cache.scale * _LOG2E,
             active_mask=0xFFFF, head_begin=head_begin, head_count=head_count,
             use_head_indices=False, window=head_window,
-            block_m=64, block_n=64, num_warps=4, num_stages=3,
+            block_m=backward_tile, block_n=backward_tile, num_warps=4, num_stages=3,
+            loop_stages=(1 if cp.cuda.runtime.is_hip and environ.get(
+                'MINI_LLM_HIP_DQ_LOOP_STAGES', '1') == '1' else 2),
         )
-    _dkdv_kernel[(grid, batch * 4)](
+    if (cp.cuda.runtime.is_hip
+            and environ.get('MINI_LLM_HIP_SPLIT_KV_BACKWARD', '2') == '2'):
+        from .triton_hip_local_kv import backward as hip_kv_backward
+        dk, dv = hip_kv_backward(d_out, cache, delta=delta)
+        return dq, dk, dv
+    split_query_heads = (
+        cp.cuda.runtime.is_hip
+        and environ.get('MINI_LLM_HIP_SPLIT_KV_BACKWARD', '2') == '1'
+    )
+    if split_query_heads:
+        partial_dk = cp.empty(q.shape, dtype=cp.float32)
+        partial_dv = cp.empty(q.shape, dtype=cp.float32)
+        kv_dk, kv_dv = partial_dk, partial_dv
+        dks, dvs = map(_element_strides, (partial_dk, partial_dv))
+    else:
+        kv_dk, kv_dv = dk, dv
+    _dkdv_kernel[(backward_grid, batch * (16 if split_query_heads else 4))](
         _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(d_out),
-        _ptr(cache.lse_log2), _ptr(delta), _ptr(dk), _ptr(dv),
+        _ptr(cache.lse_log2), _ptr(delta), _ptr(kv_dk), _ptr(kv_dv),
         *qs[:3], *ks[:3], *vs[:3], *ds[:2], *dos[:3], *ls[:3], *dels[:3],
         *dks[:3], *dvs[:3],
         n_ctx=length, scale=cache.scale, scale_log2=cache.scale * _LOG2E,
         active_mask=0xFFFF, local_window=cache.window,
         long_window=cache.long_window, long_heads=cache.long_heads,
         skip_head=cache.skip_head,
-        block_m=64, block_n=64, num_warps=4, num_stages=3,
+        block_m=backward_tile, block_n=backward_tile,
+        split_query_heads=split_query_heads, num_warps=4, num_stages=3,
     )
+    if split_query_heads:
+        n_elements = batch * length * 4 * 64
+        _reduce_query_head_kv_kernel[(triton.cdiv(n_elements, 256),)](
+            _ptr(partial_dk), _ptr(partial_dv), _ptr(dk), _ptr(dv),
+            n_elements=n_elements, block=256, num_warps=4,
+        )
     return dq, dk, dv

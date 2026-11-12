@@ -4,6 +4,7 @@ import os
 import numpy as np
 
 from ..backend import BACKEND_NAME, dtype_name, is_bfloat16_dtype, xp
+from .hip_bf16_source import adapt_bf16_source
 
 
 # Shared cache across all attention layers.  A fixed-length training run uses
@@ -213,6 +214,7 @@ def _get_fused_rope_backward_kernel():
         }
     }
     """
+    code = adapt_bf16_source(code, is_hip=xp.cuda.runtime.is_hip)
     try:
         _FUSED_ROPE_BACKWARD_KERNEL = xp.RawKernel(
             code, "inverse_rope_bf16_factors", options=("--std=c++11",)

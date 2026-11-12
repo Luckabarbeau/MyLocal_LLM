@@ -83,6 +83,8 @@ def test_fused_bf16_residual_rmsnorm_matches_existing_forward_backward(monkeypat
     expected_output, expected_cache = reference.forward_compute(
         expected_residual, xp.dtype("bfloat16")
     )
+    assert expected_cache["fused_bf16_residual"] is True
+    assert reference._can_use_fused_bf16_backward(dy, expected_cache)
     expected_dx = reference.backward_residual(dy, expected_cache)
 
     assert candidate.can_forward_residual_compute(
@@ -91,6 +93,8 @@ def test_fused_bf16_residual_rmsnorm_matches_existing_forward_backward(monkeypat
     actual_residual, actual_output, actual_cache = candidate.forward_residual_compute(
         residual, branch, xp.dtype("bfloat16")
     )
+    assert actual_cache["fused_bf16_residual"] is True
+    assert candidate._can_use_fused_bf16_backward(dy, actual_cache)
     actual_dx = candidate.backward_residual(dy, actual_cache)
     xp.cuda.get_current_stream().synchronize()
 

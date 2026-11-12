@@ -132,3 +132,63 @@ def test_integrated_dual_resolution_forward_backward():
             triton_grads[name], baseline_grads[name],
             atol=0.1, rtol=0.15, err_msg=f"gradient mismatch: {name}",
         )
+
+
+@pytest.mark.parametrize('batch,length', [(2, 65), (1, 641)])
+@pytest.mark.parametrize('skip_head', [-1, 0])
+def test_mixed_window_packed_backward_against_fp64(batch, length, skip_head):
+    cp = _available()
+    from mini_llm.ops.triton_dual_resolution_local import (
+        local_attention_forward, local_attention_backward,
+    )
+    rng = np.random.default_rng(107 + length)
+    # Match packed Q/K/V row strides, with non-tile-aligned EOS boundaries.
+    packed = cp.asarray(rng.normal(0, 0.2, (batch, length, 24, 64)),
+                        dtype=cp.float32).astype('bfloat16')
+    q, k, v = packed[:, :, :16], packed[:, :, 16:20], packed[:, :, 20:24]
+    dy_np = rng.normal(0, 0.1, q.shape).astype(np.float32)
+    dy = cp.asarray(dy_np)
+    docs = np.zeros((batch, length), dtype=np.int32)
+    docs[:, 97 if length > 97 else 17:] = 1
+    output, cache = local_attention_forward(
+        q, k, v, cp.asarray(docs), long_window=4096, long_heads=1,
+        skip_head=skip_head,
+    )
+    actual = local_attention_backward(dy, cache)
+    qf, kf, vf = [cp.asnumpy(x).astype(np.float64).transpose(0, 2, 1, 3)
+                  for x in (q, k, v)]
+    kf, vf = np.repeat(kf, 4, axis=1), np.repeat(vf, 4, axis=1)
+    upstream = dy_np.astype(np.float64).transpose(0, 2, 1, 3)
+    positions = np.arange(length)
+    windows = np.full(16, 512)
+    windows[0] = 4096
+    allowed = (
+        (positions[None, :] <= positions[:, None])[None, None]
+        & (positions[None, None, None, :] >=
+           positions[None, None, :, None] - windows[None, :, None, None] + 1)
+        & (docs[:, None, :, None] == docs[:, None, None, :])
+    )
+    scores = np.where(allowed, (qf @ kf.swapaxes(-2, -1)) * 0.125, -np.inf)
+    probabilities = np.exp(scores - scores.max(axis=-1, keepdims=True))
+    probabilities /= probabilities.sum(axis=-1, keepdims=True)
+    if skip_head >= 0:
+        probabilities[:, skip_head] = 0
+    expected_output = probabilities @ vf
+    # Reverse O=P V, P=softmax(S), S=Q K^T / sqrt(64), then sum GQA groups.
+    dp = upstream @ vf.swapaxes(-2, -1)
+    ds = probabilities * (dp - (dp * probabilities).sum(axis=-1, keepdims=True))
+    dq = (ds @ kf) * 0.125
+    dk = ((ds.swapaxes(-2, -1) @ qf) * 0.125).reshape(batch, 4, 4, length, 64).sum(axis=2)
+    dv = (probabilities.swapaxes(-2, -1) @ upstream).reshape(batch, 4, 4, length, 64).sum(axis=2)
+    # The caller owns/replaces skipped output and dQ heads; their storage is
+    # intentionally unwritten here. KV gradients must still exclude that head.
+    owned = np.arange(16) != skip_head
+    np.testing.assert_allclose(cp.asnumpy(output)[:, :, owned],
+                               expected_output.transpose(0, 2, 1, 3)[:, :, owned],
+                               atol=0.003, rtol=0.06)
+    for index, (got, expected) in enumerate(zip(actual, (dq, dk, dv))):
+        assert str(got.dtype) == 'float32'
+        got_np, expected_np = cp.asnumpy(got), expected.transpose(0, 2, 1, 3)
+        if index == 0:
+            got_np, expected_np = got_np[:, :, owned], expected_np[:, :, owned]
+        np.testing.assert_allclose(got_np, expected_np, atol=0.003, rtol=0.06)

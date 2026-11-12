@@ -159,3 +159,5 @@ rollback_backups/
 .venv-0089b-torch/
 
 .omo/
+
+.venv-rocm/

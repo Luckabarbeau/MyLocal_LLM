@@ -30,6 +30,16 @@ from .dual_resolution_attention import (
 )
 
 
+def _output_projection_wgrad(activation, gradient):
+    if (BACKEND_NAME == 'cupy' and xp.cuda.runtime.is_hip
+            and str(activation.dtype) == 'bfloat16'
+            and str(gradient.dtype) in {'bfloat16', 'float32'}
+            and os.environ.get('MINI_LLM_HIP_FP32_PROJECTION_WGRAD', '1') == '1'):
+        from .hip_projection_wgrad import projection_wgrad
+        return projection_wgrad(activation, gradient)
+    return _work_array(activation).T @ _work_array(gradient)
+
+
 class MatrixPoolDualResolutionAttention:
     """Full-context Model B attention with learned matrix-pooled summaries.
 
@@ -775,7 +785,10 @@ class MatrixPoolDualResolutionAttention:
                 if accumulate_parameter_grads:
                     _add_parameter_grad(
                         self.W_global_o,
-                        _work_array(global_compute.reshape(-1, self.global_width)).T @ dy2,
+                        _output_projection_wgrad(
+                            global_compute.reshape(-1, self.global_width),
+                            dy.reshape(-1, self.d_model),
+                        ),
                     )
                 if (_bf16_output_dx_enabled()
                         and is_low_precision_dtype(dy.dtype)
@@ -861,7 +874,9 @@ class MatrixPoolDualResolutionAttention:
         if accumulate_parameter_grads:
             _add_parameter_grad(
                 self.Wo,
-                _work_array(local_compute.reshape(-1, self.d_model)).T @ dl2,
+                _output_projection_wgrad(
+                    local_compute.reshape(-1, self.d_model), dl2,
+                ),
             )
         if (_bf16_output_dx_enabled()
                 and is_low_precision_dtype(dy.dtype)

@@ -111,3 +111,31 @@ def test_0102p_disable_global_applies_to_tiny_and_production_config():
         assert config.dual_resolution.global_enabled is False
     args = parse_args(['--architecture', 'matrix-pool', '--tiny', '--context', '24'])
     assert build_config(args, backend_name='numpy').dual_resolution.global_enabled
+
+
+def test_sparse_model_b_benchmark_uses_registered_production_shape():
+    from benchmarks.benchmark_dual_resolution_full_model_0102d import build_config
+    args = parse_args(['--architecture', 'matrix-pool-sparse', '--context', '8192',
+                       '--model-context', '65536', '--optimizer-kind', 'hybrid-muon'])
+    config = build_config(args, backend_name='cupy')
+    from dataclasses import replace
+    expected = ModelConfig.dual_resolution_matrix_pool_sparse_1024_20l()
+    expected = replace(expected, dtype='bfloat16', dual_resolution=replace(
+        expected.dual_resolution, compression_dim=args.compression_dim,
+        compression_block_chunk=args.compression_block_chunk,
+        global_query_chunk=args.query_chunk,
+    ))
+    assert config == expected
+    assert config.estimated_parameter_count() == 348261376
+
+
+def test_tiny_hybrid_optimizer_and_operation_profile():
+    args = parse_args(['--tiny', '--layers', '2', '--context', '24',
+                       '--score-last-k', '5', '--optimizer-step',
+                       '--optimizer-kind', 'hybrid-muon', '--profile-operations'])
+    report = run(args)
+    assert report['optimizer_kind'] == 'hybrid-muon'
+    assert report['optimizer_ms'] is not None
+    assert report['operation_profile']
+    assert not report['global_branch_profile']
+    assert np.isfinite(report['loss'])

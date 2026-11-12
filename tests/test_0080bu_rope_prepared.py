@@ -7,7 +7,7 @@ from mini_llm.backend import asnumpy, xp, BACKEND_NAME, resolve_dtype
 from mini_llm.config import ModelConfig, MemoryContextConfig
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.ops.rope import (
-    prepare_rope_positions, rope_forward, rope_backward,
+    prepare_rope_positions, rope_forward, rope_backward, _fused_rope_backward,
 )
 
 
@@ -140,7 +140,10 @@ def test_fused_rope_backward_bf16_factor_parity(monkeypatch, batched_positions):
     monkeypatch.setenv("MINI_LLM_FUSED_ROPE_BACKWARD", "0")
     reference = rope_backward(dy, cache)
     monkeypatch.setenv("MINI_LLM_FUSED_ROPE_BACKWARD", "1")
+    fused = _fused_rope_backward(dy, prepared.cos, prepared.sin)
+    assert fused is not None, "fused RoPE backward must compile and launch"
     optimized = rope_backward(dy, cache)
+    np.testing.assert_array_equal(asnumpy(optimized), asnumpy(fused))
 
     np.testing.assert_allclose(
         asnumpy(optimized), asnumpy(reference), rtol=2e-6, atol=2e-6

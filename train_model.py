@@ -84,6 +84,23 @@ def _bootstrap_resume_environment_from_cli():
     return True
 
 
+def _bootstrap_optimizer_offload_from_cli():
+    """Apply an explicit optimizer-state placement after any checkpoint restore.
+
+    Placement is an execution/memory setting, not part of the optimizer trajectory:
+    staged pinned-host copies and device-resident state perform identical FP32
+    arithmetic. An explicit CLI choice therefore wins over both the restored
+    checkpoint runtime environment and the runtime-profile defaults, which select
+    ``full`` for the consumer-gpu training profile. ``none`` keeps the FP32 masters
+    and Adam/Muon moments on the GPU, so no host/device optimizer traffic is needed.
+    """
+    mode = _cli_option_value("--optimizer-offload")
+    if mode is None:
+        return
+    aliases = {"false": "none", "off": "none", "0": "none"}
+    os.environ["MINI_LLM_OPTIMIZER_OFFLOAD"] = aliases.get(mode.lower(), mode.lower())
+
+
 def _bootstrap_backend_from_cli():
     """Apply explicit CLI backend before importing the process-global backend.
 
@@ -96,6 +113,7 @@ def _bootstrap_backend_from_cli():
 
 
 _bootstrap_resume_environment_from_cli()
+_bootstrap_optimizer_offload_from_cli()
 _bootstrap_backend_from_cli()
 
 import numpy as np
@@ -405,6 +423,17 @@ def parse_args():
     parser.add_argument(
         "--muon-matmul-precision", choices=["bf16", "fp32"], default=None,
         help="Muon orthogonalization GEMM precision (default: bf16 on GPU)",
+    )
+    parser.add_argument(
+        "--optimizer-offload", choices=["none", "moments", "full", "false", "off", "0"],
+        default=None,
+        help=("Where FP32 optimizer masters/moments live: 'none' keeps them on the "
+              "GPU (no host/device bandwidth cost), 'moments' offloads only moments, "
+              "'full' offloads masters and moments to pinned RAM. 'false'/'off'/'0' alias "
+              "'none'. Omitted means inherit the checkpoint runtime environment or the "
+              "profile default, which is 'full' for consumer-gpu training. Requires a "
+              "versioned checkpoint whose placement difference is recorded as an "
+              "intentional non-exact change."),
     )
     parser.add_argument(
         "--full-history-only-steps", type=int, default=None,

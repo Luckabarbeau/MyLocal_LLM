@@ -99,6 +99,52 @@ def test_nonexact_resume_bootstrap_preserves_explicit_environment(tmp_path, monk
     assert environment == {"MINI_LLM_EXPLICIT": "1"}
 
 
+def test_optimizer_offload_cli_override_beats_checkpoint_environment(tmp_path, monkeypatch):
+    """--optimizer-offload none must win over the runtime environment restored
+    from a checkpoint, so the rest of the previous config is kept intact."""
+    checkpoint = tmp_path / "model"
+    checkpoint.mkdir()
+    (checkpoint / "training_state.json").write_text(json.dumps({
+        "training_resume_contract": {
+            "runtime_environment": {
+                "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+                "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
+                "MINI_LLM_SAVED_FAST_PATH": "1",
+            },
+        },
+    }))
+    environment = {"MINI_LLM_OPTIMIZER_OFFLOAD": "moments"}
+    monkeypatch.setattr(train_model.os, "environ", environment)
+    monkeypatch.setattr(train_model.sys, "argv", [
+        "train_model.py", "--resume-from", str(checkpoint),
+        "--optimizer-offload", "none",
+    ])
+
+    assert train_model._bootstrap_resume_environment_from_cli()
+    train_model._bootstrap_optimizer_offload_from_cli()
+
+    assert environment["MINI_LLM_OPTIMIZER_OFFLOAD"] == "none"
+    assert environment["MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB"] == "16"
+    assert environment["MINI_LLM_SAVED_FAST_PATH"] == "1"
+
+
+def test_optimizer_offload_placement_drift_is_recorded_not_rejected(tmp_path, monkeypatch, capsys):
+    """Optimizer state placement may change at an otherwise exact resume."""
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET", "fine")
+    shard = _shard(tmp_path / "train.bin")
+    monkeypatch.delenv("MINI_LLM_OPTIMIZER_OFFLOAD", raising=False)
+    original = _trainer(_model(), shard, tmp_path / "placement")
+    original.save()
+    _, _, state = load_checkpoint(tmp_path / "placement", skip_optimizer=True)
+
+    monkeypatch.setenv("MINI_LLM_OPTIMIZER_OFFLOAD", "none")
+    changed = _trainer(_model(), shard, tmp_path / "placement-none")
+    mismatches = changed.validate_training_resume_contract(state)
+    fields = {row["field"] for row in mismatches}
+    assert fields == {"runtime_environment.MINI_LLM_OPTIMIZER_OFFLOAD"}
+    assert "intentional non-exact" in capsys.readouterr().out
+
+
 def test_public_checkpoint_resolution_recovers_previous(tmp_path):
     checkpoint = tmp_path / "model"
     save_checkpoint(checkpoint, {"w": np.array([3], dtype=np.float32)})

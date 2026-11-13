@@ -3511,6 +3511,16 @@ class ExtendedTrainer:
 
         expected = flatten(saved)
         actual = flatten(self.training_resume_contract())
+        # Optimizer state placement is an execution/memory setting, not a model
+        # parameter or optimizer hyperparameter: the staged pinned-host path and
+        # the device-resident path perform identical FP32 arithmetic. So a
+        # deliberate placement change (e.g. --optimizer-offload none) is recorded
+        # as provenance instead of blocking an otherwise exact resume.
+        placement_fields = {
+            "optimizer_offload_mode",
+            "runtime_environment.MINI_LLM_OPTIMIZER_OFFLOAD",
+            "runtime_environment.MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB",
+        }
         mismatches = []
         for key in sorted(set(expected) | set(actual)):
             if expected.get(key) != actual.get(key):
@@ -3519,10 +3529,11 @@ class ExtendedTrainer:
                     "checkpoint": expected.get(key),
                     "current": actual.get(key),
                 })
-        if mismatches and not allow_changes:
+        scientific = [row for row in mismatches if row["field"] not in placement_fields]
+        if scientific and not allow_changes:
             preview = "; ".join(
                 f"{row['field']}: {row['checkpoint']!r} -> {row['current']!r}"
-                for row in mismatches[:8]
+                for row in scientific[:8]
             )
             raise ValueError(
                 "non-exact checkpoint resume configuration; pass "

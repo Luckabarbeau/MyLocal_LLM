@@ -161,3 +161,7 @@ rollback_backups/
 .omo/
 
 .venv-rocm/
+
+.r9700_backward_tuning/
+
+.playwright-mcp/

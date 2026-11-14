@@ -409,6 +409,7 @@ def apply_runtime_defaults(
             # Materialize HIP policy so checkpoint resume contracts record it.
             _setdefaults({
                 'MINI_LLM_HIP_SPLIT_KV_BACKWARD': '2',
+                                'MINI_LLM_HIP_LOCAL_KV_KEY_TILE': '64',
                 'MINI_LLM_HIP_DQ_LOOP_STAGES': '1',
                 'MINI_LLM_HIP_DENSE_BACKWARD_TILES': '1',
                 'MINI_LLM_HIP_DENSE_KV_BACKWARD': '1',

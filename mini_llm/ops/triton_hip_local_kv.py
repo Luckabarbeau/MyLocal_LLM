@@ -7,6 +7,8 @@ unused derivative branch before register allocation. No atomics or FP32 dots.
 
 from __future__ import annotations
 
+from os import environ
+
 import triton
 import triton.language as tl
 
@@ -122,6 +124,9 @@ def backward(d_out, cache, *, delta=None):
     if d_out.shape != q.shape or str(d_out.dtype) != 'float32':
         raise ValueError('local Triton backward requires FP32 d_out with Q shape')
     batch, length = map(int, q.shape[:2])
+    key_tile = int(environ.get('MINI_LLM_HIP_LOCAL_KV_KEY_TILE', '32'))
+    if key_tile not in (32, 64):
+        raise ValueError('MINI_LLM_HIP_LOCAL_KV_KEY_TILE must be 32 or 64')
     reuse_delta = delta is not None
     if not reuse_delta:
         delta = cp.empty(q.shape[:3], dtype=cp.float32)
@@ -137,7 +142,7 @@ def backward(d_out, cache, *, delta=None):
     if not reuse_delta:
         _launch_delta(cache.output, d_out, delta, os, dos, dels, length, batch, active_mask)
     for compute_dk, partial in ((True, partial_dk), (False, partial_dv)):
-        _kv_kernel[(triton.cdiv(length, 32), batch * 16)](
+        _kv_kernel[(triton.cdiv(length, key_tile), batch * 16)](
             _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(d_out),
             _ptr(cache.lse_log2), _ptr(delta), _ptr(partial),
             *qs[:3], *ks[:3], *vs[:3], *docs_s[:2], *dos[:3], *ls[:3], *dels[:3],
@@ -145,7 +150,7 @@ def backward(d_out, cache, *, delta=None):
             scale_log2=cache.scale * 1.4426950408889634,
             local_window=cache.window, long_window=cache.long_window,
             long_heads=cache.long_heads, skip_head=cache.skip_head,
-            compute_dk=compute_dk, block_m=32, block_n=32,
+            compute_dk=compute_dk, block_m=32, block_n=key_tile,
             num_warps=4, num_stages=1,
         )
     n_elements = batch * length * 4 * 64

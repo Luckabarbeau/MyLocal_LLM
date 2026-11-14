@@ -13,6 +13,9 @@ except ImportError:
 _BACKEND = os.environ.get("MINI_LLM_BACKEND", "numpy").lower()
 
 if _BACKEND == "cupy":
+    from .amd_blas_policy import apply_amd_blas_policy
+
+    apply_amd_blas_policy()
     try:
         import cupy as xp
     except ImportError as exc:

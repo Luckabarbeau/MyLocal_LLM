@@ -20,6 +20,25 @@ _FUSED_SWIGLU_MODULE = None
 _FUSED_SWIGLU_DISABLED = False
 
 
+def _down_projection_wgrad(h, dy):
+    # The transposed output orientation avoids a slow HIP BLAS reduction layout
+    # at Model B's long shapes, without changing operand or accumulator dtype.
+    if (
+        os.environ.get("MINI_LLM_HIP_FFN_TRANSPOSE_WGRAD", "0") == "1"
+        and BACKEND_NAME == "cupy"
+        and xp.cuda.runtime.is_hip
+        and h.ndim == dy.ndim == 2
+        and h.shape[0] == dy.shape[0]
+        and h.shape[0] >= 8192
+        and h.shape[1] == 4096
+        and dy.shape[1] == 1024
+        and is_bfloat16_dtype(h.dtype)
+        and is_bfloat16_dtype(dy.dtype)
+    ):
+        return (dy.T @ h).T
+    return h.T @ dy
+
+
 def _fused_swiglu_enabled(dtype):
     default = "0" if is_bfloat16_dtype(dtype) else "1"
     raw = os.environ.get("MINI_LLM_FUSED_SWIGLU", default).strip().lower()
@@ -745,7 +764,7 @@ class ExpertFFN:
 
         if accumulate_parameter_grads:
             with moe_detail_scope("moe.expert.down_wgrad"):
-                self.W_down.grad += h_2d.T @ weighted_dy_2d
+                self.W_down.grad += _down_projection_wgrad(h_2d, weighted_dy_2d)
 
         with moe_detail_scope("moe.expert.down_dx"):
             if route_weights_2d is None:

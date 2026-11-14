@@ -17,6 +17,7 @@ import gc
 import math
 import time
 from collections import OrderedDict
+from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Mapping
 
@@ -67,6 +68,23 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+
+class _AccumulationOnlyOptimizer:
+    """Gradient clearing for peers that never own optimizer state."""
+
+    def __init__(self, parameters, lr, kind):
+        self.parameters = list(parameters)
+        self.lr = lr
+        self.kind = kind
+        self.step_index = 0
+
+    def zero_grad(self):
+        for p in self.parameters:
+            p.zero_grad()
+
+    def step(self, *args, **kwargs):
+        raise RuntimeError("accumulation-only peers cannot update parameters")
 
 
 class ExtendedTrainer:
@@ -152,6 +170,7 @@ class ExtendedTrainer:
         val_fixed_mixed_steps: int = 0,
         val_fixed_mixed_seed: int = 78078,
         training_objective=None,
+        optimizer_enabled: bool = True,
     ):
         """
         Initialize the extended trainer.
@@ -598,8 +617,11 @@ class ExtendedTrainer:
         if optimizer_kind == "hybrid-muon" and adamw_update_monitor:
             raise ValueError("0074B AdamW counterfactual diagnostics require pure AdamW; "
                              "disable --adamw-update-monitor for hybrid Muon")
+        self.optimizer_enabled = bool(optimizer_enabled)
         self.optimizer = (
-            HybridMuonAdamW(
+            _AccumulationOnlyOptimizer(
+                self.optimization_parameters, lr=peak_lr, kind=optimizer_kind,
+            ) if not self.optimizer_enabled else HybridMuonAdamW(
                 self.optimization_parameters,
                 lr=peak_lr, beta1=adam_beta1, beta2=adam_beta2, eps=adam_eps,
                 weight_decay=weight_decay, numerical_debug=numerical_debug,
@@ -607,7 +629,7 @@ class ExtendedTrainer:
                 muon_matmul_precision=muon_matmul_precision,
                 unembedding_lr_ratio=self.unembedding_lr_ratio,
                 unembedding_parameter_name=unembedding_parameter_name,
-            ) if optimizer_kind == "hybrid-muon" else AdamW(
+            ) if (not self.optimizer_enabled or optimizer_kind == "hybrid-muon") else AdamW(
                 self.optimization_parameters,
                 lr=peak_lr, beta1=adam_beta1, beta2=adam_beta2,
                 eps=adam_eps, weight_decay=weight_decay,
@@ -2689,6 +2711,14 @@ class ExtendedTrainer:
         Returns:
             Tuple of (loss, grad_norm)
         """
+        peer = getattr(self, "accumulation_peer", None)
+        diagnostics = getattr(self, "gpu_diagnostic_log", None)
+        if diagnostics is not None:
+            diagnostics.emit("update_begin", trainer_step=self.step,
+                             optimizer_step=getattr(self.optimizer, "step_index", None),
+                             nominal_microbatches=self.grad_accum_steps)
+        if peer is not None:
+            peer.begin_step(self)
         profile_active = self._profiled_steps < self.profile_steps
         configure_performance_profiler(profile_active, reset=profile_active)
         profile_wall_start = None
@@ -2723,6 +2753,7 @@ class ExtendedTrainer:
         supervised_tokens_in_step = 0.0
         executed_tokens_in_step = 0
         source_observations = []   # (source, CPU coverage, on-device CE scalar)
+        actual_completed = 0
         block_step_metrics = None
         # 0080AA: deep audit is explicitly opt-in and never changes the normal
         # optimizer/training path. Audit only the next requested run's steps.
@@ -2833,7 +2864,10 @@ class ExtendedTrainer:
                     in enumerate(prefetched_batches)
                 ]
 
-        for accum_step in range(self.grad_accum_steps):
+        microsteps = peer.microsteps(self) if peer is not None else range(self.grad_accum_steps)
+        for accum_step in microsteps:
+            if diagnostics is not None:
+                diagnostics.microbatch_begin(self, accum_step + 1)
             if expert_collector is not None:
                 sampled = accum_step < self.expert_usage_microbatches
                 for layer, router in enumerate(active_routers):
@@ -2845,7 +2879,7 @@ class ExtendedTrainer:
             
             # Get batch
             if prefetched_batches is None:
-                with performance_scope("train.data_batch"):
+                with performance_scope("train.data_batch"), (diagnostics.stage("sample") if diagnostics else nullcontext()):
                     inputs, targets, batch_metadata = self.get_train_batch(
                         return_metadata=True
                     )
@@ -2965,6 +2999,7 @@ class ExtendedTrainer:
                         valid_tokens=valid_tokens,
                     )
                 del inputs, targets, batch_metadata, loss_mask
+                actual_completed += 1
                 continue
 
             # Forward pass.  0056 can stop before the vocabulary projection so
@@ -2977,8 +3012,13 @@ class ExtendedTrainer:
             finite_trace = [] if trace_active else None
             chunked_head = self.lm_head_chunk_tokens > 0
             use_block_checkpoint = self._use_block_activation_checkpoint(inputs)
+            if diagnostics is not None:
+                diagnostics.batch_ready(
+                    self, inputs, targets, batch_metadata, loss_mask,
+                    valid_tokens, microbatch_weight, use_block_checkpoint,
+                )
             if chunked_head:
-                with performance_scope("train.model_forward"):
+                with performance_scope("train.model_forward"), (diagnostics.stage("forward") if diagnostics else nullcontext()):
                     head_input, cache = self.model.forward_body(
                         inputs, finite_trace=finite_trace,
                         activation_checkpoint=use_block_checkpoint,
@@ -2991,7 +3031,7 @@ class ExtendedTrainer:
                         ),
                     )
             else:
-                with performance_scope("train.model_forward"):
+                with performance_scope("train.model_forward"), (diagnostics.stage("forward") if diagnostics else nullcontext()):
                     logits, cache = self.model.forward(
                         inputs, finite_trace=finite_trace,
                         activation_checkpoint=use_block_checkpoint,
@@ -3074,7 +3114,7 @@ class ExtendedTrainer:
                 if not self._check_finite(logits, f"logits_step_{self.step}"):
                     raise ValueError(f"Nonfinite logits detected at step {self.step}!")
 
-                with performance_scope("train.loss_forward"):
+                with performance_scope("train.loss_forward"), (diagnostics.stage("loss_forward") if diagnostics else nullcontext()):
                     loss_backend, loss_cache = self.model.compute_loss(
                         logits, targets, loss_mask=loss_mask,
                         return_device_loss=True
@@ -3086,20 +3126,20 @@ class ExtendedTrainer:
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_logits_release")
 
-                with performance_scope("train.loss_backward"):
+                with performance_scope("train.loss_backward"), (diagnostics.stage("loss_backward") if diagnostics else nullcontext()):
                     d_logits = self.model.backward_loss(loss_cache)
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
                 if self.loss_scale * microbatch_weight != 1.0:
                     d_logits = d_logits * (self.loss_scale * microbatch_weight)
-                with performance_scope("train.model_backward"):
+                with performance_scope("train.model_backward"), (diagnostics.stage("backward") if diagnostics else nullcontext()):
                     self.model.backward(d_logits, cache)
                 del d_logits
             else:
                 # The chunked head owns projection+CE.  No full logits tensor or
                 # persistent probability cache is created.  Only the scalar loss
                 # and compact hidden representation survive forward.
-                with performance_scope("train.loss_forward"):
+                with performance_scope("train.loss_forward"), (diagnostics.stage("loss_forward") if diagnostics else nullcontext()):
                     target_slice = cache.get("target_slice")
                     loss_backend, loss_cache = self.model.chunked_lm_head_loss_forward(
                         head_input,
@@ -3135,7 +3175,7 @@ class ExtendedTrainer:
                             f"microstep {accum_step}; first bad stage: {first_bad}"
                         )
 
-                with performance_scope("train.loss_backward"):
+                with performance_scope("train.loss_backward"), (diagnostics.stage("loss_backward") if diagnostics else nullcontext()):
                     dx_head = self.model.chunked_lm_head_backward(
                         loss_cache,
                         grad_scale=self.loss_scale * microbatch_weight,
@@ -3143,7 +3183,7 @@ class ExtendedTrainer:
                     )
                 if memory_active:
                     self._record_memory_snapshot(memory_records, "after_loss_backward")
-                with performance_scope("train.model_backward"):
+                with performance_scope("train.model_backward"), (diagnostics.stage("backward") if diagnostics else nullcontext()):
                     self.model.backward_body(
                         dx_head, cache,
                         backbone_parameter_grads=backbone_parameter_grads,
@@ -3181,6 +3221,11 @@ class ExtendedTrainer:
                     mode_memory_peaks, profiled_mode, profiled_prefix_length,
                     "released", snap,
                 )
+
+            actual_completed += 1
+            if diagnostics is not None:
+                diagnostics.emit("microbatch_complete", source=source, valid_tokens=valid_tokens,
+                                 accumulated_supervised_tokens=supervised_tokens_in_step)
 
         del prefetched_batches
         if expert_collector is not None:
@@ -3239,22 +3284,45 @@ class ExtendedTrainer:
                 if p.grad is not None:
                     p.grad[...] = p.grad / accumulation_weight_sum
         
+        if peer is not None:
+            synced = peer.synchronize_gradients(
+                self, avg_loss=avg_loss,
+                supervised_tokens=supervised_tokens_in_step,
+                executed_tokens=executed_tokens_in_step,
+                microbatches=actual_completed,
+                source_observations=source_observations,
+            )
+            if not self.optimizer_enabled:
+                return avg_loss, 0.0
+            avg_loss = synced["loss"]
+            self._last_step_supervised_tokens = synced["supervised_tokens"]
+            self._last_step_executed_tokens = synced["executed_tokens"]
+            self._last_step_supervised_utilization = (
+                synced["supervised_tokens"] / synced["nominal_tokens"]
+            )
+
         # During full-history settling, clipping and finite checks use only the
         # parameters that can actually update. Backbone gradients are still
         # computed to preserve every path into the attached history heads.
         step_parameters = self._optimizer_step_parameters()
-        with performance_scope("train.grad_clip"):
+        with performance_scope("train.grad_clip"), (diagnostics.stage("gradient_clip") if diagnostics else nullcontext()):
             grad_norm_backend, grad_scale, is_finite = clip_grad_global_norm(
                 step_parameters, max_norm=self.grad_clip
             )
         
         if not is_finite:
-            # The ordinary FP32 sum of squares can itself overflow. An opt-in
-            # audit runs before zero_grad so a rejected update can distinguish
-            # reduction overflow from actual nonfinite gradient elements.
-            if os.environ.get("MINI_LLM_GRAD_NORM_AUDIT", "0") == "1":
+            rejected_norm = float(_array_to_float(grad_norm_backend)) if grad_norm_backend is not None else 0.0
+            # Only rejected rounds pay for the scale-stable audit. Detailed
+            # diagnostic runs must capture the gradients before zero_grad.
+            if diagnostics is not None or os.environ.get("MINI_LLM_GRAD_NORM_AUDIT", "0") == "1":
                 audit = audit_gradients(step_parameters)
                 stable_norm = audit["stable_norm"]
+                if diagnostics is not None:
+                    diagnostics.emit("gradient_rejected", completed_step=self.step,
+                        attempted_step=self.step + 1, ordinary_norm=rejected_norm,
+                        failure_kind="norm_reduction_overflow" if audit["all_finite"] else "nonfinite_elements",
+                        gradient_audit=audit, loss=avg_loss,
+                        global_supervised_tokens=self._last_step_supervised_tokens)
                 print(
                     "Gradient audit: "
                     f"parameters={audit['parameter_count']}, "
@@ -3279,10 +3347,12 @@ class ExtendedTrainer:
                 component_updates.cancel()
             print(
                 f"WARNING: Nonfinite gradient at step {self.step}; "
-                f"norm={_array_to_float(grad_norm_backend) if grad_norm_backend is not None else 'unknown'}; "
+                f"norm={rejected_norm if grad_norm_backend is not None else 'unknown'}; "
                 f"update skipped"
             )
-            return avg_loss, float(_array_to_float(grad_norm_backend)) if grad_norm_backend is not None else 0.0
+            if peer is not None:
+                peer.finish_step(self, updated=False)
+            return avg_loss, rejected_norm
         
         # Update parameters (only once per accumulated batch). Passing names to
         # the optimizer is required for a true freeze: zero gradients alone
@@ -3295,7 +3365,7 @@ class ExtendedTrainer:
             component_updates.capture_before(
                 step_parameters, learning_rate=lr, clip_scale=grad_scale,
             )
-        with performance_scope("train.optimizer_step"):
+        with performance_scope("train.optimizer_step"), (diagnostics.stage("optimizer_update") if diagnostics else nullcontext()):
             self.optimizer.step(lr=lr, active_parameter_names=active_names)
         if component_updates_active:
             component_update_rows = component_updates.finish()
@@ -3331,6 +3401,9 @@ class ExtendedTrainer:
         if memory_active:
             self._record_memory_snapshot(memory_records, "after_zero_grad")
         
+        if peer is not None:
+            peer.finish_step(self, updated=True)
+
         # One device-to-host transfer per optimizer step, after the update.
         # No new loss computation or modification of gradients is performed.
         if source_observations:
@@ -3435,8 +3508,16 @@ class ExtendedTrainer:
             self._profiled_steps += 1
             configure_performance_profiler(False)
         
-        # Sync grad_norm only at the end (necessary for logging)
-        return avg_loss, float(_array_to_float(grad_norm_backend))
+        # Reuse the existing scalar read; diagnostics add no device synchronization.
+        grad_norm_value = float(_array_to_float(grad_norm_backend))
+        if diagnostics is not None:
+            diagnostics.emit("update_complete", saved_weight_version=self.step,
+                             optimizer_step=self.optimizer.step_index, loss=avg_loss,
+                             grad_norm=grad_norm_value, learning_rate=lr,
+                             supervised_tokens=self._last_step_supervised_tokens,
+                             executed_tokens=self._last_step_executed_tokens,
+                             local_microbatches=actual_completed)
+        return avg_loss, grad_norm_value
     
     def training_resume_contract(self):
         """Versioned scientific/runtime contract required for exact AR resume."""
@@ -3844,6 +3925,10 @@ class ExtendedTrainer:
             training_state["tokenizer_hash"] = getattr(self, "tokenizer_sha256", None)
             training_state["supervised_tokens"] = int(self._block_proposal_supervised_tokens)
             training_state["block_proposal_resume_contract"] = self.block_proposal_resume_contract()
+
+        peer = getattr(self, "accumulation_peer", None)
+        if peer is not None:
+            training_state["heterogeneous_state"] = peer.state_dict(self)
 
         # Issue #12: Include RNG states
         training_state["train_rng_state"] = self.train_rng.bit_generator.state

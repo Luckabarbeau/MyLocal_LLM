@@ -1,0 +1,50 @@
+{
+  "smoke": true,
+  "dtype": "bfloat16",
+  "seed": 42,
+  "timeout_s": 300,
+  "anchor": "amd-long",
+  "grad_clip": 1.0,
+  "warmup_microbatches": 2,
+  "target_compute_fraction": 0.8,
+  "max_anchor_microbatches": 16,
+  "env": {
+    "MINI_LLM_BF16_MIXED_CONTEXT": "0",
+    "MINI_LLM_OPTIMIZER_OFFLOAD": "full",
+    "MINI_LLM_OPTIMIZER_OFFLOAD_CHUNK_MB": "16",
+    "MINI_LLM_DUAL_RESOLUTION_LOCAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_GLOBAL_KERNEL": "triton",
+    "MINI_LLM_DUAL_RESOLUTION_COMPRESSION_KERNEL": "triton"
+  },
+  "workers": [
+    {
+      "name": "nvidia-short",
+      "python": ".venv/bin/python",
+      "expected_runtime": "cuda",
+      "device": 0,
+      "batch_size": 2,
+      "context_length": 128,
+      "lm_head_chunk_tokens": 16,
+      "env": {
+        "TRITON_DEFAULT_BACKEND": "nvidia",
+        "LD_LIBRARY_PATH": ""
+      }
+    },
+    {
+      "name": "amd-long",
+      "python": ".venv-rocm/bin/python",
+      "expected_runtime": "hip",
+      "device": 0,
+      "batch_size": 1,
+      "context_length": 256,
+      "target_microbatches": 2,
+      "lm_head_chunk_tokens": 16,
+      "env": {
+        "TRITON_DEFAULT_BACKEND": "amd",
+        "ROCM_HOME": "/opt/rocm-7.2.4",
+        "ROCM_PATH": "/opt/rocm-7.2.4",
+        "LD_LIBRARY_PATH": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv-rocm/rocm-deps/opt/rocm-7.2.4/lib:/opt/rocm-7.2.4/lib"
+      }
+    }
+  ]
+}

@@ -137,6 +137,18 @@ def parse_args():
         description="Train a decoder-only language model on Cosmopedia-v2"
     )
     
+    parser.add_argument(
+        "--heterogeneous-peer-config",
+        type=str,
+        default=None,
+        help="Path to the native heterogeneous peer JSON configuration.",
+    )
+    parser.add_argument(
+        "--acknowledge-heterogeneous-fork",
+        action="store_true",
+        help="Acknowledge that heterogeneous accumulation forks the training run.",
+    )
+
     # Model selection
     parser.add_argument(
         "--model",
@@ -1790,6 +1802,11 @@ def main():
             checkpoint_path,
             param_names=param_names,
         )
+        if (training_state or {}).get("heterogeneous_state") and not args.heterogeneous_peer_config:
+            raise ValueError(
+                "resume checkpoint requires --heterogeneous-peer-config; "
+                "refusing silent removal of the accumulation peer"
+            )
         # Resume is an exact continuation, never an architecture warm start.
         # Partial loading remains available only through the explicit --init-from
         # path. Check the on-disk set too because load_checkpoint(param_names=...)
@@ -2481,6 +2498,16 @@ def main():
     print("Starting Training")
     print("=" * 60)
 
+    if args.heterogeneous_peer_config:
+        from mini_llm.heterogeneous_production import ProductionPeerSession
+        trainer.accumulation_peer = ProductionPeerSession(
+            trainer,
+            config_path=args.heterogeneous_peer_config,
+            training_state=training_state or {},
+            acknowledge_fork=args.acknowledge_heterogeneous_fork,
+            tokenizer_path=tokenizer_path,
+        )
+
     try:
         losses = trainer.train(
             num_steps=(min(args.total_steps - start_step, args.max_run_steps)
@@ -2493,8 +2520,13 @@ def main():
         if args.checkpoint_dir and trainer.step % trainer.save_interval != 0:
             trainer.save()
     finally:
-        if trainer.streaming_cache is not None:
-            trainer.streaming_cache.close()
+        try:
+            peer = getattr(trainer, "accumulation_peer", None)
+            if peer is not None:
+                peer.close()
+        finally:
+            if trainer.streaming_cache is not None:
+                trainer.streaming_cache.close()
 
     print()
     print("=" * 60)

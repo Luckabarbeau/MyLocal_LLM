@@ -1,0 +1,22 @@
+{
+  "python": ".venv-rocm/bin/python",
+  "backend": "cupy",
+  "expected_runtime": "hip",
+  "device": 0,
+  "batch_size": 1,
+  "context_length": 8192,
+  "max_microbatches": 2048,
+  "warmup_microbatches": 2,
+  "timeout_s": 7200,
+  "seed": 104729,
+  "work_dir": "/dev/shm",
+  "log_file": "logs/model_b_8k_heterogeneous_trial.peer.log",
+  "env": {
+    "TRITON_DEFAULT_BACKEND": "amd",
+    "ROCM_HOME": "/opt/rocm-7.2.4",
+    "ROCM_PATH": "/opt/rocm-7.2.4",
+    "LD_LIBRARY_PATH": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv-rocm/rocm-deps/opt/rocm-7.2.4/lib:/opt/rocm-7.2.4/lib",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1"
+  }
+}

@@ -496,6 +496,10 @@ def forward(q,k,v,*,scale,documents=None,positions=None,
         sparse_stride,sparse_phase,
     )
     if nk==0 or (bounded and not sparse_stride and nq<=history_block_size):
+        # Caller-owned views may be the intentionally unwritten sparse head.
+        # Empty history is exactly zero, never the allocator's previous contents.
+        out.fill(0.)
+        lse.fill(0.)
         return out,cache
     qstr,kstr,vstr,ostr,lstr=map(_strides,(q,k,v,out,lse))
     bm = _SPARSE_BM if sparse_stride else _BM
@@ -537,6 +541,10 @@ def backward(dout,cache,*,dq=None,dk=None,dv=None,add_dkdv=False):
             any(str(x.dtype) != 'float32' for x in (dq,dk,dv))):
         raise ValueError('provided attention gradients must be matching FP32 storage')
     if nk==0 or (cache.bounded and not cache.sparse_stride and nq<=cache.history_block_size):
+        dq.fill(0.)
+        if not add_dkdv:
+            dk.fill(0.)
+            dv.fill(0.)
         return dq,dk,dv
     qstr,kstr,vstr,ostr,dostr,lstr,dqstr,dkstr,dvstr=map(
         _strides,(q,k,v,cache.output,dout,cache.lse,dq,dk,dv))

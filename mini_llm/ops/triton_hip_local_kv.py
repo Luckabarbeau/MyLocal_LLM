@@ -15,7 +15,7 @@ import triton.language as tl
 
 @triton.jit
 def _kv_kernel(
-    q, k, v, documents, d_out, lse_log2, delta, partial,
+    q, k, v, documents, d_out, lse_log2, delta, partial_dk, partial_dv,
     q_sb: tl.constexpr, q_st: tl.constexpr, q_sh: tl.constexpr,
     k_sb: tl.constexpr, k_st: tl.constexpr, k_sh: tl.constexpr,
     v_sb: tl.constexpr, v_st: tl.constexpr, v_sh: tl.constexpr,
@@ -27,6 +27,7 @@ def _kv_kernel(
     local_window: tl.constexpr, long_window: tl.constexpr,
     long_heads: tl.constexpr, skip_head: tl.constexpr,
     compute_dk: tl.constexpr, block_m: tl.constexpr, block_n: tl.constexpr,
+    compute_dv: tl.constexpr = False,
 ):
     tile = tl.program_id(0)
     batch_head = tl.program_id(1)
@@ -36,6 +37,7 @@ def _kv_kernel(
     ns = tile * block_n + tl.arange(0, block_n)
     ds = tl.arange(0, 64)
     acc = tl.zeros((block_n, 64), tl.float32)
+    dv_acc = tl.zeros((block_n, 64), tl.float32)
     if head != skip_head:
         key_docs = tl.load(documents + batch * doc_sb + ns * doc_st,
                            mask=ns < n_ctx, other=-1)
@@ -73,13 +75,16 @@ def _kv_kernel(
                 d_probabilities = tl.dot(values, tl.trans(upstream))
                 d_scores = probabilities * (d_probabilities - row_delta[None, :])
                 acc = tl.dot(d_scores.to(tl.bfloat16), queries, acc)
-            else:
-                acc = tl.dot(probabilities.to(tl.bfloat16), upstream, acc)
+            if compute_dv:
+                dv_acc = tl.dot(probabilities.to(tl.bfloat16), upstream, dv_acc)
     if compute_dk:
         acc = acc * scale
     destination = ((batch * n_ctx + ns[:, None]) * 16 + head) * 64 + ds[None, :]
     # Skipped heads still own their partial slice, and must write zeros.
-    tl.store(partial + destination, acc, mask=ns[:, None] < n_ctx)
+    if compute_dk:
+        tl.store(partial_dk + destination, acc, mask=ns[:, None] < n_ctx)
+    if compute_dv:
+        tl.store(partial_dv + destination, dv_acc, mask=ns[:, None] < n_ctx)
 
 
 @triton.jit
@@ -139,19 +144,26 @@ def backward(d_out, cache, *, delta=None):
         (q, k, v, docs, cache.output, d_out, cache.lse_log2, delta),
     )
     active_mask = 0xFFFF if cache.skip_head < 0 else 0xFFFF & ~(1 << cache.skip_head)
+    fused = environ.get('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV', '0').strip().lower()
+    if fused not in ('0', '1'):
+        raise ValueError('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV must be 0 or 1')
     if not reuse_delta:
         _launch_delta(cache.output, d_out, delta, os, dos, dels, length, batch, active_mask)
-    for compute_dk, partial in ((True, partial_dk), (False, partial_dv)):
+    # One shared score/probability recompute per tile when fused; the dK and dV
+    # accumulation order is identical either way, so the derivatives match
+    # element-for-element across the two schedules.
+    arms = ((True, True, 8),) if fused == '1' else ((True, False, 4), (False, True, 4))
+    for compute_dk, compute_dv, warps in arms:
         _kv_kernel[(triton.cdiv(length, key_tile), batch * 16)](
             _ptr(q), _ptr(k), _ptr(v), _ptr(docs), _ptr(d_out),
-            _ptr(cache.lse_log2), _ptr(delta), _ptr(partial),
+            _ptr(cache.lse_log2), _ptr(delta), _ptr(partial_dk), _ptr(partial_dv),
             *qs[:3], *ks[:3], *vs[:3], *docs_s[:2], *dos[:3], *ls[:3], *dels[:3],
             n_ctx=length, scale=cache.scale,
             scale_log2=cache.scale * 1.4426950408889634,
             local_window=cache.window, long_window=cache.long_window,
             long_heads=cache.long_heads, skip_head=cache.skip_head,
-            compute_dk=compute_dk, block_m=32, block_n=key_tile,
-            num_warps=4, num_stages=1,
+            compute_dk=compute_dk, compute_dv=compute_dv, block_m=32, block_n=key_tile,
+            num_warps=warps, num_stages=1,
         )
     n_elements = batch * length * 4 * 64
     _reduce_kernel[(triton.cdiv(n_elements, 256),)](

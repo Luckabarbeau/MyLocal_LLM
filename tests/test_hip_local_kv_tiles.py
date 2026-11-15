@@ -96,3 +96,48 @@ def test_invalid_key_tile_raises(monkeypatch, hip_local, tile):
     monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_KEY_TILE', tile)
     with pytest.raises(ValueError):
         backward(dy, cache)
+
+
+@pytest.mark.parametrize('length', (65, 641))
+def test_fused_kv_schedule_matches_split_bitwise(monkeypatch, hip_local, length):
+    cp, forward, backward = hip_local
+    rng = np.random.default_rng(107 + length)
+    packed = cp.asarray(
+        rng.normal(0, 0.2, (1, length, 48, 64)), dtype=cp.float32,
+    ).astype('bfloat16')
+    q, k, v = packed[:, :, :16], packed[:, :, 16:20], packed[:, :, 20:24]
+    dy = cp.asarray(rng.normal(0, 0.1, (1, length, 16, 64)), dtype=cp.float32)
+    docs = cp.zeros((1, length), dtype=cp.int32)
+    docs[:, 17:] = 1
+    _, cache = forward(q, k, v, docs, long_window=4096, long_heads=3, skip_head=0)
+    monkeypatch.setenv('MINI_LLM_HIP_SPLIT_KV_BACKWARD', '2')
+    monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_KEY_TILE', '64')
+    monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV', '0')
+    split = map(cp.asnumpy, backward(dy, cache))
+    monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV', '1')
+    fused = map(cp.asnumpy, backward(dy, cache))
+    owned = np.arange(16) != cache.skip_head
+    for derivative, want, got in zip(('dq', 'dk', 'dv'), split, fused):
+        assert want.shape == got.shape
+        assert str(got.dtype) == 'float32'
+        if derivative == 'dq':
+            want, got = (x[:, :, owned] for x in (want, got))
+        # Both schedules keep each accumulator's own reduction order and tile
+        # shape, so fusing the shared score recompute must be bitwise identical.
+        np.testing.assert_array_equal(got, want, err_msg=derivative, verbose=True)
+
+
+@pytest.mark.parametrize('mode', ('2', 'invalid', ''))
+def test_invalid_fused_kv_mode_raises(monkeypatch, hip_local, mode):
+    cp, forward, backward = hip_local
+    q = cp.zeros((1, 1, 16, 64), dtype=cp.float32).astype('bfloat16')
+    k = cp.zeros((1, 1, 4, 64), dtype=cp.float32).astype('bfloat16')
+    v = cp.zeros_like(k)
+    dy = cp.zeros(q.shape, dtype=cp.float32)
+    docs = cp.zeros((1, 1), dtype=cp.int32)
+    _, cache = forward(q, k, v, docs)
+    monkeypatch.setenv('MINI_LLM_HIP_SPLIT_KV_BACKWARD', '2')
+    monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_KEY_TILE', '64')
+    monkeypatch.setenv('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV', mode)
+    with pytest.raises(ValueError):
+        backward(dy, cache)

@@ -3294,6 +3294,21 @@ class ExtendedTrainer:
             )
             if not self.optimizer_enabled:
                 return avg_loss, 0.0
+            if synced.get("rejected") is not None:
+                # A peer export carrying non-finite gradients is a rejected
+                # round, treated exactly like a non-finite owner gradient: both
+                # accumulation buffers are cleared, the peer is released without
+                # new weights, and the step is retried from fresh samples. The
+                # session already recorded the per-parameter peer audit.
+                self.optimizer.zero_grad()
+                if component_updates_active:
+                    component_updates.cancel()
+                print(
+                    f"WARNING: Nonfinite peer gradient at step {self.step}; "
+                    f"round rejected; update skipped"
+                )
+                peer.finish_step(self, updated=False)
+                return avg_loss, float("nan")
             avg_loss = synced["loss"]
             self._last_step_supervised_tokens = synced["supervised_tokens"]
             self._last_step_executed_tokens = synced["executed_tokens"]
@@ -3571,7 +3586,13 @@ class ExtendedTrainer:
         }
 
     def validate_training_resume_contract(self, training_state, *, allow_changes=False):
-        """Reject silent scientific/runtime drift for versioned checkpoints."""
+        """Report scientific/runtime drift for versioned checkpoints.
+
+        A fork is a warning plus auditable provenance, never a resume failure:
+        the value configured in this process wins and the diff is written into
+        ``resume_contract_history`` at the next save. ``allow_changes`` is retained
+        for existing callers and launch commands and is advisory only.
+        """
         saved = (training_state or {}).get("training_resume_contract")
         if saved is None:
             print("WARNING: legacy checkpoint lacks training_resume_contract; "
@@ -3611,19 +3632,37 @@ class ExtendedTrainer:
                     "current": actual.get(key),
                 })
         scientific = [row for row in mismatches if row["field"] not in placement_fields]
-        if scientific and not allow_changes:
-            preview = "; ".join(
-                f"{row['field']}: {row['checkpoint']!r} -> {row['current']!r}"
-                for row in scientific[:8]
-            )
-            raise ValueError(
-                "non-exact checkpoint resume configuration; pass "
-                f"--allow-nonexact-resume for an intentional fork ({preview})"
-            )
         if mismatches:
             print("WARNING: intentional non-exact checkpoint resume:")
             for row in mismatches:
                 print(f"  {row['field']}: {row['checkpoint']!r} -> {row['current']!r}")
+            if scientific:
+                preview = "; ".join(
+                    f"{row['field']}: {row['checkpoint']!r} -> {row['current']!r}"
+                    for row in scientific[:8]
+                )
+                print(
+                    f"WARNING: {len(scientific)} scientific/runtime field(s) changed; "
+                    f"this run continues with its own values ({preview}) and records "
+                    "the diff in resume_contract_history"
+                )
+            # The backend row is called out separately because it is not a
+            # scientific hyperparameter: a device -> host change silently moves
+            # every tensor of an otherwise valid GPU run onto the CPU reference
+            # implementation, so it deserves an actionable note rather than one
+            # line among the runtime-environment diff.
+            backend = next((row for row in mismatches
+                            if row["field"] == "backend"), None)
+            if (backend is not None and backend["current"] == "numpy"
+                    and backend["checkpoint"] != "numpy"):
+                print(
+                    "WARNING: resume moves a device checkpoint ("
+                    f"backend={backend['checkpoint']!r}) onto the host NumPy "
+                    "reference backend: all training tensors will be computed on "
+                    "CPU. Restore the checkpoint backend with "
+                    f"--backend {backend['checkpoint']} (or MINI_LLM_BACKEND) "
+                    "unless this host run is intentional."
+                )
         return mismatches
 
     def block_proposal_resume_contract(self):

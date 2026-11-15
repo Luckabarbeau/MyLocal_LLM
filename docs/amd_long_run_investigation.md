@@ -89,10 +89,45 @@ that variable, which checkpoint environment restoration could otherwise remove.
 No learning-rate, clipping, loss-scaling, optimizer, or skip policy was changed.
 
 The audit sees the owner's **globally combined** gradients. The peer export is
-already finite-element checked before combination. A passing export check does
-not rule out extreme finite peer values, and the owner's raw local gradients are
-not retained separately after reduction. Do not label a rank as responsible from
-a combined-gradient audit alone.
+finite-element checked chunk by chunk before combination, and a bad HIP export is
+now rejected as a round exactly like a nonfinite owner norm: `ProductionPeerSession`
+records `event: gradient_rejected` with `failure_kind: peer_nonfinite_export` and a
+per-parameter peer audit (NaN/Inf counts plus largest finite magnitude per flagged
+tensor) taken from the shared export buffer, `ExtendedTrainer` then clears both
+accumulation buffers, releases the waiting peer with `updated=False`, and retries the
+same step from fresh samples without touching weights, optimizer or scheduler state.
+Because that export audit localizes the tensor before the Inf is folded into the
+owner's gradients, the offending rank **can** be identified for a rejected peer
+export; a combined-gradient audit alone still does not establish responsibility.
+A passing export check still does not rule out extreme finite peer values, and the
+owner's raw local gradients are not retained separately after reduction.
+
+## Identical-data replay of a rejected peer round
+
+A rejected peer round is **not** retried on fresh samples the way the owner's own
+skip is. `ProductionPeerSession.begin_step` snapshots the sampler on both sides
+(`sampler_state`), and a rejected export rolls both samplers back so the retry
+re-runs the same round on the same documents. To keep the comparison valid the
+peer's microbatch membership is pinned for the replay: the owner's sync message
+passes `restore_sampler` plus `replay_microbatches`, and `_PeerHooks` uses that
+value as the next round's accumulation cap, which removes the usual timing
+conditioning of peer membership. This yields `event: peer_replay_verdict` with
+`verdict` in `reproduced_same_parameters`, `reproduced_different_parameters`,
+`clean_replay`, or `clean_replay_membership_differs`, plus `membership_match` and
+both attempts' microbatch/supervised-token counts.
+
+Interpretation: `reproduced_*` means the same data and the same peer membership
+failed again, i.e. a data/code-dependent defect to bisect in a forked checkpoint
+directory (a peer-config `env` change alters the saved contract, so it needs a
+deliberate new fork). `clean_replay` with `membership_match=true` means the same
+workload on the same peer GPU was clean, so the non-finite export was **not**
+reproducible and points at non-deterministic execution on the peer GPU rather than
+at the training math. `PEER_REPLAY_BUDGET = 2` bounds this to two identical replays
+per session; after it is spent the run emits `peer_replay_exhausted` and resumes
+the fresh-sample retry, so a persistently faulty card cannot replay one round
+forever. `tests/test_heterogeneous_peer_gradient_rejection.py` covers all three
+branches and asserts from the per-GPU JSONL that the replayed attempts sampled
+byte-identical `inputs`.
 
 Two injected CPU integration cases establish that the audit:
 

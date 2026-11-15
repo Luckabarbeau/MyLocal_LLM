@@ -49,9 +49,16 @@ def _cli_option_value(name):
 
 
 def _bootstrap_resume_environment_from_cli():
-    """Restore an exact checkpoint runtime before importing backend modules."""
-    if "--allow-nonexact-resume" in sys.argv[1:]:
-        return False
+    """Restore the checkpoint runtime environment before importing backends.
+
+    Every resume inherits the saved ``MINI_LLM_*`` environment, including
+    ``MINI_LLM_BACKEND``. The array backend decides whether tensors live on the
+    device or on the host reference path, and the module default is ``numpy``,
+    so a resume that only changes scientific hyperparameters (a new ``--peak-lr``,
+    for instance) must never silently continue on a different backend. Explicit
+    selections still win because ``_bootstrap_optimizer_offload_from_cli`` and
+    ``_bootstrap_backend_from_cli`` are applied after this restore.
+    """
     resume_from = _cli_option_value("--resume-from")
     if resume_from is None:
         return False
@@ -470,9 +477,11 @@ def parse_args():
     )
     parser.add_argument(
         "--allow-nonexact-resume", action="store_true",
-        help=("Explicitly allow a versioned checkpoint's scientific/runtime "
-              "contract to change; skips automatic checkpoint-environment "
-              "restoration, then prints and checkpoints differences."),
+        help=("Accepted for compatibility only. Contract drift is reported as a "
+              "warning and recorded as provenance instead of aborting the resume; "
+              "the saved checkpoint environment is restored for every resume, "
+              "regardless of this flag, so a hyperparameter fork never switches "
+              "the execution backend."),
     )
     parser.add_argument(
         "--init-from",

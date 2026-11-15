@@ -80,12 +80,21 @@ def test_resume_bootstrap_restores_saved_runtime_before_backend_import(tmp_path,
     }
 
 
-def test_nonexact_resume_bootstrap_preserves_explicit_environment(tmp_path, monkeypatch):
+def test_nonexact_resume_bootstrap_restores_saved_runtime(tmp_path, monkeypatch):
+    """A scientific hyperparameter fork still inherits the saved runtime.
+
+    Discarding stale host ``MINI_LLM_*`` keys and restoring the checkpoint's is
+    what keeps a ``--peak-lr`` fork on the checkpoint's execution backend instead
+    of falling back to the ``numpy`` module default.
+    """
     checkpoint = tmp_path / "model"
     checkpoint.mkdir()
     (checkpoint / "training_state.json").write_text(json.dumps({
         "training_resume_contract": {
-            "runtime_environment": {"MINI_LLM_SAVED": "1"},
+            "runtime_environment": {
+                "MINI_LLM_BACKEND": "cupy",
+                "MINI_LLM_SAVED_FAST_PATH": "1",
+            },
         },
     }))
     environment = {"MINI_LLM_EXPLICIT": "1"}
@@ -95,8 +104,17 @@ def test_nonexact_resume_bootstrap_preserves_explicit_environment(tmp_path, monk
         "--allow-nonexact-resume",
     ])
 
-    assert not train_model._bootstrap_resume_environment_from_cli()
-    assert environment == {"MINI_LLM_EXPLICIT": "1"}
+    assert train_model._bootstrap_resume_environment_from_cli()
+    assert environment == {"MINI_LLM_BACKEND": "cupy", "MINI_LLM_SAVED_FAST_PATH": "1"}
+
+    # An explicit CLI backend is applied after the restore, so it still wins.
+    monkeypatch.setattr(train_model.sys, "argv", [
+        "train_model.py", "--resume-from", str(checkpoint),
+        "--allow-nonexact-resume", "--backend", "numpy",
+    ])
+    train_model._bootstrap_backend_from_cli()
+    assert environment["MINI_LLM_BACKEND"] == "numpy"
+
 
 
 def test_optimizer_offload_cli_override_beats_checkpoint_environment(tmp_path, monkeypatch):
@@ -167,7 +185,7 @@ def test_step_coherence_preserves_historical_offset_and_rejects_missing_state(ca
         train_model.validate_checkpoint_step_coherence({"step": 17}, {})
 
 
-def test_versioned_resume_contract_persists_and_rejects_drift(tmp_path, monkeypatch, capsys):
+def test_versioned_resume_contract_persists_and_warns_drift(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_SHAPE_BUCKET", "fine")
     shard = _shard(tmp_path / "train.bin")
     checkpoint = tmp_path / "checkpoint"
@@ -193,14 +211,16 @@ def test_versioned_resume_contract_persists_and_rejects_drift(tmp_path, monkeypa
         _model(), shard, tmp_path / "changed",
         grad_accum_steps=4, weight_decay=0.2,
     )
-    with pytest.raises(ValueError, match="allow-nonexact-resume"):
-        changed.validate_training_resume_contract(state)
-    mismatches = changed.validate_training_resume_contract(
-        state, allow_changes=True,
-    )
+    mismatches = changed.validate_training_resume_contract(state)
     fields = {row["field"] for row in mismatches}
     assert {"grad_accum_steps", "weight_decay"} <= fields
-    assert "intentional non-exact" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "intentional non-exact" in output
+    assert "scientific/runtime field(s) changed" in output
+    # The flag stays accepted for older launch commands and changes no behaviour.
+    assert changed.validate_training_resume_contract(
+        state, allow_changes=True,
+    ) == mismatches
 
     legacy = dict(state)
     legacy.pop("training_resume_contract")

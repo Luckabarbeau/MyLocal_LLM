@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from mini_llm.backend import BACKEND_NAME, asnumpy, xp
+from mini_llm.backend import BACKEND_NAME, asnumpy, resolve_dtype, xp
 from mini_llm.ops.dual_resolution_attention import build_dual_resolution_metadata
 from mini_llm.ops.rope import PreparedRoPEPositions
 from mini_llm.ops import matrix_pool_dual_resolution_attention as pool_module
@@ -56,6 +56,48 @@ def test_local_rope_reuses_prepared_factors_across_global_and_layers(monkeypatch
     assert counts == [(2, 12), (2, 12)]
     np.testing.assert_array_equal(asnumpy(token_a.cos[:, 0, 0]),
                                   asnumpy(global_q.cos[:, 0, 0]))
+
+
+def test_numpy_bf16_prepared_local_rope_follows_projected_operand_dtype(monkeypatch):
+    if BACKEND_NAME != "numpy":
+        pytest.skip("NumPy BF16 GEMM operand promotion")
+    # NumPy has no BF16 matmul kernel, so a BF16 projection returns FP32 while
+    # the block input stays BF16.  The prepared factors must follow the tensor
+    # that is rotated; otherwise a BF16 reference run aborts on the RoPE identity
+    # check.  FP32 is also the dtype the prepared-disabled path selects, so parity
+    # between the two paths is exact.
+    monkeypatch.setenv("MINI_LLM_DUAL_RESOLUTION_FAST_PROJECTIONS", "0")
+    monkeypatch.setenv("MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE", "1")
+    tokens = _packed_tokens()
+    rng = np.random.default_rng(10214)
+    bf16 = resolve_dtype("bfloat16")
+    x = xp.asarray(rng.normal(scale=0.1, size=(2, 12, 16)), dtype=bf16)
+    residual = xp.asarray(rng.normal(size=(2, 12, 16)), dtype=xp.float32)
+    grad = xp.asarray(rng.normal(size=(2, 12, 16)), dtype=bf16)
+    metadata = build_dual_resolution_metadata(tokens, eos_token_id=0, block_size=4)
+
+    def run(prepared):
+        monkeypatch.setenv("MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE",
+                           "1" if prepared else "0")
+        operator = _attention(seed=1044, dtype="bfloat16")
+        operator.zero_grad()
+        y, cache = operator.forward(x, residual_input=residual,
+                                    dual_resolution_metadata=metadata)
+        dx, dresid = operator.backward(grad, cache)
+        return (asnumpy(y.astype(xp.float32)), asnumpy(dx.astype(xp.float32)),
+                asnumpy(dresid.astype(xp.float32)),
+                [asnumpy(p.grad.astype(xp.float32)).copy()
+                 for p in operator.parameters()])
+
+    reference, optimized = run(False), run(True)
+    device_md = metadata["_dual_resolution_device_metadata_0102f"][1]
+    tables = list(device_md.get("_matrix_pool_local_rope_0102y", {}).values())
+    assert len(tables) == 1
+    assert tables[0].dtype == "float32"
+    for a, b in zip(reference[:3], optimized[:3]):
+        np.testing.assert_allclose(a, b, rtol=0, atol=0)
+    for a, b in zip(reference[3], optimized[3]):
+        np.testing.assert_allclose(a, b, rtol=0, atol=0)
 
 
 def test_prepared_local_rope_packed_document_and_checkpoint_parity(monkeypatch):

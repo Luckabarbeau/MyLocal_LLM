@@ -4,7 +4,13 @@ import os
 from types import SimpleNamespace
 from dataclasses import replace
 
-from mini_llm.backend import xp, resolve_dtype, is_low_precision_dtype, is_bfloat16_dtype
+from mini_llm.backend import (
+    BACKEND_NAME,
+    xp,
+    resolve_dtype,
+    is_low_precision_dtype,
+    is_bfloat16_dtype,
+)
 from mini_llm.config import ModelConfig
 from mini_llm.blocks.transformer_block import TransformerBlock
 from mini_llm.ops.embedding import Embedding
@@ -17,6 +23,7 @@ from mini_llm.ops.loss import (
 )
 from mini_llm.ops.rmsnorm import RMSNorm
 from mini_llm.ops.rope import prepare_rope_positions
+from mini_llm.ops.hip_projection_wgrad import accumulate_transposed, projection_wgrad
 from mini_llm.ops.hierarchical_memory import (
     ActiveContext,
     TerminalMemoryContext,
@@ -24,6 +31,21 @@ from mini_llm.ops.hierarchical_memory import (
     ExternalMemoryReader,
 )
 from mini_llm.performance_profiler import performance_scope
+
+
+def _hip_lm_head_weight_gradient_enabled(flat_x, weight):
+    """Gate the staged FP32 LM-head weight gradient.
+
+    The staged path keeps every chunk of the ``[Din, Dout]`` product in FP32 scratch
+    and combines it once with the parameter gradient, which both avoids rounding
+    the vocabulary-wide product to BF16 and avoids the strided in-place add into
+    a tied head's transpose gradient view. The gate mirrors the matrix-pool
+    projection dispatch, including ``MINI_LLM_HIP_FP32_PROJECTION_WGRAD``.
+    """
+    return (BACKEND_NAME == "cupy" and xp.cuda.runtime.is_hip
+            and is_bfloat16_dtype(flat_x.dtype)
+            and is_bfloat16_dtype(weight.dtype)
+            and os.environ.get("MINI_LLM_HIP_FP32_PROJECTION_WGRAD", "1") == "1")
 
 
 class DecoderLanguageModel:
@@ -1769,12 +1791,23 @@ class DecoderLanguageModel:
 
         dx = xp.empty_like(flat_x)
         W = self.output_proj.W.data
+        din, dout = map(int, (flat_x.shape[1], W.shape[1]))
         router_only = (
             self.hierarchical_memory_enabled
             and self.config.memory_context.memory_training == "router_only"
         )
         W_grad = (None if router_only or frozen_output_projection
                   else self.output_proj.W.grad)
+        staged_weight_gradient = (
+            _hip_lm_head_weight_gradient_enabled(flat_x, W)
+            and W_grad is not None
+        )
+        # A tied output head exposes ``grad`` only as a transpose view, so the
+        # staged path combines into the registered embedding gradient instead.
+        weight_gradient_owner = getattr(self.output_proj.W, "embedding_weight",
+                                        self.output_proj.W)
+        weight_scratch = None
+        staged_chunks = 0
         for chunk_index, start in enumerate(range(0, n, chunk_tokens)):
             end = min(start + chunk_tokens, n)
             x_chunk = flat_x[start:end]
@@ -1792,10 +1825,23 @@ class DecoderLanguageModel:
                     grad_scale=grad_scale,
                 )
             with performance_scope("model.output_projection.chunk_backward"):
-                if W_grad is not None:
+                if staged_weight_gradient:
+                    if weight_scratch is None:
+                        weight_scratch = xp.empty((din, dout), dtype=xp.float32)
+                    projection_wgrad(x_chunk, d_logits, out=weight_scratch,
+                                     accumulate=staged_chunks > 0)
+                    staged_chunks += 1
+                elif W_grad is not None:
                     W_grad += x_chunk.T @ d_logits
                 dx[start:end] = d_logits @ W.T
             del logits, d_logits
+
+        if weight_scratch is not None:
+            owner_grad = weight_gradient_owner.grad
+            if owner_grad.shape == weight_scratch.shape:
+                owner_grad += weight_scratch
+            else:
+                accumulate_transposed(owner_grad, weight_scratch)
 
         dx_selected = dx.reshape(head_input.shape)
         target_slice = loss_cache.get("target_slice")

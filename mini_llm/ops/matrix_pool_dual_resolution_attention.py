@@ -28,6 +28,7 @@ from .dual_resolution_attention import (
     _linear_forward,
     _work_array,
 )
+from .hip_projection_wgrad import _bf16_wgrad_gradient_enabled
 
 
 def _output_projection_wgrad(activation, gradient):
@@ -656,7 +657,12 @@ class MatrixPoolDualResolutionAttention:
             v = _linear_forward(x, self.Wv).reshape(
                 batch, length, self.n_kv_heads, self.d_head
             )
-        local_rope_positions = self._local_rope_positions(metadata, x.dtype)
+        # The prepared table must match the tensor that is actually rotated, not
+        # the block input: NumPy promotes BF16 GEMM operands to FP32, while CuPy
+        # keeps BF16.  Deriving the dtype from the projected Q/K reproduces the
+        # table dtype the unprepared reference path would have chosen.
+        rope_dtype = q_pre.dtype
+        local_rope_positions = self._local_rope_positions(metadata, rope_dtype)
         fused_qkv_rope = None
         if packed_qkv is not None and _compact_packed_v_enabled():
             fused_qkv_rope = _fused_packed_qkv_rope_forward_bf16(
@@ -706,9 +712,6 @@ class MatrixPoolDualResolutionAttention:
                     batch, -1, self.d_model
                 ).astype(x.dtype, copy=False)
                 state_compute = local_state.astype(x.dtype, copy=False)
-                qg_positions, kg_positions = self._global_rope_positions(
-                    metadata, summary_meta, x.dtype
-                )
             with matrix_pool_detail_scope("matrix_pool.global_q_projection.forward"):
                 qg_projection = _linear_forward(state_compute, self.W_global_q)
             with matrix_pool_detail_scope("matrix_pool.global_kv_projection.forward"):
@@ -724,6 +727,9 @@ class MatrixPoolDualResolutionAttention:
             vg = vg_projection.reshape(batch, -1, self.global_heads,
                                        self.global_head_dim)
             with matrix_pool_detail_scope("matrix_pool.global_rope.forward"):
+                qg_positions, kg_positions = self._global_rope_positions(
+                    metadata, summary_meta, qg_pre.dtype
+                )
                 qg, qg_rope_cache = rope_forward(
                     qg_pre, self.rope_base, qg_positions
                 )
@@ -869,54 +875,70 @@ class MatrixPoolDualResolutionAttention:
                 cache["residual_input"].shape, dtype=xp.float32
             )
 
-        dl2 = d_local_delta.reshape(-1, self.d_model)
-        local_compute = cache["local_compute"]
-        if accumulate_parameter_grads:
-            _add_parameter_grad(
-                self.Wo,
-                _output_projection_wgrad(
-                    local_compute.reshape(-1, self.d_model), dl2,
-                ),
-            )
-        if (_bf16_output_dx_enabled()
-                and is_low_precision_dtype(dy.dtype)
-                and dy.dtype == self.Wo.data.dtype):
-            dlocal_context = (
-                d_local_delta.astype(dy.dtype, copy=False).reshape(-1, self.d_model)
-                @ self.Wo.data.T
-            ).astype(xp.float32, copy=False).reshape(
-                batch, length, self.n_q_heads, self.d_head
-            )
-        else:
-            dlocal_context = (dl2 @ _work_array(self.Wo.data).T).reshape(
-                batch, length, self.n_q_heads, self.d_head
-            )
+        with matrix_pool_detail_scope("matrix_pool.local_output_projection.backward"):
+            # Under the single-operand gradient policy the same BF16 rounding
+            # feeds the weight gradient and the input gradient GEMM, so cast it
+            # once. With the policy off this stays an FP32 operand and the
+            # three-part decomposition path is used unchanged.
+            share_bf16_operand = (_bf16_wgrad_gradient_enabled()
+                                  and _bf16_output_dx_enabled()
+                                  and is_low_precision_dtype(dy.dtype)
+                                  and dy.dtype == self.Wo.data.dtype)
+            if share_bf16_operand:
+                dl2 = d_local_delta.astype(dy.dtype).reshape(-1, self.d_model)
+            else:
+                dl2 = d_local_delta.reshape(-1, self.d_model)
+            local_compute = cache["local_compute"]
+            if accumulate_parameter_grads:
+                _add_parameter_grad(
+                    self.Wo,
+                    _output_projection_wgrad(
+                        local_compute.reshape(-1, self.d_model), dl2,
+                    ),
+                )
+        with matrix_pool_detail_scope("matrix_pool.local_output_dx.backward"):
+            if (_bf16_output_dx_enabled()
+                    and is_low_precision_dtype(dy.dtype)
+                    and dy.dtype == self.Wo.data.dtype):
+                dlocal_context = (
+                    (dl2 if dl2.dtype == self.Wo.data.dtype
+                     else d_local_delta.astype(dy.dtype).reshape(-1, self.d_model))
+                    @ self.Wo.data.T
+                ).astype(xp.float32, copy=False).reshape(
+                    batch, length, self.n_q_heads, self.d_head
+                )
+            else:
+                dlocal_context = (dl2 @ _work_array(self.Wo.data).T).reshape(
+                    batch, length, self.n_q_heads, self.d_head
+                )
         with performance_scope("matrix_pool.local.backward"):
             dq, dk, dv = self._local_backward(
                 dlocal_context, cache["q"], cache["k"], cache["v"],
                 cache["local_cache"], cache["metadata"]["document_ids"],
             )
-        dq_pre = rope_backward(dq, cache["q_rope_cache"])
-        dk_pre = rope_backward(dk, cache["k_rope_cache"])
+        with matrix_pool_detail_scope("matrix_pool.local_rope.backward"):
+            dq_pre = rope_backward(dq, cache["q_rope_cache"])
+            dk_pre = rope_backward(dk, cache["k_rope_cache"])
         q_width = self.n_q_heads * self.d_head
         kv_width = self.n_kv_heads * self.d_head
-        if _fast_projection_enabled():
-            dx_norm = self._packed_main.backward(
-                (dq_pre.reshape(-1, q_width), dk_pre.reshape(-1, kv_width),
-                 dv.reshape(-1, kv_width)),
-                cache["x"], accumulate_parameter_grads,
-            )
-        else:
-            dx_norm = _linear_backward(
-                dq_pre.reshape(batch, length, q_width), cache["x"], self.Wq,
-                accumulate_parameter_grads,
-            )
-            dx_norm += _linear_backward(
-                dk_pre.reshape(batch, length, kv_width), cache["x"], self.Wk,
-                accumulate_parameter_grads,
-            )
-            dx_norm += _linear_backward(
-                dv.reshape(batch, length, kv_width), cache["x"], self.Wv,
-                accumulate_parameter_grads,
-            )
+        with matrix_pool_detail_scope("matrix_pool.local_qkv_projection.backward"):
+            if _fast_projection_enabled():
+                dx_norm = self._packed_main.backward(
+                    (dq_pre.reshape(-1, q_width), dk_pre.reshape(-1, kv_width),
+                     dv.reshape(-1, kv_width)),
+                    cache["x"], accumulate_parameter_grads,
+                )
+            else:
+                dx_norm = _linear_backward(
+                    dq_pre.reshape(batch, length, q_width), cache["x"], self.Wq,
+                    accumulate_parameter_grads,
+                )
+                dx_norm += _linear_backward(
+                    dk_pre.reshape(batch, length, kv_width), cache["x"], self.Wk,
+                    accumulate_parameter_grads,
+                )
+                dx_norm += _linear_backward(
+                    dv.reshape(batch, length, kv_width), cache["x"], self.Wv,
+                    accumulate_parameter_grads,
+                )
         return dx_norm, d_residual_input

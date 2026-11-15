@@ -82,7 +82,10 @@ def main():
                 if self.name == '_dq_kernel':
                     label = 'dq_long' if options['head_begin'] == 0 else 'dq_short'
                 elif self.name == '_kv_kernel':
-                    label = 'dk' if options['compute_dk'] else 'dv'
+                    if options['compute_dk'] and options.get('compute_dv'):
+                        label = 'dk_dv'
+                    else:
+                        label = 'dk' if options['compute_dk'] else 'dv'
                 start, end = cp.cuda.Event(), cp.cuda.Event()
                 start.record()
                 compiled = self.original[grid](*values, **options)
@@ -115,8 +118,14 @@ def main():
         for actual, expected in zip(candidate, reference):
             errors.append(float(cp.max(cp.abs(actual - expected)).get()))
             np.testing.assert_allclose(actual.get(), expected.get(), atol=1e-5, rtol=1e-5)
-        expected_labels = {'delta', 'dq_long', 'dq_short', 'dk', 'dv', 'merge'}
-        if {label for label, _, _ in events} != expected_labels or len(events) != 6:
+        expected_labels = {'delta', 'dq_long', 'dq_short', 'merge'}
+        if os.environ.get('MINI_LLM_HIP_LOCAL_KV_FUSED_DKV', '0').strip().lower() in (
+                '1', 'true', 'yes'):
+            expected_labels.add('dk_dv')
+        else:
+            expected_labels |= {'dk', 'dv'}
+        if ({label for label, _, _ in events} != expected_labels
+                or len(events) != len(expected_labels)):
             raise RuntimeError('unexpected production backward launch sequence')
         for index in range(args.warmup + args.repeats):
             events.clear()

@@ -27,6 +27,14 @@ import numpy as np
 from train_heterogeneous import Channel, ROOT
 
 
+# A rejected peer export is replayed on IDENTICAL data so the recurrence can be
+# attributed: reproducing on the same documents and the same peer membership
+# points at a data/code-dependent defect, while a clean replay points at non-deterministic
+# execution on the peer GPU. The budget bounds the cost (one extra round per rejection)
+# and keeps a persistently faulty card from replaying one round forever; once it is
+# exhausted the established fresh-sample retry resumes.
+PEER_REPLAY_BUDGET = 2
+
 SAMPLER_FIELDS = (
     "current_train_shard_idx", "current_train_source_shard_idx",
     "train_source_batch_counts", "train_source_supervised_tokens", "tokens_processed",
@@ -202,6 +210,9 @@ class ProductionPeerSession:
         self.channel = None
         self.log = None
         self.diagnostics = None
+        self.round_sampler = None
+        self.pending_replay = None
+        self.replay_budget = PEER_REPLAY_BUDGET
         self._trainer = trainer
         enabled = os.environ.get("NATIVE_GPU_LOG", "1")
         if enabled not in {"0", "1"}:
@@ -297,6 +308,7 @@ class ProductionPeerSession:
 
     def begin_step(self, trainer):
         self.started = time.monotonic()
+        self.round_sampler = sampler_state(trainer)
         self.channel.send(command="begin", step=trainer.step)
         if self.diagnostics is not None:
             self.diagnostics.emit("peer_begin_sent", trainer_step=trainer.step)
@@ -329,17 +341,28 @@ class ProductionPeerSession:
         # Weight means by their true supervised-token counts, never by rank count.
         offset = 0
         reduction_started = time.monotonic()
-        for parameter in self.parameters:
+        bad_ranges = []
+        for index, parameter in enumerate(self.parameters):
             size = int(parameter.size)
             flat = parameter.grad.reshape(-1)
             flat *= supervised_tokens / total
+            nan_count = inf_count = 0
             for start in range(0, size, 1048576):
                 stop = min(size, start + 1048576)
                 host = self.buffers["peer-gradient"][offset + start:offset + stop]
                 if not np.isfinite(host).all():
-                    raise ValueError("nonfinite peer gradient; update aborted")
+                    nan_count += int(np.isnan(host).sum())
+                    inf_count += int(np.isinf(host).sum())
                 flat[start:stop] += xp.asarray(host) * (peer_tokens / total)
+            if nan_count or inf_count:
+                bad_ranges.append((parameter.name or f"parameter_{index}", offset, size,
+                                   nan_count, inf_count))
             offset += size
+        self.last_report = report
+        self.last_report["reduce_s"] = time.monotonic() - reduction_started
+        if bad_ranges:
+            return self._reject_peer_export(trainer, report, bad_ranges)
+        self._peer_replay_verdict(report, [])
         for name, coverage in report["source_metrics"].items():
             weight = float(coverage["supervised_token_weight"])
             source_observations.append((name, coverage, xp.asarray(coverage["loss_nll_sum"] / weight)))
@@ -347,8 +370,6 @@ class ProductionPeerSession:
             if name in trainer.train_source_batch_counts:
                 trainer.train_source_batch_counts[name] += coverage["microbatches"]
         trainer.tokens_processed += report["executed_tokens"]
-        self.last_report = report
-        self.last_report["reduce_s"] = time.monotonic() - reduction_started
         if self.diagnostics is not None:
             self.diagnostics.emit("gradient_exchange_complete", owner_microbatches=microbatches,
                 peer_microbatches=report["microbatches"], owner_supervised_tokens=supervised_tokens,
@@ -358,11 +379,125 @@ class ProductionPeerSession:
                     supervised_tokens=total, executed_tokens=executed_tokens + report["executed_tokens"],
                     nominal_tokens=trainer.batch_size * trainer.target_seq_length * microbatches + report["nominal_tokens"])
 
+    def _reject_peer_export(self, trainer, report, bad_ranges):
+        """Discard one peer accumulation round whose export was non-finite.
+
+        This reuses the established owner-side treatment of a non-finite gradient:
+        `train_step` clears both gradients, releases the waiting peer with
+        ``updated=False``, and retries the same step from fresh samples, so the
+        weights, optimizer and scheduler state are untouched. The always-on
+        shared-buffer scan already localizes the offending parameter, which the
+        owner's combined-gradient audit cannot recover once the Inf is folded in.
+        Only rejected rounds pay for the extra magnitude scan.
+        """
+        buffer = self.buffers["peer-gradient"]
+        rows = []
+        for name, start, size, nan_count, inf_count in bad_ranges:
+            max_finite_abs = 0.0
+            for offset in range(start, start + size, 1048576):
+                stop = min(start + size, offset + 1048576)
+                host = buffer[offset:stop]
+                finite = host[np.isfinite(host)]
+                if finite.size:
+                    max_finite_abs = max(max_finite_abs, float(np.abs(finite).max()))
+            rows.append({"name": name, "nonfinite": nan_count + inf_count, "nan": nan_count,
+                         "inf": inf_count, "max_finite_abs": max_finite_abs})
+        print(f"Peer gradient audit: parameters={len(rows)}, elements={sum(int(p.size) for p in self.parameters):,}", flush=True)
+        for row in rows:
+            print(
+                "  NONFINITE "
+                f"{row['name']}: count={row['nonfinite']:,}, nan={row['nan']:,}, "
+                f"inf={row['inf']:,}, max_finite_abs={row['max_finite_abs']:.6e}"
+            )
+        if self.diagnostics is not None:
+            self.diagnostics.emit("gradient_rejected", completed_step=trainer.step,
+                attempted_step=trainer.step + 1, failure_kind="peer_nonfinite_export",
+                peer_loss=report["avg_loss"], peer_microbatches=report["microbatches"],
+                peer_supervised_tokens=report["supervised_tokens"],
+                peer_gradient_audit={"all_finite": False, "nonfinite": rows})
+        self._peer_replay_verdict(report, [row["name"] for row in rows])
+        replay_queued = self._queue_identical_replay(trainer, report, rows)
+        return dict(rejected=dict(reason="peer_nonfinite_export", parameters=rows,
+                                   replay_queued=replay_queued))
+
+    def _peer_replay_verdict(self, report, names):
+        """Classify the previous rejection: did the identical replay fail again?
+
+        Membership identity matters: the peer's microbatch count is normally timing
+        dependent, so a clean replay that also saw a different number of
+        microbatches is inconclusive rather than evidence of instability.
+        """
+        prior = self.pending_replay
+        if prior is None:
+            return None
+        self.pending_replay = None
+        membership_match = (int(report["microbatches"]) == prior["peer_microbatches"]
+                            and float(report["supervised_tokens"]) == prior["peer_supervised_tokens"])
+        if names:
+            reproduced = sorted(names) == sorted(prior["parameters"])
+            verdict = "reproduced_same_parameters" if reproduced else "reproduced_different_parameters"
+        else:
+            verdict = "clean_replay" if membership_match else "clean_replay_membership_differs"
+        record = dict(
+            event="peer_replay_verdict", verdict=verdict, membership_match=membership_match,
+            prior_parameters=prior["parameters"], replay_parameters=names,
+            prior_peer_microbatches=prior["peer_microbatches"],
+            prior_peer_supervised_tokens=prior["peer_supervised_tokens"],
+            replay_peer_microbatches=int(report["microbatches"]),
+            replay_peer_supervised_tokens=float(report["supervised_tokens"]),
+            replay_budget_remaining=self.replay_budget,
+        )
+        print(
+            f"PEER REPLAY VERDICT: {verdict} "
+            f"(peer microbatches {prior['peer_microbatches']} -> {record['replay_peer_microbatches']}, "
+            f"membership_match={membership_match}, remaining_budget={self.replay_budget})"
+        )
+        if verdict == "clean_replay":
+            print("PEER REPLAY VERDICT: the same data on the same peer GPU was clean, so the "
+                  "non-finite export is NOT reproducible; suspect non-deterministic GPU execution",
+                  flush=True)
+        if self.diagnostics is not None:
+            self.diagnostics.emit(**record)
+        return record
+
+    def _queue_identical_replay(self, trainer, report, rows):
+        """Roll both samplers back so the retry re-runs this exact round."""
+        if self.replay_budget <= 0 or self.round_sampler is None:
+            if self.diagnostics is not None:
+                self.diagnostics.emit("peer_replay_exhausted", trainer_step=trainer.step,
+                                      replay_budget=PEER_REPLAY_BUDGET)
+            print(f"PEER REPLAY: budget exhausted; resuming the established fresh-sample retry",
+                  flush=True)
+            return False
+        self.replay_budget -= 1
+        restore_sampler(trainer, self.round_sampler)
+        self.pending_replay = dict(
+            parameters=[row["name"] for row in rows],
+            peer_microbatches=int(report["microbatches"]),
+            peer_supervised_tokens=float(report["supervised_tokens"]),
+        )
+        if self.diagnostics is not None:
+            self.diagnostics.emit("peer_replay_queued", trainer_step=trainer.step,
+                                  parameters=self.pending_replay["parameters"],
+                                  owner_microbatches=trainer.grad_accum_steps,
+                                  peer_microbatches=self.pending_replay["peer_microbatches"],
+                                  peer_supervised_tokens=self.pending_replay["peer_supervised_tokens"],
+                                  replay_budget_remaining=self.replay_budget)
+        print(
+            f"PEER REPLAY: queued identical-data retry "
+            f"(owner microbatches={trainer.grad_accum_steps}, "
+            f"peer microbatches={self.pending_replay['peer_microbatches']}, "
+            f"remaining_budget={self.replay_budget})", flush=True)
+        return True
+
     def finish_step(self, trainer, *, updated):
         if updated:
             with self.diagnostics.stage("weight_publish") if self.diagnostics else nullcontext():
                 _copy(self.parameters, self.buffers["weights"], "data", True)
-        self.channel.send(command="sync", updated=updated, step=trainer.step + int(updated))
+        replay = self.pending_replay if not updated else None
+        self.channel.send(command="sync", updated=updated, step=trainer.step + int(updated),
+                          restore_sampler=replay is not None,
+                          replay_microbatches=(replay or {}).get("peer_microbatches"))
         self._expect("synced")
         if self.diagnostics is not None:
             self.diagnostics.emit("weights_synced", updated=updated,
@@ -416,13 +551,17 @@ class _PeerHooks:
     def __init__(self, channel, setup, buffers):
         self.channel, self.setup, self.buffers = channel, setup, buffers
         self.timeout = float(setup["config"].get("timeout_s", 1800))
+        self.round_sampler = None
+        self.replay_cap = None
 
     def begin_step(self, trainer):
         self.started = time.monotonic()
+        self.round_sampler = sampler_state(trainer)
 
     def microsteps(self, trainer):
         index = 0
-        cap = self.setup["config"].get("max_microbatches")
+        cap = self.replay_cap if self.replay_cap is not None else self.setup["config"].get("max_microbatches")
+        self.replay_cap = None
         while True:
             yield index
             index += 1
@@ -464,6 +603,11 @@ class _PeerHooks:
                 trainer.model.refresh_compute_buffers()
         trainer.model.zero_grad()
         trainer.step = int(message["step"])
+        if message.get("restore_sampler"):
+            restore_sampler(trainer, self.round_sampler)
+            self.replay_cap = message.get("replay_microbatches")
+            print(f"Peer sampler restored for identical-data replay "
+                  f"(cap={self.replay_cap})", flush=True)
         if diagnostics is not None:
             diagnostics.emit("weights_synced", updated=message["updated"], new_weight_version=trainer.step)
         self.channel.send(event="synced")

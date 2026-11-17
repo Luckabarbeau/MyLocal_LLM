@@ -21,16 +21,20 @@ IQ_FORMATS = ("IQ2_S", "IQ3_S", "IQ3_XXS", "IQ4_NL", "IQ4_XS", "Q2_0")
 
 
 def test_gpu_capability_preflight_before_allocation(monkeypatch):
-    assert linear.SUPPORTED_GPU_PACKED_FORMATS == frozenset(linear._FORMAT_ID)
+    assert frozenset(IQ_FORMATS) <= linear.SUPPORTED_GPU_PACKED_FORMATS
+    assert frozenset(linear._FORMAT_ID) <= linear.SUPPORTED_GPU_PACKED_FORMATS
     def forbidden(*args, **kwargs):
         pytest.fail("Unsupported format must fail before allocation")
     monkeypatch.setattr(linear, "BACKEND_NAME", "cupy")
     monkeypatch.setattr(linear, "xp", SimpleNamespace(asarray=forbidden))
-    for fmt in IQ_FORMATS:
-        w = packed(fmt, 2, 256, 204)
+    for fmt in ('UNKNOWN', 'BF16'):
+        w = SimpleNamespace(shape=(2, 256), quant_type=fmt)
         assert not linear.supports_packed_gpu_type(fmt)
+        # A known packed host object with an unsupported type must fail before upload.
+        host = packed('IQ3_S', 2, 256, 204)
+        object.__setattr__(host, 'quant_type', fmt)
         with pytest.raises(NotImplementedError, match="GPU kernel"):
-            linear.packed_to_device(w)
+            linear.packed_to_device(host)
         with pytest.raises(NotImplementedError, match="GPU kernel"):
             linear.DevicePackedGGUFWeight(None, w.shape, fmt)
 
@@ -176,6 +180,8 @@ def test_zero_host_budget_bounded_reference_precision(dtype, monkeypatch):
 
 
 def test_unsupported_cache_miss_fallback_and_strict_gpu(monkeypatch):
+    # Simulate a backend without this encoding; IQ3_S now has a real GPU path.
+    monkeypatch.setattr(residency, "supports_packed_gpu_type", lambda fmt: False)
     weights = tuple(packed("IQ3_S", 256, 256, 204 + i) for i in range(3))
     monkeypatch.setattr(residency, "BACKEND_NAME", "cupy")
     executor = HeterogeneousExpertExecutor(lambda key: weights, model_id="q",
@@ -220,10 +226,11 @@ def test_complete_publication_failure_and_inflight():
 
 @pytest.mark.skipif(BACKEND_NAME != "cupy", reason="requires actual CuPy backend/device")
 @pytest.mark.parametrize("fmt", sorted(linear.SUPPORTED_GPU_PACKED_FORMATS))
-def test_actual_gpu_old_formats_and_iq_mixed_fallback(fmt):
+def test_actual_gpu_formats_and_iq_residency(fmt):
     # Use small, aligned experts; kernel/runtime errors are not skipped.
     from test_0106e_cpu_packed_and_gpu_swaps import packed as finite_packed
-    weights = tuple(finite_packed(fmt, 256, 256, 204 + i) for i in range(3))
+    factory = packed if fmt in IQ_FORMATS else finite_packed
+    weights = tuple(factory(fmt, 256, 256, 204 + i) for i in range(3))
     iq = tuple(packed("IQ3_S", 256, 256, 210 + i) for i in range(3))
     x = np.random.default_rng(204).normal(0, .01, (1, 256)).astype(np.float32)
     executor = HeterogeneousExpertExecutor(lambda key: weights if key.expert_id == 0 else iq,
@@ -238,7 +245,7 @@ def test_actual_gpu_old_formats_and_iq_mixed_fallback(fmt):
         assert np.isfinite(result).all(), f"{fmt}, expert {e}: non-finite result"
         np.testing.assert_allclose(result, expected, atol=2e-5, rtol=5e-4)
     assert ExpertKey("q", 0, 0) in executor.cache.resident
-    assert ExpertKey("q", 0, 1) not in executor.cache.resident
+    assert ExpertKey("q", 0, 1) in executor.cache.resident
     executor.execution_mode = "gpu"
-    with pytest.raises(NotImplementedError):
-        executor.forward(0, 1, xp.asarray(x))
+    got = asnumpy(executor.forward(0, 1, xp.asarray(x)))
+    np.testing.assert_allclose(got, expert_oracle(x, iq), atol=2e-5, rtol=5e-4)

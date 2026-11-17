@@ -197,11 +197,11 @@ def strided(a):
 @pytest.mark.parametrize("unsupported", ["qkv_stride", "gate_stride", "decay_stride", "beta_stride",
     "history_stride", "memory_stride", "weight_stride", "gamma_stride", "bias_stride",
     "qkv_half", "gate_half", "coefficient_double", "gamma_double", "float64_state",
-    "sigmoid", "dk257", "multitoken", "empty", "overlap"])
+    "dk257", "multitoken", "empty", "overlap"])
 def test_unsupported_metadata_uses_unchanged_portable_path(unsupported, monkeypatch):
     mixer, arrays, state = fixture(dk=257 if unsupported == "dk257" else 3,
         dtype="float64" if unsupported == "float64_state" else "float32",
-        activation="sigmoid" if unsupported == "sigmoid" else "silu",
+        activation="silu",
         tokens={"multitoken": 2, "empty": 0}.get(unsupported, 1))
     arrays = list(arrays)
     if unsupported.endswith("_stride"):

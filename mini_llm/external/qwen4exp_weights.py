@@ -207,8 +207,9 @@ class Qwen4ExpWeights:
     def memory_plan(self, max_length, *, host_budget_bytes=8*GiB,
                     static_device_budget_bytes=4*GiB, device_budget_bytes=8*GiB,
                     cache_bytes=0, headroom_bytes=512*1024**2, staging_bytes=64*1024**2,
-                    activation_bytes=64*1024**2, cpu_workers=2):
+                    activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0):
         h = self.headers
+        resident_device_bytes = integer(resident_device_bytes, 'resident_device_bytes')
         length = integer(max_length, 'max_length', 1)
         if length > h.context:
             raise ValueError('max_length exceeds checkpoint context')
@@ -241,6 +242,8 @@ class Qwen4ExpWeights:
             if device_static > static_device_budget_bytes:
                 raise MemoryError('Dense FP32 backbone exceeds static_device_budget_bytes; use NumPy CPU')
             for name, desc in self.store.tensors.items():
+                if self.plan is not None and name not in self.device_names:
+                    continue
                 if name in ('token_embd.weight','per_layer_token_embd.weight') or '_exps.weight' in name:
                     continue
                 if supports_packed_gpu_type(desc.quant_type) and device_static+desc.nbytes <= static_device_budget_bytes:
@@ -254,14 +257,19 @@ class Qwen4ExpWeights:
                 raise ValueError('NumPy runtime has no device expert cache')
         else:
             device_total += state+activation+staging+h.constructor_bytes
+        if resident_device_bytes > device_total:
+            raise ValueError('resident_device_bytes exceeds planned device total')
         if host_total > host_budget_bytes:
             raise MemoryError(f'Insufficient host budget: need {host_total}, budget {host_budget_bytes}')
         if BACKEND_NAME == 'cupy':
             if device_total > device_budget_bytes:
                 raise MemoryError(f'Insufficient device budget: need {device_total}, budget {device_budget_bytes}')
             free, _ = xp.cuda.runtime.memGetInfo()
-            if device_total > free:
-                raise MemoryError(f'Insufficient free device memory: need {device_total}, free {free}')
+            # Credit only this model's live allocations, never global pool usage.
+            # Unused pool-cached blocks may still make this check conservative.
+            remaining = max(device_total-resident_device_bytes, 0)
+            if remaining > free:
+                raise MemoryError(f'Insufficient free device memory: need {remaining}, free {free}')
         budgets.update(activation_bytes=activation, staging_bytes=staging)
         return dict(max_length=length, cpu_workers=workers, dense_fp32_bytes=h.dense_bytes,
             constructor_temporary_bytes=h.constructor_bytes, host_static_bytes=host_static,

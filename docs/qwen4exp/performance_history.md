@@ -39,3 +39,30 @@ Sequential CuPy processes, IDs1–16, four native expert workers, FP32, max_leng
 Positions8–15 mean instrumented token latency3.6965s. Principal host spans/token: routed experts1.55152s; complete GDN including projections1.36484s; complete QSA including projections/indexer0.55624s; parent MoE1.72397s. Spans include waiting and nested operations: **do not sum parent/child timings or interpret these as exclusive critical-path costs**. No per-operation synchronization is inserted; token boundaries synchronize.
 
 Measured next priorities are packed GPU mixed-format expert execution, separating GDN projection fallback from recurrence/launch costs, and QSA launch/synchronization/indexing. See `0212_initial_profile.md` and `0227_short_sequences_profile_v1.json`. This is a short instrumented baseline, not steady-state throughput or an optimization comparison.
+
+## Patch0213 — direct packed GPU experts and launch reduction
+
+Source reference remains pinned Strata `c77572806996349b49995e4f98d41b5294d36a21`. No route-tail skipping, Q8 activation approximation or speculation is enabled. Exact checkpoint formats remain packed; activation/state arithmetic remains FP32.
+
+Sequential separate-process ablations consume fixed IDs1–16, measuring synchronized decode positions8–15 without stage instrumentation. Cache admissions/uploads in those positions are included; construction/JIT warmup at earlier positions is not. These are short forced-token rates, not natural-language or long-context steady-state throughput.
+
+| Cumulative configuration | Tokens/s |
+|---|---:|
+| Previous4GiB/legacy-GPU placement, CPU experts |0.272867 |
+| All eligible backbone GPU projections |0.626706 |
+| Batched CPU miss transfers |0.628522 |
+|6GiB packed expert cache, admit after3 requests |1.274565 |
+| Admit after1 request |4.757141 |
+| Fused all-causal-cell short-context QSA |6.054848 |
+| Grouped resident IQ dispatch |6.098446 |
+| Fused FP32 HC stages |7.386917 |
+| Existing full-softmax fused router enabled |7.740246 |
+| Three-launch sigmoid-gated DeltaNet |**8.566126** |
+
+Final speedup **31.39×** over the measured baseline; target70–80tokens/s is **not reached**. No confidence intervals/repeated-run speedup significance are claimed for small adjacent differences. The grouped kernel separately measures1.21–1.31× over sequential resident GPU top10; small end-to-end effect reflects all-selected-resident eligibility and fresh admissions.
+
+Versioned artifacts: `0229_decode_performance_v1.json` preserves cache admission failure; v2 fixes double-counted resident backbone bytes; v3–v5 reuse successful prior variants and execute only newly introduced variants. Latest numerical difference versus previous FP32 baseline: relativeL2≤2.065315e-6, maxabs≤2.789498e-5; all checked argmax/top10 sets match. Latest decode process peakRSS10,318,860,288 bytes, pool9,819,179,008 used /9,829,571,072 reserved bytes.1,952 resident experts occupy3,994,496,000 bytes within the6GiB cap; no full expert bank expansion.
+
+Optimized reset/prefill lifecycle also passes (`0233_fast_lifecycle_v1.json`):16-token logits/all-active-state hashes identical and repeated greedy smoke IDs `[220,100561,198]`. Its extra requests use4,778,188,800 cache bytes and10,616,590,848 pool-reserved bytes; these are distinct workloads, not comparable throughput measurements or global VRAM high-water marks.
+
+Latest instrumented profile (`0231_fast_profile_v2.json`), mean host spans/token: routed experts0.05940s; complete GDN0.01208s; QSA0.02152s; HC attention+FFN reads0.00770s; router0.00172s. Profile spans include waiting and nested work and perturb timing; do not sum them or replace the uninstrumented throughput above. Remaining work is transfer/dispatch attribution, fixed-slot async movement, stable launch/graph reduction and longer realistic benchmarks. See `0213_packed_gpu_and_decode_optimizations.md` for exact controls and Strata comparison caveats.

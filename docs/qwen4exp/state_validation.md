@@ -91,4 +91,12 @@ Both processes use FP32 compute/state, four native expert workers, max_length16,
 - No element-by-element attribution of every later state/logit discrepancy to quantization is claimed.
 - Long contexts, multimodal positions and arbitrary token sequences require separate validation.
 
-No mathematical defect was exposed. The requested short-text state gate is passed, permitting measured performance work while preserving these tests and FP32/reference oracles. Production mathematics remains unchanged.
+No mathematical defect was exposed. The requested short-text state gate is passed, permitting measured performance work while preserving these tests and FP32/reference oracles. No production mathematical defect was corrected during that gate.
+
+## Optimized execution lifecycle — 0233
+
+After adding switchable packed GPU and fused FP32 execution, `0233_fast_lifecycle_v1.json` passes16-token incremental/prefill equality for logits and SHA256 hashes of all active persistent state. Each run starts from fresh state; two subsequent independent greedy requests both reproduce `[220,100561,198]`. This uses eager bounded cache admission and QSA/HC/router/sigmoid-GDN fusion without changing model equations.
+
+The new three-launch sigmoid-GDN kernel is additionally checked against retained0226 reference operands and continuous portable-state replay; convolution history matches exactly and measured16-token memory relative error versus portable is1.20e-7. Fused short-context QSA preserves cache/pooling state and explicitly falls back to reference selection beyond the all-causal-cell window or when diagnostics are requested.
+
+These optimized-path checks do not supersede the independent-reference limits above. No claim of full independent16-token model equivalence or arbitrary long-context certification is made.

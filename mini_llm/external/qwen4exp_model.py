@@ -88,7 +88,15 @@ class Qwen4ExpGGUFModel:
                           diagnostic_callback=diagnostic_callback, expert_executor=expert_executor, **budgets)
 
     @classmethod
-    def _build(cls, weights, *, max_length, diagnostic_callback, expert_executor, **budgets):
+    def _build(cls, weights, *, max_length, diagnostic_callback, expert_executor,
+               expert_promote_after=3, qsa_fast_decode=False,
+               hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False, **budgets):
+        expert_promote_after = integer(expert_promote_after, 'expert_promote_after', 1)
+        for name, value in (('qsa_fast_decode', qsa_fast_decode),
+                            ('hc_fast_decode', hc_fast_decode), ('router_fast_decode', router_fast_decode),
+                            ('gdn_fast_decode', gdn_fast_decode)):
+            if not isinstance(value, bool):
+                raise TypeError(f'{name} must be bool')
         if diagnostic_callback is not None and not callable(diagnostic_callback):
             raise TypeError('diagnostic_callback must be callable')
         index, h = weights.index, weights.headers
@@ -109,14 +117,16 @@ class Qwen4ExpGGUFModel:
                 executor = HeterogeneousExpertExecutor(index.provider, model_id=index.model_id,
                     d_model=index.d_model, d_ff=index.d_ff, compute_dtype='float32',
                     cpu_packed_backend='native', cpu_workers=plan['cpu_workers'],
-                    device_budget_bytes=plan['cache_bytes'], host_dequant_budget_bytes=0)
+                    device_budget_bytes=plan['cache_bytes'], host_dequant_budget_bytes=0,
+                    promote_after=expert_promote_after)
             dense, project = weights.dense, weights.projection
             def hc(stem, inject=True):
                 # HC copies these small matrices. No host dictionary retains
                 # the constructor inputs after this call returns.
                 return Qwen4ExpHyperConnection(dense(stem+'norm.weight'),
                     dense(stem+'down.weight'),dense(stem+'up.weight'),
-                    dense(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps)
+                    dense(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps,
+                    fast_decode=hc_fast_decode)
             blocks = []
             for i, rec in enumerate(h.recurrent):
                 p = f'blk.{i}.'
@@ -136,19 +146,21 @@ class Qwen4ExpGGUFModel:
                         out=project(p+'ssm_out.weight'),conv_weight=dense(p+'ssm_conv1d.weight'),
                         norm_weight=dense(p+'ssm_norm.weight'),ssm_a=dense(p+'ssm_a'),
                         dt_bias=dense(p+'ssm_dt.bias'))
+                    mixer.mixer._decode_fastpath_enabled = gdn_fast_decode
                 else:
                     mixer = Qwen4ExpAttention(h.attention,
                         query_gate=project(p+'attn_q.weight'),key=project(p+'attn_k.weight'),
                         value=project(p+'attn_v.weight'),output=project(p+'attn_output.weight'),
                         index_query=project(p+'indexer.q_proj.weight'),index_key=project(p+'indexer.k_proj.weight'),
                         gamma_q=dense(p+'attn_q_norm.weight'),gamma_k=dense(p+'attn_k_norm.weight'),
-                        gamma_index_q=dense(p+'indexer.q_norm.weight'),gamma_index_k=dense(p+'indexer.k_norm.weight'))
+                        gamma_index_q=dense(p+'indexer.q_norm.weight'),gamma_index_k=dense(p+'indexer.k_norm.weight'),
+                        fast_decode=qsa_fast_decode)
                 router = RouterInference(h.width,index.n_experts,index.top_k,
                     renormalize_selected=True,normalization_floor=2.0**-14)
                 router.W_router = dense(p+'ffn_gate_inp.weight').T
                 router.b_router = xp.zeros(index.n_experts,dtype=xp.float32)
-                # Keep the baseline full-softmax graph for first-divergence work.
-                router._decode_fastpath_enabled = False
+                # Both paths retain full softmax; fusion is explicitly switchable.
+                router._decode_fastpath_enabled = router_fast_decode
                 experts = ExpertsInference(h.width,index.d_ff,index.n_experts,
                     expert_executor=executor,layer_id=i)
                 moe = Qwen4ExpMoE(router,experts,project(p+'ffn_gate_shexp.weight'),
@@ -208,7 +220,13 @@ class Qwen4ExpGGUFModel:
         if self.weights is None:
             return dict(max_length=length,state_bytes=0)
         p = self.plan
-        return self.weights.memory_plan(length, **{key:p[key] for key in (
+        resident = 0
+        if BACKEND_NAME == 'cupy':
+            # Static placement is committed after _build; cache capacity is not
+            # resident until admitted, and only live sessions own state storage.
+            resident = (p['device_static_bytes'] + self.expert_executor.cache.used_bytes +
+                        sum(s.reserved_bytes for s in self._states))
+        return self.weights.memory_plan(length, resident_device_bytes=resident, **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
             'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers')})
 

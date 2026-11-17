@@ -199,6 +199,13 @@ class ExpertsInference:
                                  tuple(singleton_plan.slots[e] for e in active))
                 if output is not None:
                     return output.reshape(batch_size, seq_len, d_model)
+            batched = getattr(self.expert_executor, "try_forward_decode_batch", None)
+            if singleton_plan is not None and batched is not None:
+                active = singleton_plan.active_expert_ids()
+                output = batched(self.layer_id, active, x_flat, weights_flat.reshape(-1),
+                                 tuple(singleton_plan.slots[e] for e in active))
+                if output is not None:
+                    return output.reshape(batch_size, seq_len, d_model)
             if self.expert_executor is not None and getattr(
                 self.expert_executor, "overlaps_cpu_gpu", False
             ):

@@ -20,6 +20,7 @@ import numpy as np
 
 from mini_llm.backend import BACKEND_NAME, xp
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
+from mini_llm.ops import iq_packed_gpu
 
 try:
     import triton
@@ -30,7 +31,9 @@ except ImportError:
 
 
 _FORMAT_ID = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
-SUPPORTED_GPU_PACKED_FORMATS = frozenset(_FORMAT_ID)
+# Keep the Triton format IDs separate: grouped legacy kernels use that decoder.
+SUPPORTED_GPU_PACKED_FORMATS = frozenset(_FORMAT_ID) | frozenset(
+    fmt for fmt in BLOCK_FORMATS if iq_packed_gpu.supports_type(fmt))
 
 
 def supports_packed_gpu_type(quant_type):
@@ -301,6 +304,8 @@ def quantized_linear(x, weight, *, block_k=512, cpu_packed_backend="reference"):
         return y.astype(x_cpu.dtype).reshape(shape)
     if not isinstance(weight, DevicePackedGGUFWeight):
         raise TypeError("Expected PackedGGUFWeight or DevicePackedGGUFWeight")
+    if BACKEND_NAME == "cupy" and iq_packed_gpu.supports_type(weight.quant_type):
+        return iq_packed_gpu.linear(x, weight, block_k=block_k)
     if BACKEND_NAME != "cupy" or triton is None:
         raise RuntimeError("Native packed GPU inference requires CuPy backend and Triton")
     if not isinstance(x, xp.ndarray) or not x.flags.c_contiguous:
@@ -356,6 +361,15 @@ def quantized_swiglu(x, gate, up, *, block_k=512):
         u = quantized_linear(x, up)
         gf = np.asarray(g, dtype=np.float32)
         return ((gf / (1.0 + np.exp(-gf))) * np.asarray(u, dtype=np.float32)).astype(x.dtype)
+    if BACKEND_NAME == "cupy" and (
+            iq_packed_gpu.supports_type(gate.quant_type) or iq_packed_gpu.supports_type(up.quant_type)):
+        if iq_packed_gpu.supports_type(gate.quant_type) and iq_packed_gpu.supports_type(up.quant_type):
+            return iq_packed_gpu.swiglu(x, gate, up, block_k=block_k)
+        # Mixed legacy/IQ pairs retain FP32 projection and activation arithmetic.
+        from mini_llm.ops.silu import silu
+        g = quantized_linear(x, gate, block_k=block_k)
+        u = quantized_linear(x, up, block_k=block_k)
+        return silu(g) * u
     if BACKEND_NAME != "cupy" or triton is None:
         raise RuntimeError("Fused packed GPU SwiGLU requires CuPy backend and Triton")
     if not isinstance(x, xp.ndarray) or not x.flags.c_contiguous:

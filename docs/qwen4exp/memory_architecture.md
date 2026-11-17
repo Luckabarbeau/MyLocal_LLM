@@ -30,6 +30,18 @@ Illustrative **short-context planning envelope**, not measured inference peak: s
 
 At 262144 tokens and one sequence: FP32 K/V alone is 12 GiB, indexer raw FP32 keys 1.5 GiB; recurrent matrices ~108 MiB plus conv histories ~4.34 MiB. Even F16 K/V is 6 GiB. Full advertised context is not an initial all-GPU FP32 promise. Context limits/offload or validated BF16 storage policies must precede such allocation. QSA top-k does not bound persistent KV length.
 
+## Patch0213 measured packed GPU configuration
+
+The tested short-context configuration uses6GiB static cap,6GiB packed-expert cap and14GiB aggregate device budget. Actual eligible backbone storage is5,704,430,080 bytes (~5.313GiB):3,066,007,040 FP32 dense bytes plus2,638,423,040 packed bytes, excluding mapped token/PLE tables. Initial free-VRAM and aggregate logical budget checks remain mandatory; these constants are not safe universal defaults for every device/context.
+
+The16-token optimized decode run retains1,952 expert bundles /3,994,496,000 bytes and records9,829,571,072 pool-reserved bytes, with sampled process RSS10,318,860,288 bytes. A longer lifecycle containing repeat requests retains2,332 bundles /4,778,188,800 bytes and10,616,590,848 pool-reserved bytes, sampled RSS11,173,183,488 bytes. Pool snapshots are not global VRAM high-water measurements. Canonical expert and PLE storage stays read-only mapped; no complete packed expert duplication or full floating expert bank is created.
+
+A demonstrated replanning defect previously compared the entire aggregate requirement against free memory **after** the backbone was allocated. Replanning now credits already committed static bytes, actual cached bytes and live-state reservations when checking the remaining physical requirement. Logical reservations are unchanged, initial admission remains strict, and unrelated/global-pool allocations are never credited. Retained free pool blocks can still make admission conservative. Aggregate live-state checks remain enforced.
+
+Completed cache events are reaped nonblockingly on subsequent publication, even below cache capacity; pending/unqueryable fences remain protective. CPU singleton misses optionally share one read-only pinned activation and one result slab per dispatch, bounded by selected-expert count times width; worker tasks are drained before buffer release. Grouped IQ execution allocates only pointer metadata, selected hidden/weighted-result scratch and output. QSA/HC fusion uses bounded scratch and current-stream execution; QSA wider than the all-causal-cell window retains the existing sparse reference path.
+
+Synchronous cache promotion is still the initial implementation, not the final allocator design. Expert cache misses still fall back safely when admission cannot fit. Patch0214's fixed-slot asynchronous mover below remains unimplemented.
+
 ## Future fixed-slot mover contract (not implemented)
 
 The cache materializer seam admits a preallocated slot backend without changing expert mathematics or canonical sources. Charge padded slot stride and reserve staging/shadow slots explicitly. A future mover must:

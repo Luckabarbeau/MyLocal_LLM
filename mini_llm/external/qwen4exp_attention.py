@@ -10,7 +10,8 @@ from numbers import Integral
 
 import numpy as np
 
-from ..backend import asnumpy, xp
+from ..backend import BACKEND_NAME, asnumpy, xp
+from ..ops.qsa_decode_gpu import qsa_decode_gpu
 from ..ops.rmsnorm_inference import RMSNormInference
 from ..ops.rotary_inference import RotaryEmbeddingInference
 from .qwen4exp_hyperconnection import _fp32, _sigmoid
@@ -133,13 +134,17 @@ class Qwen4ExpAttention:
     Six projections are output-first FP32 matrices or pure vector callbacks.
     Callback outputs must be FP32 backend arrays. Converted norm gamma is used
     directly. State commits only after projection/shape validation and output.
+    fast_decode opts into CuPy all-causal-cell attention without index scoring;
+    diagnostics and contexts beyond the selection width retain the reference.
     """
 
     def __init__(self, config, *, query_gate, key, value, output, index_query,
-                 index_key, gamma_q, gamma_k, gamma_index_q, gamma_index_k):
+                 index_key, gamma_q, gamma_k, gamma_index_q, gamma_index_k,
+                                  fast_decode=False):
         if not isinstance(config, QSAConfig):
             raise TypeError("config must be QSAConfig")
         self.config = c = config
+        self.fast_decode = bool(fast_decode)
         self._owner = object()
         self.projections = {}
         sizes = {"query_gate": (2*c.n_q_heads*c.head_dim, c.d_model),
@@ -246,39 +251,46 @@ class Qwen4ExpAttention:
                 pooled += raw
             pooled *= xp.float32(1 / c.block_size)
             new_pool = self._rotate(self.norms[3].forward(pooled[None]), start)[0]
-        dead = self.norms[3].forward(raw if t == 0 else state.raw_index[0])
-        block_scores = xp.empty((completed + bool(tail),), dtype=xp.float32)
-        for b in range(block_scores.size):
-            bk = (new_pool if new_pool is not None and b == completed - 1
-                  else state.pooled[b]) if b < completed else dead
-            dots = xp.maximum(iq @ bk, xp.float32(0))
-            score = dots[0].copy()
-            for h in range(1, c.index_heads):
-                score += dots[h]
-            block_scores[b] = score
-        scores = xp.repeat(block_scores, c.block_size)[:n]
-        scores[completed*c.block_size:] += xp.float32(1e9)
-        # Only [0,t] exists in sequential prefill: the original causal mask is
-        # enforced by construction, independently of the selection mask.
-        ids = select_cells(scores, min(n, c.index_topk + c.block_size - 1), c.tie_policy)
-        contexts = xp.empty((c.n_q_heads, c.head_dim), dtype=xp.float32)
         scale = xp.float32(c.attention_scale if c.attention_scale is not None else 1/math.sqrt(c.head_dim))
-        old_ids = ids[ids < t]
-        has_current = bool(xp.any(ids == t))
-        for h in range(c.n_q_heads):
-            kh = h // (c.n_q_heads // c.n_kv_heads)
-            # Bounded selected scratch, never concatenate/grow the persistent KV.
-            keys = xp.empty((ids.size, c.head_dim), dtype=xp.float32)
-            vals = xp.empty_like(keys)
-            keys[:old_ids.size] = state.keys[old_ids, kh]
-            vals[:old_ids.size] = state.values[old_ids, kh]
-            if has_current:
-                keys[-1], vals[-1] = k[kh], v[kh]
-            logits = (keys @ q[h]) * scale
-            probability = xp.exp(logits - xp.max(logits))
-            probability /= xp.sum(probability, dtype=xp.float32)
-            contexts[h] = probability @ vals
-        gated = contexts * _sigmoid(qg[:, c.head_dim:])
+        # Sequential text admits exactly [0,t]. At this width selection keeps
+        # every causal cell, independently of scores/ties. Pooling above must
+        # still run so later sparse steps see the identical index history.
+        if (self.fast_decode and BACKEND_NAME == "cupy" and not diagnostics
+                and n <= c.index_topk + c.block_size - 1):
+            gated = qsa_decode_gpu(q, qg, k, v, state.keys, state.values, n, scale)
+        else:
+            dead = self.norms[3].forward(raw if t == 0 else state.raw_index[0])
+            block_scores = xp.empty((completed + bool(tail),), dtype=xp.float32)
+            for b in range(block_scores.size):
+                bk = (new_pool if new_pool is not None and b == completed - 1
+                      else state.pooled[b]) if b < completed else dead
+                dots = xp.maximum(iq @ bk, xp.float32(0))
+                score = dots[0].copy()
+                for h in range(1, c.index_heads):
+                    score += dots[h]
+                block_scores[b] = score
+            scores = xp.repeat(block_scores, c.block_size)[:n]
+            scores[completed*c.block_size:] += xp.float32(1e9)
+            # Only [0,t] exists in sequential prefill: the original causal mask is
+            # enforced by construction, independently of the selection mask.
+            ids = select_cells(scores, min(n, c.index_topk + c.block_size - 1), c.tie_policy)
+            contexts = xp.empty((c.n_q_heads, c.head_dim), dtype=xp.float32)
+            old_ids = ids[ids < t]
+            has_current = bool(xp.any(ids == t))
+            for h in range(c.n_q_heads):
+                kh = h // (c.n_q_heads // c.n_kv_heads)
+                # Bounded selected scratch, never concatenate/grow the persistent KV.
+                keys = xp.empty((ids.size, c.head_dim), dtype=xp.float32)
+                vals = xp.empty_like(keys)
+                keys[:old_ids.size] = state.keys[old_ids, kh]
+                vals[:old_ids.size] = state.values[old_ids, kh]
+                if has_current:
+                    keys[-1], vals[-1] = k[kh], v[kh]
+                logits = (keys @ q[h]) * scale
+                probability = xp.exp(logits - xp.max(logits))
+                probability /= xp.sum(probability, dtype=xp.float32)
+                contexts[h] = probability @ vals
+            gated = contexts * _sigmoid(qg[:, c.head_dim:])
         result = self._project("output", gated.reshape(-1))
         # All callbacks and output shapes validated before any state write.
         state.keys[t], state.values[t], state.raw_index[t] = k, v, raw

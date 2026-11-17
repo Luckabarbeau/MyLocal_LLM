@@ -1,0 +1,4200 @@
+{
+  "profile": {
+    "stages": {
+      "embedding": {
+        "calls": 8,
+        "host_seconds": 0.0018442320288158953,
+        "device_span_seconds": 0.0009453120119869709
+      },
+      "attention_hc_read": {
+        "calls": 384,
+        "host_seconds": 0.032157779758563265,
+        "device_span_seconds": 0.0549281598851085
+      },
+      "gated_delta": {
+        "calls": 288,
+        "host_seconds": 0.09664470379357226,
+        "device_span_seconds": 0.0831700160950422
+      },
+      "attention_hc_write": {
+        "calls": 384,
+        "host_seconds": 0.00669765446218662,
+        "device_span_seconds": 0.004159552010009057
+      },
+      "ffn_hc_read": {
+        "calls": 384,
+        "host_seconds": 0.02941005610045977,
+        "device_span_seconds": 0.04779564800113441
+      },
+      "router": {
+        "calls": 384,
+        "host_seconds": 0.013728256948525086,
+        "device_span_seconds": 0.011287872120738025
+      },
+      "routed_experts": {
+        "calls": 384,
+        "host_seconds": 0.4752029304509051,
+        "device_span_seconds": 0.5689131516218184
+      },
+      "shared_gate": {
+        "calls": 384,
+        "host_seconds": 0.017655310919508338,
+        "device_span_seconds": 0.004025920004583893
+      },
+      "shared_up": {
+        "calls": 384,
+        "host_seconds": 0.016177578771021217,
+        "device_span_seconds": 0.004974943975452336
+      },
+      "shared_down": {
+        "calls": 384,
+        "host_seconds": 0.010477934003574774,
+        "device_span_seconds": 0.006947264045476911
+      },
+      "moe_total": {
+        "calls": 384,
+        "host_seconds": 0.6219858990516514,
+        "device_span_seconds": 0.6267407677173609
+      },
+      "ffn_hc_write": {
+        "calls": 384,
+        "host_seconds": 0.006824855110608041,
+        "device_span_seconds": 0.007593760097399322
+      },
+      "ple_lookup": {
+        "calls": 8,
+        "host_seconds": 0.0035787980013992637,
+        "device_span_seconds": 0.003226912021636963
+      },
+      "ple_total": {
+        "calls": 8,
+        "host_seconds": 0.008070078038144857,
+        "device_span_seconds": 0.007916895985603332
+      },
+      "qsa": {
+        "calls": 96,
+        "host_seconds": 0.1721830058377236,
+        "device_span_seconds": 0.15366905558109276
+      },
+      "final_hc": {
+        "calls": 8,
+        "host_seconds": 0.0005604750185739249,
+        "device_span_seconds": 0.0006173759996891022
+      },
+      "output_head": {
+        "calls": 8,
+        "host_seconds": 0.0007758409774396569,
+        "device_span_seconds": 0.006530655980110169
+      }
+    },
+    "per_layer": [
+      {
+        "layer": -1,
+        "stage": "embedding",
+        "calls": 8,
+        "host_seconds": 0.0018442320288158953,
+        "device_span_seconds": 0.0009453120119869709
+      },
+      {
+        "layer": -1,
+        "stage": "final_hc",
+        "calls": 8,
+        "host_seconds": 0.0005604750185739249,
+        "device_span_seconds": 0.0006173759996891022
+      },
+      {
+        "layer": -1,
+        "stage": "output_head",
+        "calls": 8,
+        "host_seconds": 0.0007758409774396569,
+        "device_span_seconds": 0.006530655980110169
+      },
+      {
+        "layer": 0,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000767811929108575,
+        "device_span_seconds": 0.0008881279975175858
+      },
+      {
+        "layer": 0,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014333598664961755,
+        "device_span_seconds": 4.0288000367581844e-05
+      },
+      {
+        "layer": 0,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006133139540906996,
+        "device_span_seconds": 0.0009643839970231056
+      },
+      {
+        "layer": 0,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00015932999667711556,
+        "device_span_seconds": 2.71680005826056e-05
+      },
+      {
+        "layer": 0,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002954190975287929,
+        "device_span_seconds": 0.0024887679815292357
+      },
+      {
+        "layer": 0,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.029109374998370185,
+        "device_span_seconds": 0.029625184297561644
+      },
+      {
+        "layer": 0,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.025794616958592087,
+        "device_span_seconds": 0.027459200382232665
+      },
+      {
+        "layer": 0,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002936730452347547,
+        "device_span_seconds": 0.00022387200035154823
+      },
+      {
+        "layer": 0,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00019208894809708,
+        "device_span_seconds": 0.00013225599937140943
+      },
+      {
+        "layer": 0,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0005141350266057998,
+        "device_span_seconds": 6.144000077620149e-05
+      },
+      {
+        "layer": 0,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00025313900550827384,
+        "device_span_seconds": 0.00027318399772047994
+      },
+      {
+        "layer": 1,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0007132180326152593,
+        "device_span_seconds": 0.000979360021650791
+      },
+      {
+        "layer": 1,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001424810034222901,
+        "device_span_seconds": 4.4064000016078356e-05
+      },
+      {
+        "layer": 1,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000620902021182701,
+        "device_span_seconds": 0.0010809279978275298
+      },
+      {
+        "layer": 1,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014366896357387304,
+        "device_span_seconds": 5.558400088921189e-05
+      },
+      {
+        "layer": 1,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0029473699687514454,
+        "device_span_seconds": 0.002692287981510163
+      },
+      {
+        "layer": 1,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.014304881973657757,
+        "device_span_seconds": 0.014331776022911073
+      },
+      {
+        "layer": 1,
+        "stage": "ple_lookup",
+        "calls": 8,
+        "host_seconds": 0.0035787980013992637,
+        "device_span_seconds": 0.003226912021636963
+      },
+      {
+        "layer": 1,
+        "stage": "ple_total",
+        "calls": 8,
+        "host_seconds": 0.008070078038144857,
+        "device_span_seconds": 0.007916895985603332
+      },
+      {
+        "layer": 1,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.011226234986679628,
+        "device_span_seconds": 0.012822368025779724
+      },
+      {
+        "layer": 1,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002971239446196705,
+        "device_span_seconds": 0.00022428800351917744
+      },
+      {
+        "layer": 1,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00022112694568932056,
+        "device_span_seconds": 0.00013324799947440625
+      },
+      {
+        "layer": 1,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002521080896258354,
+        "device_span_seconds": 0.00012361599877476693
+      },
+      {
+        "layer": 1,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0004364429914858192,
+        "device_span_seconds": 0.00021743999421596527
+      },
+      {
+        "layer": 2,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000687298976117745,
+        "device_span_seconds": 0.0015930879935622214
+      },
+      {
+        "layer": 2,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013847998343408108,
+        "device_span_seconds": 4.4384001055732366e-05
+      },
+      {
+        "layer": 2,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006117400189395994,
+        "device_span_seconds": 0.001039071999490261
+      },
+      {
+        "layer": 2,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00015019296552054584,
+        "device_span_seconds": 0.0003048320098314435
+      },
+      {
+        "layer": 2,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027318899519741535,
+        "device_span_seconds": 0.002876864016056061
+      },
+      {
+        "layer": 2,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01656671497039497,
+        "device_span_seconds": 0.0157152641415596
+      },
+      {
+        "layer": 2,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.013274454046040773,
+        "device_span_seconds": 0.014201984107494355
+      },
+      {
+        "layer": 2,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002900859690271318,
+        "device_span_seconds": 0.0002270400021225214
+      },
+      {
+        "layer": 2,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023362805950455368,
+        "device_span_seconds": 0.0001337600015103817
+      },
+      {
+        "layer": 2,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00044255697866901755,
+        "device_span_seconds": 6.31040008738637e-05
+      },
+      {
+        "layer": 2,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003640919749159366,
+        "device_span_seconds": 5.0879999995231625e-05
+      },
+      {
+        "layer": 3,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006958040175959468,
+        "device_span_seconds": 0.0014350720196962357
+      },
+      {
+        "layer": 3,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001497400226071477,
+        "device_span_seconds": 0.00013254400063306094
+      },
+      {
+        "layer": 3,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006590710545424372,
+        "device_span_seconds": 0.0014551040232181549
+      },
+      {
+        "layer": 3,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014570396160706878,
+        "device_span_seconds": 0.00030608001165091994
+      },
+      {
+        "layer": 3,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.014309302001493052,
+        "device_span_seconds": 0.014261247992515562
+      },
+      {
+        "layer": 3,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.014321147958980873,
+        "device_span_seconds": 0.012982431769371033
+      },
+      {
+        "layer": 3,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.01115148005192168,
+        "device_span_seconds": 0.013086495757102967
+      },
+      {
+        "layer": 3,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002926339802797884,
+        "device_span_seconds": 0.00022662400268018247
+      },
+      {
+        "layer": 3,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00022731799981556833,
+        "device_span_seconds": 0.00013664000108838082
+      },
+      {
+        "layer": 3,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00023576701642014086,
+        "device_span_seconds": 0.00012073600012809039
+      },
+      {
+        "layer": 3,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00047897198237478733,
+        "device_span_seconds": 6.540799885988236e-05
+      },
+      {
+        "layer": 4,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0007006230298429728,
+        "device_span_seconds": 0.0007736639976501465
+      },
+      {
+        "layer": 4,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013658296666108072,
+        "device_span_seconds": 2.9376000398769974e-05
+      },
+      {
+        "layer": 4,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005959689733572304,
+        "device_span_seconds": 0.0007677440047264099
+      },
+      {
+        "layer": 4,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014754300354979932,
+        "device_span_seconds": 0.00020144000230357052
+      },
+      {
+        "layer": 4,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002806436037644744,
+        "device_span_seconds": 0.0034106879681348795
+      },
+      {
+        "layer": 4,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.0177593010594137,
+        "device_span_seconds": 0.016606752276420597
+      },
+      {
+        "layer": 4,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.014499442972010002,
+        "device_span_seconds": 0.015497248053550721
+      },
+      {
+        "layer": 4,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028680701507255435,
+        "device_span_seconds": 0.0003769280072301626
+      },
+      {
+        "layer": 4,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023590101045556366,
+        "device_span_seconds": 0.00013107199966907502
+      },
+      {
+        "layer": 4,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004512990126386285,
+        "device_span_seconds": 6.5119999460876e-05
+      },
+      {
+        "layer": 4,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00036548502976074815,
+        "device_span_seconds": 6.553599983453751e-05
+      },
+      {
+        "layer": 5,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0007268479967024177,
+        "device_span_seconds": 0.0013318719863891601
+      },
+      {
+        "layer": 5,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014066300354897976,
+        "device_span_seconds": 3.171200072392821e-05
+      },
+      {
+        "layer": 5,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006073380063753575,
+        "device_span_seconds": 0.0008102079927921294
+      },
+      {
+        "layer": 5,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001566600112710148,
+        "device_span_seconds": 2.9152000788599256e-05
+      },
+      {
+        "layer": 5,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027664379740599543,
+        "device_span_seconds": 0.002952991977334023
+      },
+      {
+        "layer": 5,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.016484101011883467,
+        "device_span_seconds": 0.015917215943336487
+      },
+      {
+        "layer": 5,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.013420575036434457,
+        "device_span_seconds": 0.0149120317697525
+      },
+      {
+        "layer": 5,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002865030837710947,
+        "device_span_seconds": 0.00022870400361716748
+      },
+      {
+        "layer": 5,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021702010417357087,
+        "device_span_seconds": 0.0001335359998047352
+      },
+      {
+        "layer": 5,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00022749401978217065,
+        "device_span_seconds": 0.00012256000004708768
+      },
+      {
+        "layer": 5,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00044119497761130333,
+        "device_span_seconds": 4.8895999789237976e-05
+      },
+      {
+        "layer": 6,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006966259970795363,
+        "device_span_seconds": 0.0019856640100479124
+      },
+      {
+        "layer": 6,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013855303404852748,
+        "device_span_seconds": 2.6976000517606737e-05
+      },
+      {
+        "layer": 6,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006082150212023407,
+        "device_span_seconds": 0.0013543360009789468
+      },
+      {
+        "layer": 6,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014545998419634998,
+        "device_span_seconds": 0.0005642240226734431
+      },
+      {
+        "layer": 6,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002621097955852747,
+        "device_span_seconds": 0.002566495969891548
+      },
+      {
+        "layer": 6,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.018134711019229144,
+        "device_span_seconds": 0.016897951960563658
+      },
+      {
+        "layer": 6,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.014917607011739165,
+        "device_span_seconds": 0.01593408006429672
+      },
+      {
+        "layer": 6,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028495598235167563,
+        "device_span_seconds": 0.00022230400331318378
+      },
+      {
+        "layer": 6,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023340698680840433,
+        "device_span_seconds": 0.00013875200040638447
+      },
+      {
+        "layer": 6,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004504620155785233,
+        "device_span_seconds": 5.16480002552271e-05
+      },
+      {
+        "layer": 6,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003580880002118647,
+        "device_span_seconds": 6.473600072786213e-05
+      },
+      {
+        "layer": 7,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006871280202176422,
+        "device_span_seconds": 0.0011961279958486557
+      },
+      {
+        "layer": 7,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001496860641054809,
+        "device_span_seconds": 0.00013231999683193863
+      },
+      {
+        "layer": 7,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006577870226465166,
+        "device_span_seconds": 0.0009167999923229217
+      },
+      {
+        "layer": 7,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013248200411908329,
+        "device_span_seconds": 2.6784000452607874e-05
+      },
+      {
+        "layer": 7,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.007748392992652953,
+        "device_span_seconds": 0.009675615847110748
+      },
+      {
+        "layer": 7,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.019234056962886825,
+        "device_span_seconds": 0.018093247890472414
+      },
+      {
+        "layer": 7,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.004984352068277076,
+        "device_span_seconds": 0.008374047994613647
+      },
+      {
+        "layer": 7,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002972960064653307,
+        "device_span_seconds": 0.0003695360049605369
+      },
+      {
+        "layer": 7,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0001794629788491875,
+        "device_span_seconds": 0.00013907199911773207
+      },
+      {
+        "layer": 7,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002490989863872528,
+        "device_span_seconds": 0.00013487999886274338
+      },
+      {
+        "layer": 7,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00022053997963666916,
+        "device_span_seconds": 0.0001253119995817542
+      },
+      {
+        "layer": 8,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006315820210147649,
+        "device_span_seconds": 0.0007574080005288123
+      },
+      {
+        "layer": 8,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013596200733445585,
+        "device_span_seconds": 2.5152000598609445e-05
+      },
+      {
+        "layer": 8,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005936840025242418,
+        "device_span_seconds": 0.0007406719923019408
+      },
+      {
+        "layer": 8,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014207902131602168,
+        "device_span_seconds": 2.9024000512436036e-05
+      },
+      {
+        "layer": 8,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027139720041304827,
+        "device_span_seconds": 0.0021549759805202483
+      },
+      {
+        "layer": 8,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.010638177976943552,
+        "device_span_seconds": 0.010533503949642182
+      },
+      {
+        "layer": 8,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007670687016798183,
+        "device_span_seconds": 0.00951747179031372
+      },
+      {
+        "layer": 8,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002848320291377604,
+        "device_span_seconds": 0.00022569600306451322
+      },
+      {
+        "layer": 8,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002147580380551517,
+        "device_span_seconds": 0.00013472000136971474
+      },
+      {
+        "layer": 8,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00023432797752320766,
+        "device_span_seconds": 0.0001267199981957674
+      },
+      {
+        "layer": 8,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00042292001307941973,
+        "device_span_seconds": 6.521599972620607e-05
+      },
+      {
+        "layer": 9,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006596690509468317,
+        "device_span_seconds": 0.0012190719842910768
+      },
+      {
+        "layer": 9,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013660499826073647,
+        "device_span_seconds": 4.134400049224496e-05
+      },
+      {
+        "layer": 9,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005984010058455169,
+        "device_span_seconds": 0.001176224000751972
+      },
+      {
+        "layer": 9,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014152601943351328,
+        "device_span_seconds": 0.00018239999981597068
+      },
+      {
+        "layer": 9,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002758526970865205,
+        "device_span_seconds": 0.0017064960300922393
+      },
+      {
+        "layer": 9,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.013470920966938138,
+        "device_span_seconds": 0.014424223959445953
+      },
+      {
+        "layer": 9,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.010507550032343715,
+        "device_span_seconds": 0.013388479828834534
+      },
+      {
+        "layer": 9,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002865190035663545,
+        "device_span_seconds": 0.00022192000411450864
+      },
+      {
+        "layer": 9,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00018010998610407114,
+        "device_span_seconds": 0.00013827200047671794
+      },
+      {
+        "layer": 9,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004238320398144424,
+        "device_span_seconds": 6.272000027820469e-05
+      },
+      {
+        "layer": 9,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00024159293388947845,
+        "device_span_seconds": 0.00012358400039374828
+      },
+      {
+        "layer": 10,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006745639839209616,
+        "device_span_seconds": 0.0031356799975037573
+      },
+      {
+        "layer": 10,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013630001922138035,
+        "device_span_seconds": 3.0016000382602213e-05
+      },
+      {
+        "layer": 10,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006095569697208703,
+        "device_span_seconds": 0.0007629759907722472
+      },
+      {
+        "layer": 10,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00015041904407553375,
+        "device_span_seconds": 4.396799998357892e-05
+      },
+      {
+        "layer": 10,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026826619578059763,
+        "device_span_seconds": 0.0024002240151166916
+      },
+      {
+        "layer": 10,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.013666963001014665,
+        "device_span_seconds": 0.011785727918148041
+      },
+      {
+        "layer": 10,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.010533014981774613,
+        "device_span_seconds": 0.010826687991619111
+      },
+      {
+        "layer": 10,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028388394275680184,
+        "device_span_seconds": 0.000225600004196167
+      },
+      {
+        "layer": 10,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023304199567064643,
+        "device_span_seconds": 0.00014182400330901146
+      },
+      {
+        "layer": 10,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004164250276517123,
+        "device_span_seconds": 6.0224000364542e-05
+      },
+      {
+        "layer": 10,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00032853896846063435,
+        "device_span_seconds": 6.188799999654294e-05
+      },
+      {
+        "layer": 11,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006734560010954738,
+        "device_span_seconds": 0.0007806719988584518
+      },
+      {
+        "layer": 11,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014952701167203486,
+        "device_span_seconds": 0.0001257599990349263
+      },
+      {
+        "layer": 11,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006599329935852438,
+        "device_span_seconds": 0.0014885120019316673
+      },
+      {
+        "layer": 11,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013697004760615528,
+        "device_span_seconds": 2.8512000571936372e-05
+      },
+      {
+        "layer": 11,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.008914043981349096,
+        "device_span_seconds": 0.009520255923271178
+      },
+      {
+        "layer": 11,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.019820153946056962,
+        "device_span_seconds": 0.018044575691223145
+      },
+      {
+        "layer": 11,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.0057592460652813315,
+        "device_span_seconds": 0.008263071954250335
+      },
+      {
+        "layer": 11,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0003040370356757194,
+        "device_span_seconds": 0.0002397760022431612
+      },
+      {
+        "layer": 11,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00024108297657221556,
+        "device_span_seconds": 0.00014150400273501873
+      },
+      {
+        "layer": 11,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004073929740116,
+        "device_span_seconds": 6.707200175151229e-05
+      },
+      {
+        "layer": 11,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00034273602068424225,
+        "device_span_seconds": 5.21599999628961e-05
+      },
+      {
+        "layer": 12,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006423210434149951,
+        "device_span_seconds": 0.0008978560045361518
+      },
+      {
+        "layer": 12,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013748399214819074,
+        "device_span_seconds": 2.688000025227666e-05
+      },
+      {
+        "layer": 12,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006019359861966223,
+        "device_span_seconds": 0.0013346240296959878
+      },
+      {
+        "layer": 12,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013408903032541275,
+        "device_span_seconds": 4.473600001074374e-05
+      },
+      {
+        "layer": 12,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027930240030400455,
+        "device_span_seconds": 0.0030696640312671665
+      },
+      {
+        "layer": 12,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.008348538976861164,
+        "device_span_seconds": 0.008144991993904114
+      },
+      {
+        "layer": 12,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.005245644977549091,
+        "device_span_seconds": 0.007192672073841095
+      },
+      {
+        "layer": 12,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002839810331352055,
+        "device_span_seconds": 0.00022921600192785265
+      },
+      {
+        "layer": 12,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023970904294401407,
+        "device_span_seconds": 0.0001434240024536848
+      },
+      {
+        "layer": 12,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00041258998680859804,
+        "device_span_seconds": 5.1071999594569206e-05
+      },
+      {
+        "layer": 12,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003278539516031742,
+        "device_span_seconds": 5.158399976789951e-05
+      },
+      {
+        "layer": 13,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006300420500338078,
+        "device_span_seconds": 0.0007894399911165238
+      },
+      {
+        "layer": 13,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001350009988527745,
+        "device_span_seconds": 3.41440006159246e-05
+      },
+      {
+        "layer": 13,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005853639740962535,
+        "device_span_seconds": 0.0012876479849219323
+      },
+      {
+        "layer": 13,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001316489651799202,
+        "device_span_seconds": 2.7136000338941812e-05
+      },
+      {
+        "layer": 13,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026213800301775336,
+        "device_span_seconds": 0.0016178559958934784
+      },
+      {
+        "layer": 13,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.00853322198963724,
+        "device_span_seconds": 0.009374304056167602
+      },
+      {
+        "layer": 13,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.005699269968317822,
+        "device_span_seconds": 0.008347615897655487
+      },
+      {
+        "layer": 13,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027841198607347906,
+        "device_span_seconds": 0.00022134400345385076
+      },
+      {
+        "layer": 13,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.000180177012225613,
+        "device_span_seconds": 0.00013379200175404549
+      },
+      {
+        "layer": 13,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0003858159761875868,
+        "device_span_seconds": 6.559999985620379e-05
+      },
+      {
+        "layer": 13,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00024747499264776707,
+        "device_span_seconds": 0.00012963199894875288
+      },
+      {
+        "layer": 14,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006709209992550313,
+        "device_span_seconds": 0.0007672640085220337
+      },
+      {
+        "layer": 14,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014312600251287222,
+        "device_span_seconds": 2.5504000252112748e-05
+      },
+      {
+        "layer": 14,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005954840162303299,
+        "device_span_seconds": 0.0012781119793653488
+      },
+      {
+        "layer": 14,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001350789680145681,
+        "device_span_seconds": 2.7360000531189146e-05
+      },
+      {
+        "layer": 14,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002640318009071052,
+        "device_span_seconds": 0.0018142400085926057
+      },
+      {
+        "layer": 14,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.012787863030098379,
+        "device_span_seconds": 0.013541824102401734
+      },
+      {
+        "layer": 14,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.010113086987985298,
+        "device_span_seconds": 0.012464320123195649
+      },
+      {
+        "layer": 14,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027683700318448246,
+        "device_span_seconds": 0.00022547200322151184
+      },
+      {
+        "layer": 14,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00017585005844011903,
+        "device_span_seconds": 0.00013312000036239623
+      },
+      {
+        "layer": 14,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002364909742027521,
+        "device_span_seconds": 0.0001261120019480586
+      },
+      {
+        "layer": 14,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00021502398885786533,
+        "device_span_seconds": 0.00012342400010675192
+      },
+      {
+        "layer": 15,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006662899686489254,
+        "device_span_seconds": 0.0007550079971551894
+      },
+      {
+        "layer": 15,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014846402336843312,
+        "device_span_seconds": 0.00013065600069239736
+      },
+      {
+        "layer": 15,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.00065060899942182,
+        "device_span_seconds": 0.0010138879939913749
+      },
+      {
+        "layer": 15,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013542696251533926,
+        "device_span_seconds": 2.6976000634022058e-05
+      },
+      {
+        "layer": 15,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.009424842981388792,
+        "device_span_seconds": 0.0103225599527359
+      },
+      {
+        "layer": 15,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.018409180018352345,
+        "device_span_seconds": 0.016875200033187866
+      },
+      {
+        "layer": 15,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.006464682024670765,
+        "device_span_seconds": 0.009264608025550842
+      },
+      {
+        "layer": 15,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002908949682023376,
+        "device_span_seconds": 0.0002287680022418499
+      },
+      {
+        "layer": 15,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0001814889837987721,
+        "device_span_seconds": 0.00014073600061237812
+      },
+      {
+        "layer": 15,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00041508194408379495,
+        "device_span_seconds": 5.129599990323186e-05
+      },
+      {
+        "layer": 15,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0002474630600772798,
+        "device_span_seconds": 0.00013196799904108047
+      },
+      {
+        "layer": 16,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006492409447673708,
+        "device_span_seconds": 0.0007508159950375558
+      },
+      {
+        "layer": 16,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013578604557551444,
+        "device_span_seconds": 4.9408000428229574e-05
+      },
+      {
+        "layer": 16,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005961969727650285,
+        "device_span_seconds": 0.0009175040125846863
+      },
+      {
+        "layer": 16,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00017242605099454522,
+        "device_span_seconds": 0.00115308800060302
+      },
+      {
+        "layer": 16,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026472269964870065,
+        "device_span_seconds": 0.0020297280102968217
+      },
+      {
+        "layer": 16,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011503500980325043,
+        "device_span_seconds": 0.011859615921974181
+      },
+      {
+        "layer": 16,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008414434007136151,
+        "device_span_seconds": 0.010675583899021148
+      },
+      {
+        "layer": 16,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028111503343097866,
+        "device_span_seconds": 0.00022380800545215604
+      },
+      {
+        "layer": 16,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023312203120440245,
+        "device_span_seconds": 0.00013916800171136858
+      },
+      {
+        "layer": 16,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00042060797568410635,
+        "device_span_seconds": 7.215999998152255e-05
+      },
+      {
+        "layer": 16,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00033613803680054843,
+        "device_span_seconds": 6.646399991586805e-05
+      },
+      {
+        "layer": 17,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000658482953440398,
+        "device_span_seconds": 0.001198079988360405
+      },
+      {
+        "layer": 17,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.000138547969982028,
+        "device_span_seconds": 2.5728000327944755e-05
+      },
+      {
+        "layer": 17,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005893560301046818,
+        "device_span_seconds": 0.0007460479959845542
+      },
+      {
+        "layer": 17,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013739793212153018,
+        "device_span_seconds": 2.972800028510392e-05
+      },
+      {
+        "layer": 17,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002648218011017889,
+        "device_span_seconds": 0.001438655972480774
+      },
+      {
+        "layer": 17,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011969151004450396,
+        "device_span_seconds": 0.012098815977573394
+      },
+      {
+        "layer": 17,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.009026237006764859,
+        "device_span_seconds": 0.011062720000743865
+      },
+      {
+        "layer": 17,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028706100420095026,
+        "device_span_seconds": 0.0002266880013048649
+      },
+      {
+        "layer": 17,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021436897804960608,
+        "device_span_seconds": 0.00013936000131070615
+      },
+      {
+        "layer": 17,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00023270497331395745,
+        "device_span_seconds": 0.00012646399997174739
+      },
+      {
+        "layer": 17,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00040027801878750324,
+        "device_span_seconds": 6.633599987253547e-05
+      },
+      {
+        "layer": 18,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006616169994231313,
+        "device_span_seconds": 0.0013669120371341706
+      },
+      {
+        "layer": 18,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013539197971113026,
+        "device_span_seconds": 2.6688000420108436e-05
+      },
+      {
+        "layer": 18,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005845300329383463,
+        "device_span_seconds": 0.0007538880035281181
+      },
+      {
+        "layer": 18,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013833498815074563,
+        "device_span_seconds": 0.00019878399721346795
+      },
+      {
+        "layer": 18,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002549770986661315,
+        "device_span_seconds": 0.0022768959999084474
+      },
+      {
+        "layer": 18,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011649410065729171,
+        "device_span_seconds": 0.011025759875774383
+      },
+      {
+        "layer": 18,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008576060004997998,
+        "device_span_seconds": 0.010063167929649354
+      },
+      {
+        "layer": 18,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028322203434072435,
+        "device_span_seconds": 0.00022316800244152546
+      },
+      {
+        "layer": 18,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00022692096536047757,
+        "device_span_seconds": 0.0001364159993827343
+      },
+      {
+        "layer": 18,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00042159302392974496,
+        "device_span_seconds": 6.53440011665225e-05
+      },
+      {
+        "layer": 18,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00032881699735298753,
+        "device_span_seconds": 6.80319992825389e-05
+      },
+      {
+        "layer": 19,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006600379711017013,
+        "device_span_seconds": 0.0008295360058546066
+      },
+      {
+        "layer": 19,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014461798127740622,
+        "device_span_seconds": 0.0001229439980816096
+      },
+      {
+        "layer": 19,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000643949955701828,
+        "device_span_seconds": 0.0010315840020775795
+      },
+      {
+        "layer": 19,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013982396922074258,
+        "device_span_seconds": 0.0006780480053275823
+      },
+      {
+        "layer": 19,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.010499672993319109,
+        "device_span_seconds": 0.011182144045829774
+      },
+      {
+        "layer": 19,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.010837962967343628,
+        "device_span_seconds": 0.009705087840557097
+      },
+      {
+        "layer": 19,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007338965107919648,
+        "device_span_seconds": 0.010242943942546845
+      },
+      {
+        "layer": 19,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002916189841926098,
+        "device_span_seconds": 0.00022720000147819516
+      },
+      {
+        "layer": 19,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.000239620974753052,
+        "device_span_seconds": 0.00013635200075805186
+      },
+      {
+        "layer": 19,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004208650207147002,
+        "device_span_seconds": 4.8031999729573724e-05
+      },
+      {
+        "layer": 19,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003357699897605926,
+        "device_span_seconds": 4.9504000227898354e-05
+      },
+      {
+        "layer": 20,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006532029947265983,
+        "device_span_seconds": 0.00091542399674654
+      },
+      {
+        "layer": 20,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014023506082594395,
+        "device_span_seconds": 3.6031999858096235e-05
+      },
+      {
+        "layer": 20,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005947229510638863,
+        "device_span_seconds": 0.001236031986773014
+      },
+      {
+        "layer": 20,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014135593664832413,
+        "device_span_seconds": 2.3008000222034756e-05
+      },
+      {
+        "layer": 20,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027690219576470554,
+        "device_span_seconds": 0.0024943360388278964
+      },
+      {
+        "layer": 20,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011722838011337444,
+        "device_span_seconds": 0.010933632016181945
+      },
+      {
+        "layer": 20,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008705730026122183,
+        "device_span_seconds": 0.009916256070137025
+      },
+      {
+        "layer": 20,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027956502162851393,
+        "device_span_seconds": 0.00022425600513815882
+      },
+      {
+        "layer": 20,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021517695859074593,
+        "device_span_seconds": 0.00013779200054705142
+      },
+      {
+        "layer": 20,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00023898205836303532,
+        "device_span_seconds": 0.0001272640014067292
+      },
+      {
+        "layer": 20,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0004657529934775084,
+        "device_span_seconds": 6.476800004020333e-05
+      },
+      {
+        "layer": 21,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006602570356335491,
+        "device_span_seconds": 0.0013830399811267853
+      },
+      {
+        "layer": 21,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013481196947395802,
+        "device_span_seconds": 2.6720000430941583e-05
+      },
+      {
+        "layer": 21,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005927919992245734,
+        "device_span_seconds": 0.0007496000006794929
+      },
+      {
+        "layer": 21,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013944297097623348,
+        "device_span_seconds": 0.0001768000042065978
+      },
+      {
+        "layer": 21,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0028025849896948785,
+        "device_span_seconds": 0.0030784959346055983
+      },
+      {
+        "layer": 21,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.012421391933457926,
+        "device_span_seconds": 0.011788095712661742
+      },
+      {
+        "layer": 21,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.009453123027924448,
+        "device_span_seconds": 0.01061135983467102
+      },
+      {
+        "layer": 21,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002806359843816608,
+        "device_span_seconds": 0.00022566400468349457
+      },
+      {
+        "layer": 21,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00018199894111603498,
+        "device_span_seconds": 0.00013606400229036807
+      },
+      {
+        "layer": 21,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00042585600749589503,
+        "device_span_seconds": 6.380800064653158e-05
+      },
+      {
+        "layer": 21,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0002437989751342684,
+        "device_span_seconds": 0.00013020799960941078
+      },
+      {
+        "layer": 22,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006640999927185476,
+        "device_span_seconds": 0.0010388160049915314
+      },
+      {
+        "layer": 22,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013637696974910796,
+        "device_span_seconds": 3.3280000090599064e-05
+      },
+      {
+        "layer": 22,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005979989946354181,
+        "device_span_seconds": 0.0013580479845404624
+      },
+      {
+        "layer": 22,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014772798749618232,
+        "device_span_seconds": 3.0432000989094382e-05
+      },
+      {
+        "layer": 22,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002697154035558924,
+        "device_span_seconds": 0.0023768959939479825
+      },
+      {
+        "layer": 22,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.021823018993018195,
+        "device_span_seconds": 0.021825024425983428
+      },
+      {
+        "layer": 22,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.018855920963687822,
+        "device_span_seconds": 0.020490496218204497
+      },
+      {
+        "layer": 22,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002827559655997902,
+        "device_span_seconds": 0.000224608002230525
+      },
+      {
+        "layer": 22,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00017904298147186637,
+        "device_span_seconds": 0.00031363200768828387
+      },
+      {
+        "layer": 22,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004414429422467947,
+        "device_span_seconds": 5.023999977856875e-05
+      },
+      {
+        "layer": 22,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.000244183000177145,
+        "device_span_seconds": 0.00013107199966907502
+      },
+      {
+        "layer": 23,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.00067878098343499,
+        "device_span_seconds": 0.0007543039992451667
+      },
+      {
+        "layer": 23,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001476030156482011,
+        "device_span_seconds": 0.00014182399841956793
+      },
+      {
+        "layer": 23,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006478690775111318,
+        "device_span_seconds": 0.0013252480104565618
+      },
+      {
+        "layer": 23,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014703802298754454,
+        "device_span_seconds": 4.0512000443413855e-05
+      },
+      {
+        "layer": 23,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01730998305720277,
+        "device_span_seconds": 0.017633408069610595
+      },
+      {
+        "layer": 23,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.011792323988629505,
+        "device_span_seconds": 0.010668799936771391
+      },
+      {
+        "layer": 23,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.01405607198830694,
+        "device_span_seconds": 0.016102303981781006
+      },
+      {
+        "layer": 23,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002942860301118344,
+        "device_span_seconds": 0.00022704000212252142
+      },
+      {
+        "layer": 23,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023962705745361745,
+        "device_span_seconds": 0.00030172799620777367
+      },
+      {
+        "layer": 23,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00045639497693628073,
+        "device_span_seconds": 6.876800116151571e-05
+      },
+      {
+        "layer": 23,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00035071696038357913,
+        "device_span_seconds": 6.563200009986758e-05
+      },
+      {
+        "layer": 24,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006918159779161215,
+        "device_span_seconds": 0.0008617280051112174
+      },
+      {
+        "layer": 24,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013710104394704103,
+        "device_span_seconds": 0.00045804800232872366
+      },
+      {
+        "layer": 24,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000614431977737695,
+        "device_span_seconds": 0.000897279992699623
+      },
+      {
+        "layer": 24,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014351701247505844,
+        "device_span_seconds": 0.0001361599995288998
+      },
+      {
+        "layer": 24,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027076530386693776,
+        "device_span_seconds": 0.002147071987390518
+      },
+      {
+        "layer": 24,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.013854523014742881,
+        "device_span_seconds": 0.013682368099689483
+      },
+      {
+        "layer": 24,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.010869177960557863,
+        "device_span_seconds": 0.012651167809963226
+      },
+      {
+        "layer": 24,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002864479611162096,
+        "device_span_seconds": 0.00022528000548481942
+      },
+      {
+        "layer": 24,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021771900355815887,
+        "device_span_seconds": 0.00013868800178170205
+      },
+      {
+        "layer": 24,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00024405698059126735,
+        "device_span_seconds": 0.0001258239997550845
+      },
+      {
+        "layer": 24,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00041568197775632143,
+        "device_span_seconds": 7.126399967819453e-05
+      },
+      {
+        "layer": 25,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006640390492975712,
+        "device_span_seconds": 0.0007501759976148605
+      },
+      {
+        "layer": 25,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001356590073555708,
+        "device_span_seconds": 2.6112000457942488e-05
+      },
+      {
+        "layer": 25,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005940989940427244,
+        "device_span_seconds": 0.0008954240009188652
+      },
+      {
+        "layer": 25,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014959598775021732,
+        "device_span_seconds": 5.052800080738962e-05
+      },
+      {
+        "layer": 25,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002638297068187967,
+        "device_span_seconds": 0.002264800041913986
+      },
+      {
+        "layer": 25,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01638487706077285,
+        "device_span_seconds": 0.016188831686973573
+      },
+      {
+        "layer": 25,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.013300994964083657,
+        "device_span_seconds": 0.01508047980070114
+      },
+      {
+        "layer": 25,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002808680001180619,
+        "device_span_seconds": 0.00022547200135886669
+      },
+      {
+        "layer": 25,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002243820345029235,
+        "device_span_seconds": 0.0001383359991014004
+      },
+      {
+        "layer": 25,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002342010266147554,
+        "device_span_seconds": 0.00012294400110840796
+      },
+      {
+        "layer": 25,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.000451519968919456,
+        "device_span_seconds": 5.120000010356307e-05
+      },
+      {
+        "layer": 26,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0007294619572348893,
+        "device_span_seconds": 0.0017069759741425515
+      },
+      {
+        "layer": 26,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013714999658986926,
+        "device_span_seconds": 2.2976000094786285e-05
+      },
+      {
+        "layer": 26,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005913429777137935,
+        "device_span_seconds": 0.0011844160258769989
+      },
+      {
+        "layer": 26,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014301695046015084,
+        "device_span_seconds": 3.971200122032314e-05
+      },
+      {
+        "layer": 26,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027076230326201767,
+        "device_span_seconds": 0.0017755840122699739
+      },
+      {
+        "layer": 26,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011337520089000463,
+        "device_span_seconds": 0.011221119940280914
+      },
+      {
+        "layer": 26,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008227113023167476,
+        "device_span_seconds": 0.010278943955898285
+      },
+      {
+        "layer": 26,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028506500530056655,
+        "device_span_seconds": 0.00022608000226318834
+      },
+      {
+        "layer": 26,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002345349930692464,
+        "device_span_seconds": 0.00014057600125670433
+      },
+      {
+        "layer": 26,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00041711903759278357,
+        "device_span_seconds": 4.9215999897569415e-05
+      },
+      {
+        "layer": 26,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003405950265005231,
+        "device_span_seconds": 5.142399994656443e-05
+      },
+      {
+        "layer": 27,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006684599502477795,
+        "device_span_seconds": 0.0009068479984998701
+      },
+      {
+        "layer": 27,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001466210524085909,
+        "device_span_seconds": 0.00015923199802637099
+      },
+      {
+        "layer": 27,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006465009937528521,
+        "device_span_seconds": 0.000949184000492096
+      },
+      {
+        "layer": 27,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013094901805743575,
+        "device_span_seconds": 2.665600052569062e-05
+      },
+      {
+        "layer": 27,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.007353425957262516,
+        "device_span_seconds": 0.00902316802740097
+      },
+      {
+        "layer": 27,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.013504405971616507,
+        "device_span_seconds": 0.012405888080596925
+      },
+      {
+        "layer": 27,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.00456920504802838,
+        "device_span_seconds": 0.00779171198606491
+      },
+      {
+        "layer": 27,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002935979573521763,
+        "device_span_seconds": 0.00035119999200105667
+      },
+      {
+        "layer": 27,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00018328800797462463,
+        "device_span_seconds": 0.00013712000101804734
+      },
+      {
+        "layer": 27,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002767919795587659,
+        "device_span_seconds": 0.00012863999884575605
+      },
+      {
+        "layer": 27,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0002362149825785309,
+        "device_span_seconds": 0.0001235520001500845
+      },
+      {
+        "layer": 28,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000634755939245224,
+        "device_span_seconds": 0.0008650880008935929
+      },
+      {
+        "layer": 28,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.000136125017888844,
+        "device_span_seconds": 3.0112000647932295e-05
+      },
+      {
+        "layer": 28,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006039249419700354,
+        "device_span_seconds": 0.0007723839953541755
+      },
+      {
+        "layer": 28,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013850798131898046,
+        "device_span_seconds": 0.0003189760025124997
+      },
+      {
+        "layer": 28,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027160990284755826,
+        "device_span_seconds": 0.0015837439894676212
+      },
+      {
+        "layer": 28,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011206011986359954,
+        "device_span_seconds": 0.011656863927841188
+      },
+      {
+        "layer": 28,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008126815024297684,
+        "device_span_seconds": 0.010584607899188995
+      },
+      {
+        "layer": 28,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027746494743041694,
+        "device_span_seconds": 0.00022051200084388257
+      },
+      {
+        "layer": 28,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023800699273124337,
+        "device_span_seconds": 0.00014067200012505055
+      },
+      {
+        "layer": 28,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00041240797145292163,
+        "device_span_seconds": 5.1200000103563064e-05
+      },
+      {
+        "layer": 28,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003404709859751165,
+        "device_span_seconds": 4.972800007089972e-05
+      },
+      {
+        "layer": 29,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006587799871340394,
+        "device_span_seconds": 0.0007946239933371543
+      },
+      {
+        "layer": 29,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001335040433332324,
+        "device_span_seconds": 4.35840010177344e-05
+      },
+      {
+        "layer": 29,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005907550221309066,
+        "device_span_seconds": 0.0007985920011997223
+      },
+      {
+        "layer": 29,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014263894991017878,
+        "device_span_seconds": 3.913600067608058e-05
+      },
+      {
+        "layer": 29,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0025721470010466874,
+        "device_span_seconds": 0.002785952016711235
+      },
+      {
+        "layer": 29,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.015533027064520866,
+        "device_span_seconds": 0.014818400144577025
+      },
+      {
+        "layer": 29,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.012521542987087741,
+        "device_span_seconds": 0.013606880068778993
+      },
+      {
+        "layer": 29,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027671403950080276,
+        "device_span_seconds": 0.000220896003767848
+      },
+      {
+        "layer": 29,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00018149003153666854,
+        "device_span_seconds": 0.000135648000985384
+      },
+      {
+        "layer": 29,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00044631099444814026,
+        "device_span_seconds": 6.73279999755323e-05
+      },
+      {
+        "layer": 29,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00024566100910305977,
+        "device_span_seconds": 0.00012393600028008222
+      },
+      {
+        "layer": 30,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000676499999826774,
+        "device_span_seconds": 0.0016137279644608499
+      },
+      {
+        "layer": 30,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001371990074403584,
+        "device_span_seconds": 0.00030828801449388264
+      },
+      {
+        "layer": 30,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005962479626759887,
+        "device_span_seconds": 0.0009805760085582734
+      },
+      {
+        "layer": 30,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014067601296119392,
+        "device_span_seconds": 0.00045532799907960003
+      },
+      {
+        "layer": 30,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026726489304564893,
+        "device_span_seconds": 0.002010624006390572
+      },
+      {
+        "layer": 30,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01047753996681422,
+        "device_span_seconds": 0.010299167931079862
+      },
+      {
+        "layer": 30,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.0075122719863429666,
+        "device_span_seconds": 0.009264575958251954
+      },
+      {
+        "layer": 30,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028069401741959155,
+        "device_span_seconds": 0.00022595200501382352
+      },
+      {
+        "layer": 30,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021511802333407104,
+        "device_span_seconds": 0.00014332800172269346
+      },
+      {
+        "layer": 30,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002294289879500866,
+        "device_span_seconds": 0.0001224320000037551
+      },
+      {
+        "layer": 30,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00040781800635159016,
+        "device_span_seconds": 7.084799930453301e-05
+      },
+      {
+        "layer": 31,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006548930250573903,
+        "device_span_seconds": 0.0016286719962954521
+      },
+      {
+        "layer": 31,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014841099618934095,
+        "device_span_seconds": 0.00015219199820421637
+      },
+      {
+        "layer": 31,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000650760077405721,
+        "device_span_seconds": 0.0010743680074810982
+      },
+      {
+        "layer": 31,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001419520704075694,
+        "device_span_seconds": 4.62080012075603e-05
+      },
+      {
+        "layer": 31,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.014119914965704083,
+        "device_span_seconds": 0.015122272193431853
+      },
+      {
+        "layer": 31,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.011343999009113759,
+        "device_span_seconds": 0.009126368045806885
+      },
+      {
+        "layer": 31,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.011050385015551,
+        "device_span_seconds": 0.014079743921756743
+      },
+      {
+        "layer": 31,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00029228400671854615,
+        "device_span_seconds": 0.00022259199991822242
+      },
+      {
+        "layer": 31,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002183799515478313,
+        "device_span_seconds": 0.00013651200011372566
+      },
+      {
+        "layer": 31,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0002393689937889576,
+        "device_span_seconds": 0.00012291199993342162
+      },
+      {
+        "layer": 31,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00044543997501023114,
+        "device_span_seconds": 7.100799959152937e-05
+      },
+      {
+        "layer": 32,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006772740161977708,
+        "device_span_seconds": 0.0010487679988145828
+      },
+      {
+        "layer": 32,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013709798804484308,
+        "device_span_seconds": 4.9248000374063844e-05
+      },
+      {
+        "layer": 32,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005963480216450989,
+        "device_span_seconds": 0.0007954879924654962
+      },
+      {
+        "layer": 32,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014145695604383945,
+        "device_span_seconds": 2.6112000457942485e-05
+      },
+      {
+        "layer": 32,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027866590244229883,
+        "device_span_seconds": 0.002794431954622269
+      },
+      {
+        "layer": 32,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.011825148976640776,
+        "device_span_seconds": 0.011754975855350494
+      },
+      {
+        "layer": 32,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008608733100118116,
+        "device_span_seconds": 0.010648672044277191
+      },
+      {
+        "layer": 32,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002886870061047375,
+        "device_span_seconds": 0.0002264640014618635
+      },
+      {
+        "layer": 32,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023530598264187574,
+        "device_span_seconds": 0.00013958400301635265
+      },
+      {
+        "layer": 32,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004199259274173528,
+        "device_span_seconds": 4.87040001899004e-05
+      },
+      {
+        "layer": 32,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003918440779671073,
+        "device_span_seconds": 6.345599936321379e-05
+      },
+      {
+        "layer": 33,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000662253936752677,
+        "device_span_seconds": 0.0011900160163640977
+      },
+      {
+        "layer": 33,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013438804307952523,
+        "device_span_seconds": 4.582400084473193e-05
+      },
+      {
+        "layer": 33,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006155830051284283,
+        "device_span_seconds": 0.0007759039923548698
+      },
+      {
+        "layer": 33,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013779403525404632,
+        "device_span_seconds": 2.7264000615105035e-05
+      },
+      {
+        "layer": 33,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0025358559796586633,
+        "device_span_seconds": 0.0022714240550994877
+      },
+      {
+        "layer": 33,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01153111198800616,
+        "device_span_seconds": 0.011984192073345184
+      },
+      {
+        "layer": 33,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.00859270998626016,
+        "device_span_seconds": 0.010936064004898072
+      },
+      {
+        "layer": 33,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002828539873007685,
+        "device_span_seconds": 0.0002388800010085106
+      },
+      {
+        "layer": 33,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002199689915869385,
+        "device_span_seconds": 0.00013369600102305413
+      },
+      {
+        "layer": 33,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00023600799613632262,
+        "device_span_seconds": 0.00012320000119507313
+      },
+      {
+        "layer": 33,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0004009390249848366,
+        "device_span_seconds": 6.396800000220537e-05
+      },
+      {
+        "layer": 34,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006491939711850137,
+        "device_span_seconds": 0.00116297597438097
+      },
+      {
+        "layer": 34,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001346260542050004,
+        "device_span_seconds": 2.7328000636771323e-05
+      },
+      {
+        "layer": 34,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005931589985266328,
+        "device_span_seconds": 0.0007442879974842072
+      },
+      {
+        "layer": 34,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013672502245754004,
+        "device_span_seconds": 2.6560000493191184e-05
+      },
+      {
+        "layer": 34,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0025351210206281394,
+        "device_span_seconds": 0.0026523520201444627
+      },
+      {
+        "layer": 34,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.010750941932201385,
+        "device_span_seconds": 0.010109375953674317
+      },
+      {
+        "layer": 34,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.0075415250030346215,
+        "device_span_seconds": 0.00914595192670822
+      },
+      {
+        "layer": 34,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00027689302805811167,
+        "device_span_seconds": 0.0002232960034161806
+      },
+      {
+        "layer": 34,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002499980037100613,
+        "device_span_seconds": 0.00013926400057971477
+      },
+      {
+        "layer": 34,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004687300242949277,
+        "device_span_seconds": 6.774399941787123e-05
+      },
+      {
+        "layer": 34,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003406760224606842,
+        "device_span_seconds": 7.020800048485398e-05
+      },
+      {
+        "layer": 35,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006441479781642556,
+        "device_span_seconds": 0.0008944639936089517
+      },
+      {
+        "layer": 35,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00015197694301605225,
+        "device_span_seconds": 0.0005601599924266339
+      },
+      {
+        "layer": 35,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006524070049636066,
+        "device_span_seconds": 0.0010491520017385484
+      },
+      {
+        "layer": 35,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014428200665861368,
+        "device_span_seconds": 0.0006881600019987672
+      },
+      {
+        "layer": 35,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.0128300940268673,
+        "device_span_seconds": 0.013154016256332397
+      },
+      {
+        "layer": 35,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.011580427002627403,
+        "device_span_seconds": 0.010085023999214173
+      },
+      {
+        "layer": 35,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.009798232989851385,
+        "device_span_seconds": 0.011914815843105317
+      },
+      {
+        "layer": 35,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00029024799005128443,
+        "device_span_seconds": 0.00023305600136518478
+      },
+      {
+        "layer": 35,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00021959003061056137,
+        "device_span_seconds": 0.0001408000010997057
+      },
+      {
+        "layer": 35,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00024127197684720159,
+        "device_span_seconds": 0.00012751999776810407
+      },
+      {
+        "layer": 35,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.000429028004873544,
+        "device_span_seconds": 6.003200029954314e-05
+      },
+      {
+        "layer": 36,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006774590001441538,
+        "device_span_seconds": 0.0011714879944920542
+      },
+      {
+        "layer": 36,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013643899001181126,
+        "device_span_seconds": 3.3248000545427206e-05
+      },
+      {
+        "layer": 36,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006386779714375734,
+        "device_span_seconds": 0.0015990400314331052
+      },
+      {
+        "layer": 36,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013663803110830486,
+        "device_span_seconds": 0.00021529599721543488
+      },
+      {
+        "layer": 36,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027076739352196455,
+        "device_span_seconds": 0.002010112002491951
+      },
+      {
+        "layer": 36,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01010379201034084,
+        "device_span_seconds": 0.009979583740234376
+      },
+      {
+        "layer": 36,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007025125960353762,
+        "device_span_seconds": 0.008443423926830292
+      },
+      {
+        "layer": 36,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028168404242023826,
+        "device_span_seconds": 0.00022553600184619426
+      },
+      {
+        "layer": 36,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023046202841214836,
+        "device_span_seconds": 0.00013718400150537492
+      },
+      {
+        "layer": 36,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004090839938726276,
+        "device_span_seconds": 4.899200005456805e-05
+      },
+      {
+        "layer": 36,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00032239299616776407,
+        "device_span_seconds": 5.0399999599903817e-05
+      },
+      {
+        "layer": 37,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006471090600825846,
+        "device_span_seconds": 0.0007948479950428009
+      },
+      {
+        "layer": 37,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013613697956316173,
+        "device_span_seconds": 3.990400047041476e-05
+      },
+      {
+        "layer": 37,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005970600759610534,
+        "device_span_seconds": 0.0007868479937314987
+      },
+      {
+        "layer": 37,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001405130315106362,
+        "device_span_seconds": 4.361600102856755e-05
+      },
+      {
+        "layer": 37,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026386049576103687,
+        "device_span_seconds": 0.0020908799916505814
+      },
+      {
+        "layer": 37,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.012124855013098568,
+        "device_span_seconds": 0.012150976002216339
+      },
+      {
+        "layer": 37,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.009035528026288375,
+        "device_span_seconds": 0.010603871941566466
+      },
+      {
+        "layer": 37,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002821400121320039,
+        "device_span_seconds": 0.00022172800078988075
+      },
+      {
+        "layer": 37,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00022892100969329476,
+        "device_span_seconds": 0.00013760000094771384
+      },
+      {
+        "layer": 37,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004079100617673248,
+        "device_span_seconds": 4.6304000075906515e-05
+      },
+      {
+        "layer": 37,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003384089795872569,
+        "device_span_seconds": 6.748799979686738e-05
+      },
+      {
+        "layer": 38,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006641849759034812,
+        "device_span_seconds": 0.0015673280134797097
+      },
+      {
+        "layer": 38,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001338930451311171,
+        "device_span_seconds": 2.464000042527914e-05
+      },
+      {
+        "layer": 38,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006035760161466897,
+        "device_span_seconds": 0.0008798080012202261
+      },
+      {
+        "layer": 38,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013800300075672567,
+        "device_span_seconds": 2.9088000766932965e-05
+      },
+      {
+        "layer": 38,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0025890129909384996,
+        "device_span_seconds": 0.0019453120231628417
+      },
+      {
+        "layer": 38,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.012356653023744002,
+        "device_span_seconds": 0.012592896103858948
+      },
+      {
+        "layer": 38,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.009393615007866174,
+        "device_span_seconds": 0.011547872126102447
+      },
+      {
+        "layer": 38,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002799110079649836,
+        "device_span_seconds": 0.00024188800156116485
+      },
+      {
+        "layer": 38,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00018475300748832524,
+        "device_span_seconds": 0.00013612799905240536
+      },
+      {
+        "layer": 38,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004180499818176031,
+        "device_span_seconds": 6.54720002785325e-05
+      },
+      {
+        "layer": 38,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00024548001238144934,
+        "device_span_seconds": 0.0001299519995227456
+      },
+      {
+        "layer": 39,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006589530094061047,
+        "device_span_seconds": 0.001168352000415325
+      },
+      {
+        "layer": 39,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014437505160458386,
+        "device_span_seconds": 0.00011423999839462339
+      },
+      {
+        "layer": 39,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006414240633603185,
+        "device_span_seconds": 0.0008747200071811676
+      },
+      {
+        "layer": 39,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014005808043293655,
+        "device_span_seconds": 3.155200066976249e-05
+      },
+      {
+        "layer": 39,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01053841199609451,
+        "device_span_seconds": 0.011586303949356079
+      },
+      {
+        "layer": 39,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.012464266997994855,
+        "device_span_seconds": 0.011126624107360839
+      },
+      {
+        "layer": 39,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007372025022050366,
+        "device_span_seconds": 0.010083775997161865
+      },
+      {
+        "layer": 39,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028684508288279176,
+        "device_span_seconds": 0.00022870400175452235
+      },
+      {
+        "layer": 39,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002362079976592213,
+        "device_span_seconds": 0.00013392000086605548
+      },
+      {
+        "layer": 39,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00042392697650939226,
+        "device_span_seconds": 6.585599994286894e-05
+      },
+      {
+        "layer": 39,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003376769891474396,
+        "device_span_seconds": 6.45119994878769e-05
+      },
+      {
+        "layer": 40,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006659360369667411,
+        "device_span_seconds": 0.0009073279947042466
+      },
+      {
+        "layer": 40,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001344179909210652,
+        "device_span_seconds": 0.00016537599824368955
+      },
+      {
+        "layer": 40,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005925250006839633,
+        "device_span_seconds": 0.0012087679877877235
+      },
+      {
+        "layer": 40,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001353799889329821,
+        "device_span_seconds": 2.9888000106438996e-05
+      },
+      {
+        "layer": 40,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0027102570165880024,
+        "device_span_seconds": 0.0021568640470504765
+      },
+      {
+        "layer": 40,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.010766838036943227,
+        "device_span_seconds": 0.011293280005455018
+      },
+      {
+        "layer": 40,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007836410019081086,
+        "device_span_seconds": 0.009989055871963502
+      },
+      {
+        "layer": 40,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002839399967342615,
+        "device_span_seconds": 0.00022819200158119205
+      },
+      {
+        "layer": 40,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00017760897753760219,
+        "device_span_seconds": 0.00013596799969673159
+      },
+      {
+        "layer": 40,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.000413970003137365,
+        "device_span_seconds": 6.515199970453977e-05
+      },
+      {
+        "layer": 40,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0002423919504508376,
+        "device_span_seconds": 0.00012915200181305407
+      },
+      {
+        "layer": 41,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000659605982946232,
+        "device_span_seconds": 0.0013093119710683822
+      },
+      {
+        "layer": 41,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013396103167906404,
+        "device_span_seconds": 2.5792000349611043e-05
+      },
+      {
+        "layer": 41,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006089119706302881,
+        "device_span_seconds": 0.0007492479979991912
+      },
+      {
+        "layer": 41,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013881700579077005,
+        "device_span_seconds": 2.8192000463604927e-05
+      },
+      {
+        "layer": 41,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002650522976182401,
+        "device_span_seconds": 0.0023492159992456437
+      },
+      {
+        "layer": 41,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.013888956949813291,
+        "device_span_seconds": 0.014983103871345521
+      },
+      {
+        "layer": 41,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.0108138820505701,
+        "device_span_seconds": 0.013654304265975954
+      },
+      {
+        "layer": 41,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002825799456331879,
+        "device_span_seconds": 0.00022777600213885307
+      },
+      {
+        "layer": 41,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023281897301785648,
+        "device_span_seconds": 0.00013766400143504145
+      },
+      {
+        "layer": 41,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004068349953740835,
+        "device_span_seconds": 8.060800144448877e-05
+      },
+      {
+        "layer": 41,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00032457802444696426,
+        "device_span_seconds": 6.489599915221334e-05
+      },
+      {
+        "layer": 42,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006559359899256378,
+        "device_span_seconds": 0.00117334396392107
+      },
+      {
+        "layer": 42,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013873897842131555,
+        "device_span_seconds": 2.8800000669434667e-05
+      },
+      {
+        "layer": 42,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005896320217289031,
+        "device_span_seconds": 0.0007513279989361763
+      },
+      {
+        "layer": 42,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013642397243529558,
+        "device_span_seconds": 2.972800075076521e-05
+      },
+      {
+        "layer": 42,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.002545443072449416,
+        "device_span_seconds": 0.002183711975812912
+      },
+      {
+        "layer": 42,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01162284699967131,
+        "device_span_seconds": 0.012081439852714539
+      },
+      {
+        "layer": 42,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.008711706002941355,
+        "device_span_seconds": 0.011073824167251587
+      },
+      {
+        "layer": 42,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.000279860949376598,
+        "device_span_seconds": 0.00022352000512182712
+      },
+      {
+        "layer": 42,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0001829239772632718,
+        "device_span_seconds": 0.00013606400229036807
+      },
+      {
+        "layer": 42,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004127250285819173,
+        "device_span_seconds": 4.9567999783903366e-05
+      },
+      {
+        "layer": 42,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00024312097229994833,
+        "device_span_seconds": 0.00012806399911642076
+      },
+      {
+        "layer": 43,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006537930166814476,
+        "device_span_seconds": 0.000938784010708332
+      },
+      {
+        "layer": 43,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014639506116509438,
+        "device_span_seconds": 0.00014147199853323402
+      },
+      {
+        "layer": 43,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.000640067970380187,
+        "device_span_seconds": 0.001014912001788616
+      },
+      {
+        "layer": 43,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001372550323139876,
+        "device_span_seconds": 2.800000063143671e-05
+      },
+      {
+        "layer": 43,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.006705335981678218,
+        "device_span_seconds": 0.007806879937648773
+      },
+      {
+        "layer": 43,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.017434876033803448,
+        "device_span_seconds": 0.014245184302330016
+      },
+      {
+        "layer": 43,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.003613772976677865,
+        "device_span_seconds": 0.006854848027229309
+      },
+      {
+        "layer": 43,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00029805192025378346,
+        "device_span_seconds": 0.0002298880033195019
+      },
+      {
+        "layer": 43,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.0002549350028857589,
+        "device_span_seconds": 0.0001380480006337166
+      },
+      {
+        "layer": 43,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004065670073032379,
+        "device_span_seconds": 5.078399972990155e-05
+      },
+      {
+        "layer": 43,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003263409889768809,
+        "device_span_seconds": 5.219199974089861e-05
+      },
+      {
+        "layer": 44,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006480519659817219,
+        "device_span_seconds": 0.0007753279954195023
+      },
+      {
+        "layer": 44,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013465594383887947,
+        "device_span_seconds": 3.0336000258103013e-05
+      },
+      {
+        "layer": 44,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005921810225117952,
+        "device_span_seconds": 0.0009029759913682936
+      },
+      {
+        "layer": 44,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014009702135808766,
+        "device_span_seconds": 0.0005616000273730606
+      },
+      {
+        "layer": 44,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026551129412837327,
+        "device_span_seconds": 0.0020653760135173798
+      },
+      {
+        "layer": 44,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.01049647101899609,
+        "device_span_seconds": 0.010860351979732513
+      },
+      {
+        "layer": 44,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.007428687997162342,
+        "device_span_seconds": 0.0097570241689682
+      },
+      {
+        "layer": 44,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028624298283830285,
+        "device_span_seconds": 0.00022262400016188623
+      },
+      {
+        "layer": 44,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023445399710908532,
+        "device_span_seconds": 0.00014000000059604642
+      },
+      {
+        "layer": 44,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00040833099046722054,
+        "device_span_seconds": 6.124800071120263e-05
+      },
+      {
+        "layer": 44,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003191639552824199,
+        "device_span_seconds": 6.303999945521355e-05
+      },
+      {
+        "layer": 45,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006464809994213283,
+        "device_span_seconds": 0.001416800007224083
+      },
+      {
+        "layer": 45,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013328503700904548,
+        "device_span_seconds": 2.68480007071048e-05
+      },
+      {
+        "layer": 45,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005896109505556524,
+        "device_span_seconds": 0.0007441279962658882
+      },
+      {
+        "layer": 45,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00014541309792548418,
+        "device_span_seconds": 0.0003535039962735027
+      },
+      {
+        "layer": 45,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0024949499929789454,
+        "device_span_seconds": 0.0020895040333271026
+      },
+      {
+        "layer": 45,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.016505302977748215,
+        "device_span_seconds": 0.015645536065101624
+      },
+      {
+        "layer": 45,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.013390752981649712,
+        "device_span_seconds": 0.01450864005088806
+      },
+      {
+        "layer": 45,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.00028072495479136705,
+        "device_span_seconds": 0.0002233600039035082
+      },
+      {
+        "layer": 45,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00023807096295058727,
+        "device_span_seconds": 0.00013539200089871884
+      },
+      {
+        "layer": 45,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004162430122960359,
+        "device_span_seconds": 6.883199978619814e-05
+      },
+      {
+        "layer": 45,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003399120469111949,
+        "device_span_seconds": 0.00021011199615895745
+      },
+      {
+        "layer": 46,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006833889929112047,
+        "device_span_seconds": 0.0017338240146636964
+      },
+      {
+        "layer": 46,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00013493001461029053,
+        "device_span_seconds": 2.8096000431105496e-05
+      },
+      {
+        "layer": 46,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0005949580227024853,
+        "device_span_seconds": 0.0007550719976425172
+      },
+      {
+        "layer": 46,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.0001415699953213334,
+        "device_span_seconds": 2.454400039277971e-05
+      },
+      {
+        "layer": 46,
+        "stage": "gated_delta",
+        "calls": 8,
+        "host_seconds": 0.0026297389704268426,
+        "device_span_seconds": 0.002546496018767357
+      },
+      {
+        "layer": 46,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.013765587034868076,
+        "device_span_seconds": 0.01280323189496994
+      },
+      {
+        "layer": 46,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.01068676498834975,
+        "device_span_seconds": 0.01161616003513336
+      },
+      {
+        "layer": 46,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002813320024870336,
+        "device_span_seconds": 0.000224768003448844
+      },
+      {
+        "layer": 46,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00022709000040777028,
+        "device_span_seconds": 0.0001343360003083944
+      },
+      {
+        "layer": 46,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.0004135279741603881,
+        "device_span_seconds": 6.236799899488688e-05
+      },
+      {
+        "layer": 46,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.00033356499625369906,
+        "device_span_seconds": 5.196799943223595e-05
+      },
+      {
+        "layer": 47,
+        "stage": "attention_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006753819470759481,
+        "device_span_seconds": 0.0010250559970736502
+      },
+      {
+        "layer": 47,
+        "stage": "attention_hc_write",
+        "calls": 8,
+        "host_seconds": 0.000145205034641549,
+        "device_span_seconds": 0.00023395200050435963
+      },
+      {
+        "layer": 47,
+        "stage": "ffn_hc_read",
+        "calls": 8,
+        "host_seconds": 0.0006591510027647018,
+        "device_span_seconds": 0.0010225600004196166
+      },
+      {
+        "layer": 47,
+        "stage": "ffn_hc_write",
+        "calls": 8,
+        "host_seconds": 0.00015174804138951004,
+        "device_span_seconds": 8.217600174248218e-05
+      },
+      {
+        "layer": 47,
+        "stage": "moe_total",
+        "calls": 8,
+        "host_seconds": 0.016806391009595245,
+        "device_span_seconds": 0.016917535841464996
+      },
+      {
+        "layer": 47,
+        "stage": "qsa",
+        "calls": 8,
+        "host_seconds": 0.011440204980317503,
+        "device_span_seconds": 0.01031062388420105
+      },
+      {
+        "layer": 47,
+        "stage": "routed_experts",
+        "calls": 8,
+        "host_seconds": 0.013487465010257438,
+        "device_span_seconds": 0.014079520106315612
+      },
+      {
+        "layer": 47,
+        "stage": "router",
+        "calls": 8,
+        "host_seconds": 0.0002943900180980563,
+        "device_span_seconds": 0.00023068800009787085
+      },
+      {
+        "layer": 47,
+        "stage": "shared_down",
+        "calls": 8,
+        "host_seconds": 0.00029585600714199245,
+        "device_span_seconds": 0.00015449600201100113
+      },
+      {
+        "layer": 47,
+        "stage": "shared_gate",
+        "calls": 8,
+        "host_seconds": 0.00043919397285208106,
+        "device_span_seconds": 0.00022707200096920132
+      },
+      {
+        "layer": 47,
+        "stage": "shared_up",
+        "calls": 8,
+        "host_seconds": 0.0003616449539549649,
+        "device_span_seconds": 0.0007996799955144524
+      }
+    ],
+    "interpretation": "Host durations include implicit waits; CUDA event spans may include idle CPU gaps. Nested moe_total/ple_total overlap their children: do not add all rows. Events are collected without per-operation synchronization; tokens synchronize at boundaries. This is an instrumented single-request profile, not a steady-state throughput benchmark."
+  },
+  "token_seconds": [
+    0.6546459379896987,
+    0.22076929500326514,
+    0.2305899259808939,
+    0.16245619498658925,
+    0.14506629400420934,
+    0.14984253299189731,
+    0.13246396300382912,
+    0.12026957800844684,
+    0.12225880500045605,
+    0.12605303499731235,
+    0.13408030700520612,
+    0.12638773600338027,
+    0.12126934799016453,
+    0.12102489799144678,
+    0.13174711397732608,
+    0.11988302200916223
+  ],
+  "expert_statistics": {
+    "device": {
+      "requests": 7680,
+      "misses": 1952,
+      "promotions": 1952,
+      "hits": 5728,
+      "resident_experts": 1952,
+      "resident_bytes": 3994496000,
+      "device_budget_bytes": 6442450944,
+      "protected_experts": 0,
+      "inflight_dispatches": 1,
+      "hit_rate": 0.7458333333333333
+    },
+    "host_dequant": {
+      "resident_experts": 0,
+      "used_bytes": 0,
+      "budget_bytes": 0
+    },
+    "execution": {
+      "gpu_experts": 7680,
+      "decode_batch_dispatches": 593,
+      "grouped_gpu_dispatches": 175
+    },
+    "cpu_workers": 4,
+    "cpu_packed_backend": "native"
+  },
+  "plan": {
+    "max_length": 16,
+    "cpu_workers": 4,
+    "dense_fp32_bytes": 3066007040,
+    "constructor_temporary_bytes": 340992000,
+    "host_static_bytes": 0,
+    "device_static_bytes": 5704430080,
+    "recurrent_bytes": 117669888,
+    "qsa_bytes": 915456,
+    "ple_bytes": 368640,
+    "state_bytes": 118953984,
+    "host_reserved_bytes": 944971776,
+    "device_reserved_bytes": 13277915648,
+    "canonical_mmap_bytes": 83606638080,
+    "device_names": [
+      "output.weight",
+      "blk.0.attn_gate.weight",
+      "blk.0.attn_qkv.weight",
+      "blk.0.ffn_down_shexp.weight",
+      "blk.0.ffn_gate_shexp.weight",
+      "blk.0.ffn_up_shexp.weight",
+      "blk.0.ssm_out.weight",
+      "blk.1.attn_gate.weight",
+      "blk.1.attn_qkv.weight",
+      "blk.1.ffn_down_shexp.weight",
+      "blk.1.ffn_gate_shexp.weight",
+      "blk.1.ffn_up_shexp.weight",
+      "blk.1.ssm_out.weight",
+      "blk.2.attn_gate.weight",
+      "blk.2.attn_qkv.weight",
+      "blk.2.ffn_down_shexp.weight",
+      "blk.2.ffn_gate_shexp.weight",
+      "blk.2.ffn_up_shexp.weight",
+      "blk.2.ssm_out.weight",
+      "blk.3.attn_k.weight",
+      "blk.3.attn_output.weight",
+      "blk.3.attn_q.weight",
+      "blk.3.attn_v.weight",
+      "blk.3.ffn_down_shexp.weight",
+      "blk.3.ffn_gate_shexp.weight",
+      "blk.3.ffn_up_shexp.weight",
+      "blk.4.attn_gate.weight",
+      "blk.4.attn_qkv.weight",
+      "blk.4.ffn_down_shexp.weight",
+      "blk.4.ffn_gate_shexp.weight",
+      "blk.4.ffn_up_shexp.weight",
+      "blk.4.ssm_out.weight",
+      "blk.5.attn_gate.weight",
+      "blk.5.attn_qkv.weight",
+      "blk.5.ffn_down_shexp.weight",
+      "blk.5.ffn_gate_shexp.weight",
+      "blk.5.ffn_up_shexp.weight",
+      "blk.5.ssm_out.weight",
+      "blk.6.attn_gate.weight",
+      "blk.6.attn_qkv.weight",
+      "blk.6.ffn_down_shexp.weight",
+      "blk.6.ffn_gate_shexp.weight",
+      "blk.6.ffn_up_shexp.weight",
+      "blk.6.ssm_out.weight",
+      "blk.7.attn_k.weight",
+      "blk.7.attn_output.weight",
+      "blk.7.attn_q.weight",
+      "blk.7.attn_v.weight",
+      "blk.7.ffn_down_shexp.weight",
+      "blk.7.ffn_gate_shexp.weight",
+      "blk.7.ffn_up_shexp.weight",
+      "blk.8.attn_gate.weight",
+      "blk.8.attn_qkv.weight",
+      "blk.8.ffn_down_shexp.weight",
+      "blk.8.ffn_gate_shexp.weight",
+      "blk.8.ffn_up_shexp.weight",
+      "blk.8.ssm_out.weight",
+      "blk.9.attn_gate.weight",
+      "blk.9.attn_qkv.weight",
+      "blk.9.ffn_down_shexp.weight",
+      "blk.9.ffn_gate_shexp.weight",
+      "blk.9.ffn_up_shexp.weight",
+      "blk.9.ssm_out.weight",
+      "blk.10.attn_gate.weight",
+      "blk.10.attn_qkv.weight",
+      "blk.10.ffn_down_shexp.weight",
+      "blk.10.ffn_gate_shexp.weight",
+      "blk.10.ffn_up_shexp.weight",
+      "blk.10.ssm_out.weight",
+      "blk.11.attn_k.weight",
+      "blk.11.attn_output.weight",
+      "blk.11.attn_q.weight",
+      "blk.11.attn_v.weight",
+      "blk.11.ffn_down_shexp.weight",
+      "blk.11.ffn_gate_shexp.weight",
+      "blk.11.ffn_up_shexp.weight",
+      "blk.12.attn_gate.weight",
+      "blk.12.attn_qkv.weight",
+      "blk.12.ffn_down_shexp.weight",
+      "blk.12.ffn_gate_shexp.weight",
+      "blk.12.ffn_up_shexp.weight",
+      "blk.12.ssm_out.weight",
+      "blk.13.attn_gate.weight",
+      "blk.13.attn_qkv.weight",
+      "blk.13.ffn_down_shexp.weight",
+      "blk.13.ffn_gate_shexp.weight",
+      "blk.13.ffn_up_shexp.weight",
+      "blk.13.ssm_out.weight",
+      "blk.14.attn_gate.weight",
+      "blk.14.attn_qkv.weight",
+      "blk.14.ffn_down_shexp.weight",
+      "blk.14.ffn_gate_shexp.weight",
+      "blk.14.ffn_up_shexp.weight",
+      "blk.14.ssm_out.weight",
+      "blk.15.attn_k.weight",
+      "blk.15.attn_output.weight",
+      "blk.15.attn_q.weight",
+      "blk.15.attn_v.weight",
+      "blk.15.ffn_down_shexp.weight",
+      "blk.15.ffn_gate_shexp.weight",
+      "blk.15.ffn_up_shexp.weight",
+      "blk.16.attn_gate.weight",
+      "blk.16.attn_qkv.weight",
+      "blk.16.ffn_down_shexp.weight",
+      "blk.16.ffn_gate_shexp.weight",
+      "blk.16.ffn_up_shexp.weight",
+      "blk.16.ssm_out.weight",
+      "blk.17.attn_gate.weight",
+      "blk.17.attn_qkv.weight",
+      "blk.17.ffn_down_shexp.weight",
+      "blk.17.ffn_gate_shexp.weight",
+      "blk.17.ffn_up_shexp.weight",
+      "blk.17.ssm_out.weight",
+      "blk.18.attn_gate.weight",
+      "blk.18.attn_qkv.weight",
+      "blk.18.ffn_down_shexp.weight",
+      "blk.18.ffn_gate_shexp.weight",
+      "blk.18.ffn_up_shexp.weight",
+      "blk.18.ssm_out.weight",
+      "blk.19.attn_k.weight",
+      "blk.19.attn_output.weight",
+      "blk.19.attn_q.weight",
+      "blk.19.attn_v.weight",
+      "blk.19.ffn_down_shexp.weight",
+      "blk.19.ffn_gate_shexp.weight",
+      "blk.19.ffn_up_shexp.weight",
+      "blk.20.attn_gate.weight",
+      "blk.20.attn_qkv.weight",
+      "blk.20.ffn_down_shexp.weight",
+      "blk.20.ffn_gate_shexp.weight",
+      "blk.20.ffn_up_shexp.weight",
+      "blk.20.ssm_out.weight",
+      "blk.21.attn_gate.weight",
+      "blk.21.attn_qkv.weight",
+      "blk.21.ffn_down_shexp.weight",
+      "blk.21.ffn_gate_shexp.weight",
+      "blk.21.ffn_up_shexp.weight",
+      "blk.21.ssm_out.weight",
+      "blk.22.attn_gate.weight",
+      "blk.22.attn_qkv.weight",
+      "blk.22.ffn_down_shexp.weight",
+      "blk.22.ffn_gate_shexp.weight",
+      "blk.22.ffn_up_shexp.weight",
+      "blk.22.ssm_out.weight",
+      "blk.23.attn_k.weight",
+      "blk.23.attn_output.weight",
+      "blk.23.attn_q.weight",
+      "blk.23.attn_v.weight",
+      "blk.23.ffn_down_shexp.weight",
+      "blk.23.ffn_gate_shexp.weight",
+      "blk.23.ffn_up_shexp.weight",
+      "blk.24.attn_gate.weight",
+      "blk.24.attn_qkv.weight",
+      "blk.24.ffn_down_shexp.weight",
+      "blk.24.ffn_gate_shexp.weight",
+      "blk.24.ffn_up_shexp.weight",
+      "blk.24.ssm_out.weight",
+      "blk.25.attn_gate.weight",
+      "blk.25.attn_qkv.weight",
+      "blk.25.ffn_down_shexp.weight",
+      "blk.25.ffn_gate_shexp.weight",
+      "blk.25.ffn_up_shexp.weight",
+      "blk.25.ssm_out.weight",
+      "blk.26.attn_gate.weight",
+      "blk.26.attn_qkv.weight",
+      "blk.26.ffn_down_shexp.weight",
+      "blk.26.ffn_gate_shexp.weight",
+      "blk.26.ffn_up_shexp.weight",
+      "blk.26.ssm_out.weight",
+      "blk.27.attn_k.weight",
+      "blk.27.attn_output.weight",
+      "blk.27.attn_q.weight",
+      "blk.27.attn_v.weight",
+      "blk.27.ffn_down_shexp.weight",
+      "blk.27.ffn_gate_shexp.weight",
+      "blk.27.ffn_up_shexp.weight",
+      "blk.28.attn_gate.weight",
+      "blk.28.attn_qkv.weight",
+      "blk.28.ffn_down_shexp.weight",
+      "blk.28.ffn_gate_shexp.weight",
+      "blk.28.ffn_up_shexp.weight",
+      "blk.28.ssm_out.weight",
+      "blk.29.attn_gate.weight",
+      "blk.29.attn_qkv.weight",
+      "blk.29.ffn_down_shexp.weight",
+      "blk.29.ffn_gate_shexp.weight",
+      "blk.29.ffn_up_shexp.weight",
+      "blk.29.ssm_out.weight",
+      "blk.30.attn_gate.weight",
+      "blk.30.attn_qkv.weight",
+      "blk.30.ffn_down_shexp.weight",
+      "blk.30.ffn_gate_shexp.weight",
+      "blk.30.ffn_up_shexp.weight",
+      "blk.30.ssm_out.weight",
+      "blk.31.attn_k.weight",
+      "blk.31.attn_output.weight",
+      "blk.31.attn_q.weight",
+      "blk.31.attn_v.weight",
+      "blk.31.ffn_down_shexp.weight",
+      "blk.31.ffn_gate_shexp.weight",
+      "blk.31.ffn_up_shexp.weight",
+      "blk.32.attn_gate.weight",
+      "blk.32.attn_qkv.weight",
+      "blk.32.ffn_down_shexp.weight",
+      "blk.32.ffn_gate_shexp.weight",
+      "blk.32.ffn_up_shexp.weight",
+      "blk.32.ssm_out.weight",
+      "blk.33.attn_gate.weight",
+      "blk.33.attn_qkv.weight",
+      "blk.33.ffn_down_shexp.weight",
+      "blk.33.ffn_gate_shexp.weight",
+      "blk.33.ffn_up_shexp.weight",
+      "blk.33.ssm_out.weight",
+      "blk.34.attn_gate.weight",
+      "blk.34.attn_qkv.weight",
+      "blk.34.ffn_down_shexp.weight",
+      "blk.34.ffn_gate_shexp.weight",
+      "blk.34.ffn_up_shexp.weight",
+      "blk.34.ssm_out.weight",
+      "blk.35.attn_k.weight",
+      "blk.35.attn_output.weight",
+      "blk.35.attn_q.weight",
+      "blk.35.attn_v.weight",
+      "blk.35.ffn_down_shexp.weight",
+      "blk.35.ffn_gate_shexp.weight",
+      "blk.35.ffn_up_shexp.weight",
+      "blk.36.attn_gate.weight",
+      "blk.36.attn_qkv.weight",
+      "blk.36.ffn_down_shexp.weight",
+      "blk.36.ffn_gate_shexp.weight",
+      "blk.36.ffn_up_shexp.weight",
+      "blk.36.ssm_out.weight",
+      "blk.37.attn_gate.weight",
+      "blk.37.attn_qkv.weight",
+      "blk.37.ffn_down_shexp.weight",
+      "blk.37.ffn_gate_shexp.weight",
+      "blk.37.ffn_up_shexp.weight",
+      "blk.37.ssm_out.weight",
+      "blk.38.attn_gate.weight",
+      "blk.38.attn_qkv.weight",
+      "blk.38.ffn_down_shexp.weight",
+      "blk.38.ffn_gate_shexp.weight",
+      "blk.38.ffn_up_shexp.weight",
+      "blk.38.ssm_out.weight",
+      "blk.39.attn_k.weight",
+      "blk.39.attn_output.weight",
+      "blk.39.attn_q.weight",
+      "blk.39.attn_v.weight",
+      "blk.39.ffn_down_shexp.weight",
+      "blk.39.ffn_gate_shexp.weight",
+      "blk.39.ffn_up_shexp.weight",
+      "blk.40.attn_gate.weight",
+      "blk.40.attn_qkv.weight",
+      "blk.40.ffn_down_shexp.weight",
+      "blk.40.ffn_gate_shexp.weight",
+      "blk.40.ffn_up_shexp.weight",
+      "blk.40.ssm_out.weight",
+      "blk.41.attn_gate.weight",
+      "blk.41.attn_qkv.weight",
+      "blk.41.ffn_down_shexp.weight",
+      "blk.41.ffn_gate_shexp.weight",
+      "blk.41.ffn_up_shexp.weight",
+      "blk.41.ssm_out.weight",
+      "blk.42.attn_gate.weight",
+      "blk.42.attn_qkv.weight",
+      "blk.42.ffn_down_shexp.weight",
+      "blk.42.ffn_gate_shexp.weight",
+      "blk.42.ffn_up_shexp.weight",
+      "blk.42.ssm_out.weight",
+      "blk.43.attn_k.weight",
+      "blk.43.attn_output.weight",
+      "blk.43.attn_q.weight",
+      "blk.43.attn_v.weight",
+      "blk.43.ffn_down_shexp.weight",
+      "blk.43.ffn_gate_shexp.weight",
+      "blk.43.ffn_up_shexp.weight",
+      "blk.44.attn_gate.weight",
+      "blk.44.attn_qkv.weight",
+      "blk.44.ffn_down_shexp.weight",
+      "blk.44.ffn_gate_shexp.weight",
+      "blk.44.ffn_up_shexp.weight",
+      "blk.44.ssm_out.weight",
+      "blk.45.attn_gate.weight",
+      "blk.45.attn_qkv.weight",
+      "blk.45.ffn_down_shexp.weight",
+      "blk.45.ffn_gate_shexp.weight",
+      "blk.45.ffn_up_shexp.weight",
+      "blk.45.ssm_out.weight",
+      "blk.46.attn_gate.weight",
+      "blk.46.attn_qkv.weight",
+      "blk.46.ffn_down_shexp.weight",
+      "blk.46.ffn_gate_shexp.weight",
+      "blk.46.ffn_up_shexp.weight",
+      "blk.46.ssm_out.weight",
+      "blk.47.attn_k.weight",
+      "blk.47.attn_output.weight",
+      "blk.47.attn_q.weight",
+      "blk.47.attn_v.weight",
+      "blk.47.ffn_down_shexp.weight",
+      "blk.47.ffn_gate_shexp.weight",
+      "blk.47.ffn_up_shexp.weight"
+    ],
+    "host_budget_bytes": 8589934592,
+    "static_device_budget_bytes": 6442450944,
+    "device_budget_bytes": 15032385536,
+    "cache_bytes": 6442450944,
+    "headroom_bytes": 536870912,
+    "staging_bytes": 67108864,
+    "activation_bytes": 67108864
+  },
+  "run": {
+    "returncode": 0,
+    "seconds": 10.100483266985975,
+    "sampled_peak_rss_bytes": 10329587712,
+    "stop_reason": null
+  }
+}

@@ -109,6 +109,8 @@ class AdaptiveExpertCache:
 
     def record_inflight(self, keys, event):
         """Retain expert handles while GPU kernels reading them are pending."""
+        # Below-budget caches may never evict, so reap completed fences here too.
+        self._busy_keys()
         relevant = frozenset(k for k in keys if k in self.resident)
         if relevant:
             self._inflight_groups.append((event, relevant))
@@ -363,12 +365,14 @@ class HeterogeneousExpertExecutor:
         idle_eviction_requests: int = 0,
         routing_profiler=None,
         execution_mode: str = "mixed",
+        batch_cpu_decode: bool = True,
     ):
         if execution_mode not in {"mixed", "cpu", "gpu"}:
             raise ValueError("execution_mode must be 'mixed', 'cpu' or 'gpu'")
         if execution_mode == "gpu" and BACKEND_NAME != "cupy":
             raise RuntimeError("GPU execution requires MINI_LLM_BACKEND=cupy")
         self.execution_mode = execution_mode
+        self.batch_cpu_decode = bool(batch_cpu_decode)
         if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
             raise ValueError("Routing trace model identity does not match executor")
         self.routing_profiler = routing_profiler
@@ -671,6 +675,85 @@ class HeterogeneousExpertExecutor:
             return self._pool.submit(self._copy_compute_copy, key, weights,
                                      x, ready, device_id, gpu_y, trace)
         return self._pool.submit(self._run_cpu, key, weights, x, trace)
+
+    def try_forward_decode_batch(self, layer_id, expert_ids, x, routing_weights, slots):
+        """Share one immutable activation across CPU misses in singleton decode.
+
+        Called only inside dispatch_scope, with unique ascending IDs. FP32-only
+        eligibility preserves the existing multiply then sequential-add boundaries.
+        All scratch is dispatch-local, O(selected experts * D); CPU math and GPU
+        expert.forward are unchanged. Profiling retains the per-expert copy path.
+        """
+        if (not self.batch_cpu_decode or self._pool is None or
+                self.routing_profiler is not None or not self._dispatch_depth or
+                x.shape != (1, self.d_model) or x.dtype != xp.float32 or
+                routing_weights.dtype != xp.float32):
+            return None
+        expert_ids = tuple(expert_ids)
+        if not expert_ids or expert_ids != tuple(sorted(set(expert_ids))):
+            return None
+        prepared = [self._prepare(layer_id, e, x) for e in expert_ids]
+        cpu = [i for i, (_, expert, _, _) in enumerate(prepared) if expert is None]
+        outputs = [None] * len(prepared)
+        jobs = []
+        if cpu:
+            if BACKEND_NAME == "cupy":
+                stream = xp.cuda.get_current_stream()
+                in_mem = xp.cuda.alloc_pinned_memory(int(x.nbytes))
+                host_x = np.frombuffer(in_mem, dtype=x.dtype, count=int(x.size)).reshape(x.shape)
+                x.get(out=host_x, stream=stream, blocking=False)
+                stream.synchronize()  # Includes the activation's current-stream producer.
+                self.counters["decode_activation_d2h"] += 1
+                out_mem = xp.cuda.alloc_pinned_memory(len(cpu) * self.d_model * x.dtype.itemsize)
+                host_out = np.frombuffer(out_mem, dtype=x.dtype,
+                                         count=len(cpu) * self.d_model).reshape(len(cpu), self.d_model)
+            else:
+                host_x = np.array(x, copy=True)
+                host_out = np.empty((len(cpu), self.d_model), dtype=x.dtype)
+            host_x.flags.writeable = False
+        try:
+            for row, i in enumerate(cpu):
+                key, _, weights, _ = prepared[i]
+                jobs.append(self._pool.submit(
+                    self._run_cpu_decode_row, key, weights, host_x, host_out[row:row + 1]))
+                self.counters["cpu_submitted"] += 1
+            # Launch unchanged resident math only after all CPU jobs are queued.
+            for i, (_, expert, _, _) in enumerate(prepared):
+                if expert is not None:
+                    self.counters["gpu_experts"] += 1
+                    outputs[i] = expert.forward(x)
+        finally:
+            # Drain even after submission/GPU failure, and retain the original
+            # exception if one is already propagating through this finally.
+            error = None
+            for job in jobs:
+                try:
+                    job.result()
+                except Exception as exc:
+                    if error is None:
+                        error = exc
+            import sys
+            if error is not None and sys.exc_info()[0] is None:
+                raise error
+        if cpu:
+            if BACKEND_NAME == "cupy":
+                device_out = xp.empty(host_out.shape, dtype=x.dtype)
+                device_out.set(host_out, stream=stream)
+                stream.synchronize()  # Pinned slab must outlive DMA, including on return.
+                self.counters["decode_results_h2d"] += 1
+            else:
+                device_out = host_out
+            for row, i in enumerate(cpu):
+                outputs[i] = device_out[row:row + 1]
+        output = xp.zeros_like(x)
+        for slot, expert_out in zip(slots, outputs):
+            output += routing_weights[slot:slot + 1] * expert_out
+        self.counters["decode_batch_dispatches"] += 1
+        return output
+
+    def _run_cpu_decode_row(self, key, weights, host_x, destination):
+        # Futures retain no per-expert output arrays after copying their row.
+        np.copyto(destination, self._run_cpu(key, weights, host_x))
 
     def try_forward_grouped(self, layer_id, expert_ids, x, routing_weights, slots):
         """Batch compatible resident decode experts inside the caller's scope.

@@ -82,7 +82,7 @@ if _ql.triton is not None:
 def _unsupported_reason(x, experts, routing_weights, block_k, routing_slots=None):
     if block_k not in (256, 512, 1024):
         return "block_k must be 256, 512 or 1024"
-    if _ql.BACKEND_NAME != "cupy" or _ql.triton is None:
+    if _ql.BACKEND_NAME != "cupy":
         return "requires the CuPy backend and Triton"
     cp: Any = _ql.xp
     if not isinstance(x, cp.ndarray) or x.dtype != cp.float32:
@@ -119,9 +119,15 @@ def _unsupported_reason(x, experts, routing_weights, block_k, routing_slots=None
         if signature is not None and current != signature:
             return "all experts must share per-projection shapes and quantization formats"
         signature = current
+        all_iq = all(_ql.iq_packed_gpu.supports_type(w.quant_type) for w in projections)
+        all_legacy = all(w.quant_type in _ql._FORMAT_ID for w in projections)
+        if not (all_iq or all_legacy):
+            return "unsupported packed quantization format (mixed legacy/IQ triple)"
+        if all_legacy and _ql.triton is None:
+            return "requires the CuPy backend and Triton"
+        if all_iq and max(len(experts) * gate.shape[0], len(experts) * x.shape[1]) > 2147483647:
+            return "grouped IQ dimensions exceed CUDA launch/index limits"
         for w in projections:
-            if w.quant_type not in _ql._FORMAT_ID:
-                return "unsupported packed quantization format"
             qk, qb = BLOCK_FORMATS[w.quant_type]
             if (not isinstance(w.data, cp.ndarray) or w.data.dtype != cp.uint8
                     or not w.data.flags.c_contiguous or w.shape[1] % qk
@@ -137,8 +143,9 @@ def supports_grouped_quantized_experts(x, experts, routing_weights, *, block_k=5
     """Metadata-only support check; no allocation, transfers, or GPU kernels.
 
     All handles share each projection's shape/format, but gate/up/down formats
-    may differ from one another. FP32 routes may be strided, including reversed
-    or broadcast views. Ordering is a caller contract, not inferred from handles.
+    may differ from one another. All-IQ triples and all-legacy triples are
+    supported; a legacy/IQ hybrid triple is not. FP32 routes may be strided,
+    including reversed or broadcast views. Ordering is a caller contract.
     """
     return _unsupported_reason(x, experts, routing_weights, block_k, routing_slots) is None
 
@@ -171,6 +178,9 @@ def grouped_quantized_experts_forward(x, experts, routing_weights, *, block_k=51
     reason = _unsupported_reason(x, experts, routing_weights, block_k, routing_slots)
     if reason is not None:
         raise ValueError(f"Unsupported grouped quantized experts: {reason}")
+    if _ql.iq_packed_gpu.supports_type(experts[0].gate.quant_type):
+        return _ql.iq_packed_gpu.grouped(x, experts, routing_weights,
+                                       slots=routing_slots, block_k=block_k)
     cp: Any = _ql.xp
     e, d, f = len(experts), x.shape[1], experts[0].gate.shape[0]
     host_pointers = np.asarray([

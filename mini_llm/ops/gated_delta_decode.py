@@ -111,7 +111,7 @@ extern "C" __global__ void normalized_delta(
 
 extern "C" __global__ void gated_rms(
     const float* x, const float* gate, const float* gamma, float* output,
-    int dv, float eps) {
+    int dv, float eps, int sigmoid_gate) {
     int row = blockIdx.x, tid = threadIdx.x;
     __shared__ float sums[128];
     float sum = 0.0f;
@@ -129,7 +129,13 @@ extern "C" __global__ void gated_rms(
     for (int d = tid; d < dv; d += 128) {
         int i = row * dv + d;
         float g = gate[i];
-        float activated = g * (1.0f / (1.0f + expf(-g)));
+        float activated;
+        if (sigmoid_gate) {
+            float z = expf(-fabsf(g));
+            activated = g >= 0.0f ? 1.0f / (1.0f + z) : z / (1.0f + z);
+        } else {
+            activated = g * (1.0f / (1.0f + expf(-g)));
+        }
         output[i] = ((x[i] * inv) * gamma[d]) * activated;
     }
 }
@@ -163,7 +169,7 @@ def _eligible(mixer, qkv, gate, log_decay, beta, state):
     rule, conv, norm = mixer.rule, mixer.conv, mixer.norm
     if (rule.state_dtype != xp.float32 or conv.compute_dtype != xp.float32 or
             norm.compute_dtype != xp.float32 or conv.activation != "silu" or
-            norm.gate_activation != "silu" or not 1 <= rule.key_dim <= 256):
+            norm.gate_activation not in {"silu", "sigmoid"} or not 1 <= rule.key_dim <= 256):
         return False
     gamma, weight, bias = norm.norm.gamma, conv.weight, conv.bias
     if (gamma.shape != (rule.value_dim,) or
@@ -247,7 +253,8 @@ def try_decode(mixer, qkv, gate, log_decay, beta, state):
             f32(rule.query_scale)), stream=stream)
         kernels[2]((batch * rule.n_value_heads,), (128,), (
             readout, gate, mixer.norm.norm.gamma, output, i32(rule.value_dim),
-            f32(mixer.norm.norm.eps)), stream=stream)
+            f32(mixer.norm.norm.eps),
+            i32(mixer.norm.gate_activation == "sigmoid")), stream=stream)
     finally:
         event.record(stream)
         pending.append((event, refs))

@@ -6,8 +6,8 @@ Operator parity does not establish layer/model/generation parity. In particular,
 
 | Level | Evidence so far | Outstanding |
 |---|---|---|
-| Packed operator | Six new decoders match compiled pinned GGML reference lanes exactly; five IQs also match installed gguf | GPU IQ kernels |
-| Expert | Native packed mixed-format experts vs FP32 oracle; six real identical-input MoE cases match routing sets and reference-arithmetic operations at roughly1e-7 | All-layer/operator arithmetic attribution; GPU IQ kernels |
+| Packed operator | Six new decoders match compiled pinned GGML reference lanes exactly; direct packed GPU GEMV/SwiGLU and grouped experts now tested across all actual format triples | Large-prefill GPU GEMM/kernel tuning |
+| Expert | Native mixed-format oracle, six identical-input MoE reference cases,48 real GPU expert cases and grouped real top10 across7 format triples | Full-model arithmetic attribution; partial-resident grouping and async mover |
 | Sparse dispatch | Generated-on-demand 512-expert/top-10 CPU oracle; supported-format GPU execution with IQ CPU fallback | Full 512-expert/top-10 GPU/mixed topology on actual model; all-IQ GPU unsupported |
 | HC/PLE/GDN/QSA layer | FP64 synthetic graph tests; compiled source hash, recurrence, text RoPE and tie checks | Full independent linked-layer/checkpoint parity |
 | Model | Original checkpoint executes on CPU/CuPy; finite logits and diagnostic hooks | Independent comparison now runs; logit maxabs~1, relativeL2~5–6%; unresolved numerical discrepancy |
@@ -46,6 +46,12 @@ The original reference preflight exited2 before loading because of eager expert 
 The actual comparison produced maxabs logit differences0.958172 /1.006777, relativeL2=6.1643% /5.0675% after prefixes[1] /[1,2]. Both argmax IDs match (271 then220), top10 overlap9/10, maxabs log-probability differences1.07785 /0.94804. Both stored outputs are FP32; production FP32 native activation arithmetic differs from GGML quantized-activation matmul. No acceptance tolerance was imposed and these results do **not** pass the numerical milestone. Reference peakRSS5.72GiB; production8.71GiB, sequential processes.
 
 The subsequent0218–0223 investigation verifies all386 boundary comparisons by exact names and graph ancestry. The old prefix selector captured scheduler-created reshaped aliases and overwrote HC files. Corrected layer0 attention-read error is0.00102728 relativeL2, not1.832984. Composed BF16-activation HC replay reduces it to8.48e-8, explaining the first genuine divergence without changing production. Forty-five isolated arithmetic cases quantify Q8_K/Q8_0/BF16 rounding. Full diagnostic activation matching still leaves5–7% final-logit differences. Follow-up0224–0225 fixed the state diagnostic and completed35 retained state comparisons without model execution. Six identical-input MoE cases match top10 sets; teacher-forced operations agree at roughly1e-7 precision, and controlled quantization/input perturbations demonstrate amplification to percent-level logits. Follow-up0226 validates16-token representative DeltaNet/QSA updates with236 comparisons each in teacher-forced and continuous-state modes. Follow-up0227 establishes bit-exact full-model local incremental/prefill logits and all active-state hashes at prefixes1/2/4/8/16. No production mathematics changed. Full independent model/long-context equivalence is still not established, but the requested short-text gate passes and initial profiling has begun without a claimed speedup. Latest consolidated regression:1492 passed,186 skipped. See numerical_root_cause.md, activation_quantization_comparison_v2.json, layer_error_evolution.csv/png and state_validation.md. Historical result files are preserved.
+
+## Patch0213 optimization validation
+
+FP32 packed GPU IQ kernels, grouped experts and switchable HC/QSA/router/GDN fusion preserve the established mathematical graph. Real CPU/GPU expert comparison worst relativeL2=1.622820435e-6. Same-prefix optimized full-model versus prior FP32 baseline: relativeL2≤2.065315e-6, maxabs≤2.789498e-5, matching argmax/top10 at prefixes1/2/4/8/16. This is a new optimization comparison, not a resolution of the5–6% independent GGML discrepancy.
+
+Optimized16-token prefill/incremental logits and all active-state hashes are bit-exact, and two fresh requests reproduce greedy IDs `[220,100561,198]` (`0233_fast_lifecycle_v1.json`). CPU regressions1650 passed/654 skipped; selected CuPy regressions894 passed/20 skipped/2 documented CPU-only exclusions. No long-context or whole-repository GPU claim. See `0213_packed_gpu_and_decode_optimizations.md` for controls and test scope.
 
 ## Required future diagnostic contract
 

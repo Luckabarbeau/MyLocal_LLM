@@ -8,6 +8,7 @@ No decoder, history, placement policy, or backward graph is owned here.
 import math
 
 from ..backend import xp
+from ..ops.hyperconnection_decode_gpu import eligible, gains_gpu, mix_gpu, write_gpu
 
 
 def _fp32(name, value):
@@ -32,9 +33,11 @@ class Qwen4ExpHyperConnection:
     for a read-only connection. Pass each read's gains to its paired ``write``
     with the same original streams. All operations return fresh arrays and
     retain no activation state. Weights are copied at construction.
+    ``fast_decode=True`` opts into contiguous single-token CuPy FP32 fusion;
+    other inputs retain the reference graph.
     """
 
-    def __init__(self, gamma, down, up, inject=None, *, epsilon):
+    def __init__(self, gamma, down, up, inject=None, *, epsilon, fast_decode=False):
         gamma = _fp32("gamma", gamma)
         down = _fp32("down", down)
         up = _fp32("up", up)
@@ -63,6 +66,7 @@ class Qwen4ExpHyperConnection:
         self.down = down.copy()
         self.up = up.copy()
         self.inject = None if inject is None else inject.copy()
+        self.fast_decode = fast_decode
 
     def _streams(self, streams):
         _fp32("streams", streams)
@@ -76,8 +80,13 @@ class Qwen4ExpHyperConnection:
             raise ValueError(f"embedding must have shape [..., {self.width}]")
         return xp.repeat(embedding[..., None, :], 4, axis=-2)
 
+    def _fast_eligible(self, streams):
+        return self.fast_decode and eligible(streams, self.gamma, self.down, self.up)
+
     def _mix(self, streams):
         self._streams(streams)
+        if self._fast_eligible(streams):
+            return mix_gpu(streams, self.gamma, self.down, self.up, self.epsilon)
         rms = xp.sqrt(xp.mean(streams * streams, axis=-1, keepdims=True,
                               dtype=xp.float32) + self.epsilon)
         normalized = (streams / rms) * self.gamma
@@ -93,7 +102,10 @@ class Qwen4ExpHyperConnection:
         mixed, flat = self._mix(streams)
         gains = None
         if self.inject is not None:
-            gains = xp.float32(2) * _sigmoid((flat @ self.inject.T) * xp.float32(0.25))
+            if self._fast_eligible(streams) and eligible(streams, self.inject):
+                gains = gains_gpu(flat, self.inject)
+            else:
+                gains = xp.float32(2) * _sigmoid((flat @ self.inject.T) * xp.float32(0.25))
         return mixed, gains
 
     def write(self, streams, output, gains):
@@ -106,6 +118,8 @@ class Qwen4ExpHyperConnection:
             raise ValueError("output must match streams' leading dimensions and D")
         if gains.shape != leading + (4,):
             raise ValueError("gains must match streams' leading dimensions and four streams")
+        if self.fast_decode and eligible(streams, output, gains):
+            return write_gpu(streams, output, gains)
         return streams + gains[..., :, None] * output[..., None, :]
 
     def collapse(self, streams):

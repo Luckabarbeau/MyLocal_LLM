@@ -26,7 +26,11 @@ static void nearest(ggml_tensor * t, ggml_tensor * root, std::set<ggml_tensor *>
 }
 static bool layers_callback(ggml_tensor * t, bool ask, void * opaque) {
     auto & c = *static_cast<Layers *>(opaque);
-    const bool wanted = selected(ggml_get_name(t));
+    const std::string name = ggml_get_name(t);
+        // Prefix matches include scheduler-created " (reshaped)" aliases, which
+        // are not new mathematical boundaries and must never overwrite captures.
+        const bool wanted = selected(name) && (name == "result_norm" ||
+            name.find_first_not_of("0123456789", name.find_last_of('-') + 1) == std::string::npos);
     if (ask) return wanted;
     if (!wanted || c.position < 0) return true;
     try {

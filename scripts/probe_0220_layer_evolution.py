@@ -155,13 +155,14 @@ def plot_png(rows, path):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--child-model',type=Path)
+    parser.add_argument('--version', choices=('v1','v2'), default='v1')
     args=parser.parse_args()
     if args.child_model:
         child_model(MODEL,args.child_model,0)
         return
     docs=ROOT/'docs/qwen4exp'
-    report_path=docs/'0220_layer_evolution_v1.json'
-    vectors=docs/'diagnostics_0220_v1'
+    report_path=docs/f'0220_layer_evolution_{args.version}.json'
+    vectors=docs/f'diagnostics_0220_{args.version}'
     csv_path=docs/'layer_error_evolution.csv'
     png_path=docs/'layer_error_evolution.png'
     reserve([report_path,vectors,csv_path,png_path])

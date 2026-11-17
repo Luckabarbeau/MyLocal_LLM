@@ -1,10 +1,10 @@
 # Qwen4Exp implementation status
 
-## Current milestone — RUNNING, NOT NUMERICALLY VALIDATED
+## Current milestone — SHORT-TEXT VALIDATION GATE PASSED; INITIAL PROFILING
 
 The original local two-shard IQ3_S checkpoint now constructs and executes all48 layers on NumPy and CuPy/RTX5080, using packed native CPU routed experts from mapped canonical sources. No pruned model, full expert expansion, whole-PLE allocation, new checkpoint download, or all-resident GPU intermediate architecture is used.
 
-**The first principal deliverable is NOT complete.** Independent full-model logits differ from the pinned reference by ~5–6% relativeL2. Matching argmax/short greedy IDs is not enough. Numerical debugging is stopped without a speculative production edit; the next experiment is listed below. Serving and performance phases are not started.
+**Complete model/state mathematical equivalence is not yet claimed.** The current numerical investigation fixed the diagnostic indentation and analyzed retained states successfully. Identical-input MoE routing/experts/shared/combination tests at early and late layers agree at expected arithmetic precision after accounting for activation quantization. A one-time1.31e-6 early input perturbation produces2.31–6.33% logit changes in the diagnostic quantized path, demonstrating sensitivity at the observed discrepancy scale. No production mathematical defect is established. Subsequent0226 replays pass236 comparisons each for identical reference pre-state and continuous local state across16 tokens. Full-model CuPy incremental/prefill logits and all active-state hashes match exactly at prefixes1/2/4/8/16 (0227). The short-text gate has passed; initial profiling has begun without a kernel change or achieved speedup. Full independent model equivalence and long-context attribution remain outstanding. See numerical_root_cause.md. Production mathematics was not changed.
 
 Status vocabulary: Not started; In progress; Implemented but unvalidated; Numerically validated; End-to-end validated; Performance optimized. Validation scope is always stated; an operator claim is not a model claim.
 
@@ -17,14 +17,14 @@ Status vocabulary: Not started; In progress; Implemented but unvalidated; Numeri
 |0202 | `mini_llm/ops/quantized_weight.py`, `gguf_codebooks.{py,h}`, `tests/test_0202_iq_formats.py`, package-data and MIT notices | Numerically validated **CPU block decoding**: IQ2_S/IQ3_S/IQ3_XXS/IQ4_NL/IQ4_XS/Q2_0 exactly match compiled reference | Not GPU kernel support; native packed execution0203 |
 |0203 | `mini_llm/ops/native_packed_cpu.{py,cpp}`, `tests/test_0203_native_iq_experts.py` | Numerically validated **native packed CPU operators**; independent GGML lanes exact, synthetic experts maxabs3.8147e-6 | FP32 arithmetic even when returned dtype differs; throughput not benchmarked |
 |0204 | `expert_source.py`, `expert_residency.py`, `quantized_linear.py`, `external/qwen4exp_gguf.py`, sparse tests and `scripts/probe_0204_qwen4exp_experts.py` | Implemented with numerically validated **CPU/supported-GPU subpaths**; all7 actual expert-format triples maxabs5.6617e-11; complete publication/in-flight tests | All-IQ GPU/top-10 GPU exit not met; fixed slots/asynchronous weight mover not implemented. Existing synchronous sparse materializer retained |
-|0205 | `external/qwen4exp_hyperconnection.py`, standalone tests | Implemented but unvalidated against linked full reference; synthetic FP64 math and actual CuPy tests pass | Full HC boundary reference association currently suspect; do not call model parity |
+|0205 | `external/qwen4exp_hyperconnection.py`, standalone tests | Implemented but unvalidated against linked full reference; synthetic FP64 math and actual CuPy tests pass | Boundary identity verified; first real HC-read difference explained by BF16 rounding; not full-model parity |
 |0206 | `external/qwen4exp_ple.py`, standalone tests | Implemented but unvalidated as a full linked-reference block; compiled Strata hash parity, bounded row decoding and synthetic activation/history tests pass | Fixed target geometry, one sequence, sequential history; independent checkpoint PLE activation parity pending |
-|0207 | `external/qwen4exp_mixer.py`, standalone tests | Numerically validated **recurrence subpath** against pinned GGML and synthetic block oracle | Full checkpoint projection+state parity pending; sigmoidZ differs deliberately from Qwen3-Next default |
-|0208 | `external/qwen4exp_attention.py`, standalone tests | Implemented but unvalidated as linked full QSA graph; synthetic2061-cell selection/state tests and compiled-source textRoPE/tie checks pass | Text scalar positions only; local libstdc++ tie membership, not portable STL promise; no multimodal/long-context performance claim |
-|0209 | `external/qwen4exp_weights.py`, `qwen4exp_model.py`, combined graph tests | Implemented but unvalidated; actual CPU/GPU original-model forward succeeds | Independent logits discrepancy unresolved; diagnostic association must be verified first |
-|0210 | Generation state/lifecycle in model; `tests/test_0210_qwen4exp_generation.py`, reference probe/harness/artifacts | In progress; actual3 greedy decisions, exact within-backend prefill/incremental/reset checks pass | Reference logits maxabs~1, relativeL2~5–6%; no end-to-end numerical validation |
+|0207 | `external/qwen4exp_mixer.py`, standalone tests | Numerically validated **representative checkpoint state subpaths**, including16-token identical-input/continuous state replay against pinned GGML | All-layer independent state parity pending; sigmoidZ differs deliberately from Qwen3-Next default |
+|0208 | `external/qwen4exp_attention.py`, standalone tests | Numerically validated **representative short-text QSA state/output subpaths** over16 reference tokens; synthetic2061-cell sparse selection/state and compiled textRoPE/tie checks pass | Text scalar positions only; local libstdc++ tie membership, not portable STL promise; no multimodal/long-context performance claim |
+|0209 | `external/qwen4exp_weights.py`, `qwen4exp_model.py`, combined graph tests | Implemented but unvalidated; actual CPU/GPU original-model forward succeeds | Boundary association verified;5–6% baseline reference logit discrepancy not fully attributed; no demonstrated graph defect |
+|0210 | Generation state/lifecycle in model; `tests/test_0210_qwen4exp_generation.py`, reference probe/harness/artifacts | In progress; actual3 greedy decisions, reset checks and16-token full-model incremental/prefill active-state consistency pass | Reference logits maxabs~1, relativeL2~5–6%; no end-to-end numerical validation |
 |0211 | Existing OpenAI serving registration/tokenizer/template/streaming integration | Not started | Gated on numerically validated model; no new HTTP stack |
-|0212 | Critical-path profiling | Not started | No optimized throughput claim from lifecycle timings |
+|0212 | Initial profiling; `scripts/probe_0227_short_sequences_and_profile.py`, `0212_initial_profile.md` | In progress; measured eight CuPy decode positions with host spans/CUDA events | Exclusive critical path, SSD/page faults, overlap efficiency and global VRAM high-water outstanding; no speedup claim |
 |0213 | Native packed IQ GPU kernels | Not started | New IQ formats safely use CPU; no permanent GPU expansion |
 |0214 | Fixed-slot asynchronous expert mover | Not started | Publication/readiness/quarantine contracts documented; current cache synchronous |
 |0215 | Independent efficient prefill policy | Not started | Sequential correct-path candidate currently used, model parity unresolved |
@@ -81,12 +81,24 @@ Original pinned build's eager prefetch initially blocked safe loading. A **separ
 
 Max absolute log-probability differences:1.07785 and0.94804. FP32 stored logits; production native packed FP32 activations differ from GGML's quantized activation arithmetic. No broad acceptance tolerance was applied, and these metrics are **not a passing numerical gate**. No finite-difference step is involved. Reference peak RSS5.72GiB, production8.71GiB; combined probe27.16s.386 boundary comparisons were collected.
 
-The reported first difference at layer0 HC attention read is **not established as the first mathematical divergence**: duplicate reference `hc_mixed` names appear to associate attention/FFN captures incorrectly (identical reference norms). Do not infer a production defect from this association. No production correction or repeated speculative run followed.
+The old HC-attention comparison is superseded by the verified0218–0220 captures: reshaped aliases overwrote occurrence-based artifacts. Corrected first HC-read error is0.00102728 relativeL2, explained by BF16 projection-input rounding. No production correction was needed.
 
 Artifacts: `0210_noprefetch_reference_validation.json`, `0210_noprefetch_reference.patch`, `0210_reference_diagnostics.md`. The earlier blocked preflight result is preserved separately, not overwritten as a success.
 
-## Stop state and single next experiment
+## Investigation outcome and next measured work
 
-Known: exact packed decoders/native operators pass; original model runs with bounded owned allocations, mapped experts/PLE, deterministic selected combination and isolated states. Unknown: whether full-model differences arise predominantly from activation quantization, an actual graph/state error, or diagnostic misassociation. Existing evidence does not distinguish those causes.
+Known: packed decoders/native operators pass; original model runs with bounded owned allocations, mapped experts/PLE, deterministic selected combination and isolated states. Diagnostic misassociation is resolved; BF16/Q8 arithmetic differences and amplification are demonstrated. Representative identical-input DeltaNet/QSA states pass over16 tokens, and full-model local state consistency passes. Complete attribution of the5–6% reference logit discrepancy remains open; no incorrect production operation has been demonstrated.
 
-**Next experiment:** fixed token1/layer0 only; capture reference tensor name **plus tensor/op/source identities and evaluation occurrence**, then associate its HC attention/FFN reads unambiguously with production. Only after verifying boundary association should the first real numerical divergence be classified. Do not alter production code or broaden tolerances merely to match argmax/text.
+**Update through investigations0224–0225:** indentation is fixed; state reanalysis passes with35 comparisons and exact PLE row IDs, without model reloads. Six identical-input MoE cases have matching top10 sets; teacher-forced down/combination agree at roughly1e-7 precision. A shared-expert quantization threshold amplifies1.47e-7 input error into5.50e-4 output error. Controlled full-forward perturbations demonstrate several-percent sensitivity. Most recent focused diagnostics plus0106 inference regressions:1295 passed,176 skipped. No production/reference math changed. Those historical next checks are superseded by0226–0227 below; full mathematical equivalence remains unclaimed.
+
+**Update through0226–0227:** both independent block-state policies pass236 comparisons; all full-model active-state hashes/logits match at prefixes1/2/4/8/16. Latest consolidated command:
+
+```sh
+MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+.venv/bin/python -m pytest -q \
+  tests/test_020*.py tests/test_021*.py tests/test_022*.py tests/test_0106*.py
+```
+
+**1492 passed,186 skipped in16.75s** on the final rerun (earlier run:16.54s). This overlaps earlier totals; do not add them. Separate real-checkpoint block replays and sequential CuPy runs passed. New diagnostic files: `tests/fixtures/qwen4exp_block_state_reference.cpp`, `scripts/probe_0226_identical_block_states.py`, `scripts/probe_0227_short_sequences_and_profile.py` and their focused tests. No production source changed.
+
+The short-text validation gate is passed. Initial profile: mean instrumented token3.6965s; routed expert span1.55152s, complete GDN1.36484s, complete QSA0.55624s. These include waiting/nested work, not exclusive critical-path costs. Next: separate projection fallback from mixer core overhead and validate packed mixed-format GPU expert kernels against retained oracles. Fixed-slot asynchronous movement and long-context validation remain pending.

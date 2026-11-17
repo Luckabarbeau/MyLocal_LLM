@@ -1,0 +1,4172 @@
+{
+  "scope": "sampled actual states; fixed prefixes 1,2,4, fifth sentinel exposes final pre-state",
+  "provenance": {
+    "base_sha": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "changed_source_files": [
+      "src/llama-model.cpp"
+    ],
+    "compared_files": 3603,
+    "zero_prefetch_control_flow_verified": true,
+    "cpu_only": true
+  },
+  "tokens": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "sampled_layers": [
+    0,
+    1,
+    3
+  ],
+  "full_state_equivalence_claim": false,
+  "production_files_modified": false,
+  "context": 32,
+  "threads": 1,
+  "kv_dtype": "F32",
+  "comparisons": [
+    {
+      "position": 0,
+      "state": "conv0",
+      "tensor": {
+        "ptr": 135267173598272,
+        "name": "conv_state_at-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885602432,
+        "view_src": 135267173596800,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173596800,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "rms_difference": 0.0,
+      "reference_rms": 0.0,
+      "actual_norm": 0.0,
+      "reference_norm": 0.0,
+      "cosine": 0.0,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 0,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 1,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 2,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 3,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 4,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 5,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 6,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 7,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 8,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 9,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "state",
+      "tensor": {
+        "ptr": 135267173603424,
+        "name": "state_predelta-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885930112,
+        "view_src": 135267173601952,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          128,
+          48,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          65536,
+          3145728
+        ],
+        "src": [
+          135267173601952,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "rms_difference": 0.0,
+      "reference_rms": 0.0,
+      "actual_norm": 0.0,
+      "reference_norm": 0.0,
+      "cosine": 0.0,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 0,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 1,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 2,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 3,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 4,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 5,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 6,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 7,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 8,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 9,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "ple_history",
+      "tensor": {
+        "ptr": 135267173647216,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885612672,
+        "view_src": 135267173645744,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          9,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          36,
+          368640,
+          368640
+        ],
+        "src": [
+          135267173645744,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "rms_difference": 0.0,
+      "reference_rms": 0.0,
+      "actual_norm": 0.0,
+      "reference_norm": 0.0,
+      "cosine": 0.0,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 0,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 1,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 2,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 3,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 4,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 5,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 6,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 7,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 8,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 9,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "conv1",
+      "tensor": {
+        "ptr": 135267173675552,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885593472,
+        "view_src": 135267173674080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173674080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "rms_difference": 0.0,
+      "reference_rms": 0.0,
+      "actual_norm": 0.0,
+      "reference_norm": 0.0,
+      "cosine": 0.0,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 0,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 1,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 2,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 3,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 4,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 5,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 6,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 7,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 8,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        },
+        {
+          "index": 9,
+          "reference": 0.0,
+          "actual": 0.0,
+          "relative_error": 0.0
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "indexer_k_raw-3",
+      "tensor": {
+        "ptr": 135267173766448,
+        "name": "indexer_k_raw-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885581952,
+        "view_src": 135267173766080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          1,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          512,
+          512
+        ],
+        "src": [
+          135267173766080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.009109020233154297,
+      "relative_l2": 0.001723855633105641,
+      "rms_difference": 0.0030168153981167145,
+      "reference_rms": 1.7500394697679644,
+      "actual_norm": 19.83153616095475,
+      "reference_norm": 19.799436422672603,
+      "cosine": 0.9999998286564236,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 61,
+          "reference": 4.8981404304504395,
+          "actual": 4.907249450683594,
+          "relative_error": 0.001859689480629411
+        },
+        {
+          "index": 31,
+          "reference": 4.239331245422363,
+          "actual": 4.245069980621338,
+          "relative_error": 0.0013536887935264093
+        },
+        {
+          "index": 70,
+          "reference": 3.8679792881011963,
+          "actual": 3.8736257553100586,
+          "relative_error": 0.001459797684602953
+        },
+        {
+          "index": 125,
+          "reference": 3.8374037742614746,
+          "actual": 3.843881845474243,
+          "relative_error": 0.0016881390632434265
+        },
+        {
+          "index": 106,
+          "reference": 3.802816390991211,
+          "actual": 3.809138774871826,
+          "relative_error": 0.001662553021385104
+        },
+        {
+          "index": 75,
+          "reference": -3.7368764877319336,
+          "actual": -3.742952585220337,
+          "relative_error": 0.0016259829588564105
+        },
+        {
+          "index": 111,
+          "reference": 3.6860246658325195,
+          "actual": 3.690838098526001,
+          "relative_error": 0.0013058601419842347
+        },
+        {
+          "index": 65,
+          "reference": -3.625977039337158,
+          "actual": -3.6324462890625,
+          "relative_error": 0.0017841397381061187
+        },
+        {
+          "index": 124,
+          "reference": 3.5920681953430176,
+          "actual": 3.597189426422119,
+          "relative_error": 0.0014257054155433484
+        },
+        {
+          "index": 63,
+          "reference": -3.5905861854553223,
+          "actual": -3.597400665283203,
+          "relative_error": 0.0018978739057942192
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "Vcur-3",
+      "tensor": {
+        "ptr": 135267173790000,
+        "name": "Vcur-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885606528,
+        "view_src": 135267173787792,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173787792,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.004400432109832764,
+      "relative_l2": 0.0032666001949189023,
+      "rms_difference": 0.0011688795112969048,
+      "reference_rms": 0.35782753981190035,
+      "actual_norm": 8.101587915956022,
+      "reference_norm": 8.096712956681408,
+      "cosine": 0.999994849019824,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 380,
+          "reference": 3.4587762355804443,
+          "actual": 3.4595470428466797,
+          "relative_error": 0.00022285548810763018
+        },
+        {
+          "index": 383,
+          "reference": -2.5848472118377686,
+          "actual": -2.584752321243286,
+          "relative_error": 3.671033013009569e-05
+        },
+        {
+          "index": 65,
+          "reference": -2.347059965133667,
+          "actual": -2.345505952835083,
+          "relative_error": 0.0006621101811071461
+        },
+        {
+          "index": 408,
+          "reference": 1.622510552406311,
+          "actual": 1.6239311695098877,
+          "relative_error": 0.000875567250684301
+        },
+        {
+          "index": 57,
+          "reference": -1.4466161727905273,
+          "actual": -1.4487892389297485,
+          "relative_error": 0.0015021718822825958
+        },
+        {
+          "index": 133,
+          "reference": 1.3942344188690186,
+          "actual": 1.3976364135742188,
+          "relative_error": 0.00244004498752788
+        },
+        {
+          "index": 42,
+          "reference": 1.3385919332504272,
+          "actual": 1.3405673503875732,
+          "relative_error": 0.0014757425979321436
+        },
+        {
+          "index": 164,
+          "reference": 1.2812567949295044,
+          "actual": 1.2798240184783936,
+          "relative_error": 0.0011182586166808756
+        },
+        {
+          "index": 190,
+          "reference": -1.2547607421875,
+          "actual": -1.2554361820220947,
+          "relative_error": 0.0005383016952038136
+        },
+        {
+          "index": 14,
+          "reference": 1.248443603515625,
+          "actual": 1.2512478828430176,
+          "relative_error": 0.0022462202693783765
+        }
+      ]
+    },
+    {
+      "position": 0,
+      "state": "Kcur-3",
+      "tensor": {
+        "ptr": 135267173790736,
+        "name": "Kcur-3",
+        "op": "ROPE",
+        "type": 0,
+        "data": 106702885610624,
+        "view_src": 0,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173788896,
+          135267173584656,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.017368778586387634,
+      "relative_l2": 0.003298078417014882,
+      "rms_difference": 0.004277070928983511,
+      "reference_rms": 1.2968372452631747,
+      "actual_norm": 29.344217427199766,
+      "reference_norm": 29.344077127067923,
+      "cosine": 0.9999945613768109,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 325,
+          "reference": -4.154628753662109,
+          "actual": -4.155040264129639,
+          "relative_error": 9.904867364299874e-05
+        },
+        {
+          "index": 236,
+          "reference": 4.153497695922852,
+          "actual": 4.153506278991699,
+          "relative_error": 2.066467704094683e-06
+        },
+        {
+          "index": 479,
+          "reference": 3.894712448120117,
+          "actual": 3.8947691917419434,
+          "relative_error": 1.4569399559538891e-05
+        },
+        {
+          "index": 326,
+          "reference": 3.7431657314300537,
+          "actual": 3.740163803100586,
+          "relative_error": 0.0008019757993245212
+        },
+        {
+          "index": 441,
+          "reference": -3.6009604930877686,
+          "actual": -3.6044087409973145,
+          "relative_error": 0.0009575911527396621
+        },
+        {
+          "index": 383,
+          "reference": 3.5959384441375732,
+          "actual": 3.6002650260925293,
+          "relative_error": 0.001203185766989322
+        },
+        {
+          "index": 95,
+          "reference": 3.4797887802124023,
+          "actual": 3.484243869781494,
+          "relative_error": 0.0012802758588180353
+        },
+        {
+          "index": 227,
+          "reference": 3.3326656818389893,
+          "actual": 3.3343653678894043,
+          "relative_error": 0.0005100079673989801
+        },
+        {
+          "index": 243,
+          "reference": 3.219876289367676,
+          "actual": 3.2300102710723877,
+          "relative_error": 0.003147320205492131
+        },
+        {
+          "index": 392,
+          "reference": -3.189683198928833,
+          "actual": -3.194483995437622,
+          "relative_error": 0.0015051013562730235
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "conv0",
+      "tensor": {
+        "ptr": 135267173598272,
+        "name": "conv_state_at-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885602432,
+        "view_src": 135267173596800,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173596800,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.04420042037963867,
+      "relative_l2": 0.003146543243478475,
+      "rms_difference": 0.004019096264378769,
+      "reference_rms": 1.2773052691103952,
+      "actual_norm": 223.9330222773477,
+      "reference_norm": 223.87485078783035,
+      "cosine": 0.9999950846682423,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 20786,
+          "reference": -29.27920913696289,
+          "actual": -29.25229263305664,
+          "relative_error": 0.0009193043357263996
+        },
+        {
+          "index": 23577,
+          "reference": -28.63092803955078,
+          "actual": -28.635324478149414,
+          "relative_error": 0.00015355557432716012
+        },
+        {
+          "index": 21463,
+          "reference": -22.651229858398438,
+          "actual": -22.639766693115234,
+          "relative_error": 0.0005060725335826702
+        },
+        {
+          "index": 25201,
+          "reference": -20.09090805053711,
+          "actual": -20.099210739135742,
+          "relative_error": 0.0004132560149968358
+        },
+        {
+          "index": 25191,
+          "reference": -19.23637580871582,
+          "actual": -19.223896026611328,
+          "relative_error": 0.0006487595287485346
+        },
+        {
+          "index": 28173,
+          "reference": 18.810070037841797,
+          "actual": 18.831653594970703,
+          "relative_error": 0.0011474469305794606
+        },
+        {
+          "index": 30183,
+          "reference": 18.192523956298828,
+          "actual": 18.200380325317383,
+          "relative_error": 0.00043184601748646117
+        },
+        {
+          "index": 24129,
+          "reference": -17.791854858398438,
+          "actual": -17.788679122924805,
+          "relative_error": 0.00017849378262737702
+        },
+        {
+          "index": 29984,
+          "reference": 17.548885345458984,
+          "actual": 17.55759048461914,
+          "relative_error": 0.00049605083108078
+        },
+        {
+          "index": 22342,
+          "reference": 17.428955078125,
+          "actual": 17.391698837280273,
+          "relative_error": 0.0021376061087842665
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "state",
+      "tensor": {
+        "ptr": 135267173603424,
+        "name": "state_predelta-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885930112,
+        "view_src": 135267173601952,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          128,
+          48,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          65536,
+          3145728
+        ],
+        "src": [
+          135267173601952,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.005085475742816925,
+      "relative_l2": 0.005481787697389618,
+      "rms_difference": 4.139795267806725e-05,
+      "reference_rms": 0.007551907327199153,
+      "actual_norm": 6.690862414975526,
+      "reference_norm": 6.6971070385974425,
+      "cosine": 0.9999853961030559,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 80999,
+          "reference": 1.3184372186660767,
+          "actual": 1.3166614770889282,
+          "relative_error": 0.0013468533442533097
+        },
+        {
+          "index": 737588,
+          "reference": 1.1842973232269287,
+          "actual": 1.1837437152862549,
+          "relative_error": 0.00046745688757057904
+        },
+        {
+          "index": 81895,
+          "reference": 1.1764992475509644,
+          "actual": 1.1762813329696655,
+          "relative_error": 0.00018522288199711607
+        },
+        {
+          "index": 475413,
+          "reference": 1.1204086542129517,
+          "actual": 1.1183252334594727,
+          "relative_error": 0.0018595186190725516
+        },
+        {
+          "index": 25713,
+          "reference": 1.057507038116455,
+          "actual": 1.0558925867080688,
+          "relative_error": 0.0015266578379107142
+        },
+        {
+          "index": 626367,
+          "reference": 1.0433536767959595,
+          "actual": 1.0388013124465942,
+          "relative_error": 0.004363203437730833
+        },
+        {
+          "index": 343143,
+          "reference": 0.97489333152771,
+          "actual": 0.9728826284408569,
+          "relative_error": 0.0020624852194877034
+        },
+        {
+          "index": 344039,
+          "reference": 0.8699399828910828,
+          "actual": 0.8691555857658386,
+          "relative_error": 0.0009016680928233044
+        },
+        {
+          "index": 605193,
+          "reference": 0.8097013831138611,
+          "actual": 0.8078886270523071,
+          "relative_error": 0.0022387958071439324
+        },
+        {
+          "index": 606089,
+          "reference": 0.7225319743156433,
+          "actual": 0.7217530012130737,
+          "relative_error": 0.0010781157516349304
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "ple_history",
+      "tensor": {
+        "ptr": 135267173647216,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885612672,
+        "view_src": 135267173645744,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          9,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          36,
+          368640,
+          368640
+        ],
+        "src": [
+          135267173645744,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.009659290313720703,
+      "relative_l2": 0.0015446806329799984,
+      "rms_difference": 0.0002520903297907553,
+      "reference_rms": 0.1631989968725267,
+      "actual_norm": 49.518918924362104,
+      "reference_norm": 49.543732029300514,
+      "cosine": 0.9999989318624464,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 87983,
+          "reference": -11.431234359741211,
+          "actual": -11.429946899414062,
+          "relative_error": 0.00011262653591309837
+        },
+        {
+          "index": 87991,
+          "reference": -7.305247783660889,
+          "actual": -7.303323745727539,
+          "relative_error": 0.0002633775048196125
+        },
+        {
+          "index": 82863,
+          "reference": -6.084038734436035,
+          "actual": -6.0743794441223145,
+          "relative_error": 0.0015876444472729147
+        },
+        {
+          "index": 88722,
+          "reference": -5.725100994110107,
+          "actual": -5.724119663238525,
+          "relative_error": 0.00017140848215456964
+        },
+        {
+          "index": 82871,
+          "reference": -5.426421642303467,
+          "actual": -5.416987895965576,
+          "relative_error": 0.0017384838406854955
+        },
+        {
+          "index": 87308,
+          "reference": 5.254549026489258,
+          "actual": 5.254109859466553,
+          "relative_error": 8.357844231562922e-05
+        },
+        {
+          "index": 87619,
+          "reference": 4.998787879943848,
+          "actual": 4.998066425323486,
+          "relative_error": 0.00014432591213881082
+        },
+        {
+          "index": 87571,
+          "reference": -4.523151874542236,
+          "actual": -4.521718502044678,
+          "relative_error": 0.0003168968315271655
+        },
+        {
+          "index": 87925,
+          "reference": 3.8063995838165283,
+          "actual": 3.8059964179992676,
+          "relative_error": 0.00010591789127312366
+        },
+        {
+          "index": 88455,
+          "reference": 3.7534451484680176,
+          "actual": 3.7541911602020264,
+          "relative_error": 0.0001987538659818371
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "conv1",
+      "tensor": {
+        "ptr": 135267173675552,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885593472,
+        "view_src": 135267173674080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173674080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.03490692377090454,
+      "relative_l2": 0.006725200761488828,
+      "rms_difference": 0.0040475298510660685,
+      "reference_rms": 0.6018452079890066,
+      "actual_norm": 105.45762337839153,
+      "reference_norm": 105.48614289342952,
+      "cosine": 0.9999774162795501,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 28195,
+          "reference": -17.9335880279541,
+          "actual": -17.931020736694336,
+          "relative_error": 0.00014315547205410553
+        },
+        {
+          "index": 25959,
+          "reference": 13.267777442932129,
+          "actual": 13.267441749572754,
+          "relative_error": 2.5301401144155237e-05
+        },
+        {
+          "index": 30052,
+          "reference": -13.232902526855469,
+          "actual": -13.228955268859863,
+          "relative_error": 0.00029829117138849314
+        },
+        {
+          "index": 25928,
+          "reference": 13.035869598388672,
+          "actual": 13.037084579467773,
+          "relative_error": 9.320291752931795e-05
+        },
+        {
+          "index": 27999,
+          "reference": -13.024526596069336,
+          "actual": -13.03030776977539,
+          "relative_error": 0.00044386824069286206
+        },
+        {
+          "index": 26579,
+          "reference": -12.066595077514648,
+          "actual": -12.064746856689453,
+          "relative_error": 0.00015316838041904278
+        },
+        {
+          "index": 30563,
+          "reference": -11.377105712890625,
+          "actual": -11.379073143005371,
+          "relative_error": 0.0001729288770268639
+        },
+        {
+          "index": 30707,
+          "reference": 10.854575157165527,
+          "actual": 10.849355697631836,
+          "relative_error": 0.00048085341509159277
+        },
+        {
+          "index": 30617,
+          "reference": 10.765189170837402,
+          "actual": 10.759011268615723,
+          "relative_error": 0.0005738777204598924
+        },
+        {
+          "index": 30672,
+          "reference": 10.711103439331055,
+          "actual": 10.706229209899902,
+          "relative_error": 0.0004550632396335775
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "indexer_k_raw-3",
+      "tensor": {
+        "ptr": 135267173766448,
+        "name": "indexer_k_raw-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885581952,
+        "view_src": 135267173766080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          1,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          512,
+          512
+        ],
+        "src": [
+          135267173766080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.02896365523338318,
+      "relative_l2": 0.008064864087393951,
+      "rms_difference": 0.009102460148141006,
+      "reference_rms": 1.1286563604176423,
+      "actual_norm": 12.765145550516566,
+      "reference_norm": 12.769289057290287,
+      "cosine": 0.9999675210914287,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 31,
+          "reference": 3.532958984375,
+          "actual": 3.5377414226531982,
+          "relative_error": 0.0013536636851288785
+        },
+        {
+          "index": 64,
+          "reference": -3.2272109985351562,
+          "actual": -3.211836338043213,
+          "relative_error": 0.004764070430759556
+        },
+        {
+          "index": 79,
+          "reference": 2.909022808074951,
+          "actual": 2.9057884216308594,
+          "relative_error": 0.0011118463681734263
+        },
+        {
+          "index": 84,
+          "reference": -2.586655616760254,
+          "actual": -2.5874407291412354,
+          "relative_error": 0.0003035241243149277
+        },
+        {
+          "index": 102,
+          "reference": -2.397752523422241,
+          "actual": -2.386901617050171,
+          "relative_error": 0.004525448838474429
+        },
+        {
+          "index": 109,
+          "reference": 2.373495101928711,
+          "actual": 2.3751845359802246,
+          "relative_error": 0.0007117916738656134
+        },
+        {
+          "index": 27,
+          "reference": 2.2825803756713867,
+          "actual": 2.282294750213623,
+          "relative_error": 0.0001251327054275841
+        },
+        {
+          "index": 90,
+          "reference": 2.1489298343658447,
+          "actual": 2.1511106491088867,
+          "relative_error": 0.001014837575506767
+        },
+        {
+          "index": 93,
+          "reference": 2.1444923877716064,
+          "actual": 2.137702226638794,
+          "relative_error": 0.0031663255936610337
+        },
+        {
+          "index": 60,
+          "reference": -2.133333206176758,
+          "actual": -2.130092144012451,
+          "relative_error": 0.001519247980072974
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "Vcur-3",
+      "tensor": {
+        "ptr": 135267173790000,
+        "name": "Vcur-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885606528,
+        "view_src": 135267173787792,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173787792,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.026714012026786804,
+      "relative_l2": 0.015488514668387672,
+      "rms_difference": 0.00769195282546399,
+      "reference_rms": 0.49662301325532526,
+      "actual_norm": 11.24524672907685,
+      "reference_norm": 11.237296011716388,
+      "cosine": 0.999880387884702,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 92,
+          "reference": -2.322066068649292,
+          "actual": -2.322636127471924,
+          "relative_error": 0.0002454963837284052
+        },
+        {
+          "index": 2,
+          "reference": -1.9527928829193115,
+          "actual": -1.9513840675354004,
+          "relative_error": 0.0007214361524121472
+        },
+        {
+          "index": 485,
+          "reference": 1.716410517692566,
+          "actual": 1.727662444114685,
+          "relative_error": 0.0065554984114438546
+        },
+        {
+          "index": 478,
+          "reference": 1.6456279754638672,
+          "actual": 1.6421067714691162,
+          "relative_error": 0.002139732702197424
+        },
+        {
+          "index": 304,
+          "reference": -1.5098432302474976,
+          "actual": -1.5135207176208496,
+          "relative_error": 0.0024356749758378737
+        },
+        {
+          "index": 57,
+          "reference": -1.4523884057998657,
+          "actual": -1.4563792943954468,
+          "relative_error": 0.00274781083327581
+        },
+        {
+          "index": 144,
+          "reference": 1.4151136875152588,
+          "actual": 1.417767882347107,
+          "relative_error": 0.0018756053702713726
+        },
+        {
+          "index": 108,
+          "reference": -1.4035124778747559,
+          "actual": -1.4006882905960083,
+          "relative_error": 0.002012228122847924
+        },
+        {
+          "index": 274,
+          "reference": -1.3976365327835083,
+          "actual": -1.3893507719039917,
+          "relative_error": 0.005928408914022036
+        },
+        {
+          "index": 202,
+          "reference": -1.3954986333847046,
+          "actual": -1.3968770503997803,
+          "relative_error": 0.0009877594876122591
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "state": "Kcur-3",
+      "tensor": {
+        "ptr": 135267173790736,
+        "name": "Kcur-3",
+        "op": "ROPE",
+        "type": 0,
+        "data": 106702885610624,
+        "view_src": 0,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173788896,
+          135267173584656,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.06595293805003166,
+      "relative_l2": 0.01360553009084001,
+      "rms_difference": 0.01727682173500781,
+      "reference_rms": 1.2698381922391628,
+      "actual_norm": 28.741275419133093,
+      "reference_norm": 28.733158295743316,
+      "cosine": 0.9999075108068763,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 283,
+          "reference": -4.965315818786621,
+          "actual": -4.961522102355957,
+          "relative_error": 0.0007640433295925045
+        },
+        {
+          "index": 142,
+          "reference": 4.071370601654053,
+          "actual": 4.092944145202637,
+          "relative_error": 0.005298840528007797
+        },
+        {
+          "index": 280,
+          "reference": -3.698505401611328,
+          "actual": -3.733184337615967,
+          "relative_error": 0.009376472990827618
+        },
+        {
+          "index": 310,
+          "reference": -3.5319719314575195,
+          "actual": -3.53287935256958,
+          "relative_error": 0.0002569162863324586
+        },
+        {
+          "index": 445,
+          "reference": -3.4934020042419434,
+          "actual": -3.493332624435425,
+          "relative_error": 1.9860241230270283e-05
+        },
+        {
+          "index": 98,
+          "reference": -3.3724310398101807,
+          "actual": -3.3999788761138916,
+          "relative_error": 0.008168539542697806
+        },
+        {
+          "index": 312,
+          "reference": 3.186321973800659,
+          "actual": 3.179530620574951,
+          "relative_error": 0.002131408339003246
+        },
+        {
+          "index": 70,
+          "reference": 3.1582250595092773,
+          "actual": 3.201453685760498,
+          "relative_error": 0.01368763322330725
+        },
+        {
+          "index": 207,
+          "reference": 3.1184744834899902,
+          "actual": 3.125465154647827,
+          "relative_error": 0.002241695801856752
+        },
+        {
+          "index": 155,
+          "reference": 3.102100133895874,
+          "actual": 3.110283374786377,
+          "relative_error": 0.002637968001447374
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "conv0",
+      "tensor": {
+        "ptr": 135267173598272,
+        "name": "conv_state_at-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885602432,
+        "view_src": 135267173596800,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173596800,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.065948486328125,
+      "relative_l2": 0.004097399154577902,
+      "rms_difference": 0.007869454923612329,
+      "reference_rms": 1.920597585622094,
+      "actual_norm": 336.72010940789323,
+      "reference_norm": 336.62547889125784,
+      "cosine": 0.999991647520952,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 20786,
+          "reference": -32.43789291381836,
+          "actual": -32.477779388427734,
+          "relative_error": 0.0012296259413441613
+        },
+        {
+          "index": 23577,
+          "reference": -30.64295196533203,
+          "actual": -30.67464256286621,
+          "relative_error": 0.0010341887938875116
+        },
+        {
+          "index": 10546,
+          "reference": -29.27920913696289,
+          "actual": -29.25229263305664,
+          "relative_error": 0.0009193043357263996
+        },
+        {
+          "index": 13337,
+          "reference": -28.63092803955078,
+          "actual": -28.635324478149414,
+          "relative_error": 0.00015355557432716012
+        },
+        {
+          "index": 29984,
+          "reference": 24.7713680267334,
+          "actual": 24.756885528564453,
+          "relative_error": 0.0005846466837566549
+        },
+        {
+          "index": 25370,
+          "reference": -24.648380279541016,
+          "actual": -24.71432876586914,
+          "relative_error": 0.002675570791272823
+        },
+        {
+          "index": 21463,
+          "reference": -23.100370407104492,
+          "actual": -23.11677360534668,
+          "relative_error": 0.0007100837758490104
+        },
+        {
+          "index": 11223,
+          "reference": -22.651229858398438,
+          "actual": -22.639766693115234,
+          "relative_error": 0.0005060725335826702
+        },
+        {
+          "index": 28906,
+          "reference": 22.249277114868164,
+          "actual": 22.22451400756836,
+          "relative_error": 0.0011129848026953041
+        },
+        {
+          "index": 26805,
+          "reference": 21.287059783935547,
+          "actual": 21.288454055786133,
+          "relative_error": 6.549856413886412e-05
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "state",
+      "tensor": {
+        "ptr": 135267173603424,
+        "name": "state_predelta-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885930112,
+        "view_src": 135267173601952,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          128,
+          48,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          65536,
+          3145728
+        ],
+        "src": [
+          135267173601952,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.010526061058044434,
+      "relative_l2": 0.005404155976433206,
+      "rms_difference": 8.406972413656194e-05,
+      "reference_rms": 0.01555649476128722,
+      "actual_norm": 13.810332985625546,
+      "reference_norm": 13.795655328885017,
+      "cosine": 0.9999859784440948,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 112154,
+          "reference": 3.439927339553833,
+          "actual": 3.4492790699005127,
+          "relative_error": 0.0027185836860997856
+        },
+        {
+          "index": 636479,
+          "reference": 2.0624845027923584,
+          "actual": 2.065828800201416,
+          "relative_error": 0.0016214897152099018
+        },
+        {
+          "index": 86858,
+          "reference": 1.9987127780914307,
+          "actual": 2.0015740394592285,
+          "relative_error": 0.0014315520464776674
+        },
+        {
+          "index": 80999,
+          "reference": 1.7494463920593262,
+          "actual": 1.7599724531173706,
+          "relative_error": 0.006016795430727025
+        },
+        {
+          "index": 311760,
+          "reference": 1.6946049928665161,
+          "actual": 1.7018189430236816,
+          "relative_error": 0.00425700985629857
+        },
+        {
+          "index": 550378,
+          "reference": 1.5979652404785156,
+          "actual": 1.596156120300293,
+          "relative_error": 0.0011321398816415492
+        },
+        {
+          "index": 97226,
+          "reference": 1.551780104637146,
+          "actual": 1.5517854690551758,
+          "relative_error": 3.4569447138514013e-06
+        },
+        {
+          "index": 703008,
+          "reference": 1.5328364372253418,
+          "actual": 1.531646966934204,
+          "relative_error": 0.0007759929645793197
+        },
+        {
+          "index": 26097,
+          "reference": 1.4760302305221558,
+          "actual": 1.476064682006836,
+          "relative_error": 2.3340636233438343e-05
+        },
+        {
+          "index": 703040,
+          "reference": 1.4422112703323364,
+          "actual": 1.4427180290222168,
+          "relative_error": 0.00035137618205105
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "ple_history",
+      "tensor": {
+        "ptr": 135267173647216,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885612672,
+        "view_src": 135267173645744,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          9,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          36,
+          368640,
+          368640
+        ],
+        "src": [
+          135267173645744,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.03065776824951172,
+      "relative_l2": 0.003187347176382393,
+      "rms_difference": 0.0006858092094383484,
+      "reference_rms": 0.21516614648070273,
+      "actual_norm": 65.3943054615327,
+      "reference_norm": 65.31984943108257,
+      "cosine": 0.9999955751027421,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 77743,
+          "reference": -11.431234359741211,
+          "actual": -11.429946899414062,
+          "relative_error": 0.00011262653591309837
+        },
+        {
+          "index": 87983,
+          "reference": -7.54345703125,
+          "actual": -7.566223621368408,
+          "relative_error": 0.0030180579042332835
+        },
+        {
+          "index": 77751,
+          "reference": -7.305247783660889,
+          "actual": -7.303323745727539,
+          "relative_error": 0.0002633775048196125
+        },
+        {
+          "index": 72623,
+          "reference": -6.084038734436035,
+          "actual": -6.0743794441223145,
+          "relative_error": 0.0015876444472729147
+        },
+        {
+          "index": 78482,
+          "reference": -5.725100994110107,
+          "actual": -5.724119663238525,
+          "relative_error": 0.00017140848215456964
+        },
+        {
+          "index": 72631,
+          "reference": -5.426421642303467,
+          "actual": -5.416987895965576,
+          "relative_error": 0.0017384838406854955
+        },
+        {
+          "index": 87991,
+          "reference": -5.311197280883789,
+          "actual": -5.327653408050537,
+          "relative_error": 0.0030983837158482896
+        },
+        {
+          "index": 77068,
+          "reference": 5.254549026489258,
+          "actual": 5.254109859466553,
+          "relative_error": 8.357844231562922e-05
+        },
+        {
+          "index": 88722,
+          "reference": -5.252558708190918,
+          "actual": -5.268413543701172,
+          "relative_error": 0.003018497534454901
+        },
+        {
+          "index": 77379,
+          "reference": 4.998787879943848,
+          "actual": 4.998066425323486,
+          "relative_error": 0.00014432591213881082
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "conv1",
+      "tensor": {
+        "ptr": 135267173675552,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885593472,
+        "view_src": 135267173674080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173674080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.03567349910736084,
+      "relative_l2": 0.008144500802685604,
+      "rms_difference": 0.0064035922707018945,
+      "reference_rms": 0.7862473619734149,
+      "actual_norm": 137.7601713694713,
+      "reference_norm": 137.80653309816554,
+      "cosine": 0.9999668790018638,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 17955,
+          "reference": -17.9335880279541,
+          "actual": -17.931020736694336,
+          "relative_error": 0.00014315547205410553
+        },
+        {
+          "index": 28195,
+          "reference": -16.297252655029297,
+          "actual": -16.285417556762695,
+          "relative_error": 0.0007262020487207257
+        },
+        {
+          "index": 15719,
+          "reference": 13.267777442932129,
+          "actual": 13.267441749572754,
+          "relative_error": 2.5301401144155237e-05
+        },
+        {
+          "index": 19812,
+          "reference": -13.232902526855469,
+          "actual": -13.228955268859863,
+          "relative_error": 0.00029829117138849314
+        },
+        {
+          "index": 15688,
+          "reference": 13.035869598388672,
+          "actual": 13.037084579467773,
+          "relative_error": 9.320291752931795e-05
+        },
+        {
+          "index": 17759,
+          "reference": -13.024526596069336,
+          "actual": -13.03030776977539,
+          "relative_error": 0.00044386824069286206
+        },
+        {
+          "index": 30052,
+          "reference": -12.989002227783203,
+          "actual": -12.987661361694336,
+          "relative_error": 0.0001032308768104684
+        },
+        {
+          "index": 27999,
+          "reference": -12.654762268066406,
+          "actual": -12.637602806091309,
+          "relative_error": 0.0013559687342684114
+        },
+        {
+          "index": 25928,
+          "reference": 12.324785232543945,
+          "actual": 12.313878059387207,
+          "relative_error": 0.0008849787603549944
+        },
+        {
+          "index": 30617,
+          "reference": 12.155476570129395,
+          "actual": 12.145777702331543,
+          "relative_error": 0.0007979010729768795
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "indexer_k_raw-3",
+      "tensor": {
+        "ptr": 135267173766448,
+        "name": "indexer_k_raw-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885581952,
+        "view_src": 135267173766080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          1,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          512,
+          512
+        ],
+        "src": [
+          135267173766080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.026327848434448242,
+      "relative_l2": 0.007491458407683621,
+      "rms_difference": 0.008741018310854744,
+      "reference_rms": 1.1667979497676328,
+      "actual_norm": 13.21740875048934,
+      "reference_norm": 13.200811880884062,
+      "cosine": 0.9999727636216662,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 64,
+          "reference": -3.10518741607666,
+          "actual": -3.104099750518799,
+          "relative_error": 0.00035027372332829137
+        },
+        {
+          "index": 92,
+          "reference": 2.9497342109680176,
+          "actual": 2.935847282409668,
+          "relative_error": 0.004707857578053557
+        },
+        {
+          "index": 31,
+          "reference": 2.9232616424560547,
+          "actual": 2.9253106117248535,
+          "relative_error": 0.000700918877407543
+        },
+        {
+          "index": 97,
+          "reference": -2.8152928352355957,
+          "actual": -2.8218984603881836,
+          "relative_error": 0.002346336789520904
+        },
+        {
+          "index": 109,
+          "reference": 2.5993151664733887,
+          "actual": 2.5941877365112305,
+          "relative_error": 0.001972608027026913
+        },
+        {
+          "index": 2,
+          "reference": -2.4100584983825684,
+          "actual": -2.424960136413574,
+          "relative_error": 0.00618310221142209
+        },
+        {
+          "index": 28,
+          "reference": 2.33089542388916,
+          "actual": 2.3341665267944336,
+          "relative_error": 0.0014033675092190608
+        },
+        {
+          "index": 93,
+          "reference": 2.320770740509033,
+          "actual": 2.328742742538452,
+          "relative_error": 0.0034350665881242464
+        },
+        {
+          "index": 123,
+          "reference": -2.240938901901245,
+          "actual": -2.248722553253174,
+          "relative_error": 0.0034733884736103016
+        },
+        {
+          "index": 23,
+          "reference": -2.0759847164154053,
+          "actual": -2.07034969329834,
+          "relative_error": 0.002714385646728364
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "Vcur-3",
+      "tensor": {
+        "ptr": 135267173790000,
+        "name": "Vcur-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885606528,
+        "view_src": 135267173787792,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173787792,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.03317314386367798,
+      "relative_l2": 0.016948001449141936,
+      "rms_difference": 0.008566690779240242,
+      "reference_rms": 0.5054690846556404,
+      "actual_norm": 11.451316453962741,
+      "reference_norm": 11.437459758085133,
+      "cosine": 0.9998572894087111,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 92,
+          "reference": -2.67080020904541,
+          "actual": -2.6863508224487305,
+          "relative_error": 0.005822454764925441
+        },
+        {
+          "index": 485,
+          "reference": 1.9888091087341309,
+          "actual": 1.994503378868103,
+          "relative_error": 0.0028631556990386816
+        },
+        {
+          "index": 2,
+          "reference": -1.825515627861023,
+          "actual": -1.8429944515228271,
+          "relative_error": 0.009574732418086353
+        },
+        {
+          "index": 411,
+          "reference": -1.473818302154541,
+          "actual": -1.4785807132720947,
+          "relative_error": 0.0032313420932496575
+        },
+        {
+          "index": 65,
+          "reference": -1.3116767406463623,
+          "actual": -1.3125656843185425,
+          "relative_error": 0.0006777155107150303
+        },
+        {
+          "index": 478,
+          "reference": 1.305749535560608,
+          "actual": 1.3113579750061035,
+          "relative_error": 0.004295187777407624
+        },
+        {
+          "index": 57,
+          "reference": -1.2421655654907227,
+          "actual": -1.2417185306549072,
+          "relative_error": 0.0003598834553418221
+        },
+        {
+          "index": 466,
+          "reference": -1.2174606323242188,
+          "actual": -1.2207472324371338,
+          "relative_error": 0.0026995535014883282
+        },
+        {
+          "index": 104,
+          "reference": 1.2152276039123535,
+          "actual": 1.2053319215774536,
+          "relative_error": 0.008143069086845409
+        },
+        {
+          "index": 409,
+          "reference": -1.197117805480957,
+          "actual": -1.1854852437973022,
+          "relative_error": 0.009717140310164595
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "state": "Kcur-3",
+      "tensor": {
+        "ptr": 135267173790736,
+        "name": "Kcur-3",
+        "op": "ROPE",
+        "type": 0,
+        "data": 106702885610624,
+        "view_src": 0,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173788896,
+          135267173584656,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.05720233917236328,
+      "relative_l2": 0.014770340929572268,
+      "rms_difference": 0.018773964734166388,
+      "reference_rms": 1.2710583204330992,
+      "actual_norm": 28.761443843498174,
+      "reference_norm": 28.7607666451785,
+      "cosine": 0.9998909213599725,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 430,
+          "reference": 4.536313056945801,
+          "actual": 4.547522068023682,
+          "relative_error": 0.002470951836253479
+        },
+        {
+          "index": 248,
+          "reference": 3.7260875701904297,
+          "actual": 3.7245423793792725,
+          "relative_error": 0.0004146952485816795
+        },
+        {
+          "index": 285,
+          "reference": 3.725972890853882,
+          "actual": 3.7196195125579834,
+          "relative_error": 0.0017051595602034647
+        },
+        {
+          "index": 23,
+          "reference": 3.7156598567962646,
+          "actual": 3.7162668704986572,
+          "relative_error": 0.00016336632678642457
+        },
+        {
+          "index": 178,
+          "reference": 3.4477832317352295,
+          "actual": 3.444594383239746,
+          "relative_error": 0.0009248981972333822
+        },
+        {
+          "index": 154,
+          "reference": 3.1681265830993652,
+          "actual": 3.1668570041656494,
+          "relative_error": 0.0004007349139672937
+        },
+        {
+          "index": 447,
+          "reference": 3.1443188190460205,
+          "actual": 3.134418249130249,
+          "relative_error": 0.0031487169353823018
+        },
+        {
+          "index": 198,
+          "reference": 3.1390466690063477,
+          "actual": 3.165144443511963,
+          "relative_error": 0.008313917331428645
+        },
+        {
+          "index": 324,
+          "reference": 3.0970280170440674,
+          "actual": 3.102813959121704,
+          "relative_error": 0.0018682240024289684
+        },
+        {
+          "index": 251,
+          "reference": 3.0885674953460693,
+          "actual": 3.0651676654815674,
+          "relative_error": 0.007576272786578697
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "conv0",
+      "tensor": {
+        "ptr": 135267173598272,
+        "name": "conv_state_at-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885602432,
+        "view_src": 135267173596800,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173596800,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.065948486328125,
+      "relative_l2": 0.004047963894639489,
+      "rms_difference": 0.009326761803112914,
+      "reference_rms": 2.3040624980533693,
+      "actual_norm": 403.82453082266477,
+      "reference_norm": 403.83584130737086,
+      "cosine": 0.9999918071569055,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 10546,
+          "reference": -32.43789291381836,
+          "actual": -32.477779388427734,
+          "relative_error": 0.0012296259413441613
+        },
+        {
+          "index": 13337,
+          "reference": -30.64295196533203,
+          "actual": -30.67464256286621,
+          "relative_error": 0.0010341887938875116
+        },
+        {
+          "index": 306,
+          "reference": -29.27920913696289,
+          "actual": -29.25229263305664,
+          "relative_error": 0.0009193043357263996
+        },
+        {
+          "index": 3097,
+          "reference": -28.63092803955078,
+          "actual": -28.635324478149414,
+          "relative_error": 0.00015355557432716012
+        },
+        {
+          "index": 23577,
+          "reference": -28.135883331298828,
+          "actual": -28.091060638427734,
+          "relative_error": 0.0015930792839630606
+        },
+        {
+          "index": 20786,
+          "reference": -27.477500915527344,
+          "actual": -27.44441032409668,
+          "relative_error": 0.0012042795133514054
+        },
+        {
+          "index": 19744,
+          "reference": 24.7713680267334,
+          "actual": 24.756885528564453,
+          "relative_error": 0.0005846466837566549
+        },
+        {
+          "index": 15130,
+          "reference": -24.648380279541016,
+          "actual": -24.71432876586914,
+          "relative_error": 0.002675570791272823
+        },
+        {
+          "index": 11223,
+          "reference": -23.100370407104492,
+          "actual": -23.11677360534668,
+          "relative_error": 0.0007100837758490104
+        },
+        {
+          "index": 983,
+          "reference": -22.651229858398438,
+          "actual": -22.639766693115234,
+          "relative_error": 0.0005060725335826702
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "state",
+      "tensor": {
+        "ptr": 135267173603424,
+        "name": "state_predelta-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885930112,
+        "view_src": 135267173601952,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          128,
+          48,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          65536,
+          3145728
+        ],
+        "src": [
+          135267173601952,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.013499140739440918,
+      "relative_l2": 0.005840335554190745,
+      "rms_difference": 0.00010902127100443837,
+      "reference_rms": 0.01866695329281368,
+      "actual_norm": 16.55444166860583,
+      "reference_norm": 16.554041101142236,
+      "cosine": 0.999982945945734,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 112154,
+          "reference": 3.5457401275634766,
+          "actual": 3.5557994842529297,
+          "relative_error": 0.002837025931837144
+        },
+        {
+          "index": 557034,
+          "reference": 2.435171127319336,
+          "actual": 2.434802532196045,
+          "relative_error": 0.00015136312974307038
+        },
+        {
+          "index": 80999,
+          "reference": 2.227224349975586,
+          "actual": 2.2290453910827637,
+          "relative_error": 0.0008176280522425574
+        },
+        {
+          "index": 86858,
+          "reference": 2.051607847213745,
+          "actual": 2.0545878410339355,
+          "relative_error": 0.001452516290692449
+        },
+        {
+          "index": 550378,
+          "reference": 1.8107961416244507,
+          "actual": 1.8090150356292725,
+          "relative_error": 0.0009836038161537095
+        },
+        {
+          "index": 467182,
+          "reference": 1.671524167060852,
+          "actual": 1.6714091300964355,
+          "relative_error": 6.882159808600361e-05
+        },
+        {
+          "index": 343143,
+          "reference": 1.6457843780517578,
+          "actual": 1.6456854343414307,
+          "relative_error": 6.0119485666935154e-05
+        },
+        {
+          "index": 261453,
+          "reference": 1.579476237297058,
+          "actual": 1.577366590499878,
+          "relative_error": 0.0013356622577560225
+        },
+        {
+          "index": 97226,
+          "reference": 1.5751556158065796,
+          "actual": 1.5752954483032227,
+          "relative_error": 8.877376637575158e-05
+        },
+        {
+          "index": 217724,
+          "reference": 1.5632420778274536,
+          "actual": 1.5733909606933594,
+          "relative_error": 0.006492201694065433
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "ple_history",
+      "tensor": {
+        "ptr": 135267173647216,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885612672,
+        "view_src": 135267173645744,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          9,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          36,
+          368640,
+          368640
+        ],
+        "src": [
+          135267173645744,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0461273193359375,
+      "relative_l2": 0.002974215673785531,
+      "rms_difference": 0.0009237363025992688,
+      "reference_rms": 0.31058147892266086,
+      "actual_norm": 94.38748209346346,
+      "reference_norm": 94.28590775608195,
+      "cosine": 0.9999961614449613,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 85423,
+          "reference": -14.032414436340332,
+          "actual": -14.031150817871094,
+          "relative_error": 9.004996787764731e-05
+        },
+        {
+          "index": 87983,
+          "reference": -11.881031036376953,
+          "actual": -11.92715835571289,
+          "relative_error": 0.0038824340408426155
+        },
+        {
+          "index": 67503,
+          "reference": -11.431234359741211,
+          "actual": -11.429946899414062,
+          "relative_error": 0.00011262653591309837
+        },
+        {
+          "index": 86162,
+          "reference": -8.84521484375,
+          "actual": -8.844046592712402,
+          "relative_error": 0.00013207718051338668
+        },
+        {
+          "index": 88722,
+          "reference": -8.666926383972168,
+          "actual": -8.700210571289062,
+          "relative_error": 0.003840368066174798
+        },
+        {
+          "index": 85431,
+          "reference": -8.444510459899902,
+          "actual": -8.444186210632324,
+          "relative_error": 3.839763940347686e-05
+        },
+        {
+          "index": 87991,
+          "reference": -7.810299873352051,
+          "actual": -7.841026782989502,
+          "relative_error": 0.003934152354673124
+        },
+        {
+          "index": 77743,
+          "reference": -7.54345703125,
+          "actual": -7.566223621368408,
+          "relative_error": 0.0030180579042332835
+        },
+        {
+          "index": 67511,
+          "reference": -7.305247783660889,
+          "actual": -7.303323745727539,
+          "relative_error": 0.0002633775048196125
+        },
+        {
+          "index": 87308,
+          "reference": 6.609829902648926,
+          "actual": 6.635611534118652,
+          "relative_error": 0.003900498477183873
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "conv1",
+      "tensor": {
+        "ptr": 135267173675552,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885593472,
+        "view_src": 135267173674080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173674080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.08233070373535156,
+      "relative_l2": 0.009741467342234196,
+      "rms_difference": 0.009153720100060622,
+      "reference_rms": 0.939665430111813,
+      "actual_norm": 164.73336843826132,
+      "reference_norm": 164.6963048256099,
+      "cosine": 0.9999525878987244,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 7715,
+          "reference": -17.9335880279541,
+          "actual": -17.931020736694336,
+          "relative_error": 0.00014315547205410553
+        },
+        {
+          "index": 17955,
+          "reference": -16.297252655029297,
+          "actual": -16.285417556762695,
+          "relative_error": 0.0007262020487207257
+        },
+        {
+          "index": 28195,
+          "reference": -14.889909744262695,
+          "actual": -14.958712577819824,
+          "relative_error": 0.0046207690133004105
+        },
+        {
+          "index": 5479,
+          "reference": 13.267777442932129,
+          "actual": 13.267441749572754,
+          "relative_error": 2.5301401144155237e-05
+        },
+        {
+          "index": 9572,
+          "reference": -13.232902526855469,
+          "actual": -13.228955268859863,
+          "relative_error": 0.00029829117138849314
+        },
+        {
+          "index": 30052,
+          "reference": -13.137079238891602,
+          "actual": -13.196484565734863,
+          "relative_error": 0.004521958478212989
+        },
+        {
+          "index": 5448,
+          "reference": 13.035869598388672,
+          "actual": 13.037084579467773,
+          "relative_error": 9.320291752931795e-05
+        },
+        {
+          "index": 7519,
+          "reference": -13.024526596069336,
+          "actual": -13.03030776977539,
+          "relative_error": 0.00044386824069286206
+        },
+        {
+          "index": 19812,
+          "reference": -12.989002227783203,
+          "actual": -12.987661361694336,
+          "relative_error": 0.0001032308768104684
+        },
+        {
+          "index": 17759,
+          "reference": -12.654762268066406,
+          "actual": -12.637602806091309,
+          "relative_error": 0.0013559687342684114
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "indexer_k_raw-3",
+      "tensor": {
+        "ptr": 135267173766448,
+        "name": "indexer_k_raw-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885581952,
+        "view_src": 135267173766080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          1,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          512,
+          512
+        ],
+        "src": [
+          135267173766080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.06146955490112305,
+      "relative_l2": 0.021122137402305216,
+      "rms_difference": 0.025203506923204787,
+      "reference_rms": 1.1932271078046364,
+      "actual_norm": 13.487779622472653,
+      "reference_norm": 13.49982367078832,
+      "cosine": 0.9997771267942148,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 2,
+          "reference": -3.3637404441833496,
+          "actual": -3.3257579803466797,
+          "relative_error": 0.011291734444716147
+        },
+        {
+          "index": 28,
+          "reference": 3.238004446029663,
+          "actual": 3.2705788612365723,
+          "relative_error": 0.010060027943090345
+        },
+        {
+          "index": 92,
+          "reference": 2.6822032928466797,
+          "actual": 2.6701197624206543,
+          "relative_error": 0.0045050762774960585
+        },
+        {
+          "index": 31,
+          "reference": 2.548506736755371,
+          "actual": 2.5348169803619385,
+          "relative_error": 0.00537167753806361
+        },
+        {
+          "index": 3,
+          "reference": 2.4336090087890625,
+          "actual": 2.4323153495788574,
+          "relative_error": 0.0005315805478747751
+        },
+        {
+          "index": 63,
+          "reference": 2.34975528717041,
+          "actual": 2.3588194847106934,
+          "relative_error": 0.0038575070305292792
+        },
+        {
+          "index": 103,
+          "reference": 2.2435097694396973,
+          "actual": 2.264247417449951,
+          "relative_error": 0.009243395456857317
+        },
+        {
+          "index": 64,
+          "reference": -2.2100603580474854,
+          "actual": -2.2312850952148438,
+          "relative_error": 0.00960369117977834
+        },
+        {
+          "index": 93,
+          "reference": 2.1487741470336914,
+          "actual": 2.1527366638183594,
+          "relative_error": 0.0018440824924006493
+        },
+        {
+          "index": 30,
+          "reference": -2.0918989181518555,
+          "actual": -2.1122026443481445,
+          "relative_error": 0.009705883023366606
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "Vcur-3",
+      "tensor": {
+        "ptr": 135267173790000,
+        "name": "Vcur-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885606528,
+        "view_src": 135267173787792,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173787792,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.06446883082389832,
+      "relative_l2": 0.034191311674215186,
+      "rms_difference": 0.018085145128478655,
+      "reference_rms": 0.5289397874173183,
+      "actual_norm": 11.995994433700048,
+      "reference_norm": 11.968541136709014,
+      "cosine": 0.9994194395175898,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 92,
+          "reference": -2.42751145362854,
+          "actual": -2.4476089477539062,
+          "relative_error": 0.008279052234882492
+        },
+        {
+          "index": 485,
+          "reference": 1.9741712808609009,
+          "actual": 1.9691168069839478,
+          "relative_error": 0.002560301593866242
+        },
+        {
+          "index": 2,
+          "reference": -1.8945229053497314,
+          "actual": -1.9005218744277954,
+          "relative_error": 0.0031664800996198815
+        },
+        {
+          "index": 104,
+          "reference": 1.5403870344161987,
+          "actual": 1.5663418769836426,
+          "relative_error": 0.016849559226055574
+        },
+        {
+          "index": 67,
+          "reference": 1.521284818649292,
+          "actual": 1.5424140691757202,
+          "relative_error": 0.013889082614515484
+        },
+        {
+          "index": 65,
+          "reference": -1.4605166912078857,
+          "actual": -1.4658006429672241,
+          "relative_error": 0.0036178646852494454
+        },
+        {
+          "index": 411,
+          "reference": -1.4566054344177246,
+          "actual": -1.4602530002593994,
+          "relative_error": 0.002504155041226324
+        },
+        {
+          "index": 57,
+          "reference": -1.42991042137146,
+          "actual": -1.419399380683899,
+          "relative_error": 0.007350838577342246
+        },
+        {
+          "index": 91,
+          "reference": 1.4283307790756226,
+          "actual": 1.4806286096572876,
+          "relative_error": 0.03661464931499327
+        },
+        {
+          "index": 202,
+          "reference": -1.4234963655471802,
+          "actual": -1.4286644458770752,
+          "relative_error": 0.0036305539339459097
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "state": "Kcur-3",
+      "tensor": {
+        "ptr": 135267173790736,
+        "name": "Kcur-3",
+        "op": "ROPE",
+        "type": 0,
+        "data": 106702885610624,
+        "view_src": 0,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173788896,
+          135267173584656,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.12322637438774109,
+      "relative_l2": 0.032845125049741915,
+      "rms_difference": 0.0415256630892994,
+      "reference_rms": 1.264286953586304,
+      "actual_norm": 28.599835314731344,
+      "reference_norm": 28.607548103889837,
+      "cosine": 0.9994604897685229,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 23,
+          "reference": 3.777392625808716,
+          "actual": 3.756516933441162,
+          "relative_error": 0.00552648200372985
+        },
+        {
+          "index": 430,
+          "reference": 3.427794933319092,
+          "actual": 3.3549177646636963,
+          "relative_error": 0.02126065592401977
+        },
+        {
+          "index": 154,
+          "reference": 3.2989931106567383,
+          "actual": 3.307490348815918,
+          "relative_error": 0.002575706548683311
+        },
+        {
+          "index": 246,
+          "reference": 3.2044425010681152,
+          "actual": 3.1971378326416016,
+          "relative_error": 0.0022795442340060265
+        },
+        {
+          "index": 251,
+          "reference": 3.1566555500030518,
+          "actual": 3.2122037410736084,
+          "relative_error": 0.017597165794824506
+        },
+        {
+          "index": 215,
+          "reference": 3.113938570022583,
+          "actual": 3.1483142375946045,
+          "relative_error": 0.0110392889259123
+        },
+        {
+          "index": 454,
+          "reference": -3.093993663787842,
+          "actual": -3.0730345249176025,
+          "relative_error": 0.0067741376188146084
+        },
+        {
+          "index": 142,
+          "reference": 3.0741050243377686,
+          "actual": 3.119129180908203,
+          "relative_error": 0.014646264917423824
+        },
+        {
+          "index": 288,
+          "reference": 3.0206329822540283,
+          "actual": 3.0394909381866455,
+          "relative_error": 0.006243047746418097
+        },
+        {
+          "index": 53,
+          "reference": 2.9989945888519287,
+          "actual": 2.9910192489624023,
+          "relative_error": 0.002659337872489952
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "conv0",
+      "tensor": {
+        "ptr": 135267173598272,
+        "name": "conv_state_at-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885602432,
+        "view_src": 135267173596800,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173596800,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.065948486328125,
+      "relative_l2": 0.004156635070401885,
+      "rms_difference": 0.009500332510052232,
+      "reference_rms": 2.2855825322990606,
+      "actual_norm": 400.65940686395027,
+      "reference_norm": 400.5968351935923,
+      "cosine": 0.9999913747382901,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 306,
+          "reference": -32.43789291381836,
+          "actual": -32.477779388427734,
+          "relative_error": 0.0012296259413441613
+        },
+        {
+          "index": 3097,
+          "reference": -30.64295196533203,
+          "actual": -30.67464256286621,
+          "relative_error": 0.0010341887938875116
+        },
+        {
+          "index": 20786,
+          "reference": -29.65343475341797,
+          "actual": -29.718290328979492,
+          "relative_error": 0.0021871184940573515
+        },
+        {
+          "index": 13337,
+          "reference": -28.135883331298828,
+          "actual": -28.091060638427734,
+          "relative_error": 0.0015930792839630606
+        },
+        {
+          "index": 23577,
+          "reference": -27.84677505493164,
+          "actual": -27.887771606445312,
+          "relative_error": 0.0014722190067898515
+        },
+        {
+          "index": 10546,
+          "reference": -27.477500915527344,
+          "actual": -27.44441032409668,
+          "relative_error": 0.0012042795133514054
+        },
+        {
+          "index": 9504,
+          "reference": 24.7713680267334,
+          "actual": 24.756885528564453,
+          "relative_error": 0.0005846466837566549
+        },
+        {
+          "index": 4890,
+          "reference": -24.648380279541016,
+          "actual": -24.71432876586914,
+          "relative_error": 0.002675570791272823
+        },
+        {
+          "index": 983,
+          "reference": -23.100370407104492,
+          "actual": -23.11677360534668,
+          "relative_error": 0.0007100837758490104
+        },
+        {
+          "index": 8426,
+          "reference": 22.249277114868164,
+          "actual": 22.22451400756836,
+          "relative_error": 0.0011129848026953041
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "state",
+      "tensor": {
+        "ptr": 135267173603424,
+        "name": "state_predelta-0",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885930112,
+        "view_src": 135267173601952,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          128,
+          48,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          65536,
+          3145728
+        ],
+        "src": [
+          135267173601952,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.012477874755859375,
+      "relative_l2": 0.00500165633490234,
+      "rms_difference": 0.00010778114179668051,
+      "reference_rms": 0.021549089857406993,
+      "actual_norm": 19.11746479048778,
+      "reference_norm": 19.109948666826813,
+      "cosine": 0.9999875739504006,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 112154,
+          "reference": 3.544060230255127,
+          "actual": 3.5542099475860596,
+          "relative_error": 0.0028638670540319703
+        },
+        {
+          "index": 557034,
+          "reference": 3.175739288330078,
+          "actual": 3.173281669616699,
+          "relative_error": 0.0007738729442967636
+        },
+        {
+          "index": 80999,
+          "reference": 2.3639016151428223,
+          "actual": 2.3714075088500977,
+          "relative_error": 0.0031752140864043108
+        },
+        {
+          "index": 467182,
+          "reference": 2.1083900928497314,
+          "actual": 2.108551502227783,
+          "relative_error": 7.65557467753012e-05
+        },
+        {
+          "index": 86858,
+          "reference": 2.107572078704834,
+          "actual": 2.1108295917510986,
+          "relative_error": 0.0015456235538413886
+        },
+        {
+          "index": 76135,
+          "reference": 2.055694341659546,
+          "actual": 2.0556769371032715,
+          "relative_error": 8.466509792678371e-06
+        },
+        {
+          "index": 217724,
+          "reference": 1.992682933807373,
+          "actual": 2.0051608085632324,
+          "relative_error": 0.006261846550779751
+        },
+        {
+          "index": 343143,
+          "reference": 1.9525591135025024,
+          "actual": 1.957822322845459,
+          "relative_error": 0.0026955441740841293
+        },
+        {
+          "index": 697920,
+          "reference": 1.9514819383621216,
+          "actual": 1.9504731893539429,
+          "relative_error": 0.0005169143451183329
+        },
+        {
+          "index": 729233,
+          "reference": 1.9479198455810547,
+          "actual": 1.9481403827667236,
+          "relative_error": 0.00011321676616686462
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "ple_history",
+      "tensor": {
+        "ptr": 135267173647216,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885612672,
+        "view_src": 135267173645744,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          9,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          36,
+          368640,
+          368640
+        ],
+        "src": [
+          135267173645744,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.08060550689697266,
+      "relative_l2": 0.003841773791938138,
+      "rms_difference": 0.001362196110573898,
+      "reference_rms": 0.35457478351079136,
+      "actual_norm": 107.76064869744884,
+      "reference_norm": 107.64133600850067,
+      "cosine": 0.9999932421841208,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 75183,
+          "reference": -14.032414436340332,
+          "actual": -14.031150817871094,
+          "relative_error": 9.004996787764731e-05
+        },
+        {
+          "index": 87983,
+          "reference": -12.818870544433594,
+          "actual": -12.764066696166992,
+          "relative_error": 0.004275247813497838
+        },
+        {
+          "index": 77743,
+          "reference": -11.881031036376953,
+          "actual": -11.92715835571289,
+          "relative_error": 0.0038824340408426155
+        },
+        {
+          "index": 57263,
+          "reference": -11.431234359741211,
+          "actual": -11.429946899414062,
+          "relative_error": 0.00011262653591309837
+        },
+        {
+          "index": 85423,
+          "reference": -10.473675727844238,
+          "actual": -10.554281234741211,
+          "relative_error": 0.007696009404098996
+        },
+        {
+          "index": 87991,
+          "reference": -9.186509132385254,
+          "actual": -9.147919654846191,
+          "relative_error": 0.004200668282473349
+        },
+        {
+          "index": 75922,
+          "reference": -8.84521484375,
+          "actual": -8.844046592712402,
+          "relative_error": 0.00013207718051338668
+        },
+        {
+          "index": 78482,
+          "reference": -8.666926383972168,
+          "actual": -8.700210571289062,
+          "relative_error": 0.003840368066174798
+        },
+        {
+          "index": 88722,
+          "reference": -8.520730018615723,
+          "actual": -8.484375,
+          "relative_error": 0.004266655384725931
+        },
+        {
+          "index": 75191,
+          "reference": -8.444510459899902,
+          "actual": -8.444186210632324,
+          "relative_error": 3.839763940347686e-05
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "conv1",
+      "tensor": {
+        "ptr": 135267173675552,
+        "name": "conv_state_at-1",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885593472,
+        "view_src": 135267173674080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          3,
+          10240,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          12,
+          122880,
+          122880
+        ],
+        "src": [
+          135267173674080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.08233070373535156,
+      "relative_l2": 0.01122787598559342,
+      "rms_difference": 0.00984582988091668,
+      "reference_rms": 0.8769093899460614,
+      "actual_norm": 153.79745770870366,
+      "reference_norm": 153.69697720369527,
+      "cosine": 0.9999372221411472,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 7715,
+          "reference": -16.297252655029297,
+          "actual": -16.285417556762695,
+          "relative_error": 0.0007262020487207257
+        },
+        {
+          "index": 17955,
+          "reference": -14.889909744262695,
+          "actual": -14.958712577819824,
+          "relative_error": 0.0046207690133004105
+        },
+        {
+          "index": 28195,
+          "reference": -14.772261619567871,
+          "actual": -14.789904594421387,
+          "relative_error": 0.0011943313290732074
+        },
+        {
+          "index": 19812,
+          "reference": -13.137079238891602,
+          "actual": -13.196484565734863,
+          "relative_error": 0.004521958478212989
+        },
+        {
+          "index": 9572,
+          "reference": -12.989002227783203,
+          "actual": -12.987661361694336,
+          "relative_error": 0.0001032308768104684
+        },
+        {
+          "index": 7519,
+          "reference": -12.654762268066406,
+          "actual": -12.637602806091309,
+          "relative_error": 0.0013559687342684114
+        },
+        {
+          "index": 15688,
+          "reference": 12.631746292114258,
+          "actual": 12.691104888916016,
+          "relative_error": 0.004699159991743515
+        },
+        {
+          "index": 30052,
+          "reference": -12.596570014953613,
+          "actual": -12.607096672058105,
+          "relative_error": 0.0008356764652596544
+        },
+        {
+          "index": 17759,
+          "reference": -12.578960418701172,
+          "actual": -12.661291122436523,
+          "relative_error": 0.006545111916637428
+        },
+        {
+          "index": 5448,
+          "reference": 12.324785232543945,
+          "actual": 12.313878059387207,
+          "relative_error": 0.0008849787603549944
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "indexer_k_raw-3",
+      "tensor": {
+        "ptr": 135267173766448,
+        "name": "indexer_k_raw-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885581952,
+        "view_src": 135267173766080,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          128,
+          1,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          512,
+          512,
+          512
+        ],
+        "src": [
+          135267173766080,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.0424966961145401,
+      "relative_l2": 0.013178062612341555,
+      "rms_difference": 0.013488514475741599,
+      "reference_rms": 1.023558232536344,
+      "actual_norm": 11.596965402962118,
+      "reference_norm": 11.580239474652256,
+      "cosine": 0.9999143361362008,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 28,
+          "reference": 2.985584020614624,
+          "actual": 2.9755258560180664,
+          "relative_error": 0.0033689102457371153
+        },
+        {
+          "index": 2,
+          "reference": -2.55507493019104,
+          "actual": -2.5695619583129883,
+          "relative_error": 0.005669903434442552
+        },
+        {
+          "index": 31,
+          "reference": 2.376537561416626,
+          "actual": 2.3866376876831055,
+          "relative_error": 0.004249933361229488
+        },
+        {
+          "index": 62,
+          "reference": 2.3379783630371094,
+          "actual": 2.31392502784729,
+          "relative_error": 0.01028809144263135
+        },
+        {
+          "index": 88,
+          "reference": -2.3240132331848145,
+          "actual": -2.355736255645752,
+          "relative_error": 0.013650104056190958
+        },
+        {
+          "index": 106,
+          "reference": 2.236445665359497,
+          "actual": 2.2262144088745117,
+          "relative_error": 0.0045747842853766495
+        },
+        {
+          "index": 23,
+          "reference": -2.05458402633667,
+          "actual": -2.0686428546905518,
+          "relative_error": 0.006842664098264588
+        },
+        {
+          "index": 64,
+          "reference": -2.0076723098754883,
+          "actual": -2.014263153076172,
+          "relative_error": 0.0032828281628750184
+        },
+        {
+          "index": 3,
+          "reference": 1.9458067417144775,
+          "actual": 1.950771689414978,
+          "relative_error": 0.0025516139882040922
+        },
+        {
+          "index": 101,
+          "reference": -1.9100854396820068,
+          "actual": -1.909828543663025,
+          "relative_error": 0.00013449451717966184
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "Vcur-3",
+      "tensor": {
+        "ptr": 135267173790000,
+        "name": "Vcur-3",
+        "op": "RESHAPE",
+        "type": 0,
+        "data": 106702885606528,
+        "view_src": 135267173787792,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173787792,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.031055539846420288,
+      "relative_l2": 0.01648310051338265,
+      "rms_difference": 0.008460410660978149,
+      "reference_rms": 0.5132778662672797,
+      "actual_norm": 11.616955790589849,
+      "reference_norm": 11.61415231585777,
+      "cosine": 0.9998642156081663,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 92,
+          "reference": -2.190607786178589,
+          "actual": -2.2052245140075684,
+          "relative_error": 0.006672453152591811
+        },
+        {
+          "index": 2,
+          "reference": -1.9067167043685913,
+          "actual": -1.9128409624099731,
+          "relative_error": 0.0032119391555914868
+        },
+        {
+          "index": 485,
+          "reference": 1.6450815200805664,
+          "actual": 1.6431334018707275,
+          "relative_error": 0.0011842077040312628
+        },
+        {
+          "index": 188,
+          "reference": 1.6295850276947021,
+          "actual": 1.6202245950698853,
+          "relative_error": 0.0057440590492284175
+        },
+        {
+          "index": 57,
+          "reference": -1.594043493270874,
+          "actual": -1.592564344406128,
+          "relative_error": 0.0009279225259475048
+        },
+        {
+          "index": 14,
+          "reference": 1.5880837440490723,
+          "actual": 1.584999918937683,
+          "relative_error": 0.0019418529551385353
+        },
+        {
+          "index": 67,
+          "reference": 1.5059010982513428,
+          "actual": 1.5035890340805054,
+          "relative_error": 0.0015353360014958345
+        },
+        {
+          "index": 478,
+          "reference": 1.4457670450210571,
+          "actual": 1.4546940326690674,
+          "relative_error": 0.006174568495493847
+        },
+        {
+          "index": 279,
+          "reference": 1.3257129192352295,
+          "actual": 1.3248012065887451,
+          "relative_error": 0.000687714989615036
+        },
+        {
+          "index": 399,
+          "reference": -1.2972497940063477,
+          "actual": -1.2858424186706543,
+          "relative_error": 0.008793507147504346
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "state": "Kcur-3",
+      "tensor": {
+        "ptr": 135267173790736,
+        "name": "Kcur-3",
+        "op": "ROPE",
+        "type": 0,
+        "data": 106702885610624,
+        "view_src": 0,
+        "view_offs": 0,
+        "buffer": 106702811472976,
+        "buffer_name": "CPU",
+        "ne": [
+          256,
+          2,
+          1,
+          1
+        ],
+        "nb": [
+          4,
+          1024,
+          2048,
+          2048
+        ],
+        "src": [
+          135267173788896,
+          135267173584656,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "max_absolute_error": 0.09524035453796387,
+      "relative_l2": 0.021124610823475148,
+      "rms_difference": 0.026843778980897518,
+      "reference_rms": 1.2707348412339425,
+      "actual_norm": 28.747526466156177,
+      "reference_norm": 28.75344714644901,
+      "cosine": 0.9997768506595273,
+      "nonfinite": 0,
+      "largest_reference_elements": [
+        {
+          "index": 246,
+          "reference": 4.177871227264404,
+          "actual": 4.158783912658691,
+          "relative_error": 0.004568669920018316
+        },
+        {
+          "index": 454,
+          "reference": -3.429582357406616,
+          "actual": -3.429286241531372,
+          "relative_error": 8.634167207113164e-05
+        },
+        {
+          "index": 280,
+          "reference": -3.3454716205596924,
+          "actual": -3.3621909618377686,
+          "relative_error": 0.004997603678753984
+        },
+        {
+          "index": 30,
+          "reference": 3.213029623031616,
+          "actual": 3.192525863647461,
+          "relative_error": 0.006381441128703069
+        },
+        {
+          "index": 466,
+          "reference": 3.2073137760162354,
+          "actual": 3.2028908729553223,
+          "relative_error": 0.0013790054138097829
+        },
+        {
+          "index": 309,
+          "reference": -3.114074945449829,
+          "actual": -3.1012768745422363,
+          "relative_error": 0.004109750449742014
+        },
+        {
+          "index": 422,
+          "reference": -3.055488109588623,
+          "actual": -3.05696964263916,
+          "relative_error": 0.0004848760647727005
+        },
+        {
+          "index": 217,
+          "reference": 3.026642322540283,
+          "actual": 2.9969794750213623,
+          "relative_error": 0.009800579109732614
+        },
+        {
+          "index": 430,
+          "reference": 3.0193936824798584,
+          "actual": 3.007807493209839,
+          "relative_error": 0.003837256909308917
+        },
+        {
+          "index": 140,
+          "reference": -2.9352643489837646,
+          "actual": -2.914053201675415,
+          "relative_error": 0.007226315856591672
+        }
+      ]
+    }
+  ],
+  "retained_capture_reanalysis_only": true,
+  "ple_row_indices": [
+    {
+      "position": 0,
+      "exact": true
+    },
+    {
+      "position": 1,
+      "exact": true
+    },
+    {
+      "position": 2,
+      "exact": true
+    },
+    {
+      "position": 3,
+      "exact": true
+    },
+    {
+      "position": 4,
+      "exact": true
+    }
+  ],
+  "logits": [
+    {
+      "prefix_length": 1,
+      "max_absolute_error": 0.958172082901001,
+      "relative_l2": 0.06164339321299816,
+      "reference_l2": 1388.4012692495796,
+      "count": 248320,
+      "actual_argmax": 271,
+      "reference_argmax": 271,
+      "actual_top10": [
+        271,
+        198,
+        524,
+        303,
+        11069,
+        1358,
+        3070,
+        1892,
+        1000,
+        369
+      ],
+      "reference_top10": [
+        271,
+        198,
+        524,
+        303,
+        11069,
+        1358,
+        3070,
+        1892,
+        369,
+        4831
+      ],
+      "top10_overlap": 9,
+      "logprob_max_absolute_error": 1.0778488640567865,
+      "reference_top10_logprob_differences": [
+        {
+          "id": 271,
+          "actual": -1.0932149500029298,
+          "reference": -0.8541099165835189,
+          "difference": -0.23910503341941092
+        },
+        {
+          "id": 198,
+          "actual": -1.3642243951933595,
+          "reference": -1.6030131911196517,
+          "difference": 0.2387887959262922
+        },
+        {
+          "id": 524,
+          "actual": -2.532095870413086,
+          "reference": -2.4923259352602765,
+          "difference": -0.03976993515280958
+        },
+        {
+          "id": 303,
+          "actual": -2.925181350149414,
+          "reference": -2.9935275648989483,
+          "difference": 0.06834621474953417
+        },
+        {
+          "id": 11069,
+          "actual": -3.2374429315703126,
+          "reference": -3.277713928119163,
+          "difference": 0.04027099654885058
+        },
+        {
+          "id": 1358,
+          "actual": -3.7044410318510743,
+          "reference": -3.9010993575014874,
+          "difference": 0.19665832565041308
+        },
+        {
+          "id": 3070,
+          "actual": -3.951853713430664,
+          "reference": -4.164178047076683,
+          "difference": 0.21232433364601855
+        },
+        {
+          "id": 1892,
+          "actual": -4.021038016714355,
+          "reference": -4.19614521016262,
+          "difference": 0.17510719344826509
+        },
+        {
+          "id": 369,
+          "actual": -4.14754672948291,
+          "reference": -4.222757491961937,
+          "difference": 0.0752107624790268
+        },
+        {
+          "id": 4831,
+          "actual": -4.314138373770019,
+          "reference": -4.325437698260765,
+          "difference": 0.011299324490745555
+        }
+      ]
+    },
+    {
+      "prefix_length": 2,
+      "max_absolute_error": 1.006776511669159,
+      "relative_l2": 0.05067542595511853,
+      "reference_l2": 1683.5608159287663,
+      "count": 248320,
+      "actual_argmax": 220,
+      "reference_argmax": 220,
+      "actual_top10": [
+        220,
+        1088,
+        100561,
+        14955,
+        57491,
+        10838,
+        8313,
+        2972,
+        97634,
+        5261
+      ],
+      "reference_top10": [
+        220,
+        1088,
+        57491,
+        14955,
+        100561,
+        10838,
+        8313,
+        2972,
+        14791,
+        5261
+      ],
+      "top10_overlap": 9,
+      "logprob_max_absolute_error": 0.948035699819064,
+      "reference_top10_logprob_differences": [
+        {
+          "id": 220,
+          "actual": -1.6563656464598628,
+          "reference": -1.6719546028412082,
+          "difference": 0.015588956381345387
+        },
+        {
+          "id": 1088,
+          "actual": -2.141248954870507,
+          "reference": -2.4095768638885717,
+          "difference": 0.2683279090180646
+        },
+        {
+          "id": 57491,
+          "actual": -3.054209961035058,
+          "reference": -2.890266866329978,
+          "difference": -0.16394309470507995
+        },
+        {
+          "id": 14955,
+          "actual": -3.0410978928587884,
+          "reference": -2.9256119438446264,
+          "difference": -0.11548594901416198
+        },
+        {
+          "id": 100561,
+          "actual": -3.0317995682738275,
+          "reference": -3.0671076484955053,
+          "difference": 0.03530808022167786
+        },
+        {
+          "id": 10838,
+          "actual": -3.601063980200097,
+          "reference": -3.6244930931366186,
+          "difference": 0.023429112936521612
+        },
+        {
+          "id": 8313,
+          "actual": -3.950034393408105,
+          "reference": -3.9924101539886694,
+          "difference": 0.04237576058056458
+        },
+        {
+          "id": 2972,
+          "actual": -3.9900515213988275,
+          "reference": -4.019440145138572,
+          "difference": 0.02938862373974427
+        },
+        {
+          "id": 14791,
+          "actual": -4.384171737768456,
+          "reference": -4.020891637448142,
+          "difference": -0.3632801003203143
+        },
+        {
+          "id": 5261,
+          "actual": -4.261273635961816,
+          "reference": -4.219605893734763,
+          "difference": -0.04166774222705261
+        }
+      ]
+    },
+    {
+      "prefix_length": 4,
+      "max_absolute_error": 0.5963342189788818,
+      "relative_l2": 0.04106616938329405,
+      "reference_l2": 1413.637509243536,
+      "count": 248320,
+      "actual_argmax": 5,
+      "reference_argmax": 5,
+      "actual_top10": [
+        5,
+        3,
+        9,
+        198,
+        2,
+        271,
+        220,
+        17,
+        363,
+        26972
+      ],
+      "reference_top10": [
+        5,
+        3,
+        9,
+        198,
+        271,
+        220,
+        2,
+        17,
+        363,
+        26972
+      ],
+      "top10_overlap": 10,
+      "logprob_max_absolute_error": 0.6826296613404885,
+      "reference_top10_logprob_differences": [
+        {
+          "id": 5,
+          "actual": -0.37623834619900753,
+          "reference": -0.4186374381391585,
+          "difference": 0.04239909194015096
+        },
+        {
+          "id": 3,
+          "actual": -3.885176181892367,
+          "reference": -3.888043566068846,
+          "difference": 0.0028673841764792485
+        },
+        {
+          "id": 9,
+          "actual": -4.306410312751742,
+          "reference": -4.118198557218748,
+          "difference": -0.1882117555329943
+        },
+        {
+          "id": 198,
+          "actual": -4.350662708381625,
+          "reference": -4.232299967130857,
+          "difference": -0.11836274125076773
+        },
+        {
+          "id": 271,
+          "actual": -4.927025318244906,
+          "reference": -4.686700983366209,
+          "difference": -0.24032433487869742
+        },
+        {
+          "id": 220,
+          "actual": -5.041786670783969,
+          "reference": -4.763067407926756,
+          "difference": -0.27871926285721305
+        },
+        {
+          "id": 2,
+          "actual": -4.900852680305453,
+          "reference": -4.911686106046873,
+          "difference": 0.010833425741419767
+        },
+        {
+          "id": 17,
+          "actual": -5.130394458869906,
+          "reference": -5.198550386747557,
+          "difference": 0.06815592787765024
+        },
+        {
+          "id": 363,
+          "actual": -5.258906841377231,
+          "reference": -5.223164720854002,
+          "difference": -0.03574212052322867
+        },
+        {
+          "id": 26972,
+          "actual": -5.327018261054965,
+          "reference": -5.352394266447264,
+          "difference": 0.025376005392298673
+        }
+      ]
+    }
+  ],
+  "self_consistency": {
+    "prefix": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "logits_and_sampled_states_bit_exact": true
+  },
+  "status": "sampled_states_compared_no_equivalence_claim"
+}

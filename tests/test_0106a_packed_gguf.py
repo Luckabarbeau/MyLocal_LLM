@@ -63,7 +63,7 @@ def test_invalid_packed_shapes_and_lengths():
         with pytest.raises(ValueError, match="expected"):
             PackedGGUFWeight(np.zeros(nbytes - 1, dtype=np.uint8), (1, block), fmt)
     with pytest.raises(ValueError, match="Unsupported"):
-        PackedGGUFWeight(np.zeros(1, np.uint8), (1, 32), "IQ3_S")
+        PackedGGUFWeight(np.zeros(1, np.uint8), (1, 32), "IQ1_S")
 
 
 def test_legacy_gguf_map_adds_packed_view_without_changing_dense_semantics():

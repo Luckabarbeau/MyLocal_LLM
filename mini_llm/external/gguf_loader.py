@@ -21,6 +21,9 @@ from .gguf_tensor import decode_gguf_dense
 from .llama_model import ExternalLlamaModel
 
 
+# Keep the legacy dense import contract independent of new sparse CPU formats.
+_LEGACY_PACKED_FORMATS = frozenset({"Q8_0", "Q4_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K"})
+
 # Llama-only GGUF names to original Hugging Face Llama tensor names.
 _BASE_TENSORS = {
     "token_embd.weight": "model.embed_tokens.weight",
@@ -152,7 +155,7 @@ class GGUFWeightMap(Mapping):
                 raise ValueError(f"Unsupported GGUF tensor name: {raw_name}")
             if canonical in names:
                 raise ValueError(f"Duplicate mapped GGUF tensor: {canonical}")
-            if tensor.tensor_type.name not in {"F32", "F16", "BF16", *BLOCK_FORMATS}:
+            if tensor.tensor_type.name not in {"F32", "F16", "BF16", *_LEGACY_PACKED_FORMATS}:
                 raise ValueError(
                     f"Unsupported GGUF tensor type {tensor.tensor_type.name} for {raw_name}"
                 )

@@ -82,10 +82,10 @@ def test_bad_architecture_and_missing_layers():
 def test_no_indexing_unrecognized_formats():
     reader = Reader()
     down = next(t for t in reader.tensors if t.name == 'blk.0.ffn_down_exps.weight')
-    down.tensor_type = Kind('IQ3_S')
+    down.tensor_type = Kind('IQ1_S')
     idx = Qwen3NextGGUFIndex(reader)
-    assert idx.report()['unsupported_routed_formats']['IQ3_S'] == 1
-    with pytest.raises(NotImplementedError, match='IQ3_S'):
+    assert idx.report()['unsupported_routed_formats']['IQ1_S'] == 1
+    with pytest.raises(NotImplementedError, match='IQ1_S'):
         idx.expert_weights(0, 0)
 
 

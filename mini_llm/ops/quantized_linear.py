@@ -29,6 +29,15 @@ except ImportError:
     tl = None
 
 
+_FORMAT_ID = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
+SUPPORTED_GPU_PACKED_FORMATS = frozenset(_FORMAT_ID)
+
+
+def supports_packed_gpu_type(quant_type):
+    """Report kernel format support, independently of runtime availability."""
+    return quant_type in SUPPORTED_GPU_PACKED_FORMATS
+
+
 @dataclass(frozen=True)
 class DevicePackedGGUFWeight:
     """GPU-resident packed tensor; shares the PackedGGUFWeight layout contract."""
@@ -38,6 +47,8 @@ class DevicePackedGGUFWeight:
     quant_type: str
 
     def __post_init__(self):
+        if not supports_packed_gpu_type(self.quant_type):
+            raise NotImplementedError(f"No packed GPU kernel for {self.quant_type}")
         if BACKEND_NAME != "cupy":
             raise RuntimeError("DevicePackedGGUFWeight requires MINI_LLM_BACKEND=cupy")
         if not isinstance(self.data, xp.ndarray) or self.data.dtype != xp.uint8:
@@ -61,10 +72,12 @@ class DevicePackedGGUFWeight:
 
 def packed_to_device(weight: PackedGGUFWeight):
     """Transfer *packed bytes* of one matrix/expert to CuPy VRAM once."""
-    if BACKEND_NAME != "cupy":
-        raise RuntimeError("Packed GPU weights require MINI_LLM_BACKEND=cupy")
     if not isinstance(weight, PackedGGUFWeight) or len(weight.shape) != 2:
         raise TypeError("Expected a two-dimensional PackedGGUFWeight")
+    if not supports_packed_gpu_type(weight.quant_type):
+        raise NotImplementedError(f"No packed GPU kernel for {weight.quant_type}")
+    if BACKEND_NAME != "cupy":
+        raise RuntimeError("Packed GPU weights require MINI_LLM_BACKEND=cupy")
     return DevicePackedGGUFWeight(xp.asarray(weight.data, dtype=xp.uint8),
                                   weight.shape, weight.quant_type)
 
@@ -242,9 +255,6 @@ def _triton_cupy_pointer(array):
     if dtype is None:
         raise TypeError(f"Unsupported Triton quantized operand dtype: {array.dtype}")
     return _TritonCuPyPointer(array, dtype)
-
-
-_FORMAT_ID = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
 
 
 def _launch_on_cupy_stream(kernel, grid, *args):

@@ -28,6 +28,7 @@ from mini_llm.ops.experts_inference import ExpertFFNInference
 from mini_llm.ops.quantized_weight import PackedGGUFWeight
 from mini_llm.ops.quantized_linear import (
     PackedExpertFFNInference, packed_to_device, quantized_linear,
+    supports_packed_gpu_type,
 )
 
 
@@ -361,7 +362,13 @@ class HeterogeneousExpertExecutor:
         cpu_packed_backend: str = "reference",
         idle_eviction_requests: int = 0,
         routing_profiler=None,
+        execution_mode: str = "mixed",
     ):
+        if execution_mode not in {"mixed", "cpu", "gpu"}:
+            raise ValueError("execution_mode must be 'mixed', 'cpu' or 'gpu'")
+        if execution_mode == "gpu" and BACKEND_NAME != "cupy":
+            raise RuntimeError("GPU execution requires MINI_LLM_BACKEND=cupy")
+        self.execution_mode = execution_mode
         if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
             raise ValueError("Routing trace model identity does not match executor")
         self.routing_profiler = routing_profiler
@@ -383,7 +390,7 @@ class HeterogeneousExpertExecutor:
         self.d_ff = int(d_ff)
         self.compute_dtype = compute_dtype
         self.cache = AdaptiveExpertCache(
-            device_budget_bytes, promote_after=promote_after,
+            device_budget_bytes, promote_after=1 if execution_mode == "gpu" else promote_after,
             score_half_life=score_half_life,
             idle_eviction_requests=idle_eviction_requests,
         )
@@ -481,6 +488,19 @@ class HeterogeneousExpertExecutor:
         expert.W_down = xp.asarray(down, dtype=self.compute_dtype)
         return expert
 
+    @staticmethod
+    def _bounded_projection(x, weight):
+        rows = x.reshape(-1, x.shape[-1])
+        result = np.empty((len(rows), weight.shape[0]), dtype=x.dtype)
+        for i, row in enumerate(rows):
+            if x.dtype != np.float64:
+                result[i] = weight.matvec_reference(row, tile_rows=1)
+            else:
+                for j in range(weight.shape[0]):
+                    decoded = weight.select_outer(j).dequantize_reference()
+                    result[i, j] = row @ decoded.astype(np.float64)
+        return result.reshape(x.shape[:-1] + (weight.shape[0],))
+
     def _cpu_forward_numpy(self, key, weights, x_host):
         """Execute a selected expert entirely on host; never call CuPy here."""
         dtype = np.float64 if x_host.dtype == np.float64 else np.float32
@@ -495,16 +515,18 @@ class HeterogeneousExpertExecutor:
                 self.counters["native_cpu_fallbacks"] += 1
             if self.host_cache.budget_bytes:
                 gmat, umat, dmat = self.host_cache.get(key, weights)
+                g = x_cpu @ gmat.T
+                u = x_cpu @ umat.T
             else:
-                gmat, umat, dmat = (w.dequantize_reference() for w in weights)
-            g = x_cpu @ gmat.T
-            u = x_cpu @ umat.T
+                g = self._bounded_projection(x_cpu, gate)
+                u = self._bounded_projection(x_cpu, up)
         else:
             g = x_cpu @ np.asarray(gate, dtype=dtype)
             u = x_cpu @ np.asarray(up, dtype=dtype)
         h = (g / (1.0 + np.exp(-g))) * u
         if isinstance(down, PackedGGUFWeight):
-            result = h @ dmat.T
+            result = (h @ dmat.T if self.host_cache.budget_bytes else
+                      self._bounded_projection(h, down))
         else:
             result = h @ np.asarray(down, dtype=dtype)
         return np.asarray(result, dtype=x_host.dtype)
@@ -593,19 +615,29 @@ class HeterogeneousExpertExecutor:
             raise ValueError("Expert input has incorrect hidden width")
         key = ExpertKey(self.model_id, int(layer_id), int(expert_id))
         weights = None
-        if BACKEND_NAME == "cupy" and self.cache.device_budget_bytes:
+        if (self.execution_mode != "cpu" and BACKEND_NAME == "cupy"
+                and self.cache.device_budget_bytes):
             if key in self.cache.resident:
                 size = self.cache.resident[key][1]
                 expert = self.cache.request(key, size, lambda: None)
                 return key, expert, None
             weights = self._host_weights(key)
             if isinstance(weights[0], PackedGGUFWeight):
+                unsupported = [w.quant_type for w in weights
+                               if not supports_packed_gpu_type(w.quant_type)]
+                if unsupported:
+                    if self.execution_mode == "gpu":
+                        raise NotImplementedError(f"No packed GPU kernel for {unsupported}")
+                    self.counters["unsupported_gpu_fallbacks"] += 1
+                    return key, None, weights
                 size = sum(w.nbytes for w in weights)
             else:
                 size = sum(w.size for w in weights) * np.dtype(self.compute_dtype).itemsize
             expert = self.cache.request(key, size, lambda: self._materialize(weights, trace))
             if expert is not None:
                 return key, expert, None
+        if self.execution_mode == "gpu":
+            raise RuntimeError("GPU execution could not obtain residency within the device budget")
         if weights is None:
             weights = self._host_weights(key)
         return key, None, weights
@@ -646,7 +678,7 @@ class HeterogeneousExpertExecutor:
         Eligibility is observational: a miss/unsupported layout changes no
         request counters and falls through to ordinary hybrid dispatch.
         """
-        if (BACKEND_NAME != "cupy" or not self._dispatch_depth or
+        if (self.execution_mode == "cpu" or BACKEND_NAME != "cupy" or not self._dispatch_depth or
                 self.cache.idle_eviction_requests or x.shape[0] != 1):
             return None
         from .grouped_quantized_experts import (

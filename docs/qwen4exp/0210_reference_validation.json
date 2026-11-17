@@ -1,0 +1,121 @@
+{
+  "scope": "independent linked llama.cpp full-model diagnostic attempt",
+  "model": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "expected_source_sha": "171e8846b4af9766c354064cb776cb34a50f053f",
+  "fixed_token_ids": [
+    1,
+    2
+  ],
+  "context": 32,
+  "sequences": 1,
+  "dtype": "float32",
+  "kv_dtype": "float32",
+  "greedy_count": 0,
+  "actual_model_ran": false,
+  "reference_model_ran": false,
+  "numerical_comparison_completed": false,
+  "numerical_parity_claim": false,
+  "text_correctness_claim": false,
+  "sequential_separate_processes": true,
+  "full_expert_dequantization": false,
+  "all_expert_hashing": false,
+  "production_files_modified": false,
+  "wall_limit_seconds": 120,
+  "sampled_child_rss_limit_bytes": 12884901888,
+  "virtual_child_limit_bytes": 120259084288,
+  "arithmetic_caveat": "Native experts use FP32 activations; GGML CPU quantized matmuls may use Q8_K/Q8_0 activation quantization. No equality or broad acceptance tolerance is assumed.",
+  "source_revision": {
+    "command": [
+      "git",
+      "--no-pager",
+      "-C",
+      "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "seconds": 0.05251603899523616,
+    "sampled_peak_rss_bytes": 729088,
+    "stop_reason": null,
+    "log_tail": "171e8846b4af9766c354064cb776cb34a50f053f\n"
+  },
+  "source_status": {
+    "command": [
+      "git",
+      "--no-optional-locks",
+      "-C",
+      "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp",
+      "status",
+      "--porcelain"
+    ],
+    "returncode": 0,
+    "seconds": 0.2532533970079385,
+    "sampled_peak_rss_bytes": 16293888,
+    "stop_reason": null,
+    "log_tail": ""
+  },
+  "build_version": {
+    "command": [
+      "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp/build-cuda/bin/llama-cli",
+      "--version"
+    ],
+    "returncode": 0,
+    "seconds": 0.2031148529786151,
+    "sampled_peak_rss_bytes": 211529728,
+    "stop_reason": null,
+    "log_tail": "version: 0.5.0-dev (build 11192, commit 171e8846b)\nbuilt with GNU 13.3.0 for Linux x86_64\n"
+  },
+  "compile": {
+    "command": [
+      "c++",
+      "-std=c++17",
+      "-O2",
+      "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/tests/fixtures/qwen4exp_reference.cpp",
+      "-I/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp/include",
+      "-I/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp/ggml/include",
+      "-L/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp/build-cuda/bin",
+      "-Wl,-rpath,/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/vendor/llama.cpp/build-cuda/bin",
+      "-lllama",
+      "-lggml",
+      "-lggml-base",
+      "-lggml-cpu",
+      "-o",
+      "/tmp/qwen4exp-reference-bgrjyvki/reference"
+    ],
+    "returncode": 0,
+    "seconds": 0.5044906970288139,
+    "sampled_peak_rss_bytes": 3137536,
+    "stop_reason": null,
+    "log_tail": ""
+  },
+  "capabilities_run": {
+    "command": [
+      "/tmp/qwen4exp-reference-bgrjyvki/reference",
+      "--capabilities"
+    ],
+    "returncode": 0,
+    "seconds": 0.2030131689971313,
+    "sampled_peak_rss_bytes": 204894208,
+    "stop_reason": null,
+    "log_tail": "ggml_cuda_init: found 1 CUDA devices (Total VRAM: 15831 MiB):\n  Device 0: NVIDIA GeForce RTX 5080, compute capability 12.0, VMM: yes, VRAM: 15831 MiB\n{\"q2_0_type\":42,\"numa_disables_prefetch\":false}\n"
+  },
+  "capabilities": {
+    "q2_0_type": 42,
+    "numa_disables_prefetch": false
+  },
+  "status": "blocked_memory_safety_before_model_load",
+  "blocker": "Pinned llama-model.cpp calls init_mappings(true). On this single-NUMA-node host ggml_is_numa() is false, so llama-mmap.cpp requests MAP_POPULATE on shards without lazy ranges and MADV_WILLNEED on all non-lazy ranges. Packed expert banks are non-lazy. No public no-prefetch parameter exists in this pinned llama_model_params. Refusing to fault in the expert banks.",
+  "next_experiment": "With separate approval, use a separately built reference exposing a no-prefetch loader option; first verify CPU mmap/lazy PLE and bounded RSS, then compare the fixed [1,2] logits. Do not change the frozen production model.",
+  "checkpoint_size_mtime_unchanged": true,
+  "checkpoint_file_stats": {
+    "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf": [
+      54817524224,
+      1794362612345817261
+    ],
+    "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf": [
+      28800138432,
+      1794269742748675005
+    ]
+  },
+  "elapsed_seconds": 1.2171722310013138
+}

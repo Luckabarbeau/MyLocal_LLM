@@ -6,7 +6,9 @@ import pytest
 from mini_llm.backend import BACKEND_NAME
 from mini_llm.diagnostics.quantized_numerics import packed_swiglu_reference
 from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
-from mini_llm.ops.quantized_linear import quantized_linear, packed_to_device
+from mini_llm.ops.quantized_linear import (
+    SUPPORTED_GPU_PACKED_FORMATS, quantized_linear, packed_to_device,
+)
 from mini_llm.ops.expert_residency import ExpertKey, HeterogeneousExpertExecutor
 
 
@@ -90,7 +92,7 @@ def test_packed_gguf_expert_mixed_representations_rejected():
         executor.forward(0, 0, np.ones((1, 32), dtype=np.float32))
 
 
-@pytest.mark.parametrize("fmt", list(BLOCK_FORMATS))
+@pytest.mark.parametrize("fmt", sorted(SUPPORTED_GPU_PACKED_FORMATS))
 @pytest.mark.parametrize("block_k", [256, 512, 1024])
 def test_triton_kernel_matches_cpu_oracle(fmt, block_k):
     # Requires a CUDA-capable environment to compile/run Triton. In standard

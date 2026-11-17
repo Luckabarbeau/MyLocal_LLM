@@ -358,8 +358,8 @@ def test_unsupported_layouts(suffix):
 def test_unsupported_format_alignment_and_backend_before_payload():
     index, _, reads = _fixture()
     tensor = index.tensors['blk.3.attn_output.weight']
-    tensor.tensor_type.name = 'IQ4_XS'
-    with pytest.raises(NotImplementedError, match='IQ4_XS'):
+    tensor.tensor_type.name = 'IQ1_S'
+    with pytest.raises(NotImplementedError, match='IQ1_S'):
         Qwen3NextAttentionInference.from_index(index, 3)
     tensor.tensor_type.name = 'Q8_0'
     with pytest.raises(ValueError, match='block-aligned'):

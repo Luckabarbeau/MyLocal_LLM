@@ -6,9 +6,19 @@
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include "gguf_codebooks.h"  // Pinned GGML tables and MIT notice from Patch0202.
 
 namespace {
 constexpr int Q8_0 = 0, Q4_0 = 1, Q4_K = 2, Q3_K = 3, Q5_K = 4, Q6_K = 5;
+constexpr int IQ2_S = 6, IQ3_S = 7, IQ3_XXS = 8, IQ4_NL = 9, IQ4_XS = 10, Q2_0 = 11;
+
+inline int block_elements(int fmt) noexcept {
+    return (fmt == Q8_0 || fmt == Q4_0 || fmt == IQ4_NL) ? 32 : fmt == Q2_0 ? 64 : 256;
+}
+inline int block_bytes(int fmt) noexcept {
+    constexpr int bytes[] = {34, 18, 144, 110, 176, 210, 82, 110, 98, 18, 136, 18};
+    return bytes[fmt];
+}
 
 inline float fp16(const uint8_t* p) noexcept {
     const uint16_t h = uint16_t(p[0]) | (uint16_t(p[1]) << 8);
@@ -31,11 +41,82 @@ inline float fp16(const uint8_t* p) noexcept {
 }
 
 inline float packed_dot(const uint8_t* w, int fmt, int k, const float* x) noexcept {
-    const int qk = (fmt == Q8_0 || fmt == Q4_0) ? 32 : 256;
-    const int qb = fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : fmt == Q6_K ? 210 : 110;
+    const int qk = block_elements(fmt);
+    const int qb = block_bytes(fmt);
     float sum = 0.0f;
     for (int b = 0; b < k / qk; ++b, w += qb, x += qk) {
-        if (fmt == Q8_0) {
+        // Decode only the current dot-product lane, never a weight matrix/block.
+        // Layouts/order follow pinned GGML dequantize_row_iq* (see 0203 docs).
+        if (fmt == IQ4_NL || fmt == IQ4_XS) {
+            const float d = fp16(w);
+            for (int group = 0; group < qk / 32; ++group) {
+                float dl = d;
+                const uint8_t* qs = w + 2;
+                if (fmt == IQ4_XS) {
+                    const unsigned high = unsigned(w[2]) | (unsigned(w[3]) << 8);
+                    const int sc = ((w[4 + group / 2] >> (4 * (group % 2))) & 15)
+                        | (((high >> (2 * group)) & 3) << 4);
+                    dl = d * float(sc - 32);
+                    qs = w + 8 + 16 * group;
+                }
+                for (int j = 0; j < 32; ++j) {
+                    const unsigned q = (qs[j % 16] >> (4 * (j / 16))) & 15;
+                    const float value = dl * float(kvalues_iq4nl[q]);
+                    sum += value * x[32 * group + j];
+                }
+            }
+        } else if (fmt == Q2_0) {
+            const float d = fp16(w);
+            for (int j = 0; j < 64; ++j) {
+                const int q = (w[2 + j / 4] >> (2 * (j % 4))) & 3;
+                sum += (d * float(q - 1)) * x[j];
+            }
+        } else if (fmt == IQ2_S || fmt == IQ3_S || fmt == IQ3_XXS) {
+            const float d = fp16(w);
+            for (int group = 0; group < 8; ++group) {
+                uint32_t aux = 0;
+                float dl = 0.0f;
+                if (fmt == IQ3_XXS) {
+                    const uint8_t* a = w + 66 + 4 * group;
+                    aux = uint32_t(a[0]) | (uint32_t(a[1]) << 8)
+                        | (uint32_t(a[2]) << 16) | (uint32_t(a[3]) << 24);
+                    dl = (d * (0.5f + float(aux >> 28))) * 0.5f;
+                } else if (fmt == IQ3_S) {
+                    const int sc = (w[106 + group / 2] >> (4 * (group % 2))) & 15;
+                    dl = d * float(1 + 2 * sc);
+                }
+                for (int lane = 0; lane < 4; ++lane) {
+                    unsigned signs;
+                    const uint8_t *grid1, *grid2 = nullptr;
+                    if (fmt == IQ2_S) {
+                        const unsigned index = w[2 + 4 * group + lane]
+                            | (((w[66 + group] >> (2 * lane)) & 3) << 8);
+                        grid1 = iq2s_grid[index];
+                        signs = w[34 + 4 * group + lane];
+                        const int sc = (w[74 + group] >> (4 * (lane / 2))) & 15;
+                        dl = (d * (0.5f + float(sc))) * 0.25f;
+                    } else {
+                        const int pos = 2 + 8 * group + 2 * lane;
+                        if (fmt == IQ3_S) {
+                            const unsigned high = w[66 + group];
+                            grid1 = iq3s_grid[w[pos] | (((high >> (2 * lane)) & 1) << 8)];
+                            grid2 = iq3s_grid[w[pos + 1] | (((high >> (2 * lane + 1)) & 1) << 8)];
+                            signs = w[74 + 4 * group + lane];
+                        } else {
+                            grid1 = iq3xxs_grid[w[pos]];
+                            grid2 = iq3xxs_grid[w[pos + 1]];
+                            signs = ksigns_iq2xs[(aux >> (7 * lane)) & 127];
+                        }
+                    }
+                    for (int j = 0; j < 8; ++j) {
+                        const unsigned q = fmt == IQ2_S ? grid1[j] :
+                            (j < 4 ? grid1[j] : grid2[j - 4]);
+                        const float value = (dl * float(q)) * ((signs & (1u << j)) ? -1.0f : 1.0f);
+                        sum += value * x[32 * group + 8 * lane + j];
+                    }
+                }
+            }
+        } else if (fmt == Q8_0) {
             const float d = fp16(w);
             float acc = 0.0f;
             for (int i = 0; i < 32; ++i) {
@@ -114,14 +195,11 @@ inline float packed_dot(const uint8_t* w, int fmt, int k, const float* x) noexce
     return sum;
 }
 inline bool valid(int fmt, int n, int k) noexcept {
-    return fmt >= 0 && fmt <= 5 && n > 0 && k > 0 &&
-        (k % ((fmt == Q8_0 || fmt == Q4_0) ? 32 : 256) == 0);
-}
-inline int block_bytes(int fmt) noexcept {
-    return fmt == Q8_0 ? 34 : fmt == Q4_0 ? 18 : fmt == Q4_K ? 144 : fmt == Q5_K ? 176 : fmt == Q6_K ? 210 : 110;
+    return fmt >= 0 && fmt <= Q2_0 && n > 0 && k > 0 &&
+        (k % block_elements(fmt) == 0);
 }
 inline int row_bytes(int fmt, int k) noexcept {
-    return k / ((fmt == Q8_0 || fmt == Q4_0) ? 32 : 256) * block_bytes(fmt);
+    return k / block_elements(fmt) * block_bytes(fmt);
 }
 }  // namespace
 

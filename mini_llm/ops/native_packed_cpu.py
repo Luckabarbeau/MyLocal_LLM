@@ -22,7 +22,8 @@ import numpy as np
 
 from mini_llm.ops.quantized_weight import PackedGGUFWeight
 
-_FORMAT = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5}
+_FORMAT = {"Q8_0": 0, "Q4_0": 1, "Q4_K": 2, "Q3_K": 3, "Q5_K": 4, "Q6_K": 5,
+           "IQ2_S": 6, "IQ3_S": 7, "IQ3_XXS": 8, "IQ4_NL": 9, "IQ4_XS": 10, "Q2_0": 11}
 _LOCK = threading.Lock()
 _LIB = None
 _FAILURE = None
@@ -39,10 +40,11 @@ def _load_native():
         try:
             source = Path(__file__).with_name("native_packed_cpu.cpp")
             cpp_bytes = source.read_bytes()
+            header_bytes = source.with_name("gguf_codebooks.h").read_bytes()
             compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
             if not compiler:
                 raise RuntimeError("No local C++ compiler found (g++ or clang++)")
-            fingerprint = hashlib.sha256(cpp_bytes + platform.machine().encode() +
+            fingerprint = hashlib.sha256(cpp_bytes + header_bytes + platform.machine().encode() +
                                          sys.platform.encode() + compiler.encode()).hexdigest()[:20]
             cache_dir = Path(os.environ.get("MINI_LLM_NATIVE_BUILD_DIR",
                     str(Path.home() / ".cache" / "mylocal_llm" / "native")))

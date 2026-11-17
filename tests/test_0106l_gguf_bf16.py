@@ -232,12 +232,12 @@ def test_qwen_accessor_rejects_all_expert_banks_before_decode(fused):
 def test_qwen_accessor_unsupported_formats_ngram_arch_and_missing_name():
     reader = Reader()
     reader.tensors.extend([
-        tensor(Unreadable(), (3, 256), "IQ3_S", "blk.0.attn_q.weight"),
+        tensor(Unreadable(), (3, 256), "IQ1_S", "blk.0.attn_q.weight"),
         tensor(Unreadable(), (256,), "F64", "output_norm.weight"),
         tensor(Unreadable(), (3, 256), "BF16", "token_embd_ngram.weight"),
     ])
     index = Qwen3NextGGUFIndex(reader)
-    for name, message in [("blk.0.attn_q.weight", "IQ3_S"),
+    for name, message in [("blk.0.attn_q.weight", "IQ1_S"),
                           ("output_norm.weight", "F64"),
                           ("token_embd_ngram.weight", "ngram tables")]:
         with pytest.raises(NotImplementedError, match=message):

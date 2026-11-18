@@ -91,12 +91,13 @@ class Qwen4ExpGGUFModel:
     def _build(cls, weights, *, max_length, diagnostic_callback, expert_executor,
                expert_promote_after=3, qsa_fast_decode=False,
                hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False,
-               hc_graph_decode=False, group_after_admission=False,
+               hc_graph_decode=False, hc_native_read=False, group_after_admission=False,
                expert_cache_slots=False, **budgets):
         expert_promote_after = integer(expert_promote_after, 'expert_promote_after', 1)
         for name, value in (('qsa_fast_decode', qsa_fast_decode),
                             ('hc_fast_decode', hc_fast_decode), ('router_fast_decode', router_fast_decode),
                             ('gdn_fast_decode', gdn_fast_decode), ('hc_graph_decode', hc_graph_decode),
+                            ('hc_native_read', hc_native_read),
                             ('group_after_admission', group_after_admission),
                             ('expert_cache_slots', expert_cache_slots)):
             if not isinstance(value, bool):
@@ -153,7 +154,8 @@ class Qwen4ExpGGUFModel:
                 return Qwen4ExpHyperConnection(dense(stem+'norm.weight'),
                     dense(stem+'down.weight'),dense(stem+'up.weight'),
                     dense(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps,
-                    fast_decode=hc_fast_decode, graph_decode=hc_graph_decode)
+                    fast_decode=hc_fast_decode, graph_decode=hc_graph_decode,
+                    native_read=hc_native_read)
             blocks = []
             for i, rec in enumerate(h.recurrent):
                 p = f'blk.{i}.'
@@ -313,6 +315,9 @@ class Qwen4ExpGGUFModel:
             self.diagnostic_callback(layer,stage,value.copy())
 
     def step(self, token, state):
+        return self._step(token, state, project_logits=True)
+
+    def _step(self, token, state, *, project_logits):
         self._validate(state)
         token = integer(token,'token')
         if token >= self.config.vocab_size:
@@ -341,12 +346,14 @@ class Qwen4ExpGGUFModel:
                     self._diagnostic(i,'hc_ffn_read',hidden)
                     streams = b.ffn_hc.write(streams,b.moe(hidden),gains)
                     self._diagnostic(i,'post_moe',streams)
-                hidden = self.final_hc.collapse(streams)
-                self._diagnostic(-1,'hc_output_read',hidden)
-                logits = self.output(hidden).reshape(1,-1)
-                if logits.shape != (1,self.config.vocab_size) or logits.dtype != xp.float32:
-                    raise ValueError('Output must be FP32 [1,vocab]')
-                self._diagnostic(-1,'logits',logits)
+                logits = None
+                if project_logits or self.diagnostic_callback is not None:
+                    hidden = self.final_hc.collapse(streams)
+                    self._diagnostic(-1,'hc_output_read',hidden)
+                    logits = self.output(hidden).reshape(1,-1)
+                    if logits.shape != (1,self.config.vocab_size) or logits.dtype != xp.float32:
+                        raise ValueError('Output must be FP32 [1,vocab]')
+                    self._diagnostic(-1,'logits',logits)
             except Exception:
                 # Operators can already have committed recurrent/PLE history.
                 # Never retry or pretend this request remains resumable.
@@ -372,9 +379,10 @@ class Qwen4ExpGGUFModel:
         tokens = self._tokens(sequence)
         if not state.has_capacity(tokens.size):
             raise ValueError('Generation state capacity exceeded')
-        for token in tokens:
-            logits = self.step(int(token),state)
-        return logits
+        # The output head does not feed back into any persistent state.
+        for token in tokens[:-1]:
+            self._step(int(token), state, project_logits=False)
+        return self.step(int(tokens[-1]), state)
 
     def decode_one(self, token_ids, state):
         tokens = self._tokens(token_ids)

@@ -38,7 +38,7 @@ class Qwen4ExpHyperConnection:
     """
 
     def __init__(self, gamma, down, up, inject=None, *, epsilon, fast_decode=False,
-                 graph_decode=False, graph_pool_bytes=2 * 1024**2):
+                 graph_decode=False, graph_pool_bytes=2 * 1024**2, native_read=False):
         gamma = _fp32("gamma", gamma)
         down = _fp32("down", down)
         up = _fp32("up", up)
@@ -72,6 +72,11 @@ class Qwen4ExpHyperConnection:
             raise TypeError('graph_decode must be bool')
         if isinstance(graph_pool_bytes, bool) or not isinstance(graph_pool_bytes, int) or graph_pool_bytes < 1:
             raise ValueError('graph_pool_bytes must be a positive integer')
+        if not isinstance(native_read, bool):
+            raise TypeError('native_read must be bool')
+        if native_read and graph_decode:
+            raise ValueError('native_read and graph_decode are separate execution modes')
+        self.native_read = native_read
         self.graph_decode = graph_decode
         self.graph_pool_bytes = graph_pool_bytes
         self._read_graph = None
@@ -117,6 +122,9 @@ class Qwen4ExpHyperConnection:
     def read(self, streams):
         """Read a feature-gated mix and the scalar write gain for each stream."""
         self._streams(streams)
+        if self.native_read and self._fast_eligible(streams) and eligible(streams, self.inject):
+            from ..ops.hyperconnection_read_gpu import read_gpu
+            return read_gpu(streams, self.gamma, self.down, self.up, self.inject, self.epsilon)
         if self.graph_decode and eligible(streams, self.gamma, self.down, self.up):
             from ..ops.inference_graph import CapturedArrayInference
             graph = self._read_graph
@@ -171,6 +179,6 @@ class Qwen4ExpHyperConnection:
 
     def collapse(self, streams):
         """Final read-only mix; no injection matrix or conventional output norm needed."""
-        if self.graph_decode and self.inject is None:
+        if (self.graph_decode or self.native_read) and self.inject is None:
             return self.read(streams)[0]
         return self._mix(streams)[0]

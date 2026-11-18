@@ -1,20 +1,29 @@
 """Rebuild a supported byte-level BPE tokenizer from GGUF metadata.
 
 No model weights or network access are required. Only the explicitly
-supported GGUF GPT-2 BPE/SmolLM and Qwen2 pre-tokenizer variants are accepted;
+supported GGUF GPT-2 BPE/SmolLM, Qwen2 and Qwen35 pre-tokenizers are accepted;
 other algorithms are rejected rather than silently approximated.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
 
-_SUPPORTED_VARIANTS = frozenset({("gpt2", "smollm"), ("gpt2", "qwen2")})
+_SUPPORTED_VARIANTS = frozenset({("gpt2", "smollm"), ("gpt2", "qwen2"), ("gpt2", "qwen35")})
 # llama.cpp 171e8846b4af9766c354064cb776cb34a50f053f:
 # src/llama-vocab.cpp, LLAMA_VOCAB_PRE_TYPE_QWEN2 (not QWEN35, which adds \p{M}).
 _QWEN2_PATTERN = (
     r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
     r"|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+|\s+(?!\S)|\s+"
+)
+
+
+# Same pinned llama-vocab.cpp, LLAMA_VOCAB_PRE_TYPE_QWEN35: marks join letters.
+_QWEN35_PATTERN = (
+    r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+    r"|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*"
     r"|\s*[\r\n]+|\s+(?!\S)|\s+"
 )
 
@@ -33,15 +42,20 @@ class GGUFTokenizerSpec:
 
 
 def _value(reader, name, default=None):
+    if isinstance(reader, Mapping):
+        return reader.get(name, default)
     field = reader.fields.get(name)
     return default if field is None else field.contents(0)
 
 
 def _array(reader, name):
-    field = reader.fields.get(name)
-    if field is None:
+    if isinstance(reader, Mapping):
+        values = reader.get(name)
+    else:
+        field = reader.fields.get(name)
+        values = None if field is None else field.contents(slice(None))
+    if values is None:
         raise ValueError(f"GGUF tokenizer requires {name}")
-    values = field.contents(slice(None))
     if not isinstance(values, (tuple, list)):
         raise ValueError(f"GGUF tokenizer field {name} is not an array")
     return tuple(values)
@@ -54,7 +68,7 @@ def tokenizer_spec_from_gguf(reader, *, vocab_size=None):
     if (model, pre) not in _SUPPORTED_VARIANTS:
         raise ValueError(
             f"Unsupported GGUF tokenizer (model={model!r}, pre={pre!r}); "
-            "supported GPT-2 BPE pre-tokenizers are 'smollm' and 'qwen2'"
+            "supported GPT-2 BPE pre-tokenizers are 'smollm', 'qwen2', and 'qwen35'"
         )
     tokens = _array(reader, "tokenizer.ggml.tokens")
     merges = _array(reader, "tokenizer.ggml.merges")
@@ -154,11 +168,12 @@ def load_gguf_tokenizer(reader, *, vocab_size=None):
             pre_tokenizers.Split(Regex(r"\p{N}"), behavior="isolated"),
             pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True),
         ])
-    elif spec.pre == "qwen2":
+    elif spec.pre in ("qwen2", "qwen35"):
         # Split Unicode text first; byte encoding must not run GPT-2's regex
         # again, which would change Qwen contractions, code and CR/LF groups.
         tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
-            pre_tokenizers.Split(Regex(_QWEN2_PATTERN), behavior="isolated"),
+            pre_tokenizers.Split(Regex(_QWEN2_PATTERN if spec.pre == 'qwen2' else _QWEN35_PATTERN),
+                                             behavior="isolated"),
             pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
         ])
     tokenizer.decoder = decoders.ByteLevel()

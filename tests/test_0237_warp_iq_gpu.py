@@ -41,7 +41,8 @@ def test_option_rejects_invalid_mode_without_cuda(monkeypatch):
 @GPU
 @pytest.mark.parametrize('formats', [(f, f, f) for f in IQ] + ACTUAL)
 @pytest.mark.parametrize('storage', ['constant', 'global'])
-def test_warp_against_block_formats_routes_and_stream(formats, storage, monkeypatch):
+@pytest.mark.parametrize('scheduling', ['warp', 'warp_specialized'])
+def test_warp_against_block_formats_routes_and_stream(formats, storage, scheduling, monkeypatch):
     import cupy as cp
     monkeypatch.setenv('MINI_LLM_IQ_GPU_CODEBOOK_STORAGE', storage)
     _, experts = handles(formats, count=3, d=768, f=256)
@@ -55,11 +56,35 @@ def test_warp_against_block_formats_routes_and_stream(formats, storage, monkeypa
             for slots in (None, (2, 0, 1)):
                 monkeypatch.setenv(ENV, 'block')
                 expected = iq.grouped(x, experts, routes, slots=slots)
-                monkeypatch.setenv(ENV, 'warp')
+                monkeypatch.setenv(ENV, scheduling)
                 actual = iq.grouped(x, experts, routes, slots=slots)
                 dependent = actual * cp.float32(2)
                 stream.synchronize()
                 metrics(cp.asnumpy(dependent), cp.asnumpy(expected)*2)
+
+
+@GPU
+def test_grouped_entrypoints_validate_once_and_match(monkeypatch):
+    import cupy as cp
+    _, experts = handles(('IQ3_S', 'IQ3_S', 'IQ3_S'), count=3, d=768, f=256)
+    x = cp.ones((1, 768), dtype=cp.float32)
+    routes = cp.asarray([.2, .3, .5], dtype=cp.float32)
+    check = grouped._unsupported_reason
+    calls = []
+
+    def tracked(*args, **kwargs):
+        calls.append(1)
+        return check(*args, **kwargs)
+
+    monkeypatch.setattr(grouped, '_unsupported_reason', tracked)
+    expected = iq.grouped(x, experts, routes)
+    assert len(calls) == 1
+    actual = grouped.grouped_quantized_experts_forward(x, experts, routes)
+    assert len(calls) == 2
+    np.testing.assert_array_equal(cp.asnumpy(actual), cp.asnumpy(expected))
+    for entry in (iq.grouped, grouped.grouped_quantized_experts_forward):
+        with pytest.raises(ValueError, match='FP32'):
+            entry(x.astype(cp.float16), experts, routes)
 
 
 @GPU

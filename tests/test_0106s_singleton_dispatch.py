@@ -143,6 +143,78 @@ def test_cpu_order_shared_input_basic_weight_views_and_no_scatter(monkeypatch, a
     assert not executor.protected
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("outcome", ["grouped", "batched", "fallback"])
+def test_fallback_zero_allocation_deferred_past_fastpaths(monkeypatch, asynchronous, outcome):
+    x, weights, ids = inputs()
+    executor = FakeExecutor(asynchronous)
+    fast_output = xp.full((1, 3), 7, dtype=x.dtype)
+    allocations = []
+    attempts = []
+
+    def zeros(shape, dtype):
+        assert executor.protected
+        assert attempts == ["grouped", "batched"]
+        allocations.append((shape, dtype))
+        return xp.zeros(shape, dtype=dtype)
+
+    def fastpath(name):
+        def run(layer_id, expert_ids, row, routes, slots):
+            assert executor.protected and layer_id == 7
+            assert expert_ids == (0, 1, 2) and slots == (1, 2, 0)
+            assert row.shape == (1, 3) and routes.shape == (3,)
+            assert not allocations
+            attempts.append(name)
+            return fast_output if outcome == name else None
+        return run
+
+    monkeypatch.setattr(dispatch, "xp", SimpleNamespace(zeros=zeros))
+    executor.try_forward_grouped = fastpath("grouped")
+    executor.try_forward_decode_batch = fastpath("batched")
+    actual = layer(executor).forward(x, weights, ids)
+    if outcome == "fallback":
+        assert allocations == [((1, 3), x.dtype)]
+        np.testing.assert_array_equal(asnumpy(actual), np.full((1, 1, 3), 3, np.float32))
+        operation = "submit" if asynchronous else "forward"
+        assert [event for event in executor.events if event[0] == operation] == [
+            (operation, 0), (operation, 1), (operation, 2)]
+    else:
+        assert not allocations and not executor.inputs
+        np.testing.assert_array_equal(asnumpy(actual), asnumpy(fast_output.reshape(1, 1, 3)))
+        assert actual.dtype == x.dtype
+    assert attempts == (["grouped"] if outcome == "grouped" else ["grouped", "batched"])
+    assert executor.events[0] == ("enter", 7, (0, 1, 2))
+    assert executor.events[-1] == ("exit", 7)
+    assert not executor.protected
+
+
+@pytest.mark.parametrize("failure", ["grouped", "batched"])
+def test_fastpath_error_skips_fallback_allocation_and_releases_scope(monkeypatch, failure):
+    x, weights, ids = inputs()
+    executor = FakeExecutor()
+    attempts = []
+    error = RuntimeError("fastpath failure")
+
+    def fastpath(name):
+        def run(*args):
+            assert executor.protected
+            attempts.append(name)
+            if name == failure:
+                raise error
+            return None
+        return run
+
+    monkeypatch.setattr(dispatch, "xp", SimpleNamespace(zeros=forbidden))
+    executor.try_forward_grouped = fastpath("grouped")
+    executor.try_forward_decode_batch = fastpath("batched")
+    with pytest.raises(RuntimeError, match="fastpath failure") as caught:
+        layer(executor).forward(x, weights, ids)
+    assert caught.value is error
+    assert attempts == (["grouped"] if failure == "grouped" else ["grouped", "batched"])
+    assert executor.events == [("enter", 7, (0, 1, 2)), ("exit", 7)]
+    assert not executor.inputs and not executor.protected
+
+
 @pytest.mark.parametrize("failure", ["submit", "resolve", "accumulate"])
 def test_async_errors_drain_every_started_job_before_scope_exit(failure):
     kwargs = {"values": (1, 2, 3)}

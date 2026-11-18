@@ -210,6 +210,11 @@ class Qwen4ExpWeights:
                     activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0,
                     graph_workspace_bytes=0):
         h = self.headers
+        auto_cache = cache_bytes == 'auto'
+        if auto_cache:
+            if BACKEND_NAME != 'cupy':
+                raise ValueError('Automatic GPU expert cache sizing requires CuPy')
+            cache_bytes = 0
         resident_device_bytes = integer(resident_device_bytes, 'resident_device_bytes')
         length = integer(max_length, 'max_length', 1)
         if length > h.context:
@@ -261,14 +266,25 @@ class Qwen4ExpWeights:
                 raise ValueError('NumPy runtime has no device graph workspace')
         else:
             device_total += state+activation+staging+h.constructor_bytes+graph_workspace_bytes
-        if resident_device_bytes > device_total:
+        if not auto_cache and resident_device_bytes > device_total:
             raise ValueError('resident_device_bytes exceeds planned device total')
         if host_total > host_budget_bytes:
             raise MemoryError(f'Insufficient host budget: need {host_total}, budget {host_budget_bytes}')
         if BACKEND_NAME == 'cupy':
-            if device_total > device_budget_bytes:
+            if not auto_cache and device_total > device_budget_bytes:
                 raise MemoryError(f'Insufficient device budget: need {device_total}, budget {device_budget_bytes}')
             free, _ = xp.cuda.runtime.memGetInfo()
+            if auto_cache:
+                # Raw free bytes do not include future runtime/context growth or
+                # state blocks retained by CuPy's pool after request reset.
+                slack = headroom_bytes + state
+                cache_bytes = max(0, min(device_budget_bytes, free+resident_device_bytes)-device_total-slack)
+                device_total += cache_bytes
+                budgets['cache_bytes'] = cache_bytes
+            if resident_device_bytes > device_total:
+                raise ValueError('resident_device_bytes exceeds planned device total')
+            if device_total > device_budget_bytes:
+                raise MemoryError(f'Insufficient device budget: need {device_total}, budget {device_budget_bytes}')
             # Credit only this model's live allocations, never global pool usage.
             # Unused pool-cached blocks may still make this check conservative.
             remaining = max(device_total-resident_device_bytes, 0)

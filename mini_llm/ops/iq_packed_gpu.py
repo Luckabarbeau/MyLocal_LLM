@@ -375,8 +375,8 @@ def _cached_grouped_module(device_id, storage):
 
 def _grouped_kernel():
     mode = os.environ.get('MINI_LLM_IQ_GPU_GROUPED_KERNEL', 'block')
-    if mode not in ('block', 'warp'):
-        raise ValueError('MINI_LLM_IQ_GPU_GROUPED_KERNEL must be block or warp')
+    if mode not in ('block', 'warp', 'warp_specialized'):
+        raise ValueError('MINI_LLM_IQ_GPU_GROUPED_KERNEL must be block or warp or warp_specialized')
     return mode
 
 
@@ -393,12 +393,17 @@ def grouped(x, experts, routes, slots=None, block_k=512):
     All three projection formats must be supported by this module; legacy/IQ
     hybrid triples are deliberately unsupported here.
     """
-    scheduling = _grouped_kernel()
     from .grouped_quantized_experts import _unsupported_reason
 
     reason = _unsupported_reason(x, experts, routes, block_k, slots)
     if reason is not None:
         raise ValueError(f"Unsupported grouped IQ experts: {reason}")
+    return _grouped_validated(x, experts, routes, slots, block_k)
+
+
+def _grouped_validated(x, experts, routes, slots, block_k):
+    """Internal launch seam; caller must have checked _unsupported_reason."""
+    scheduling = _grouped_kernel()
     projections = (experts[0].gate, experts[0].up, experts[0].down)
     if not all(supports_type(w.quant_type) for w in projections):
         raise ValueError("grouped IQ requires all-IQ projection formats")
@@ -415,9 +420,12 @@ def grouped(x, experts, routes, slots=None, block_k=512):
     terms = cp.empty((e, d), cp.float32)
     out = cp.empty((1, d), cp.float32)
     formats = [(_FORMAT_ID[w.quant_type], *BLOCK_FORMATS[w.quant_type]) for w in projections]
-    if scheduling == 'warp':
+    warp = scheduling in ('warp', 'warp_specialized')
+    if warp:
         from .iq_grouped_warp_gpu import module as warp_module
-        module = warp_module(x.device.id, _codebook_storage())
+        specialization = ((d, f, width, *formats[0], *formats[1], *formats[2])
+                          if scheduling == 'warp_specialized' else None)
+        module = warp_module(x.device.id, _codebook_storage(), specialization)
         gate_up = module.get_function('iq_warp_gate_up')
         down = module.get_function('iq_warp_down_weighted')
     else:
@@ -426,9 +434,9 @@ def grouped(x, experts, routes, slots=None, block_k=512):
         down = module.get_function('iq_grouped_down_weighted')
     reduce = module.get_function("iq_grouped_ordered_reduce")
     ints = lambda values: tuple(np.int32(v) for v in values)
-    extra = ints((e,)) if scheduling == 'warp' else ()
-    block = (128,) if scheduling == 'warp' else (256,)
-    rows_per_block = 4 if scheduling == 'warp' else 1
+    extra = ints((e,)) if warp else ()
+    block = (128,) if warp else (256,)
+    rows_per_block = 4 if warp else 1
     gate_up(((e*f + rows_per_block - 1)//rows_per_block,), block,
             (x, table, hidden) + ints((d, f, width, *formats[0], *formats[1], block_k)) + extra)
     down(((e*d + rows_per_block - 1)//rows_per_block,), block,

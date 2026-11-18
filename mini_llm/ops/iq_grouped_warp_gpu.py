@@ -60,11 +60,26 @@ extern "C" __global__ void iq_warp_down_weighted(
 '''
 
 
-@lru_cache(maxsize=None)
-def module(device_id, storage):
+@lru_cache(maxsize=32)
+def module(device_id, storage, specialization=None):
     # The canonical source includes codebooks, lane equations and MIT notices.
     # Original block/reduce symbols remain available as an independent path.
+    source = _SOURCE
+    if specialization is not None:
+        # Keep launch ABI and arithmetic identical; constant propagation removes
+        # unused format branches and runtime block-layout divisions per lane.
+        import re
+        names = ('d', 'f', 'width', 'gf', 'gqk', 'gqb', 'uf', 'uqk', 'uqb',
+                 'df', 'dqk', 'dqb')
+        if len(specialization) != len(names):
+            raise ValueError('Invalid grouped IQ specialization')
+        constants = ', '.join(f'{name} = {int(value)}'
+                              for name, value in zip(names, specialization))
+        for name in names:
+            source = re.sub(r'\bint ' + name + r'\b', 'int unused_' + name, source)
+        source = source.replace('    const long long pair =',
+                                '    constexpr int ' + constants + ';\n    const long long pair =')
     with iq.cp.cuda.Device(device_id):
         return iq.cp.RawModule(code=iq._cuda_source(storage).replace('INPUT_T', 'float')
-                               + iq._GROUPED_CUDA + _SOURCE,
+                               + iq._GROUPED_CUDA + source,
                                options=('--std=c++11', '--fmad=false'))

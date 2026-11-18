@@ -198,11 +198,14 @@ class AdaptiveExpertCache:
         if required > 0:
             busy = self._busy_keys()
             # Prefer experts with the lowest decayed request density per byte.
-            for victim, (_, victim_size) in sorted(
-                self.resident.items(),
-                key=lambda pair: (self._effective_score(pair[0]) / pair[1][1],
-                                  self._usage[pair[0]].last_step),
+            # Sort keys only: retaining a victim handle here keeps its slot
+            # leased even after deletion, causing a false allocation failure.
+            for victim in sorted(
+                self.resident,
+                key=lambda key: (self._effective_score(key) / self.resident[key][1],
+                                 self._usage[key].last_step),
             ):
+                victim_size = self.resident[victim][1]
                 if victim in busy:
                     self.counters["busy_victim_skips"] += 1
                     continue
@@ -495,14 +498,24 @@ class HeterogeneousExpertExecutor:
                 raise ValueError(f"{key}: expert weight {matrix.shape} != {shape}")
         return provided
 
+    def reserve_device_slots(self):
+        """Commit the approved fixed-slot arena before the first routing call."""
+        if (BACKEND_NAME != 'cupy' or not self.expert_slot_stride_bytes or
+                self.cache.device_budget_bytes < self.expert_slot_stride_bytes):
+            return None
+        if self._slot_arena is None:
+            from .packed_expert_slots import PackedExpertSlotArena
+            self._slot_arena = PackedExpertSlotArena(self.cache.device_budget_bytes,
+                self.expert_slot_stride_bytes, staging_budget_bytes=self.slot_staging_budget_bytes)
+        return self._slot_arena.statistics()
+
     def _device_expert(self, weights):
         gate, up, down = weights
         if isinstance(gate, PackedGGUFWeight):
             if self.expert_slot_stride_bytes:
-                from .packed_expert_slots import PackedExpertSlotArena
+                self.reserve_device_slots()
                 if self._slot_arena is None:
-                    self._slot_arena = PackedExpertSlotArena(self.cache.device_budget_bytes,
-                        self.expert_slot_stride_bytes, staging_budget_bytes=self.slot_staging_budget_bytes)
+                    raise MemoryError('Expert cache budget cannot fit one slot')
                 return self._slot_arena.materialize(weights)
             # Allocate only the retained compressed byte count; this is the
             # same expert forward interface as the existing resident path.

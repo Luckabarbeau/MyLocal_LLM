@@ -246,6 +246,30 @@ def test_sequence_incremental_reset_isolation_capacity(source):
                 other.step(1,s)
 
 
+def test_prefill_projects_only_returned_logits_unless_tracing(source, monkeypatch):
+    with factory(source) as model:
+        output = model.output
+        calls = []
+
+        def counted(hidden):
+            calls.append(1)
+            return output(hidden)
+
+        monkeypatch.setattr(model, 'output', counted)
+        normal = model.create_generation_state(1, 4)
+        traced = model.create_generation_state(1, 4)
+        normal_logits = model.prefill([1, 2, 3], normal)
+        assert len(calls) == 1
+        boundaries = []
+        model.diagnostic_callback = lambda layer, stage, value: boundaries.append(stage)
+        traced_logits = model.prefill([1, 2, 3], traced)
+        assert len(calls) == 4
+        assert boundaries.count('logits') == boundaries.count('hc_output_read') == 3
+        np.testing.assert_array_equal(normal_logits, traced_logits)
+        np.testing.assert_array_equal(model.step(4, normal), model.step(4, traced))
+        assert normal.length == traced.length == 4
+
+
 def test_invalid_prefill_no_mutation_decode_and_poison(source):
     with factory(source) as model:
         s = model.create_generation_state(1,4)
@@ -320,7 +344,8 @@ def test_native_projections_never_full_decode_and_selected_rows_only(source,monk
         state = model.create_generation_state(1,2)
         got = model.prefill([1,2],state)
         assert np.isfinite(got).all()
-        assert len(calls)==14 and all(c[2]=={'backend':'native'} for c in calls)
+        # Six packed block projections per token, plus the final output head once.
+        assert len(calls)==13 and all(c[2]=={'backend':'native'} for c in calls)
         assert not model.expert_executor.cache.resident
     rows = [r for r in source.reads if r[0]=='rows']
     assert [r[2:4] for r in rows if r[1]=='token_embd.weight']==[(1,2),(2,3)]

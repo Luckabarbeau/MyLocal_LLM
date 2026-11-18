@@ -171,7 +171,6 @@ class ExpertsInference:
 
         x_flat = x.reshape(N, d_model)
         weights_flat = weights.reshape(N, k)
-        y_flat = xp.zeros((N, d_model), dtype=x.dtype)
 
         singleton_plan = (
             _SingletonRoutingPlan.from_router_outputs(expert_indices, self.n_experts)
@@ -206,6 +205,7 @@ class ExpertsInference:
                                  tuple(singleton_plan.slots[e] for e in active))
                 if output is not None:
                     return output.reshape(batch_size, seq_len, d_model)
+            y_flat = xp.zeros((N, d_model), dtype=x.dtype)
             if self.expert_executor is not None and getattr(
                 self.expert_executor, "overlaps_cpu_gpu", False
             ):

@@ -47,6 +47,14 @@ def test_sequential_parity_exact_state_and_width_fallback(monkeypatch, heads, di
     a, b = reference.create_state(23), fast.create_state(23)
     pointers = [id(getattr(b, name)) for name in ("keys", "values", "raw_index", "pooled")]
     calls = []
+    query_calls = []
+    query, query_size = fast.projections['index_query']
+
+    def tracked_query(hidden):
+        query_calls.append(1)
+        return query @ hidden
+
+    fast.projections['index_query'] = (tracked_query, query_size)
     kernel = attention.qsa_decode_gpu
     select = attention.select_cells
     selections = []
@@ -68,6 +76,7 @@ def test_sequential_parity_exact_state_and_width_fallback(monkeypatch, heads, di
         before = len(selections)
         outputs.append(fast.step(hidden, b, position=t))
         assert len(selections) - before == (t >= 16)
+        assert len(query_calls) == max(0, t - 15)
         assert a.length == b.length == t+1
         for name in ("keys", "values", "raw_index", "pooled"):
             np.testing.assert_array_equal(asnumpy(getattr(a, name)), asnumpy(getattr(b, name)))
@@ -86,6 +95,7 @@ def test_sequential_parity_exact_state_and_width_fallback(monkeypatch, heads, di
         for name in ("selected_ids", "cell_scores", "block_scores"):
             np.testing.assert_array_equal(asnumpy(dx[name]), asnumpy(dy[name]))
     assert calls == list(range(1, 17))
+    assert len(query_calls) == 12  # Seven sparse steps plus five diagnostic steps.
 
 
 @pytest.mark.parametrize("n,dim", [(1, 8), (16, 256), (129, 10), (2051, 32)])
@@ -145,7 +155,7 @@ def test_fast_validation_and_output_failure_do_not_commit(monkeypatch):
         model.step(xp.full(7, xp.nan, dtype=xp.float32), state, position=1)
     unchanged()
     # Complete a pool block, then fail output validation: neither KV nor the
-    # newly computed pool may commit. Index projection validation stays active.
+    # newly computed pool may commit. Diagnostics validate the index query too.
     model.step(hidden, state, position=1)
     model.step(hidden, state, position=2)
     snapshot = {name: getattr(state, name).copy() for name in snapshot}
@@ -153,7 +163,7 @@ def test_fast_validation_and_output_failure_do_not_commit(monkeypatch):
         original = model.projections[name]
         model.projections[name] = (lambda x: xp.zeros(1, dtype=xp.float32), original[1])
         with pytest.raises(ValueError, match="shape"):
-            model.step(hidden, state, position=3)
+            model.step(hidden, state, position=3, diagnostics=(name == 'index_query'))
         assert state.length == 3
         for field, expected in snapshot.items():
             np.testing.assert_array_equal(asnumpy(getattr(state, field)), asnumpy(expected))

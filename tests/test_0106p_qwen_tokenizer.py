@@ -128,7 +128,7 @@ def test_qwen_chat_is_rejected_even_with_chatml_and_template(qwen):
 
 
 @pytest.mark.parametrize("model,pre", [
-    ("gpt2", "qwen35"), ("gpt2", "qwen3"), ("gpt2", "qwen2.5"),
+    ("gpt2", "qwen35-unsupported"), ("gpt2", "qwen3"), ("gpt2", "qwen2.5"),
     ("gpt2", "llama3"), ("gpt2", None), ("gpt2", ""),
     ("llama", "qwen2"), (None, "qwen2"),
 ])

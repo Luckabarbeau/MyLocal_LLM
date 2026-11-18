@@ -179,8 +179,8 @@ def grouped_quantized_experts_forward(x, experts, routing_weights, *, block_k=51
     if reason is not None:
         raise ValueError(f"Unsupported grouped quantized experts: {reason}")
     if _ql.iq_packed_gpu.supports_type(experts[0].gate.quant_type):
-        return _ql.iq_packed_gpu.grouped(x, experts, routing_weights,
-                                       slots=routing_slots, block_k=block_k)
+        return _ql.iq_packed_gpu._grouped_validated(
+            x, experts, routing_weights, routing_slots, block_k)
     cp: Any = _ql.xp
     e, d, f = len(experts), x.shape[1], experts[0].gate.shape[0]
     host_pointers = np.asarray([

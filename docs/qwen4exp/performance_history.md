@@ -66,3 +66,25 @@ Versioned artifacts: `0229_decode_performance_v1.json` preserves cache admission
 Optimized reset/prefill lifecycle also passes (`0233_fast_lifecycle_v1.json`):16-token logits/all-active-state hashes identical and repeated greedy smoke IDs `[220,100561,198]`. Its extra requests use4,778,188,800 cache bytes and10,616,590,848 pool-reserved bytes; these are distinct workloads, not comparable throughput measurements or global VRAM high-water marks.
 
 Latest instrumented profile (`0231_fast_profile_v2.json`), mean host spans/token: routed experts0.05940s; complete GDN0.01208s; QSA0.02152s; HC attention+FFN reads0.00770s; router0.00172s. Profile spans include waiting and nested work and perturb timing; do not sum them or replace the uninstrumented throughput above. Remaining work is transfer/dispatch attribution, fixed-slot async movement, stable launch/graph reduction and longer realistic benchmarks. See `0213_packed_gpu_and_decode_optimizations.md` for exact controls and Strata comparison caveats.
+
+## Follow-ups0234–0238 — codebooks, grouping, warp rows and fixed slots
+
+The same bounded fixed-ID method now extends the preserved ablation through `0229_decode_performance_v10.json`, reusing successful previous variants rather than executing them again.
+
+| New variant | Tokens/s | Decision |
+|---|---:|---|
+| Read-only global codebooks |9.174106 | Opt-in; arithmetic/output bits unchanged |
+| Static HC graph replay |8.965350 | No demonstrated gain; keep disabled |
+| Group after complete cache admission |10.197347 | Removes cold-route individual expert launches |
+| Warp-per-row grouped IQ |**12.033481** | FP32 row reduction changes, numerically validated |
+| Fixed-slot cache with same warp kernels |**11.976041** | Bounded ownership foundation;0.5% difference not significant from one run |
+
+Best observed rate is44.10× the original0.272867tokens/s. This is still **not70–80tokens/s** and not a natural-language/long-context benchmark. Strata's exact launch/MTP/tail-skip/cache/context settings are needed for a like-for-like target.
+
+The real-weight warp benchmark (`0237_iq_warp_scheduling_v1.json`) measures median1.472287× CUDA-event speedup over the retained block kernels across7 actual triples, with20 warm balanced samples/mode. Worst relativeL2=3.176314e-7; maxabs3.492460e-10. Additional RSS882,761,728 bytes; no checkpoint modification or full expert decode.
+
+Full-model warp/fixed-slot results versus the original production baseline: max relativeL2=2.014602e-6 and maxabs=2.717972e-5; argmax/top10 match at prefixes1/2/4/8/16. These two cache variants' logits **and active-state hashes match bit-for-bit**. Slot GPU arena6,440,345,600 bytes, pinned staging4,194,304 bytes; forced-token process RSS10,302,685,184 bytes/default pool12,267,438,592 reserved bytes. These are not global GPU high-water measurements.
+
+The extended lifecycle `0233_fast_lifecycle_v2.json` passes16-token prefill/incremental/logit/all-state equality and repeated greedy IDs `[220,100561,198]`. Elapsed11.1123s includes multiple requests and must not be divided into steady-state throughput. Sampled RSS11,180,748,800 bytes; default pool12,270,584,320 reserved bytes. It retains2,332/2,419 slots without quarantines.
+
+The graph experiment owns17,153,024 private-pool bytes under a203,423,744-byte cap, separately from the default pool. No whole-decode graph, dynamic-position capture or asynchronous mover is claimed. Remaining priority is bounded admission/transfer overlap and longer realistic cache-pressure/steady-state tests. Individual patch contracts and failures are preserved in `0234_codebook_storage.md` through `0238_packed_expert_slots.md`.

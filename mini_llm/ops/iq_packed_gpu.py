@@ -373,6 +373,13 @@ def _cached_grouped_module(device_id, storage):
                             options=("--std=c++11", "--fmad=false"))
 
 
+def _grouped_kernel():
+    mode = os.environ.get('MINI_LLM_IQ_GPU_GROUPED_KERNEL', 'block')
+    if mode not in ('block', 'warp'):
+        raise ValueError('MINI_LLM_IQ_GPU_GROUPED_KERNEL must be block or warp')
+    return mode
+
+
 def grouped(x, experts, routes, slots=None, block_k=512):
     """Three-launch FP32 [1,D] IQ expert combine on CuPy's current stream.
 
@@ -386,6 +393,7 @@ def grouped(x, experts, routes, slots=None, block_k=512):
     All three projection formats must be supported by this module; legacy/IQ
     hybrid triples are deliberately unsupported here.
     """
+    scheduling = _grouped_kernel()
     from .grouped_quantized_experts import _unsupported_reason
 
     reason = _unsupported_reason(x, experts, routes, block_k, slots)
@@ -407,14 +415,24 @@ def grouped(x, experts, routes, slots=None, block_k=512):
     terms = cp.empty((e, d), cp.float32)
     out = cp.empty((1, d), cp.float32)
     formats = [(_FORMAT_ID[w.quant_type], *BLOCK_FORMATS[w.quant_type]) for w in projections]
-    module = _grouped_module(x.device.id)
-    gate_up = module.get_function("iq_grouped_gate_up")
-    down = module.get_function("iq_grouped_down_weighted")
+    if scheduling == 'warp':
+        from .iq_grouped_warp_gpu import module as warp_module
+        module = warp_module(x.device.id, _codebook_storage())
+        gate_up = module.get_function('iq_warp_gate_up')
+        down = module.get_function('iq_warp_down_weighted')
+    else:
+        module = _grouped_module(x.device.id)
+        gate_up = module.get_function('iq_grouped_gate_up')
+        down = module.get_function('iq_grouped_down_weighted')
     reduce = module.get_function("iq_grouped_ordered_reduce")
     ints = lambda values: tuple(np.int32(v) for v in values)
-    gate_up((e * f,), (256,), (x, table, hidden) + ints(
-        (d, f, width, *formats[0], *formats[1], block_k)))
-    down((e * d,), (256,), (hidden, table, routes, terms) + ints((d, f, width))
-         + (np.int64(routes.strides[0] // routes.itemsize),) + ints((*formats[2], block_k)))
+    extra = ints((e,)) if scheduling == 'warp' else ()
+    block = (128,) if scheduling == 'warp' else (256,)
+    rows_per_block = 4 if scheduling == 'warp' else 1
+    gate_up(((e*f + rows_per_block - 1)//rows_per_block,), block,
+            (x, table, hidden) + ints((d, f, width, *formats[0], *formats[1], block_k)) + extra)
+    down(((e*d + rows_per_block - 1)//rows_per_block,), block,
+         (hidden, table, routes, terms) + ints((d, f, width))
+         + (np.int64(routes.strides[0] // routes.itemsize),) + ints((*formats[2], block_k)) + extra)
     reduce(((d + 255) // 256,), (256,), (terms, out) + ints((d, e)))
     return out

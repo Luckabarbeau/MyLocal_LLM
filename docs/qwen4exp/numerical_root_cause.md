@@ -246,3 +246,17 @@ The final optimized full-model path versus the previous FP32 production baseline
 Latest regressions: **1650 passed,654 skipped** in the NumPy inference/diagnostic suite; selected actual CuPy suite **894 passed,20 skipped,2 deselected**. The two exclusions are previously documented CPU-only NumPy-input assumptions, not a claim that every GPU test passes; see implementation_status.md. Latest memory/ownership fixes address demonstrated resident-budget double-counting and completed-fence accumulation, not mathematical discrepancies.
 
 Measured short forced-token rate rises0.272867→8.566126tokens/s (~31.39×).70–80tokens/s remains unmet. Further bounded optimization should target expert transfer/admission and dispatch/launch overhead, with no route-tail skipping, Q8 activation approximation or speculative arithmetic substitution. Long-context and full independent model-equivalence limitations above remain in force.
+
+## J — Follow-ups0234–0238 retain the numerical gate
+
+Read-only global codebooks change no output bits. Grouping newly admitted complete bundles likewise preserves sequential GPU output exactly. Warp-per-row scheduling changes only FP32 within-row summation: real top10 across all7 format triples has worst relativeL2=3.176314e-7 and maxabs3.492460e-10 versus the retained block kernels (`0237_iq_warp_scheduling_v1.json`). No activation quantization or expert dropping is added.
+
+Static HC graph capture initially encountered the installed CuPy cuBLAS capture restriction. A localized correction reuses the repository's graph-capturable FP32 GEMV;53 focused GPU tests pass. It does not demonstrate an end-to-end speedup, remains disabled, and captures no positions, QSA selection or expert placement.
+
+The full-model warp and synchronous fixed-slot paths match each other **bit-for-bit** for logits and all active-state hashes at prefixes1/2/4/8/16. Versus the original FP32 production baseline, their largest relativeL2 is2.014602e-6 and maxabs2.717972e-5; all checked argmax/top10 sets match. The optimized fixed-slot lifecycle (`0233_fast_lifecycle_v2.json`) additionally passes16-token incremental/prefill/logit/all-state equality and repeats greedy IDs `[220,100561,198]` on fresh requests.
+
+Fixed slots change storage ownership only. Tests verify exact checkpoint bytes, retained projection-view leases, stable addresses, synchronous completion before publication, CPU fallback on exhausted leases and quarantine on unknown completion. Initial pinned-pointer size API misuse was locally corrected and the focused GPU rerun passes32 tests; no model mathematical correction was indicated.
+
+Latest CPU inference/diagnostic/selected-training regression: **1691 passed,780 skipped in17.89s**. Selected actual CuPy regression: **1031 passed,22 skipped,2 previously documented CPU-only cases deselected in8.21s**. This is not a claim that every repository GPU test passes.
+
+Best short forced-token throughput is12.033481tokens/s (11.976041 with fixed slots), ~44× the original baseline.70–80tokens/s remains unmet. Next work is bounded asynchronous staging/admission and realistic longer cache-pressure benchmarking; it must preserve these oracles. None of these optimization comparisons establishes independent full-model GGML equivalence or removes the previously documented5–6% reference-logit attribution uncertainty.

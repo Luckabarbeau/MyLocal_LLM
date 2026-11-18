@@ -366,6 +366,9 @@ class HeterogeneousExpertExecutor:
         routing_profiler=None,
         execution_mode: str = "mixed",
         batch_cpu_decode: bool = True,
+        group_after_admission: bool = False,
+        expert_slot_stride_bytes: int = 0,
+        slot_staging_budget_bytes: int = 64 * 1024**2,
     ):
         if execution_mode not in {"mixed", "cpu", "gpu"}:
             raise ValueError("execution_mode must be 'mixed', 'cpu' or 'gpu'")
@@ -373,6 +376,15 @@ class HeterogeneousExpertExecutor:
             raise RuntimeError("GPU execution requires MINI_LLM_BACKEND=cupy")
         self.execution_mode = execution_mode
         self.batch_cpu_decode = bool(batch_cpu_decode)
+        if not isinstance(group_after_admission, bool):
+            raise TypeError('group_after_admission must be bool')
+        self.group_after_admission = group_after_admission
+        if (isinstance(expert_slot_stride_bytes, bool) or
+                not isinstance(expert_slot_stride_bytes, int) or expert_slot_stride_bytes < 0):
+            raise ValueError('expert_slot_stride_bytes must be a nonnegative integer')
+        self.expert_slot_stride_bytes = expert_slot_stride_bytes
+        self.slot_staging_budget_bytes = slot_staging_budget_bytes
+        self._slot_arena = None
         if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
             raise ValueError("Routing trace model identity does not match executor")
         self.routing_profiler = routing_profiler
@@ -445,6 +457,15 @@ class HeterogeneousExpertExecutor:
         if self._pool is not None:
             self._pool.shutdown(wait=True)
             self._pool = None
+        if self._slot_arena is not None:
+            # Arena backing cannot retire before consumers on other streams.
+            for event, _ in self.cache._inflight_groups:
+                event.synchronize()
+
+    @property
+    def resident_device_bytes(self):
+        """Physical expert storage; a slot arena owns even its unused slots."""
+        return self.cache.used_bytes if self._slot_arena is None else self._slot_arena.nbytes
 
     def statistics(self):
         return {
@@ -453,6 +474,7 @@ class HeterogeneousExpertExecutor:
             "execution": dict(self.counters),
             "cpu_workers": self.cpu_workers,
             "cpu_packed_backend": self.cpu_packed_backend,
+            "slots": None if self._slot_arena is None else self._slot_arena.statistics(),
         }
 
     def _host_weights(self, key):
@@ -476,6 +498,12 @@ class HeterogeneousExpertExecutor:
     def _device_expert(self, weights):
         gate, up, down = weights
         if isinstance(gate, PackedGGUFWeight):
+            if self.expert_slot_stride_bytes:
+                from .packed_expert_slots import PackedExpertSlotArena
+                if self._slot_arena is None:
+                    self._slot_arena = PackedExpertSlotArena(self.cache.device_budget_bytes,
+                        self.expert_slot_stride_bytes, staging_budget_bytes=self.slot_staging_budget_bytes)
+                return self._slot_arena.materialize(weights)
             # Allocate only the retained compressed byte count; this is the
             # same expert forward interface as the existing resident path.
             return PackedExpertFFNInference(
@@ -634,7 +662,7 @@ class HeterogeneousExpertExecutor:
                         raise NotImplementedError(f"No packed GPU kernel for {unsupported}")
                     self.counters["unsupported_gpu_fallbacks"] += 1
                     return key, None, weights
-                size = sum(w.nbytes for w in weights)
+                size = self.expert_slot_stride_bytes or sum(w.nbytes for w in weights)
             else:
                 size = sum(w.size for w in weights) * np.dtype(self.compute_dtype).itemsize
             expert = self.cache.request(key, size, lambda: self._materialize(weights, trace))
@@ -694,6 +722,21 @@ class HeterogeneousExpertExecutor:
             return None
         prepared = [self._prepare(layer_id, e, x) for e in expert_ids]
         cpu = [i for i, (_, expert, _, _) in enumerate(prepared) if expert is None]
+        if self.group_after_admission and not cpu and BACKEND_NAME == 'cupy':
+            from .grouped_quantized_experts import (
+                supports_grouped_quantized_experts, grouped_quantized_experts_forward)
+            experts = [item[1] for item in prepared]
+            if (all(isinstance(e, PackedExpertFFNInference) and e.fuse_gate_up for e in experts)
+                    and supports_grouped_quantized_experts(
+                        x, experts, routing_weights, routing_slots=slots)):
+                # _prepare already counted requests and published complete bundles.
+                # The surrounding dispatch scope protects new and old residents alike.
+                output = grouped_quantized_experts_forward(
+                    x, experts, routing_weights, routing_slots=slots)
+                self.counters['gpu_experts'] += len(experts)
+                self.counters['grouped_gpu_dispatches'] += 1
+                self.counters['admission_grouped_dispatches'] += 1
+                return output
         outputs = [None] * len(prepared)
         jobs = []
         if cpu:

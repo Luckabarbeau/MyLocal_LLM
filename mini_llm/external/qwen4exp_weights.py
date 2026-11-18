@@ -207,7 +207,8 @@ class Qwen4ExpWeights:
     def memory_plan(self, max_length, *, host_budget_bytes=8*GiB,
                     static_device_budget_bytes=4*GiB, device_budget_bytes=8*GiB,
                     cache_bytes=0, headroom_bytes=512*1024**2, staging_bytes=64*1024**2,
-                    activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0):
+                    activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0,
+                    graph_workspace_bytes=0):
         h = self.headers
         resident_device_bytes = integer(resident_device_bytes, 'resident_device_bytes')
         length = integer(max_length, 'max_length', 1)
@@ -219,7 +220,8 @@ class Qwen4ExpWeights:
             raise ValueError(f'cpu_workers exceeds fixed positive cap {cap}')
         budgets = dict(host_budget_bytes=host_budget_bytes, static_device_budget_bytes=static_device_budget_bytes,
             device_budget_bytes=device_budget_bytes, cache_bytes=cache_bytes, headroom_bytes=headroom_bytes,
-            staging_bytes=staging_bytes, activation_bytes=activation_bytes)
+            staging_bytes=staging_bytes, activation_bytes=activation_bytes,
+            graph_workspace_bytes=graph_workspace_bytes)
         for k,v in budgets.items():
             integer(v,k)
         r, a = h.mixer, h.attention
@@ -255,8 +257,10 @@ class Qwen4ExpWeights:
             host_total += state+activation
             if cache_bytes:
                 raise ValueError('NumPy runtime has no device expert cache')
+            if graph_workspace_bytes:
+                raise ValueError('NumPy runtime has no device graph workspace')
         else:
-            device_total += state+activation+staging+h.constructor_bytes
+            device_total += state+activation+staging+h.constructor_bytes+graph_workspace_bytes
         if resident_device_bytes > device_total:
             raise ValueError('resident_device_bytes exceeds planned device total')
         if host_total > host_budget_bytes:

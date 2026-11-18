@@ -53,6 +53,14 @@ FP32 packed GPU IQ kernels, grouped experts and switchable HC/QSA/router/GDN fus
 
 Optimized16-token prefill/incremental logits and all active-state hashes are bit-exact, and two fresh requests reproduce greedy IDs `[220,100561,198]` (`0233_fast_lifecycle_v1.json`). CPU regressions1650 passed/654 skipped; selected CuPy regressions894 passed/20 skipped/2 documented CPU-only exclusions. No long-context or whole-repository GPU claim. See `0213_packed_gpu_and_decode_optimizations.md` for controls and test scope.
 
+## Follow-up0234–0238 validation
+
+Global codebook storage and grouping after complete admission preserve output bits. Warp-per-row scheduling changes FP32 summation order; real top10 worst relativeL2=3.176314e-7 versus block kernels across7 actual format triples. Full-model warp/fixed-slot optimization errors versus the original FP32 production baseline are ≤2.014602e-6 relativeL2 and ≤2.717972e-5 maxabs, with matching checked argmax/top10 sets.
+
+Dynamic-warp and fixed-slot logits/all active-state hashes are bit-exact at1/2/4/8/16. The new fixed-slot lifecycle (`0233_fast_lifecycle_v2.json`) passes16-token incremental/prefill equality and repeated fresh greedy IDs `[220,100561,198]`. HC graph capture is separately tested, disabled by default and not a measured speedup. No extra independent full-model GGML comparison is claimed.
+
+Latest CPU regression includes existing inference and selected training components:1691 passed/780 skipped. Selected actual CuPy suite:1031 passed/22 skipped/2 documented CPU-only exclusions. All previous reference discrepancy/long-context limitations remain.
+
 ## Required future diagnostic contract
 
 For every graph comparison retain input IDs, source/weight revisions, activation dtype, execution policy, KV/state precision, context and reference flags. Compare intermediate HC reads/writes, PLE indices/history, GDN output/state, QSA selection/masks/KV/indexer state, routed/shared outputs, then logits. Report the **first** divergent operation and tensor, absolute/relative errors, requested tolerances and accumulation/storage boundaries. Correct-looking text is not evidence. Do not broaden tolerances to conceal state/order errors. Disable Strata route-tail skipping for exact full-expert comparisons.

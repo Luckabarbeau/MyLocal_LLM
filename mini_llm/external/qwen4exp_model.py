@@ -90,11 +90,15 @@ class Qwen4ExpGGUFModel:
     @classmethod
     def _build(cls, weights, *, max_length, diagnostic_callback, expert_executor,
                expert_promote_after=3, qsa_fast_decode=False,
-               hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False, **budgets):
+               hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False,
+               hc_graph_decode=False, group_after_admission=False,
+               expert_cache_slots=False, **budgets):
         expert_promote_after = integer(expert_promote_after, 'expert_promote_after', 1)
         for name, value in (('qsa_fast_decode', qsa_fast_decode),
                             ('hc_fast_decode', hc_fast_decode), ('router_fast_decode', router_fast_decode),
-                            ('gdn_fast_decode', gdn_fast_decode)):
+                            ('gdn_fast_decode', gdn_fast_decode), ('hc_graph_decode', hc_graph_decode),
+                            ('group_after_admission', group_after_admission),
+                            ('expert_cache_slots', expert_cache_slots)):
             if not isinstance(value, bool):
                 raise TypeError(f'{name} must be bool')
         if diagnostic_callback is not None and not callable(diagnostic_callback):
@@ -109,6 +113,28 @@ class Qwen4ExpGGUFModel:
                 raise ValueError('Full expert host-dequant cache is forbidden')
             budgets['cache_bytes'] = expert_executor.cache.device_budget_bytes
             budgets['cpu_workers'] = expert_executor.cpu_workers
+        slot_stride = 0
+        if expert_cache_slots:
+            if BACKEND_NAME != 'cupy':
+                raise RuntimeError('Expert cache slots require CuPy')
+            if expert_executor is not None:
+                raise ValueError('Configure slots on the borrowed expert executor explicitly')
+            if not budgets.get('cache_bytes', 0):
+                raise ValueError('Expert cache slots require a positive cache budget')
+            largest = max(sum(index.descriptors[f'blk.{layer}.ffn_{p}_exps.weight'].nbytes
+                              // index.n_experts for p in ('gate', 'up', 'down'))
+                          for layer in range(len(h.recurrent)))
+            slot_stride = (largest + 255) // 256 * 256
+            # Account for pinned allocator rounding plus other transfer scratch.
+            budgets['staging_bytes'] = max(integer(budgets.get('staging_bytes', 64*1024**2),
+                'staging_bytes'), 2 * (1 << (slot_stride-1).bit_length()))
+        if hc_graph_decode:
+            if BACKEND_NAME != 'cupy':
+                raise RuntimeError('HC graph decode requires CuPy')
+            graph_reservation = (2 * len(h.recurrent) + 1) * 2 * 1024**2
+            budgets['graph_workspace_bytes'] = max(
+                integer(budgets.get('graph_workspace_bytes', 0), 'graph_workspace_bytes'),
+                graph_reservation)
         plan = weights.memory_plan(max_length, **budgets)
         weights.approve(plan)
         executor = expert_executor
@@ -118,7 +144,8 @@ class Qwen4ExpGGUFModel:
                     d_model=index.d_model, d_ff=index.d_ff, compute_dtype='float32',
                     cpu_packed_backend='native', cpu_workers=plan['cpu_workers'],
                     device_budget_bytes=plan['cache_bytes'], host_dequant_budget_bytes=0,
-                    promote_after=expert_promote_after)
+                    promote_after=expert_promote_after, group_after_admission=group_after_admission,
+                    expert_slot_stride_bytes=slot_stride, slot_staging_budget_bytes=plan['staging_bytes'])
             dense, project = weights.dense, weights.projection
             def hc(stem, inject=True):
                 # HC copies these small matrices. No host dictionary retains
@@ -126,7 +153,7 @@ class Qwen4ExpGGUFModel:
                 return Qwen4ExpHyperConnection(dense(stem+'norm.weight'),
                     dense(stem+'down.weight'),dense(stem+'up.weight'),
                     dense(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps,
-                    fast_decode=hc_fast_decode)
+                    fast_decode=hc_fast_decode, graph_decode=hc_graph_decode)
             blocks = []
             for i, rec in enumerate(h.recurrent):
                 p = f'blk.{i}.'
@@ -174,6 +201,8 @@ class Qwen4ExpGGUFModel:
             result.weights, result.index = weights, index
             result.expert_executor, result._owns_executor = executor, expert_executor is None
             result.plan = plan
+            result._hc_graph_owners = (tuple(hc for b in blocks for hc in
+                (b.attention_hc, b.ffn_hc)) + (result.final_hc,)) if hc_graph_decode else ()
             m = weights.store.metadata
             result.stop_token_ids = frozenset(integer(m[k],k) for k in (
                 'tokenizer.ggml.eos_token_id','tokenizer.ggml.eot_token_id',
@@ -224,11 +253,15 @@ class Qwen4ExpGGUFModel:
         if BACKEND_NAME == 'cupy':
             # Static placement is committed after _build; cache capacity is not
             # resident until admitted, and only live sessions own state storage.
-            resident = (p['device_static_bytes'] + self.expert_executor.cache.used_bytes +
-                        sum(s.reserved_bytes for s in self._states))
+            resident = (p['device_static_bytes'] + getattr(self.expert_executor,
+                            'resident_device_bytes', self.expert_executor.cache.used_bytes) +
+                        sum(s.reserved_bytes for s in self._states) +
+                        sum(hc.graph_statistics()['pool_reserved_bytes']
+                            for hc in getattr(self, '_hc_graph_owners', ())))
         return self.weights.memory_plan(length, resident_device_bytes=resident, **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
-            'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers')})
+            'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers',
+            'graph_workspace_bytes')})
 
     def create_generation_state(self, batch_size=1, max_length=None):
         self._open()
@@ -378,7 +411,11 @@ class Qwen4ExpGGUFModel:
         try:
             if self._owns_executor:
                 self.expert_executor.close()
+            if getattr(self, '_hc_graph_owners', ()):
+                # Graphs can have run on their bound non-default streams.
+                xp.cuda.runtime.deviceSynchronize()
             self.blocks = ()
+            self._hc_graph_owners = ()
             self.embedding = self.output = self.final_hc = None
             if self.weights is not None:
                 self.weights.close()

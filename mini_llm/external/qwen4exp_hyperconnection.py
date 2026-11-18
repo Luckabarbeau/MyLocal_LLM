@@ -37,7 +37,8 @@ class Qwen4ExpHyperConnection:
     other inputs retain the reference graph.
     """
 
-    def __init__(self, gamma, down, up, inject=None, *, epsilon, fast_decode=False):
+    def __init__(self, gamma, down, up, inject=None, *, epsilon, fast_decode=False,
+                 graph_decode=False, graph_pool_bytes=2 * 1024**2):
         gamma = _fp32("gamma", gamma)
         down = _fp32("down", down)
         up = _fp32("up", up)
@@ -67,6 +68,13 @@ class Qwen4ExpHyperConnection:
         self.up = up.copy()
         self.inject = None if inject is None else inject.copy()
         self.fast_decode = fast_decode
+        if not isinstance(graph_decode, bool):
+            raise TypeError('graph_decode must be bool')
+        if isinstance(graph_pool_bytes, bool) or not isinstance(graph_pool_bytes, int) or graph_pool_bytes < 1:
+            raise ValueError('graph_pool_bytes must be a positive integer')
+        self.graph_decode = graph_decode
+        self.graph_pool_bytes = graph_pool_bytes
+        self._read_graph = None
 
     def _streams(self, streams):
         _fp32("streams", streams)
@@ -83,29 +91,68 @@ class Qwen4ExpHyperConnection:
     def _fast_eligible(self, streams):
         return self.fast_decode and eligible(streams, self.gamma, self.down, self.up)
 
+    def _project(self, value, weight):
+        if self.graph_decode:
+            # CuPy's cuBLAS wrapper rejects stream capture; reuse exact FP32 GEMV.
+            from ..ops.inference_matmul import matmul_inference
+            result = matmul_inference(value.reshape(-1, value.shape[-1]), weight.T)
+            return result.reshape(value.shape[:-1] + (weight.shape[0],))
+        return value @ weight.T
+
     def _mix(self, streams):
         self._streams(streams)
         if self._fast_eligible(streams):
-            return mix_gpu(streams, self.gamma, self.down, self.up, self.epsilon)
+            return mix_gpu(streams, self.gamma, self.down, self.up, self.epsilon,
+                           project=self._project if self.graph_decode else None)
         rms = xp.sqrt(xp.mean(streams * streams, axis=-1, keepdims=True,
                               dtype=xp.float32) + self.epsilon)
         normalized = (streams / rms) * self.gamma
         flat = normalized.reshape(streams.shape[:-2] + (4 * self.width,))
-        low = (flat @ self.down.T) * xp.float32(0.25)
+        low = self._project(flat, self.down) * xp.float32(0.25)
         low = low * _sigmoid(low)
-        gates = _sigmoid(low @ self.up.T).reshape(streams.shape)
+        gates = _sigmoid(self._project(low, self.up)).reshape(streams.shape)
         mixed = xp.mean(normalized * gates, axis=-2, dtype=xp.float32)
         return mixed, flat
 
     def read(self, streams):
         """Read a feature-gated mix and the scalar write gain for each stream."""
+        self._streams(streams)
+        if self.graph_decode and eligible(streams, self.gamma, self.down, self.up):
+            from ..ops.inference_graph import CapturedArrayInference
+            graph = self._read_graph
+            if graph is None:
+                def enqueue(value, unused):
+                    mixed, gains = self._read_uncaptured(value)
+                    if gains is None:
+                        return mixed.reshape(-1)
+                    return xp.concatenate((mixed.reshape(-1), gains.reshape(-1)))
+                graph = CapturedArrayInference(enqueue, streams, (),
+                                               pool_limit_bytes=self.graph_pool_bytes)
+                self._read_graph = graph
+            if graph.matches(streams, ()) and graph.accepts_current_stream():
+                packed = graph.forward(streams, ())
+                leading = streams.shape[:-2]
+                mixed = packed[:self.width].reshape(leading + (self.width,))
+                gains = None if self.inject is None else packed[self.width:].reshape(leading + (4,))
+                return mixed, gains
+        return self._read_uncaptured(streams)
+
+    def graph_statistics(self):
+        """Owned graph-pool bytes only, not a global allocator estimate."""
+        if self._read_graph is None:
+            return dict(calls=0, pool_reserved_bytes=0, pool_used_bytes=0,
+                        pool_limit_bytes=self.graph_pool_bytes)
+        return self._read_graph.statistics()
+
+    def _read_uncaptured(self, streams):
         mixed, flat = self._mix(streams)
         gains = None
         if self.inject is not None:
             if self._fast_eligible(streams) and eligible(streams, self.inject):
-                gains = gains_gpu(flat, self.inject)
+                gains = gains_gpu(flat, self.inject,
+                                  project=self._project if self.graph_decode else None)
             else:
-                gains = xp.float32(2) * _sigmoid((flat @ self.inject.T) * xp.float32(0.25))
+                gains = xp.float32(2) * _sigmoid(self._project(flat, self.inject) * xp.float32(0.25))
         return mixed, gains
 
     def write(self, streams, output, gains):
@@ -124,4 +171,6 @@ class Qwen4ExpHyperConnection:
 
     def collapse(self, streams):
         """Final read-only mix; no injection matrix or conventional output norm needed."""
+        if self.graph_decode and self.inject is None:
+            return self.read(streams)[0]
         return self._mix(streams)[0]

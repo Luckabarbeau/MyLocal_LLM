@@ -81,22 +81,22 @@ def _kernels(device):
     return norm, silu, mix, gain, write
 
 
-def mix_gpu(streams, gamma, down, up, epsilon):
+def mix_gpu(streams, gamma, down, up, epsilon, *, project=None):
     """Return the read mix and normalized flat features for one token."""
     d = streams.shape[-1]
     leading = streams.shape[:-2]
     norm, silu, mix, _, _ = _kernels(streams.device.id)
     flat = xp.empty(leading + (4 * d,), dtype=xp.float32)
     norm((4,), (256,), (streams, gamma, flat, np.int32(d), epsilon))
-    low = silu(flat @ down.T)
-    gates = low @ up.T
+    low = silu(flat @ down.T if project is None else project(flat, down))
+    gates = low @ up.T if project is None else project(low, up)
     mixed = xp.empty(leading + (d,), dtype=xp.float32)
     mix(flat, gates, np.int32(d), mixed)
     return mixed, flat
 
 
-def gains_gpu(flat, inject):
-    return _kernels(flat.device.id)[3](flat @ inject.T)
+def gains_gpu(flat, inject, *, project=None):
+    return _kernels(flat.device.id)[3](flat @ inject.T if project is None else project(flat, inject))
 
 
 def write_gpu(streams, output, gains):

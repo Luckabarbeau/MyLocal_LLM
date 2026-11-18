@@ -1,6 +1,8 @@
 """Bounded optimized-path prefill/incremental, reset and greedy smoke check."""
+import argparse
 import gc
 import json
+import os
 from pathlib import Path
 import sys
 import numpy as np
@@ -12,14 +14,17 @@ from probe_0218_hc_identity import MODEL
 from probe_0227_short_sequences_and_profile import digest_state, bounded_gpu
 
 
-def child(output):
+def child(output, *, hc_graph=False):
+    os.environ['MINI_LLM_IQ_GPU_CODEBOOK_STORAGE'] = 'global'
+    os.environ['MINI_LLM_IQ_GPU_GROUPED_KERNEL'] = 'warp'
     from mini_llm.backend import asnumpy, xp
     from mini_llm.external.qwen4exp_model import Qwen4ExpGGUFModel
     with Qwen4ExpGGUFModel.open(MODEL, max_length=16, cpu_workers=4,
             static_device_budget_bytes=6*1024**3, device_budget_bytes=14*1024**3,
             cache_bytes=6*1024**3, expert_promote_after=1,
             qsa_fast_decode=True, hc_fast_decode=True, router_fast_decode=True,
-            gdn_fast_decode=True) as model:
+            gdn_fast_decode=True, group_after_admission=True, expert_cache_slots=True,
+            hc_graph_decode=hc_graph) as model:
         ids = list(range(1, 17))
         state = model.create_generation_state(1, 16)
         incremental = None
@@ -45,6 +50,8 @@ def child(output):
             raise AssertionError('fresh request contamination')
         xp.cuda.get_current_stream().synchronize()
         report = dict(status='passed', input_ids=ids, backend='cupy', activation_dtype='float32',
+                      codebook_storage='global', grouped_kernel='warp', expert_cache_slots=True,
+                      hc_graph_decode=hc_graph,
                       full_top10=True, incremental_prefill_logits_bit_exact=True,
                       all_active_state_hash_equal=True, active_state_sha256=state_hash,
                       greedy_ids=generated, repeated_request_ids=repeated,
@@ -57,16 +64,24 @@ def child(output):
 
 
 def main():
-    if len(sys.argv) > 1:
-        child(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--child', type=Path)
+    parser.add_argument('--version', default='v2')
+    parser.add_argument('--hc-graph', action='store_true')
+    args = parser.parse_args()
+    if args.child:
+        child(args.child, hc_graph=args.hc_graph)
         return
     docs = ROOT/'docs/qwen4exp'
-    output = docs/'diagnostics_0233_lifecycle_v1'
-    result = docs/'0233_fast_lifecycle_v1.json'
+    output = docs/f'diagnostics_0233_lifecycle_{args.version}'
+    result = docs/f'0233_fast_lifecycle_{args.version}.json'
     if output.exists() or result.exists():
         raise FileExistsError('Preserve previous artifacts')
     output.mkdir()
-    run = bounded_gpu([sys.executable, str(Path(__file__).resolve()), str(output)], output, 'lifecycle')
+    command = [sys.executable, str(Path(__file__).resolve()), '--child', str(output)]
+    if args.hc_graph:
+        command.append('--hc-graph')
+    run = bounded_gpu(command, output, 'lifecycle')
     report = json.loads((output/'result.json').read_text())
     report['run'] = run
     with result.open('x') as f:

@@ -22,10 +22,15 @@ from probe_0227_short_sequences_and_profile import digest_state
 
 GiB = 1024**3
 MODES = ('baseline', 'backbone', 'batch', 'cache', 'eager', 'fused_qsa',
-         'grouped_iq', 'fused_hc', 'fused_router', 'fused_gdn')
+         'grouped_iq', 'fused_hc', 'fused_router', 'fused_gdn', 'global_books', 'hc_graph',
+         'admit_grouped', 'warp_rows', 'slot_cache')
 
 
 def child(mode, output):
+    storage = 'global' if mode in ('global_books', 'hc_graph', 'admit_grouped', 'warp_rows', 'slot_cache') else 'constant'
+    os.environ['MINI_LLM_IQ_GPU_CODEBOOK_STORAGE'] = storage
+    scheduling = 'warp' if mode in ('warp_rows', 'slot_cache') else 'block'
+    os.environ['MINI_LLM_IQ_GPU_GROUPED_KERNEL'] = scheduling
     from mini_llm.backend import asnumpy, xp, BACKEND_NAME
     from mini_llm.external.qwen4exp_model import Qwen4ExpGGUFModel
     from mini_llm.external import qwen4exp_weights
@@ -41,9 +46,15 @@ def child(mode, output):
                        cache_bytes=6*GiB if mode not in ('backbone', 'batch') else 0)
         if mode not in ('backbone', 'batch', 'cache'):
             budgets.update(expert_promote_after=1, qsa_fast_decode=mode != 'eager',
-                           hc_fast_decode=mode in ('fused_hc', 'fused_router', 'fused_gdn'),
-                           router_fast_decode=mode in ('fused_router', 'fused_gdn'),
-                           gdn_fast_decode=mode == 'fused_gdn')
+                           hc_fast_decode=mode in ('fused_hc', 'fused_router', 'fused_gdn', 'global_books'),
+                           router_fast_decode=mode in ('fused_router', 'fused_gdn', 'global_books'),
+                           gdn_fast_decode=mode in ('fused_gdn', 'global_books'))
+    if mode in ('hc_graph', 'admit_grouped', 'warp_rows', 'slot_cache'):
+        budgets.update(expert_promote_after=1, qsa_fast_decode=True, hc_fast_decode=True,
+                       router_fast_decode=True, gdn_fast_decode=True,
+                       hc_graph_decode=mode == 'hc_graph',
+                       group_after_admission=mode in ('admit_grouped', 'warp_rows', 'slot_cache'),
+                       expert_cache_slots=mode == 'slot_cache')
     start = time.perf_counter()
     with Qwen4ExpGGUFModel.open(MODEL, max_length=16, **budgets) as model:
         model.expert_executor.batch_cpu_decode = mode not in ('baseline', 'backbone')
@@ -66,7 +77,8 @@ def child(mode, output):
                 snapshots.append(dict(prefix=position+1, state_sha256=digest_state(state, asnumpy),
                                       argmax=int(values.argmax())))
         measured = [x['seconds'] for x in latencies[8:]]
-        record = dict(mode=mode, input_ids=list(range(1, 17)), full_top10=True,
+        record = dict(mode=mode, codebook_storage=storage, grouped_kernel=scheduling,
+                      input_ids=list(range(1, 17)), full_top10=True,
                       activation_dtype='float32', state_dtype='float32', speculative=False,
                       batch_cpu_decode=model.expert_executor.batch_cpu_decode,
                       build_seconds=built-start, latencies=latencies,
@@ -77,6 +89,8 @@ def child(mode, output):
                       snapshots=snapshots, plan=model.plan,
                       initial_expert_statistics=initial,
                       expert_statistics=model.expert_executor.statistics(),
+                      hc_graph_statistics=[hc.graph_statistics() for hc in
+                                           getattr(model, '_hc_graph_owners', ())],
                       peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024,
                       device_pool_used_bytes=xp.get_default_memory_pool().used_bytes(),
                       device_pool_reserved_bytes=xp.get_default_memory_pool().total_bytes())

@@ -100,3 +100,9 @@ After adding switchable packed GPU and fused FP32 execution, `0233_fast_lifecycl
 The new three-launch sigmoid-GDN kernel is additionally checked against retained0226 reference operands and continuous portable-state replay; convolution history matches exactly and measured16-token memory relative error versus portable is1.20e-7. Fused short-context QSA preserves cache/pooling state and explicitly falls back to reference selection beyond the all-causal-cell window or when diagnostics are requested.
 
 These optimized-path checks do not supersede the independent-reference limits above. No claim of full independent16-token model equivalence or arbitrary long-context certification is made.
+
+## Follow-up0238 optimized lifecycle
+
+`0233_fast_lifecycle_v2.json` repeats the gate using read-only global codebooks, warp-per-row IQ kernels, grouping after admission and fixed slots.16-token incremental/prefill logits and SHA256 hashes of **all active** state are identical. Two fresh greedy requests both return `[220,100561,198]`. Dynamic-warp and fixed-slot forced-prefix artifacts also match each other bit-for-bit at1/2/4/8/16, establishing that slot ownership does not alter state trajectories.
+
+This run keeps HC graph capture disabled, uses FP32 state/activations and full top10, and has no speculative decoding. It retains2,332/2,419 slots, no quarantines, sampled RSS11,180,748,800 bytes and pool12,270,584,320 reserved bytes. Context remains16; no long-context/reference equivalence is inferred.

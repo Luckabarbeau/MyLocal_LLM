@@ -1,0 +1,173 @@
+{
+  "status": "passed",
+  "scope": "resident real top10 operator only; FP32, global codebooks",
+  "records": [
+    {
+      "layer": 0,
+      "formats": [
+        "IQ3_XXS",
+        "IQ3_XXS",
+        "IQ4_NL"
+      ],
+      "errors": {
+        "max_absolute_error": 2.6193447411060333e-10,
+        "relative_l2": 2.9925953439093085e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.38420799374580383,
+          "wall_ms": 0.3890179796144366
+        },
+        "warp": {
+          "event_ms": 0.26095999777317047,
+          "wall_ms": 0.2659994934219867
+        }
+      },
+      "speedup": 1.4722869291245242
+    },
+    {
+      "layer": 1,
+      "formats": [
+        "IQ2_S",
+        "IQ2_S",
+        "Q2_0"
+      ],
+      "errors": {
+        "max_absolute_error": 3.2014213502407074e-10,
+        "relative_l2": 2.952481408283317e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.3614879995584488,
+          "wall_ms": 0.36644996725954115
+        },
+        "warp": {
+          "event_ms": 0.24745599925518036,
+          "wall_ms": 0.2525679883547127
+        }
+      },
+      "speedup": 1.4608172792193126
+    },
+    {
+      "layer": 2,
+      "formats": [
+        "IQ2_S",
+        "IQ2_S",
+        "IQ4_NL"
+      ],
+      "errors": {
+        "max_absolute_error": 3.055902197957039e-10,
+        "relative_l2": 2.93416430082924e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.3667520135641098,
+          "wall_ms": 0.3718745138030499
+        },
+        "warp": {
+          "event_ms": 0.24798399955034256,
+          "wall_ms": 0.2529634803067893
+        }
+      },
+      "speedup": 1.4789341821614441
+    },
+    {
+      "layer": 12,
+      "formats": [
+        "IQ3_XXS",
+        "IQ3_XXS",
+        "Q2_0"
+      ],
+      "errors": {
+        "max_absolute_error": 2.546585164964199e-10,
+        "relative_l2": 3.075853090547681e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.37833599746227264,
+          "wall_ms": 0.38340449100360274
+        },
+        "warp": {
+          "event_ms": 0.2603839933872223,
+          "wall_ms": 0.26532349875196815
+        }
+      },
+      "speedup": 1.452992530534093
+    },
+    {
+      "layer": 17,
+      "formats": [
+        "IQ3_S",
+        "IQ3_S",
+        "IQ4_NL"
+      ],
+      "errors": {
+        "max_absolute_error": 2.9103830456733704e-10,
+        "relative_l2": 3.1672298421885967e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.39851200580596924,
+          "wall_ms": 0.4036195168737322
+        },
+        "warp": {
+          "event_ms": 0.26604799926280975,
+          "wall_ms": 0.2712190034799278
+        }
+      },
+      "speedup": 1.4978951426441955
+    },
+    {
+      "layer": 21,
+      "formats": [
+        "IQ3_S",
+        "IQ3_S",
+        "Q2_0"
+      ],
+      "errors": {
+        "max_absolute_error": 2.473825588822365e-10,
+        "relative_l2": 3.0430321210548143e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.3961600065231323,
+          "wall_ms": 0.40121350320987403
+        },
+        "warp": {
+          "event_ms": 0.26551999151706696,
+          "wall_ms": 0.2703229838516563
+        }
+      },
+      "speedup": 1.4920157396045568
+    },
+    {
+      "layer": 47,
+      "formats": [
+        "IQ4_XS",
+        "IQ4_XS",
+        "IQ4_NL"
+      ],
+      "errors": {
+        "max_absolute_error": 3.4924596548080444e-10,
+        "relative_l2": 3.1763135840470786e-07
+      },
+      "timings": {
+        "block": {
+          "event_ms": 0.3543519973754883,
+          "wall_ms": 0.3593370201997459
+        },
+        "warp": {
+          "event_ms": 0.24273600429296494,
+          "wall_ms": 0.24761646636761725
+        }
+      },
+      "speedup": 1.4598246288499124
+    }
+  ],
+  "logical_read_bytes": 142336000,
+  "max_single_read_bytes": 921600,
+  "additional_peak_rss_bytes": 882761728,
+  "median_event_speedup": 1.4722869291245242,
+  "timings": "20 warm samples per mode, balanced order, excludes JIT/upload; includes pointer metadata upload",
+  "checkpoint_size_mtime_unchanged": true
+}

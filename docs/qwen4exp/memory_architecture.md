@@ -42,9 +42,15 @@ Completed cache events are reaped nonblockingly on subsequent publication, even 
 
 Synchronous cache promotion is still the initial implementation, not the final allocator design. Expert cache misses still fall back safely when admission cannot fit. Patch0214's fixed-slot asynchronous mover below remains unimplemented.
 
-## Future fixed-slot mover contract (not implemented)
+## Fixed-slot foundation0238 and future asynchronous mover
 
-The cache materializer seam admits a preallocated slot backend without changing expert mathematics or canonical sources. Charge padded slot stride and reserve staging/shadow slots explicitly. A future mover must:
+The cache materializer now has an opt-in fixed-slot backend (`expert_cache_slots=True`) without changing expert mathematics or canonical sources. Largest complete target bundle rounds to2,662,400 bytes; the6GiB cap holds2,419 slots and reserves6,440,345,600 physical bytes even when empty. Padded stride, not payload size, is charged per resident expert. Owned physical arena bytes are credited separately from retained-handle counts during replanning.
+
+One reusable4MiB pinned slab and dedicated copy stream materialize complete bundles. Copies are currently synchronous: publication waits for completion. `UnownedMemory` projection-view leases prevent reuse after eviction while old handles/views survive; existing in-flight fences separately protect consumers. Exhaustion safely falls back to CPU; unknown DMA completion quarantines slots. Close waits for arena consumers. No GPU weight allocation occurs per admission after arena construction.
+
+The extended lifecycle records2,332 leased slots,6,208,716,800 charged padded bytes,11,180,748,800 sampled RSS and12,270,584,320 default-pool-reserved bytes. Dynamic-cache and slot-cache logits/active-state hashes match exactly at all checked16-token prefixes. Pool snapshots exclude CUDA context/other owners and are not global VRAM high-water measurements. The slot cache's padding can reduce useful capacity relative to dynamic allocation; performance under longer cache pressure is not yet established.
+
+Full asynchronous movement is still unimplemented. Reserve staging/shadow slots explicitly. A future mover must:
 
 1. Reserve a destination without overwriting a live source slot.
 2. Copy complete projection bundles on a dedicated transfer stream, retaining canonical/staging owners.
@@ -53,7 +59,7 @@ The cache materializer seam admits a preallocated slot backend without changing 
 5. Quarantine old storage until the last reader retires, independently of copy completion.
 6. Bound moves, queues and live shadow allocations; CPU misses remain correct when admission fails.
 
-Heat, hysteresis, warm-start profiles, prefill grouping and decode scheduling are distinct policies. Radiance's mapped/zero-copy GPU miss path must not be confused with the existing native CPU fallback. No per-token GPU allocation scheme is claimed as the final design; fixed slots and asynchronous weight transfers remain Patch0214.
+Heat, hysteresis, warm-start profiles, prefill grouping and decode scheduling are distinct policies. Radiance's mapped/zero-copy GPU miss path must not be confused with the existing native CPU fallback. Fixed slots are the validated synchronous foundation of Patch0214; asynchronous transfers/publication and shadow-slot scheduling remain in progress.
 
 ## Observed memory, not estimates
 

@@ -192,13 +192,28 @@ class AdaptiveExpertCache:
             evicted += 1
         return evicted
 
+    def retain_only(self, keys):
+        """Serialized placement seam; never discard an outstanding consumer."""
+        keep=frozenset(keys)
+        removed=set(self.resident)-keep
+        if removed & self._busy_keys():
+            raise RuntimeError('Cannot replace protected or in-flight expert placement')
+        for key in removed:
+            self.used_bytes-=self.resident.pop(key)[1]
+            if self._victim_index is not None:
+                self._victim_index.remove(key)
+            self.counters['evictions']+=1
+            self.counters['profile_evictions']+=1
+        return len(removed)
+
     def _effective_score(self, key):
         usage = self._usage[key]
         return usage.score * 2.0 ** (
             -(self._step - usage.last_step) / self.score_half_life
         )
 
-    def request(self, key: ExpertKey, size_bytes: int, materialize: Callable):
+    def request(self, key: ExpertKey, size_bytes: int, materialize: Callable, *,
+                needs_slot=False, compatible_victim=None):
         """Return cached/device handle, or None when CPU execution is cheaper.
 
         `materialize()` should return a device handle retaining `size_bytes`.
@@ -242,6 +257,8 @@ class AdaptiveExpertCache:
         candidates = []
         freed = 0
         required = self.used_bytes + size_bytes - self.device_budget_bytes
+        if needs_slot:
+            required=max(required,size_bytes)
         if required > 0:
             busy = self._busy_keys()
             # Prefer experts with the lowest decayed request density per byte.
@@ -255,6 +272,8 @@ class AdaptiveExpertCache:
                        )))
             with victims as ordered_victims:
                 for victim in ordered_victims:
+                    if compatible_victim is not None and not compatible_victim(victim):
+                        continue
                     victim_size = self.resident[victim][1]
                     if victim in busy:
                         self.counters["busy_victim_skips"] += 1
@@ -432,6 +451,7 @@ class HeterogeneousExpertExecutor:
         batch_cpu_decode: bool = True,
         group_after_admission: bool = False,
         expert_slot_stride_bytes: int = 0,
+        expert_slot_sizes=None,
         slot_staging_budget_bytes: int = 64 * 1024**2,
         expert_victim_policy: str = "sort",
         group_mixed_decode: bool = False,
@@ -459,6 +479,11 @@ class HeterogeneousExpertExecutor:
                 not isinstance(expert_slot_stride_bytes, int) or expert_slot_stride_bytes < 0):
             raise ValueError('expert_slot_stride_bytes must be a nonnegative integer')
         self.expert_slot_stride_bytes = expert_slot_stride_bytes
+        self.expert_slot_sizes=None if expert_slot_sizes is None else tuple(expert_slot_sizes)
+        if self.expert_slot_sizes is not None and (not expert_slot_stride_bytes or not self.expert_slot_sizes or
+                any(isinstance(s,bool) or not isinstance(s,int) or s<=0 or s%256 or s>expert_slot_stride_bytes
+                    for s in self.expert_slot_sizes) or sum(self.expert_slot_sizes)>device_budget_bytes):
+            raise ValueError('Invalid bounded expert slot sizes')
         self.slot_staging_budget_bytes = slot_staging_budget_bytes
         self._slot_arena = None
         if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
@@ -567,6 +592,52 @@ class HeterogeneousExpertExecutor:
             for event, _ in self.cache._inflight_groups:
                 event.synchronize()
 
+    def check_native_service(self):
+        """Once-per-model-step failure seam; never expose a timed-out token."""
+        service=getattr(self._ggml_row_pool,'_native_service',None)
+        if service is not None:
+            service.check()
+
+    def install_observed_profile(self):
+        """Warmup-only cumulative-frequency placement; no future route oracle.
+
+        Call at a serialized, request-free seam before freezing device plans.
+        Canonical sources and bounded slots remain unchanged. Setup may block
+        for copies; model equations/routing and CPU fallback never change.
+        """
+        if (BACKEND_NAME!='cupy' or not self.expert_slot_stride_bytes or self.expert_slot_sizes is not None or
+                self._dispatch_depth or self._device_expert_plans or
+                self.cache._admission_limit is not None):
+            raise ValueError('Observed profile requires idle fixed slots before admission freezes')
+        xp.cuda.get_current_stream().synchronize()
+        self.cache._busy_keys()
+        if self.cache._protected or self.cache._inflight_groups:
+            raise RuntimeError('Observed profile requires all expert consumers to retire')
+        from .expert_profile import frequency_placement
+        counts={key:usage.hits for key,usage in self.cache._usage.items()}
+        selected=frequency_placement(counts,self.cache.device_budget_bytes,self.expert_slot_stride_bytes)
+        kept=set(self.cache.resident)&set(selected)
+        before=self.cache.counters['promotions']
+        evicted=self.cache.retain_only(selected)
+        promote_after=self.cache.promote_after
+        try:
+            self.cache.promote_after=1
+            for key in selected:
+                if key not in self.cache.resident:
+                    weights=self._host_weights(key)
+                    if sum(w.nbytes for w in weights)>self.expert_slot_stride_bytes:
+                        raise ValueError('Profile expert exceeds approved slot stride')
+                    self.cache.request(key,self.expert_slot_stride_bytes,
+                        lambda weights=weights:self._device_expert(weights))
+        finally:
+            self.cache.promote_after=promote_after
+        return dict(policy='warmup_cumulative_frequency',observed_keys=len(counts),
+            selected=len(selected),retained=len(kept),evicted=evicted,
+            promotions=self.cache.counters['promotions']-before,
+            observed_requests=sum(counts.values()),
+            selected_observed_requests=sum(counts[k] for k in selected),
+            resident=len(self.cache.resident))
+
     @property
     def resident_device_bytes(self):
         """Physical expert storage; a slot arena owns even its unused slots."""
@@ -612,7 +683,8 @@ class HeterogeneousExpertExecutor:
         if self._slot_arena is None:
             from .packed_expert_slots import PackedExpertSlotArena
             self._slot_arena = PackedExpertSlotArena(self.cache.device_budget_bytes,
-                self.expert_slot_stride_bytes, staging_budget_bytes=self.slot_staging_budget_bytes)
+                self.expert_slot_stride_bytes, staging_budget_bytes=self.slot_staging_budget_bytes,
+                                slot_sizes=self.expert_slot_sizes)
         return self._slot_arena.statistics()
 
     def _device_expert(self, weights):
@@ -785,10 +857,19 @@ class HeterogeneousExpertExecutor:
                         raise NotImplementedError(f"No packed GPU kernel for {unsupported}")
                     self.counters["unsupported_gpu_fallbacks"] += 1
                     return key, None, weights
-                size = self.expert_slot_stride_bytes or sum(w.nbytes for w in weights)
+                if self.expert_slot_sizes is not None:
+                    self.reserve_device_slots()
+                    size=self._slot_arena.reservation_size(sum(w.nbytes for w in weights))
+                else:
+                    size = self.expert_slot_stride_bytes or sum(w.nbytes for w in weights)
             else:
                 size = sum(w.size for w in weights) * np.dtype(self.compute_dtype).itemsize
-            expert = self.cache.request(key, size, lambda: self._materialize(weights, trace))
+            if self.expert_slot_sizes is not None:
+                expert=self.cache.request(key,size,lambda:self._materialize(weights,trace),
+                    needs_slot=not self._slot_arena.has_free_slot(size),
+                    compatible_victim=lambda k:self.cache.resident[k][1]==size)
+            else:
+                expert = self.cache.request(key, size, lambda: self._materialize(weights, trace))
             if expert is not None:
                 return key, expert, None
         if self.execution_mode == "gpu":

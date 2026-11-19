@@ -1,6 +1,30 @@
 # Qwen4Exp performance and memory history
 
-## Current follow-up —0280 validation-dependency experiment
+## Current — 0281–0288 mixed Q8 and bounded execution
+
+**Best retained safe callback observation31.42545 decode forwards/s;50/s unmet.** Final callback/service reproductions29.29/29.56/s. Full report: `0281_0288_execution_optimization.md`; retained measurements/source hashes/parity: `0281_0288_performance_v3.json`.
+
+| Configuration | Response tokens | Decode forwards/s |
+|---|---:|---:|
+|Expert+dense GPU Q8,23workers/500us|415|23.17058|
+|Same Q8,19workers/50us|415|28.61418|
+|Exact BF16 HC storage,6GiB expert cache|415|30.62288|
+|BF16 HC,7GiB cache|359|31.42545|
+|Initial service (historical timeout path later corrected)|359|31.71163|
+|Intermediate safe mapped-status copy|359|19.60218|
+|Final safe device-status service copy|359|29.55954|
+|Sized fixed slots, natural sampling|351|29.96722|
+|Uniform slots, controlled359-token trajectory|359|30.19602|
+|Sized slots, same controlled trajectory|359|31.14912|
+|Final natural7GiB reproduction, same359 IDs|359|29.29410|
+
+Final natural reproduction29.29/s shows the29–32/s run-to-run range; do not advertise the small native-service difference as robust. An8GiB-cache probe failed safely at physical headroom validation; no result is inferred and no guard weakened. Full head/sampler remain in controlled replay; it is not natural generation. One run/configuration, not confidence intervals. No isolated speedup ratio across415/359/351-token trajectories. Hidden-phase fusion, cumulative warmup placement and extra graph flags show no useful measured gain and remain off. Sized slots increase capacity2823 ->3673 within7GiB but only modestly improve controlled throughput.
+
+Q8 operator gains2.12–3.53x for resident top10 are not model gains. Node-level Q8/BF16 trace:214.856ms kernel sum/217.214ms GPU-operation union/602.011ms GPU span across16 tokens. Remaining gaps include CPU-result joins and host submission; they are not removable memcpy arithmetic. Direct mapped PCIe dots lose to the19-worker CPU pool; explicit staging is much better but integrated CPU/PCIe overlap is not yet measured. Native service31.71 versus31.43/s is too small to advertise as a meaningful gain. See all failed/neutral experiments in the numbered report.
+
+Final selected regressions1969CPU passed/1124skipped;1367CuPy passed/14skipped. BF16 HC and native-service fixed-prefix logits/state hashes are exact against same-arithmetic controls, not new independent llama.cpp equivalence. Strata speculation/tail/KV/context differences remain explicit.
+
+## Prior follow-up —0280 validation-dependency experiment
 
 Best remains26.95159decode forwards/s. Deferred QSA finite validation with conditional GPU cache writes retains all checks and passes exact same-arithmetic logits/state parity, but same413-token longer workload **24.84134/s** shows no gain. Sampling-call wait decreased while total decode did not: do not mistake shifted wait attribution for eliminated critical work. Node-level graph capture reveals380.77mssummedGPUkernels/363.54msGPUoperationunion in635.60ms/16tokens; dominant copy waits are4-byte QSA status readbacks. Times overlap, profiling overhead applies. See `0280_qsa_validation_dependencies.md` and `0279_node_copy_attribution_v2.json`.
 

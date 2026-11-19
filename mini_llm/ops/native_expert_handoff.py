@@ -70,6 +70,22 @@ class NativeExpertHandoff:
         plan.executor.cache.protect(self.keys)
         self.graph = None
         self.capture_enabled = os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH', '0') == '1'
+        self.service=None
+        self.service_flags=None
+        if os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE','0')=='1':
+            try:
+                if self.pool._native_service is None:
+                    from .native_expert_service import NativeExpertService
+                    self.pool._native_service=NativeExpertService(self.pool)
+                self.service=self.pool._native_service
+                from .native_expert_service import mapped_output
+                self.service_output=mapped_output(plan.host_output,plan.output_owner)
+                self.service_flags=self.service.register(self.handle)
+            except Exception:
+                plan.executor.cache.unprotect(self.keys)
+                self.bridge.mylocal_ggml_handoff_destroy(self.handle)
+                self.handle=None
+                raise
 
     def forward(self, x, routes, ids, on_cpu_submitted):
         if not self.capture_enabled:
@@ -87,6 +103,8 @@ class NativeExpertHandoff:
             if self.stats[3] != self.accounted[3]:
                 raise RuntimeError('Native expert graph warmup failed')
             self.accounted[:] = self.stats
+            if self.service is not None:
+                self.service.check()
         result = self.graph.forward(x, (routes, ids))
         # The model's shared stream waits on hidden's producer, not this graph's
         # CPU-result join. It can overlap the host node even after graph launch.
@@ -106,6 +124,32 @@ class NativeExpertHandoff:
                             p.metadata.nbytes, runtime.memcpyDeviceToHost, stream.ptr)
         runtime.memcpyAsync(p.host_input.ctypes.data, x.data.ptr,
                             x.nbytes, runtime.memcpyDeviceToHost, stream.ptr)
+        if self.service is not None:
+            self.service.publish((1,),(32,),(self.service_flags.device,self.service.failure.device))
+            try:
+                if on_cpu_submitted is not None:
+                    on_cpu_submitted()
+                p.launch_resident(x)
+            finally:
+                self.service.wait((1,),(32,),
+                    (self.service_flags.device,self.service.failure.device,self.service.timeout_ns,self.service.device_failure))
+                self.service.copy_rows(((p.cpu_rows.size+255)//256,),(256,),
+                    (self.service_output,p.cpu_rows,self.service.device_failure,np.int32(p.cpu_rows.size)))
+                p.retired.record(stream)
+                p.pending=True
+        else:
+            self._enqueue_callback(x,on_cpu_submitted,stream,runtime)
+        p.combine_kernel(((p.d+255)//256,), (256,), (p.terms,p.cpu_rows,
+            p.selected,p.routes,p.output)+p.combine_args)
+        if self.service is not None:
+            self.service.poison(((p.d+255)//256,),(256,),
+                (p.output,self.service.device_failure,np.int32(p.d)))
+        out = p.output.copy()
+        p.retired.record(stream)
+        return out
+
+    def _enqueue_callback(self,x,on_cpu_submitted,stream,runtime):
+        p=self.plan
         self.input_ready.record(stream)
         self.stream.wait_event(self.input_ready)
         # Native function is noexcept, enters neither Python nor any CUDA API,
@@ -128,11 +172,6 @@ class NativeExpertHandoff:
             stream.wait_event(self.cpu_ready)
             p.retired.record(stream)
             p.pending = True
-        p.combine_kernel(((p.d+255)//256,), (256,), (p.terms,p.cpu_rows,
-            p.selected,p.routes,p.output)+p.combine_args)
-        out = p.output.copy()
-        p.retired.record(stream)
-        return out
 
     def flush_statistics(self):
         if not self.handle:
@@ -169,6 +208,7 @@ class NativeExpertHandoff:
 
     def statistics(self):
         return dict(layer=self.plan.layer, calls=int(self.production[0]),
+                    cpu_handoff='native_mapped_service' if self.service is not None else 'cuda_host_function',
                     gpu_arithmetic='q8_1' if self.plan.q8 is not None else 'fp32',
             cpu_experts=int(self.production[1]), gpu_experts=int(self.production[2]),
             cpu_seconds=int(self.production[4])*1e-9,
@@ -180,6 +220,8 @@ class NativeExpertHandoff:
             try:
                 self.flush_statistics()
             finally:
+                if self.service is not None:
+                    self.service.unregister(self.handle)
                 self.bridge.mylocal_ggml_handoff_destroy(self.handle)
                 self.handle = None
                 self.plan.executor.cache.unprotect(self.keys)

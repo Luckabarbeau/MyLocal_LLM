@@ -241,9 +241,10 @@ class Qwen4ExpGGUFModel:
                 raise ValueError('Configure slots on the borrowed expert executor explicitly')
             if not budgets.get('cache_bytes', 0):
                 raise ValueError('Expert cache slots require a positive cache budget')
-            largest = max(sum(index.descriptors[f'blk.{layer}.ffn_{p}_exps.weight'].nbytes
+            layer_bundle_bytes=[sum(index.descriptors[f'blk.{layer}.ffn_{p}_exps.weight'].nbytes
                               // index.n_experts for p in ('gate', 'up', 'down'))
-                          for layer in range(len(h.recurrent)))
+                          for layer in range(len(h.recurrent))]
+            largest = max(layer_bundle_bytes)
             slot_stride = (largest + 255) // 256 * 256
             # Account for pinned allocator rounding plus other transfer scratch.
             budgets['staging_bytes'] = max(integer(budgets.get('staging_bytes', 64*1024**2),
@@ -277,6 +278,12 @@ class Qwen4ExpGGUFModel:
             weights.configure_hc_bf16()
         plan = weights.memory_plan(max_length, **budgets)
         weights.approve(plan)
+        slot_sizes=None
+        if os.environ.get('MINI_LLM_SIZED_EXPERT_SLOTS','0')=='1':
+            if not expert_cache_slots:
+                raise ValueError('Sized slots require the fixed-slot expert cache')
+            from mini_llm.ops.expert_slot_layout import sized_slot_layout
+            slot_sizes=sized_slot_layout(plan['cache_bytes'],layer_bundle_bytes,index.n_experts)
         if gdn_graph_decode or pre_moe_graph:
             for i, recurrent in enumerate(h.recurrent):
                 if recurrent and any(
@@ -304,7 +311,8 @@ class Qwen4ExpGGUFModel:
                     promote_after=expert_promote_after, group_after_admission=group_after_admission,
                     expert_victim_policy=expert_victim_policy,
                     group_mixed_decode=group_mixed_decode, device_expert_plan=device_expert_plan,
-                    expert_slot_stride_bytes=slot_stride, slot_staging_budget_bytes=plan['staging_bytes'])
+                    expert_slot_stride_bytes=slot_stride, expert_slot_sizes=slot_sizes,
+                                        slot_staging_budget_bytes=plan['staging_bytes'])
             dense, project = weights.dense, weights.projection
             def recurrent_project(name):
                 return weights.projection(name, capturable=gdn_graph_decode or pre_moe_graph)
@@ -576,6 +584,9 @@ class Qwen4ExpGGUFModel:
                     invalid = np.flatnonzero(asnumpy(deferred_status))
                     if invalid.size:
                         raise ValueError(f'QSA hidden/projections must be finite (first layer {int(invalid[0])})')
+                executor=getattr(self,'expert_executor',None)
+                if isinstance(executor,HeterogeneousExpertExecutor):
+                    executor.check_native_service()
             except Exception:
                 # Operators can already have committed recurrent/PLE history.
                 # Never retry or pretend this request remains resumable.

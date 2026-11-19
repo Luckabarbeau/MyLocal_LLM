@@ -222,6 +222,9 @@ def replay_case(model, tokenizer, row, prompt, xp, sample_token, guard, journal)
     Sampler call wall time therefore also contains queued model completion wait.
     """
     settings = sampling_settings(row)
+    forced=row.get('_forced_output_token_ids')
+    if forced is not None and any(t>=model.config.vocab_size for t in forced):
+        raise ValueError('Forced token ID exceeds model vocabulary')
     xp.random.seed(row['request']['seed'])
     guard()
     state = model.create_generation_state(1, 1024)
@@ -237,12 +240,15 @@ def replay_case(model, tokenizer, row, prompt, xp, sample_token, guard, journal)
     ids, windows, arrivals = [], [], []
     sampling, text_seconds = 0.0, 0.0
     text = ''
-    for index in range(row['request']['max_tokens']):
+    limit=len(forced) if forced is not None else row['request']['max_tokens']
+    for index in range(limit):
         guard()
         if index:
             logits = model.step(ids[-1], state)
         sample_start = time.perf_counter()
         token = sample_token(logits, **settings)
+        if forced is not None:
+            token=forced[index] # Retain full head/sampler cost; only trajectory is controlled.
         sampling += time.perf_counter() - sample_start
         ids.append(token)  # Count EOS just like an emitted completion token.
         text_start = time.perf_counter()
@@ -252,11 +258,11 @@ def replay_case(model, tokenizer, row, prompt, xp, sample_token, guard, journal)
         if index == 0:
             decode_cpu_start = time.process_time()
         stopped = token in model.stop_token_ids
-        if len(ids) % 32 == 0 or stopped or len(ids) == row['request']['max_tokens']:
+        if len(ids) % 32 == 0 or stopped or len(ids) == limit:
             journal(dict(request_id=row['request_id'], emitted_tokens=len(ids),
                 elapsed_seconds=arrivals[-1], memory=guard(),
                 cache=model.expert_executor.statistics()))
-        if len(ids) % 64 == 0 or stopped or len(ids) == row['request']['max_tokens']:
+        if len(ids) % 64 == 0 or stopped or len(ids) == limit:
             lo = (len(ids)-1)//64*64
             windows.append(dict(start_token_1based=lo+1, end_token_1based=len(ids),
                 token_ids=ids[lo:], text=tokenizer.decode(ids[lo:], skip_special_tokens=False),
@@ -269,8 +275,10 @@ def replay_case(model, tokenizer, row, prompt, xp, sample_token, guard, journal)
     prefill_seconds = xp.cuda.get_elapsed_time(begin_event, end_event)/1000
     report = dict(request_id=row['request_id'], captured_request=row['request'],
         messages=row['messages'], captured_usage=row['usage'], prompt=prompt,
+        forced_trajectory=forced is not None,
         output_token_ids=ids, output_text=text, token_ready_seconds=arrivals,
-        windows_64_tokens=windows, stop_reason='eos' if stopped else 'max_tokens',
+        windows_64_tokens=windows, stop_reason=('eos' if stopped else
+                    'forced_prefix' if forced is not None and limit<row['request']['max_tokens'] else 'max_tokens'),
         eos_included_in_usage=True, prefill_submission_wall_seconds=prefill_submission,
         process_cpu_seconds=time.process_time()-cpu_start,
         decode_process_cpu_seconds=time.process_time()-decode_cpu_start,
@@ -291,6 +299,16 @@ def child(args):
                       MINI_LLM_IQ_GPU_GROUPED_KERNEL='warp')
     deadline = time.monotonic()+180
     rows = select_records(BENCHMARK / 'outputs.jsonl', args.cases)
+    forced_path=getattr(args,'force_tokens_from',None)
+    if forced_path is not None:
+        forced_report=json.loads(Path(forced_path).read_text())
+        forced_cases={r['request_id']:r['output_token_ids'] for r in forced_report['cases']}
+        for row in rows:
+            tokens=forced_cases[row['request_id']]
+            if (not isinstance(tokens,list) or not tokens or len(tokens)>row['request']['max_tokens'] or
+                    any(isinstance(t,bool) or not isinstance(t,int) or t<0 for t in tokens)):
+                raise ValueError('Invalid fixed-token workload')
+            row['_forced_output_token_ids']=tokens
     options = dict(MODEL_OPTIONS, expert_victim_policy=args.victim_policy,
                    cache_bytes=int(getattr(args,'expert_cache_gib',6)*GiB),
                    expert_cpu_backend=args.cpu_backend, cpu_workers=args.cpu_workers,
@@ -345,7 +363,16 @@ def child(args):
                 budget_bytes=int(args.host_warm_gib*GiB),
                 reserve_bytes=int(args.mem_available_floor_gib*GiB),
                 progress=lambda touched, target: guard())
+        # Constructor conversions leave unused pool blocks too. Retire them at
+        # the same untimed setup seam, before the first physical capacity check.
+        xp.cuda.get_current_stream().synchronize()
+        xp.get_default_memory_pool().free_all_blocks()
+        placement_profile=None
         for row, prompt in zip(rows, prompts):
+            if (row['request_id']!='warmup' and placement_profile is None and
+                    getattr(args,'warmup_frequency_placement',False)):
+                placement_profile=model.expert_executor.install_observed_profile()
+                (args.output/'placement_profile.json').write_text(json.dumps(placement_profile,indent=2))
             if row['request_id'] != 'warmup' and args.promotion_limit is not None:
                 model.expert_executor.cache.set_admission_budget(
                     args.promotion_limit, window_requests=480)
@@ -356,7 +383,8 @@ def child(args):
         pool = xp.get_default_memory_pool()
         report = dict(cases=results, provenance=provenance, comparison=COMPARISON,
             options=options, placement=dict(after_warmup_promotions_per_480_requests=args.promotion_limit),
-            host_warming=warming, initial_memory=baseline,
+            host_warming=warming, initial_memory=baseline,placement_profile=placement_profile,
+            forced_tokens_source=None if forced_path is None else str(Path(forced_path).resolve()),
             cpu_backend_provenance=getattr(model.expert_executor._ggml_cpu, 'provenance', None),
             gdn_graph_statistics=[m.graph_statistics() for m in getattr(model, '_gdn_graph_owners', ())],
             pre_graph_statistics=[m.graph_statistics() for m in getattr(model, '_pre_moe_segments', {}).values()],
@@ -369,6 +397,8 @@ def child(args):
                 scheduler=getattr(model.expert_executor._ggml_row_pool,'scheduler','barrier'),
                 fused_hidden=getattr(model.expert_executor._ggml_row_pool,'fused_hidden',False),
                                 native_moe_handoff=os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')=='1',
+                                                native_moe_service=os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE','0')=='1',
+                                                                sized_expert_slots=os.environ.get('MINI_LLM_SIZED_EXPERT_SLOTS','0')=='1',
                                                 native_moe_graph=os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH','0')=='1',
                                                                 device_plan_specialized=os.environ.get('MINI_LLM_DEVICE_PLAN_SPECIALIZED','0')=='1',
                                                                                 qsa_frontend_graph=os.environ.get('MINI_LLM_QSA_FRONTEND_GRAPH','0')=='1',
@@ -396,6 +426,10 @@ def parent(args):
         '--victim-policy', args.victim_policy, '--cpu-backend', args.cpu_backend,
         '--cpu-workers', str(args.cpu_workers),
         '--expert-cache-gib',str(getattr(args,'expert_cache_gib',6))]
+    if getattr(args,'force_tokens_from',None) is not None:
+        command.extend(['--force-tokens-from',str(args.force_tokens_from.resolve())])
+    if getattr(args,'warmup_frequency_placement',False):
+        command.append('--warmup-frequency-placement')
     if args.group_mixed_decode:
         command.append('--group-mixed-decode')
     if getattr(args,'shared_graph_decode',False):
@@ -457,6 +491,8 @@ def main():
     parser.add_argument('--cases', nargs='+', choices=CASES, default=list(CASES[:2]))
     parser.add_argument('--host-warm-gib', type=float, default=0)
     parser.add_argument('--expert-cache-gib',type=float,default=6)
+    parser.add_argument('--warmup-frequency-placement',action='store_true')
+    parser.add_argument('--force-tokens-from',type=Path,help='Controlled trajectory from retained result.json; full logits/sampler still execute')
     parser.add_argument('--victim-policy', choices=('sort', 'heap'), default='sort')
     parser.add_argument('--cpu-backend', choices=('native', 'ggml', 'ggml_pool'), default='native')
     parser.add_argument('--cpu-workers', type=int, default=15)

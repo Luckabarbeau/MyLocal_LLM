@@ -174,7 +174,8 @@ def test_capacity_fast_options_and_caveats():
     assert probe.COMPARISON['full_configuration_equivalence'] is False
 
 
-def test_replay_eos_fresh_state_windows_and_only_final_sync(rows):
+@pytest.mark.parametrize('forced',[False,True])
+def test_replay_eos_fresh_state_windows_and_only_final_sync(rows,forced):
     calls, journal, seeds = [], [], []
     class Event:
         def record(self):
@@ -183,6 +184,7 @@ def test_replay_eos_fresh_state_windows_and_only_final_sync(rows):
         cuda=SimpleNamespace(Event=Event, get_elapsed_time=lambda a, b: 100.,
             get_current_stream=lambda: SimpleNamespace(synchronize=lambda: calls.append('sync'))))
     class FakeModel:
+        config=SimpleNamespace(vocab_size=100)
         stop_token_ids = {99}
         expert_executor = SimpleNamespace(statistics=lambda: {'gpu_experts': 10})
         def create_generation_state(self, batch, capacity):
@@ -202,11 +204,14 @@ def test_replay_eos_fresh_state_windows_and_only_final_sync(rows):
         sequence = iter([2]*(n-1)+[99])
         def sample(logits, **settings):
             assert settings == probe.sampling_settings(rows[1])
-            return next(sequence)
-        result = probe.replay_case(model, tokenizer, rows[1], {'token_ids': [1]*77},
+            return 0 if forced else next(sequence)
+        row=dict(rows[1])
+        if forced: row['_forced_output_token_ids']=[2]*(n-1)+[99]
+        result = probe.replay_case(model, tokenizer, row, {'token_ids': [1]*77},
             xp, sample, lambda: {}, journal.append)
         assert result['output_token_ids'] == [2]*(n-1)+[99]
         assert result['stop_reason'] == 'eos'
+        assert result['forced_trajectory']==forced
         assert result['timing']['decode_forwards'] == n-1
         assert result['timing']['emitted_tokens_including_eos'] == n
         assert sum(len(w['token_ids']) for w in result['windows_64_tokens']) == n

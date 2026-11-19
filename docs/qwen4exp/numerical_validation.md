@@ -1,6 +1,14 @@
 # Qwen4Exp numerical validation record
 
-## Q8 execution follow-ups0252–0257
+## Current follow-ups — 0281–0288
+
+Mixed-format GPU Q8_1 is now opt-in for IQ2_S,IQ3_S,IQ3_XXS,IQ4_NL,IQ4_XS,Q2_0,Q4_K,Q5_K,Q6_K,Q8_0. Tests compare extracted pinned Strata parts/rows exactly, independent FP64 decoded-Q8 products with explicit integer-truncation bounds, real bounded checkpoint slices, all seven expert triples, captured/native/mixed dispatch and output lifetime. CPU GGML Q8_K/Q8_0 is a separate contract. Flags do not convert generic warmup fused experts or prove whole-engine Strata parity.
+
+Exact BF16 HC storage keeps FP32 arithmetic unchanged. Real model BF16/graph versus expanded/direct control, and native-service versus retained graph control, have bit-exact logits and all active-state hashes at1/2/4/8/16 over two requests. The final native service additionally tests timeout, epoch exhaustion, no payload reads on failure (null-source probe), poisoned output, failure before state advancement and retirement before pool destruction. An unconditional timeout-path DMA was corrected; completion status is now published once into VRAM before gated copying. Final v3 real-model logits/state hashes remain exact. Size-classed slots test exact bytes/output, compatible eviction under spare global bytes and held-view fallback. The mapped-host operator tier is numerically exact to VRAM Q8 but slower and not integrated.
+
+Final selected regressions:1969NumPy passed/1124skipped;1367actualCuPy passed/14skipped, including Qwen3-Next GPU components. This is **not** a new independent-reference full-model or arbitrary-long-context equivalence claim. See `0281_0288_execution_optimization.md` and `0281_0288_performance_v3.json`. Failed earlier fixtures/probes are retained; most recent relevant suites pass, with no tolerance loosened to hide discrepancies.
+
+## Historical Q8 execution follow-ups0252–0257
 
 GPU Q8_1 producer matches pinned Strata712fec6b4297c9cfd32ab43daaa2979a9aa01edf byte-for-byte in41cases; IQ3_S×Q8_1 GEMV passes38 source-oracle/independent-baseline cases. These remain isolated GPU operators, not all-format model integration. Optional CPU `expert_cpu_backend='ggml'` uses the explicitly selected numerical-reference library's per-format Q8_K/Q8_0 integer dots; synthetic direct-GGML expert results agree exactly, while FP32-baseline differences are expected and separately measured. Library source ancestry differs from installed Strata; do not claim whole-engine exact parity. Full long requests complete with that backend, but finiteness/coherent text is not independent mathematical equivalence.
 

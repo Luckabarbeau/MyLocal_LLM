@@ -1,6 +1,18 @@
 # Qwen4Exp implementation status
 
-## Current — through0280; best longer decode26.95/s, target50/s unmet
+## Current — through 0288; safe callback observation 31.43/s, target 50/s unmet
+
+Integrated opt-in mixed-format GPU Q8 covers IQ2_S/IQ3_S/IQ3_XXS/IQ4_NL/IQ4_XS/Q2_0 and Q4_K/Q5_K/Q6_K/Q8_0. Extracted pinned-Strata parts/rows are bit-exact; independent FP64 decoded-Q8 baselines/truncation bounds are tested. CPU retains GGML per-format Q8_K/Q8_0. This is scoped arithmetic alignment, not whole-engine Strata equivalence.
+
+Direct BF16 HC storage reconstructs the exact checkpoint FP32 values at loads, saves **1,279,262,720 VRAM bytes**, and preserves exact outputs/state. Same-arithmetic full-model logits/all active-state hashes match at prefixes1/2/4/8/16 over two requests for BF16 storage and the new native mapped-doorbell service. The service has bounded waits, sticky failure reporting and retired ownership; its measured gain is not material, so it remains opt-in.
+
+Final natural7GiB reproduction measured29.29/s on the same359 IDs; the29–32/s spread makes small single-pair gains uncertain. The8GiB probe was safely rejected by physical memory headroom checks, with no benchmark result inferred. Final focused group:122passed.
+
+Longer sampled runs: expert+dense Q8 with19 workers/50us spin28.61/s; exact BF16 HC30.62/s with the same415 IDs;7GiB cache31.43/s; historical initial service31.71/s with the same359 IDs. Its timeout path was corrected to avoid reading incomplete CPU output; final completion-gated/device-status service29.56/s preserves those IDs and exact state parity, with no material gain. Failed copies never read CPU payloads; repeated mapped-status system loads are eliminated by publishing a device-local status once. Different trajectories must not be used for identical-input ratios. Size-classed fixed slots retain3673 versus2823 experts in7GiB; controlled359-token replay30.20 ->31.15/s is modest, not50/s. Cumulative warmup placement, hidden-phase fusion and extra graph flags did not demonstrate useful speedups. Direct mapped PCIe weight dots are slower than native CPU and are **not integrated**; staged expert costs are measured, but integrated asynchronous splitting remains pending.
+
+**Final verified inference tests:1969 NumPy passed/1124 skipped;1367 actual CuPy passed/14 skipped**, including Qwen3-Next GPU mixer/attention/decoder/model. Full training suite not run. No production graph equation or pinned reference mathematics corrected, no checkpoint changed, no expert tail omitted. Current defaults/reference paths remain available. Contracts, commands, per-patch status, memory scopes and next dependencies: `0281_0288_execution_optimization.md`, `0288_reproduce.md`, `0281_0288_performance_v3.json`.
+
+## Prior — through0280; best longer decode26.95/s
 
 **0280 implemented/numerically validated within path, not performance optimized:** node-level graph trace attributes the dominant runtime copy waits to4-byteQSAfinite-status reads. An opt-in device-status/conditional-cache-commit path preserves every check, reports the first bad layer once/modelstep and isolates failed requests. Focused9tests pass; actual checkpoint fixed-prefix logits/all-state hashes remain bit-exact over two requests. Longer same413-token run24.84134/s does not improve26.95159/s; keep default off.
 

@@ -428,6 +428,8 @@ extern "C" void mylocal_ggml_handoff_destroy(void *handle) noexcept {
     delete static_cast<NativeHandoff *>(handle);
 }
 
+#include "native_expert_service.h"
+
 extern "C" int mylocal_ggml_linear(
     const uint8_t *w, size_t stride, int type, Quantize quantize, Dot dot,
     int n, int k, const float *x, int m, float *out) noexcept {

@@ -66,7 +66,8 @@ def _load_bridge():
         raise RuntimeError('GGML CPU bridge needs g++ or clang++; set CXX to a compiler executable')
     flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-pthread', '-ffp-contract=off']
     header = source.with_name('q2_cpu_simd.h')
-    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + repr(
+    service_header=source.with_name('native_expert_service.h')
+    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + service_header.read_bytes() + repr(
         (compiler, flags, platform.machine(), sys.platform)).encode()).hexdigest()[:20]
     cache = Path(os.environ.get('MINI_LLM_NATIVE_BUILD_DIR',
                               str(Path.home() / '.cache/mylocal_llm/native')))
@@ -312,6 +313,7 @@ class GGMLPackedCPURowPool:
         self.d_model, self.d_ff, self.capacity = d_model, d_ff, capacity
         self._lock, self._pending = threading.Lock(), None
         self._registered = {}
+        self._native_service = None
         self._handle = executor._bridge.mylocal_ggml_pool_create(d_model, d_ff, capacity, workers)
         if not self._handle:
             raise RuntimeError('Cannot allocate bounded GGML row pool')
@@ -412,6 +414,9 @@ class GGMLPackedCPURowPool:
     def close(self):
         with self._lock:
             if self._handle:
+                if self._native_service is not None:
+                    self._native_service.close()
+                    self._native_service=None
                 self.executor._bridge.mylocal_ggml_pool_destroy(self._handle)
                 self._handle = None
                 self._registered.clear()

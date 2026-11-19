@@ -1,8 +1,28 @@
 // Pinned Strata 712fec6b4297c9cfd32ab43daaa2979a9aa01edf
 // src/kernels/cuda/iq_kernels.cu: extracted K/Q8 dot arithmetic.
-// Included after strata_mixed_q8_reference.cuh, which carries the full
-// MIT notice: Copyright (c) 2026 Niko1221 and the Strata contributors;
-// Copyright (c) 2023-2026 The ggml authors. Same MIT terms apply here.
+/*
+MIT License
+Copyright (c) 2026 Niko1221 and the Strata contributors
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 constexpr int QR4_K=2, QR5_K=2, QR6_K=2, QI4_K=32, QI5_K=32, QI6_K=32, QI8_1=8, VDR_Q8_0=2;
 struct block_q4_K { half2 dm; uint8_t scales[12],qs[128]; };
 struct block_q5_K { half2 dm; uint8_t scales[12],qh[32],qs[128]; };

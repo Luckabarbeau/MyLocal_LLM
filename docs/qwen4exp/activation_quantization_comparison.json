@@ -1,0 +1,344 @@
+{
+  "scope": "B bounded arithmetic only; not full model parity",
+  "hc_audit": {
+    "source": "src/models/qwen4exp.cpp:build_hc_mix; ggml/src/ggml-cpu/ops.cpp:ggml_compute_forward_dsv4_hc_pre_f32",
+    "chain": "F32 grouped RMSNorm * gamma -> BF16 down matmul (activation BF16) -> scale 1/4 -> F32 SiLU -> BF16 up matmul (activation BF16) -> F32 fused sigmoid(gate)*xn stream sum /4",
+    "fused_mixing_dtype": "F32; no BF16 cast inside fused HC pre",
+    "limitation": "HC down/up are separate bounded row tiles on substitute inputs, not a composed HC replay. No retained pre-HC normalized streams/gates available; cannot attribute earliest HC read divergence from these tiles alone.",
+    "fp32_baseline": "D(BF16 W) x in F32 and FP64; activation rounding isolated per matmul, not full HC mixed baseline"
+  },
+  "activation_types": {
+    "IQ3_S": "q8_K",
+    "IQ3_XXS": "q8_K",
+    "IQ2_S": "q8_K",
+    "IQ4_NL": "q8_0",
+    "Q2_0": "q8_0",
+    "Q4_K": "q8_K",
+    "Q6_K": "q8_K",
+    "Q5_K": "q8_K",
+    "IQ4_XS": "q8_K",
+    "BF16": "bf16"
+  },
+  "observations": [
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.013360169626647583,
+      "graph_relative_l2": 0.013360180729970899,
+      "kernel_relative_l2": 8.082074216434805e-08
+    },
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.008040829902555105,
+      "graph_relative_l2": 0.008040837631274432,
+      "kernel_relative_l2": 1.025454629563481e-07
+    },
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.010557745363791204,
+      "graph_relative_l2": 0.010557743941917566,
+      "kernel_relative_l2": 6.634033913437235e-08
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.014748766508204052,
+      "graph_relative_l2": 0.014748765087611993,
+      "kernel_relative_l2": 9.232911468777206e-08
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.007589345688619581,
+      "graph_relative_l2": 0.007589365910068781,
+      "kernel_relative_l2": 1.1166918790538664e-07
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.010032365698009055,
+      "graph_relative_l2": 0.010032355461315003,
+      "kernel_relative_l2": 5.639714190568481e-08
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.01360686719765759,
+      "graph_relative_l2": 0.013606829408191124,
+      "kernel_relative_l2": 9.830702635147304e-08
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.005214653973544824,
+      "graph_relative_l2": 0.005214639375411563,
+      "kernel_relative_l2": 7.811692485974432e-08
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.012747910461937496,
+      "graph_relative_l2": 0.012747930158417605,
+      "kernel_relative_l2": 7.346027062762003e-08
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.013783285848142125,
+      "graph_relative_l2": 0.013783297353953703,
+      "kernel_relative_l2": 9.166972486195586e-08
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.007304609594392523,
+      "graph_relative_l2": 0.007304591519411913,
+      "kernel_relative_l2": 8.996764606310615e-08
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.009521674677382304,
+      "graph_relative_l2": 0.009521670734165391,
+      "kernel_relative_l2": 6.247185408218888e-08
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.003422563907470701,
+      "graph_relative_l2": 0.003422556972523151,
+      "kernel_relative_l2": 5.7989652110256294e-08
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "input_source": "random_seed_859",
+      "rounding_relative_l2": 0.00785954940177478,
+      "graph_relative_l2": 0.007859547750664487,
+      "kernel_relative_l2": 1.0084474534224863e-07
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "input_source": "multirange_seed_859",
+      "rounding_relative_l2": 0.005398098864347492,
+      "graph_relative_l2": 0.00539809980157592,
+      "kernel_relative_l2": 6.660966718807785e-08
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.0042285812675700585,
+      "graph_relative_l2": 0.004228586972985527,
+      "kernel_relative_l2": 3.945016744146656e-08
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "input_source": "random_seed_859",
+      "rounding_relative_l2": 0.003728811829274574,
+      "graph_relative_l2": 0.0037288183266438522,
+      "kernel_relative_l2": 5.2261321009984494e-08
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "input_source": "multirange_seed_859",
+      "rounding_relative_l2": 0.005960615271644855,
+      "graph_relative_l2": 0.005960617982347714,
+      "kernel_relative_l2": 2.886591593005075e-08
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.002320989397419537,
+      "graph_relative_l2": 0.002320953575366347,
+      "kernel_relative_l2": 1.3629413078406665e-07
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.008886089083739541,
+      "graph_relative_l2": 0.00888618110510451,
+      "kernel_relative_l2": 2.2883848198399915e-07
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.013915168887933066,
+      "graph_relative_l2": 0.0139152208633228,
+      "kernel_relative_l2": 2.0933792665950918e-07
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.0034503243216611615,
+      "graph_relative_l2": 0.0034503471869062607,
+      "kernel_relative_l2": 9.865829030533706e-08
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.006590961391067563,
+      "graph_relative_l2": 0.006590917795515176,
+      "kernel_relative_l2": 2.5756549314677425e-07
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.01052858478950579,
+      "graph_relative_l2": 0.010528571654280746,
+      "kernel_relative_l2": 1.1077163402261389e-07
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.006143129911787227,
+      "graph_relative_l2": 0.006143148372445899,
+      "kernel_relative_l2": 4.047485941669098e-07
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.005641521925220519,
+      "graph_relative_l2": 0.005641472046146589,
+      "kernel_relative_l2": 2.2604930905738981e-07
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.011434798897648434,
+      "graph_relative_l2": 0.011434784184405276,
+      "kernel_relative_l2": 1.2254531459314154e-07
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.009899418636753097,
+      "graph_relative_l2": 0.009899455663785455,
+      "kernel_relative_l2": 1.0914152994258626e-07
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.008707690198609326,
+      "graph_relative_l2": 0.008707685914957753,
+      "kernel_relative_l2": 7.969909076076355e-08
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.007339184831988367,
+      "graph_relative_l2": 0.007339198290621776,
+      "kernel_relative_l2": 6.717765469304186e-08
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.0030363630065313365,
+      "graph_relative_l2": 0.0030363667617618155,
+      "kernel_relative_l2": 3.931095587102065e-08
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "input_source": "random_seed_859",
+      "rounding_relative_l2": 0.00530851699314029,
+      "graph_relative_l2": 0.005308513921975311,
+      "kernel_relative_l2": 5.254271029742403e-08
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "input_source": "multirange_seed_859",
+      "rounding_relative_l2": 0.006429570106723886,
+      "graph_relative_l2": 0.006429579781247102,
+      "kernel_relative_l2": 7.261758722469465e-08
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "input_source": "real_A",
+      "rounding_relative_l2": 0.007614766844596858,
+      "graph_relative_l2": 0.007614614053745977,
+      "kernel_relative_l2": 3.746376696602322e-07
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "input_source": "random_seed_2779",
+      "rounding_relative_l2": 0.00936681289971567,
+      "graph_relative_l2": 0.009366797254596913,
+      "kernel_relative_l2": 1.6907615844164053e-07
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "input_source": "multirange_seed_2779",
+      "rounding_relative_l2": 0.014421970733392086,
+      "graph_relative_l2": 0.014421981838074383,
+      "kernel_relative_l2": 1.8689180402219156e-07
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.0033278985363373857,
+      "graph_relative_l2": 0.0033279771286606414,
+      "kernel_relative_l2": 3.075316334042106e-07
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "input_source": "random_seed_6363",
+      "rounding_relative_l2": 0.005184113746214475,
+      "graph_relative_l2": 0.005184050454542883,
+      "kernel_relative_l2": 4.3269801881522756e-07
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "input_source": "multirange_seed_6363",
+      "rounding_relative_l2": 0.0071512584581044395,
+      "graph_relative_l2": 0.007151247544707337,
+      "kernel_relative_l2": 1.7027030137283456e-07
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.0014091800368872984,
+      "graph_relative_l2": 0.001409176941857482,
+      "kernel_relative_l2": 6.839594814580306e-08
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "input_source": "random_seed_10459",
+      "rounding_relative_l2": 0.0013434721175808405,
+      "graph_relative_l2": 0.0013435315234848518,
+      "kernel_relative_l2": 1.5063335618792788e-07
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "input_source": "multirange_seed_10459",
+      "rounding_relative_l2": 0.0017271791000969356,
+      "graph_relative_l2": 0.001727198640509995,
+      "kernel_relative_l2": 9.059002836754513e-08
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "input_source": "deterministic_width_substitute",
+      "rounding_relative_l2": 0.0016727484598912938,
+      "graph_relative_l2": 0.0016727788257550657,
+      "kernel_relative_l2": 7.329369188299942e-08
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "input_source": "random_seed_539",
+      "rounding_relative_l2": 0.0012123560312913124,
+      "graph_relative_l2": 0.0012123501044378972,
+      "kernel_relative_l2": 5.496316940111429e-08
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "input_source": "multirange_seed_539",
+      "rounding_relative_l2": 0.0014048641588817815,
+      "graph_relative_l2": 0.0014048433216305551,
+      "kernel_relative_l2": 6.138071971536334e-08
+    }
+  ],
+  "limitations": [
+    "32 output rows only; no full-bank decode or full-model run",
+    "Descriptive measurements, no FP32-equals-GGML assertion or broad pass claim",
+    "Different-width inputs are substitutes, not real intermediate activations"
+  ]
+}

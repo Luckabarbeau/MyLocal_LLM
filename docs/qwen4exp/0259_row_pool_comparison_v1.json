@@ -1,0 +1,172 @@
+{
+  "patch": "0259",
+  "reference_strata_revision": "712fec6b4297c9cfd32ab43daaa2979a9aa01edf",
+  "artifacts": {
+    "control": "diagnostics_0259_long_control_v2",
+    "pool": "diagnostics_0259_long_pool_v1"
+  },
+  "comparison": "Separate sequential processes; nearly fully resident mmap sources; not randomized interleaved trials or full Strata configuration parity",
+  "cases": [
+    {
+      "case": "warmup",
+      "token_ids_identical": true,
+      "output_tokens": 128,
+      "control": {
+        "emitted_tokens_including_eos": 128,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 127,
+        "prefill_seconds": 9.1020341796875,
+        "ttft_seconds": 9.142719722993206,
+        "sampling_call_wall_seconds": 0.1998672837507911,
+        "decode_wall_seconds_after_first_token": 15.482196683005895,
+        "total_wall_seconds": 24.6249164059991,
+        "decode_forward_rate_N_minus_1_per_decode_second": 8.202970327808982,
+        "emitted_N_per_total_second": 5.197987188651603,
+        "emitted_N_per_decode_second": 8.267560645350784
+      },
+      "pool": {
+        "emitted_tokens_including_eos": 128,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 127,
+        "prefill_seconds": 9.3621767578125,
+        "ttft_seconds": 9.408304030017462,
+        "sampling_call_wall_seconds": 0.20591792050981894,
+        "decode_wall_seconds_after_first_token": 14.428973204980139,
+        "total_wall_seconds": 23.8372772349976,
+        "decode_forward_rate_N_minus_1_per_decode_second": 8.801735105874764,
+        "emitted_N_per_total_second": 5.369740794559873,
+        "emitted_N_per_decode_second": 8.871040106708424
+      },
+      "decode_rate_ratio": 1.0729936540226048,
+      "device_counters_identical": true,
+      "pool_promotions_case_including_prefill": 21646,
+      "pool_transfer_bytes_case_including_prefill": 44186240000
+    },
+    {
+      "case": "performance-short-r1",
+      "token_ids_identical": true,
+      "output_tokens": 427,
+      "control": {
+        "emitted_tokens_including_eos": 427,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 426,
+        "prefill_seconds": 9.5331962890625,
+        "ttft_seconds": 9.53388795000501,
+        "sampling_call_wall_seconds": 0.5341919552884065,
+        "decode_wall_seconds_after_first_token": 51.88974493299611,
+        "total_wall_seconds": 61.42363288300112,
+        "decode_forward_rate_N_minus_1_per_decode_second": 8.209714666165402,
+        "emitted_N_per_total_second": 6.951721673860347,
+        "emitted_N_per_decode_second": 8.228986296837151
+      },
+      "pool": {
+        "emitted_tokens_including_eos": 427,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 426,
+        "prefill_seconds": 8.7286279296875,
+        "ttft_seconds": 8.729323284991551,
+        "sampling_call_wall_seconds": 0.5338404173962772,
+        "decode_wall_seconds_after_first_token": 48.831141155038495,
+        "total_wall_seconds": 57.560464440030046,
+        "decode_forward_rate_N_minus_1_per_decode_second": 8.723941114696732,
+        "emitted_N_per_total_second": 7.418286217007062,
+        "emitted_N_per_decode_second": 8.744419849707757
+      },
+      "decode_rate_ratio": 1.0626363362725144,
+      "device_counters_identical": true,
+      "pool_promotions_case_including_prefill": 46591,
+      "pool_transfer_bytes_case_including_prefill": 94913766400
+    }
+  ],
+  "memory": {
+    "control": {
+      "sampled_highwater_bytes": {
+        "RssAnon": 825638912,
+        "RssFile": 55251689472
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "host_warming": {
+        "mode": "reclaimable_mmap_pages",
+        "total_expert_bytes": 50292326400,
+        "requested_budget_bytes": 53687091200,
+        "planned_bytes": 50292326400,
+        "touched_bytes": 50292326400,
+        "resident_bytes_estimate": 50292326400,
+        "ram_reserve_bytes": 4294967296,
+        "available_before_bytes": 57454055424,
+        "available_after_bytes": 57211990016,
+        "complete_expert_source": true,
+        "stop_reason": null,
+        "seconds": 1.1465913699939847,
+        "checksum": 1508195388,
+        "private_weight_copy_bytes": 0,
+        "pinned_expert_source_bytes": 0,
+        "note": "Resident estimate is page-rounded; pages remain OS-reclaimable, not permanently pinned."
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_0a66b88034271e53ec2f.so",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      }
+    },
+    "pool": {
+      "sampled_highwater_bytes": {
+        "RssAnon": 824041472,
+        "RssFile": 55226150912
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "host_warming": {
+        "mode": "reclaimable_mmap_pages",
+        "total_expert_bytes": 50292326400,
+        "requested_budget_bytes": 53687091200,
+        "planned_bytes": 50292326400,
+        "touched_bytes": 50292326400,
+        "resident_bytes_estimate": 50258399232,
+        "ram_reserve_bytes": 4294967296,
+        "available_before_bytes": 56752242688,
+        "available_after_bytes": 57417310208,
+        "complete_expert_source": true,
+        "stop_reason": null,
+        "seconds": 12.039909733983222,
+        "checksum": 1508195388,
+        "private_weight_copy_bytes": 0,
+        "pinned_expert_source_bytes": 0,
+        "note": "Resident estimate is page-rounded; pages remain OS-reclaimable, not permanently pinned."
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_0a66b88034271e53ec2f.so",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      }
+    }
+  },
+  "tests": {
+    "cpu_regression": {
+      "passed": 120,
+      "skipped": 7
+    },
+    "gpu_integration": {
+      "passed": 74,
+      "skipped": 1
+    },
+    "supervisor_final": {
+      "passed": 18,
+      "skipped": 0
+    }
+  },
+  "full_model_logit_comparison": "not captured by this sampled workload"
+}

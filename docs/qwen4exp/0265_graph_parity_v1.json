@@ -1,0 +1,68 @@
+{
+  "scope": "same Triton projection arithmetic; fixed tokens1..16; two isolated requests; all selected experts CPU Q8",
+  "logit_comparisons": [
+    {
+      "request": 0,
+      "prefix": 1,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 2,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 4,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 8,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 16,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 1,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 2,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 4,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 8,
+      "logits_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 16,
+      "logits_exact": true,
+      "max_abs": 0.0
+    }
+  ],
+  "all_active_state_hashes_exact": true,
+  "reset_logits_exact": true,
+  "graph_calls": 1152
+}

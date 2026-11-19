@@ -1,0 +1,73 @@
+{
+  "scope": "C only",
+  "mapping_trusted": false,
+  "production_files_modified": false,
+  "model_complete": false,
+  "tokens": [
+    1,
+    2
+  ],
+  "threads": 1,
+  "context": 32,
+  "kv_dtype": "F32",
+  "expected_boundaries": 386,
+  "omitted_captures": "Input streams and branch outputs omitted: buffer lifetime not independently verified.",
+  "interpretation": "Descriptive differences only; jumps do not prove causal quantization attribution. Old occurrence-based HC read 183% is untrusted and not reused.",
+  "provenance": {
+    "base_sha": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "changed_source_files": [
+      "src/llama-model.cpp"
+    ],
+    "compared_files": 3603,
+    "zero_prefetch_control_flow_verified": true,
+    "cpu_only": true
+  },
+  "shards_before": [
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "size": 54817524224,
+      "mtime_ns": 1794362612345817261
+    },
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "size": 28800138432,
+      "mtime_ns": 1794269742748675005
+    }
+  ],
+  "compile": {
+    "command": [
+      "c++",
+      "-std=c++17",
+      "-O2",
+      "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/tests/fixtures/qwen4exp_layers_reference.cpp",
+      "-I/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/include",
+      "-I/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/ggml/include",
+      "-L/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin",
+      "-Wl,-rpath,/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin",
+      "-lllama",
+      "-lggml",
+      "-lggml-base",
+      "-lggml-cpu",
+      "-o",
+      "/tmp/layer-evolution-t0vej5d4/layers"
+    ],
+    "returncode": 0,
+    "seconds": 0.8077281599980779,
+    "sampled_peak_rss_bytes": 3026944,
+    "stop_reason": null,
+    "log_tail": ""
+  },
+  "error": "reference failed",
+  "failure": {
+    "command": [
+      "/tmp/layer-evolution-t0vej5d4/layers",
+      "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/qwen4exp/diagnostics_0220_v1/reference"
+    ],
+    "returncode": 5,
+    "seconds": 4.62529746198561,
+    "sampled_peak_rss_bytes": 6170009600,
+    "stop_reason": null,
+    "log_tail": " = {     1,     1,     1,     1 }] is used by node 'cache_k_l15 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l19 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l23 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l27 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l31 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l35 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l39 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l43 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_k_l47 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-3' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-3' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-3' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-7' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-7' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-7' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-11' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-11' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-11' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-15' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-15' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-15' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-19' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-19' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-19' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-23' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-23' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-23' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-27' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-27' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-27' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-31' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-31' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-31' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-35' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-35' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-35' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-39' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-39' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-39' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-43' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-43' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-43' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Qcur-47' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'Kcur-47' (ROPE)\nllama_graph_n_input_tensors: input tensor '                         inp_pos' [i32, ne = {     4,     1,     1,     1 }] is used by node 'indexer_q-47' (ROPE)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l3 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l7 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l11 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l15 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l19 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l23 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l27 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l31 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l35 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l39 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l43 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                 attn_inp_k_idxs' [i64, ne = {     1,     1,     1,     1 }] is used by node 'cache_idx_k_l47 (view)' (SET_ROWS)\nllama_graph_n_input_tensors: input tensor '                       rs_s_copy' [i32, ne = {     1,     1,     1,     1 }] is used by node 'rs_s_copy (view)' (VIEW)\nllama_graph_n_input_tensors: input tensor '                       rs_s_copy' [i32, ne = {     1,     1,     1,     1 }] is used by node 'rs_s_copy (view)' (VIEW)\nllama_graph_n_input_tensors: input tensor '                          leaf_4' [i32, ne = {    16,     1,     1,     1 }] is used by node 'node_1' (GET_ROWS)\nllama_graph_n_input_tensors: input tensor '                      inp_tokens' [i32, ne = {     1,     1,     1,     1 }] is used by node 'model.input_embed' (GET_ROWS)\nsched_reserve:        CPU compute buffer size =     6.60 MiB\nsched_reserve: graph: nodes = 6820, splits = 1, input objects = 6, input tensors = 13\nsched_reserve: reserve took 15.86 ms, sched copies = 1\n~llama_context:        CPU compute buffer size is   6.6001 MiB, matches expectation of   6.6001 MiB\n"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "logit_comparisons": [
+    {
+      "request": 0,
+      "prefix": 1,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 2,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 4,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 8,
+      "max_abs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 16,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 1,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 2,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 4,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 8,
+      "max_abs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 16,
+      "max_abs": 0.0
+    }
+  ],
+  "active_state_hashes_exact": true,
+  "graph_calls": 1152
+}

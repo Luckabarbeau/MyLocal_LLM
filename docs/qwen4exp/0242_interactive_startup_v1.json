@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "run": {
+    "returncode": 0,
+    "seconds": 13.966163054981735,
+    "sampled_peak_rss_bytes": 13265502208,
+    "stop_reason": null
+  },
+  "scope": "real terminal input, warm-cache continuation, /reset and fresh identical greeting, two output tokens per response",
+  "context": 64,
+  "host_moe_gib": 0.25,
+  "gpu_cache": "auto"
+}

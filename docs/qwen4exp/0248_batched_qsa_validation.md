@@ -1,0 +1,7 @@
+# 0248 — Batch QSA finite checks before state commit
+
+`ops/finite_checks_gpu.py` checks1..8 current-device FP32 arrays with one kernel/readback. The existing `Qwen4ExpAttention.fast_decode` mode now retains original hidden and projection arrays and validates them together before KV/index/pool/state updates. Shape/dtype checks remain immediate. CPU/reference behavior is unchanged. This removes per-projection host fences without discarding finite validation, including when a later callback masks bad upstream values. Diagnostic sparse paths still validate all evaluated projections. New tests cover strides, empty arrays, nondefault streams, NaN and ±infinity injection, including masked outputs and unchanged state on failure.
+
+Validation: actual CuPy `test_0248_batched_qsa_validation.py`, `test_0230_qsa_gpu_decode.py`, `test_0208_qwen4exp_attention.py`: **49 passed**. No arithmetic or tolerance changes. Real checkpoint pre/post final logits and active-state hashes are bit-exact; `diagnostics_0248_v1/` records warm16-token pass rates16.31/16.34/16.49t/s with sampled peakRSS10,304,057,344bytes.
+
+Controlled same-process A/B in `diagnostics_0248_ab_v1/`: passes1/3 restore per-array validation and bypass redundant final batch check; passes2/4 use batch validation. Old14.1985/14.3450 vs batch15.6075/15.8511 forced tokens/s. All repeated final logits/state hashes exact. These are fixed-prefix warm cache, not emitted conversation throughput. Keep the reference validation path; no Strata arithmetic-equivalence claim.

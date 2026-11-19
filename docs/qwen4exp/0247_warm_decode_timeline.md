@@ -1,0 +1,9 @@
+# 0247 — Warm-decode timeline and discarded expert accumulator
+
+Added `scripts/probe_0247_warm_decode.py`: one cold pass followed by 1–4 fresh-state repetitions of fixed IDs1..16, full top10 FP32 with fixed packed expert slots. Warm repeats compare final logits and active-state hashes exactly. Optional cudaProfilerApi capture records only the first warm pass. It is not a prolonged conversation benchmark. `diagnostics_0247_v1/` preserves Nsight report/SQLite and repeated-run results.
+
+Nsight warm pass: 13.3222 forced tokens/s under instrumentation, 60,624 kernel launches over16 tokens, kernel duration sum465.503ms (~29.094ms/token), versus ~1.20s wall interval. Sums are kernel occupancy durations, not an independently proven exclusive critical path. Transfers consumed ~1.35ms total; host calls and dependency waits are materially larger. 1,152 finite-validation D2H operations plus768 routing readbacks account for1,920 D2H operations. GPU kernel counters unavailable to this user (`ERR_NVGPUCTRPERM`); no administrator settings changed.
+
+Removed an unused `xp.zeros` fallback accumulator before successful grouped/batched returns in `ops/experts_inference.py`, retaining zero initialization for fallback. Added8 dispatcher cases in `test_0106s_singleton_dispatch.py`. CPU singleton/admission suite23 passed21 skipped; GPU42 passed2 skipped. No arithmetic or residency ownership changes. No isolated throughput benefit claimed for this cleanup.
+
+Caution: the original `bounded_gpu` wrapper samples only its direct child. With nsys as that child it measured the profiler process, **not the inference descendant**; its recorded67MB RSS is not a model memory measurement. GPU allocations were independently budgeted and runtime was bounded, but do not claim an enforced whole-process-tree20GiB guard for that capture. Subsequent non-nsys runs supervise Python directly and report ~9.6GiB RSS.

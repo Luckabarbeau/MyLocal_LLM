@@ -1,0 +1,13 @@
+{
+  "run": {
+    "returncode": 0,
+    "seconds": 17.861956117034424,
+    "sampled_peak_rss_bytes": 11276140544,
+    "stop_reason": null
+  },
+  "scope": "two-token CLI interface smoke, not numerical parity or steady-state speed",
+  "prompt": "Hi",
+  "thinking": false,
+  "context": 64,
+  "max_new_tokens": 2
+}

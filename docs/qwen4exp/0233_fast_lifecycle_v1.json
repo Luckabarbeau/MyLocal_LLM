@@ -1,0 +1,72 @@
+{
+  "status": "passed",
+  "input_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "backend": "cupy",
+  "activation_dtype": "float32",
+  "full_top10": true,
+  "incremental_prefill_logits_bit_exact": true,
+  "all_active_state_hash_equal": true,
+  "active_state_sha256": "21d17fc3aede01a84b7af68ee3f28be1e156b30d2b160e0a403b71f080684794",
+  "greedy_ids": [
+    220,
+    100561,
+    198
+  ],
+  "repeated_request_ids": [
+    220,
+    100561,
+    198
+  ],
+  "expert_statistics": {
+    "device": {
+      "requests": 19200,
+      "misses": 2332,
+      "promotions": 2332,
+      "hits": 16868,
+      "resident_experts": 2332,
+      "resident_bytes": 4778188800,
+      "device_budget_bytes": 6442450944,
+      "protected_experts": 0,
+      "inflight_dispatches": 1,
+      "hit_rate": 0.8785416666666667
+    },
+    "host_dequant": {
+      "resident_experts": 0,
+      "used_bytes": 0,
+      "budget_bytes": 0
+    },
+    "execution": {
+      "gpu_experts": 19200,
+      "decode_batch_dispatches": 689,
+      "grouped_gpu_dispatches": 1231
+    },
+    "cpu_workers": 4,
+    "cpu_packed_backend": "native"
+  },
+  "pool_used_bytes": 10486193152,
+  "pool_reserved_bytes": 10616590848,
+  "scope": "Optimized-path self-consistency and retained three-token greedy smoke, not independent full-model reference equality.",
+  "run": {
+    "returncode": 0,
+    "seconds": 13.019808580022072,
+    "sampled_peak_rss_bytes": 11173183488,
+    "stop_reason": null
+  }
+}

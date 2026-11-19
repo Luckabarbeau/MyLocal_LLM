@@ -1,0 +1,553 @@
+{
+  "target_decode_tokens_per_second": 50,
+  "target_reached": false,
+  "tests": {
+    "numpy": {
+      "passed": 1875,
+      "skipped": 962
+    },
+    "cupy": {
+      "passed": 147,
+      "skipped": 3
+    }
+  },
+  "runs": [
+    {
+      "artifact": "diagnostics_0259_long_pool_v1",
+      "placement": null,
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_0a66b88034271e53ec2f.so",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 824041472,
+        "RssFile": 55226150912
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": null,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 9.3621767578125,
+            "ttft_seconds": 9.408304030017462,
+            "sampling_call_wall_seconds": 0.20591792050981894,
+            "decode_wall_seconds_after_first_token": 14.428973204980139,
+            "total_wall_seconds": 23.8372772349976,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.801735105874764,
+            "emitted_N_per_total_second": 5.369740794559873,
+            "emitted_N_per_decode_second": 8.871040106708424
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 427,
+          "token_ids_sha256": "747fd1b4734ee2d03c45f17e61d314025205df0ac3f0e9e38b5cc1050a4eef0e",
+          "identical_to_previous_listed_run": null,
+          "timing": {
+            "emitted_tokens_including_eos": 427,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 426,
+            "prefill_seconds": 8.7286279296875,
+            "ttft_seconds": 8.729323284991551,
+            "sampling_call_wall_seconds": 0.5338404173962772,
+            "decode_wall_seconds_after_first_token": 48.831141155038495,
+            "total_wall_seconds": 57.560464440030046,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.723941114696732,
+            "emitted_N_per_total_second": 7.418286217007062,
+            "emitted_N_per_decode_second": 8.744419849707757
+          },
+          "promotions_including_prefill": 46591,
+          "transfer_bytes_including_prefill": 94913766400
+        }
+      ]
+    },
+    {
+      "artifact": "diagnostics_0260_frozen_v1",
+      "placement": {
+        "after_warmup_promotions_per_480_requests": 0
+      },
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_0a66b88034271e53ec2f.so",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 825151488,
+        "RssFile": 55135801344
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 10.54407421875,
+            "ttft_seconds": 10.60394802497467,
+            "sampling_call_wall_seconds": 0.23732900514733046,
+            "decode_wall_seconds_after_first_token": 14.937785524991341,
+            "total_wall_seconds": 25.54173354996601,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.501929538854696,
+            "emitted_N_per_total_second": 5.01140612674547,
+            "emitted_N_per_decode_second": 8.568873865932293
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 324,
+          "token_ids_sha256": "882079f66b41cad830417421fc7adcb51ff942c99850219fb00ec21813ccd973",
+          "identical_to_previous_listed_run": false,
+          "timing": {
+            "emitted_tokens_including_eos": 324,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 323,
+            "prefill_seconds": 7.56530419921875,
+            "ttft_seconds": 7.566104119992815,
+            "sampling_call_wall_seconds": 0.437728576886002,
+            "decode_wall_seconds_after_first_token": 31.32427529001143,
+            "total_wall_seconds": 38.89037941000424,
+            "decode_forward_rate_N_minus_1_per_decode_second": 10.311491551186727,
+            "emitted_N_per_total_second": 8.33110925929032,
+            "emitted_N_per_decode_second": 10.34341567363622
+          },
+          "promotions_including_prefill": 0,
+          "transfer_bytes_including_prefill": 0
+        }
+      ]
+    },
+    {
+      "artifact": "diagnostics_0260_bounded_v1",
+      "placement": {
+        "after_warmup_promotions_per_480_requests": 1
+      },
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_0a66b88034271e53ec2f.so",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 823713792,
+        "RssFile": 55181402112
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 9.0150185546875,
+            "ttft_seconds": 9.054154013982043,
+            "sampling_call_wall_seconds": 0.21260968095157295,
+            "decode_wall_seconds_after_first_token": 14.742556056007743,
+            "total_wall_seconds": 23.796710069989786,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.614517015741392,
+            "emitted_N_per_total_second": 5.378894797790632,
+            "emitted_N_per_decode_second": 8.682347858385025
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 352,
+          "token_ids_sha256": "ad211d9f42b019693c7bb4d1cc386a2edd00149a39f59f9c79a32cc519cbeaa1",
+          "identical_to_previous_listed_run": false,
+          "timing": {
+            "emitted_tokens_including_eos": 352,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 351,
+            "prefill_seconds": 7.49683740234375,
+            "ttft_seconds": 7.49767203402007,
+            "sampling_call_wall_seconds": 0.4778005115222186,
+            "decode_wall_seconds_after_first_token": 34.08320296398597,
+            "total_wall_seconds": 41.58087499800604,
+            "decode_forward_rate_N_minus_1_per_decode_second": 10.29832789984217,
+            "emitted_N_per_total_second": 8.465430321436953,
+            "emitted_N_per_decode_second": 10.327667865368785
+          },
+          "promotions_including_prefill": 427,
+          "transfer_bytes_including_prefill": 850713600
+        }
+      ]
+    },
+    {
+      "artifact": "diagnostics_0261_frozen_simd_v1",
+      "placement": {
+        "after_warmup_promotions_per_480_requests": 0
+      },
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_cf3589155daae325ead2.so",
+        "q2_dot": "avx2_q8_0_scalar_float_order",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 824172544,
+        "RssFile": 55092994048
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12334209024,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 10.3480625,
+            "ttft_seconds": 10.398629606992472,
+            "sampling_call_wall_seconds": 0.20962112717097625,
+            "decode_wall_seconds_after_first_token": 14.429286881000735,
+            "total_wall_seconds": 24.827916487993207,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.801543766325892,
+            "emitted_N_per_total_second": 5.155486972171059,
+            "emitted_N_per_decode_second": 8.870847260548931
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 324,
+          "token_ids_sha256": "882079f66b41cad830417421fc7adcb51ff942c99850219fb00ec21813ccd973",
+          "identical_to_previous_listed_run": false,
+          "timing": {
+            "emitted_tokens_including_eos": 324,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 323,
+            "prefill_seconds": 7.283224609375,
+            "ttft_seconds": 7.28388233599253,
+            "sampling_call_wall_seconds": 0.40727854339638725,
+            "decode_wall_seconds_after_first_token": 30.12779565801611,
+            "total_wall_seconds": 37.41167799400864,
+            "decode_forward_rate_N_minus_1_per_decode_second": 10.720996772097374,
+            "emitted_N_per_total_second": 8.660397431301734,
+            "emitted_N_per_decode_second": 10.754188712568263
+          },
+          "promotions_including_prefill": 0,
+          "transfer_bytes_including_prefill": 0
+        }
+      ]
+    },
+    {
+      "artifact": "diagnostics_0262_overlap_v1",
+      "placement": {
+        "after_warmup_promotions_per_480_requests": 0
+      },
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false,
+        "overlap_shared": true
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_cf3589155daae325ead2.so",
+        "q2_dot": "avx2_q8_0_scalar_float_order",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 823582720,
+        "RssFile": 55142375424
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12335560704,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 9.8791826171875,
+            "ttft_seconds": 9.9219767319737,
+            "sampling_call_wall_seconds": 0.20642591291107237,
+            "decode_wall_seconds_after_first_token": 14.193276290025096,
+            "total_wall_seconds": 24.115253021998797,
+            "decode_forward_rate_N_minus_1_per_decode_second": 8.947898808202194,
+            "emitted_N_per_total_second": 5.307843955990585,
+            "emitted_N_per_decode_second": 9.018354704329768
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 324,
+          "token_ids_sha256": "882079f66b41cad830417421fc7adcb51ff942c99850219fb00ec21813ccd973",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 324,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 323,
+            "prefill_seconds": 7.38813232421875,
+            "ttft_seconds": 7.388871543982532,
+            "sampling_call_wall_seconds": 0.4083340764627792,
+            "decode_wall_seconds_after_first_token": 29.91391805303283,
+            "total_wall_seconds": 37.30278959701536,
+            "decode_forward_rate_N_minus_1_per_decode_second": 10.79764942283288,
+            "emitted_N_per_total_second": 8.685677492224968,
+            "emitted_N_per_decode_second": 10.831078678011929
+          },
+          "promotions_including_prefill": 0,
+          "transfer_bytes_including_prefill": 0
+        }
+      ]
+    },
+    {
+      "artifact": "diagnostics_0264_sources_v1",
+      "placement": {
+        "after_warmup_promotions_per_480_requests": 0
+      },
+      "options": {
+        "max_length": 1024,
+        "cpu_workers": 15,
+        "static_device_budget_bytes": 6442450944,
+        "device_budget_bytes": 15032385536,
+        "cache_bytes": 6442450944,
+        "expert_promote_after": 1,
+        "group_after_admission": true,
+        "expert_cache_slots": true,
+        "qsa_fast_decode": true,
+        "hc_fast_decode": true,
+        "router_fast_decode": true,
+        "gdn_fast_decode": true,
+        "hc_graph_decode": false,
+        "hc_native_read": true,
+        "elementwise_fast_decode": true,
+        "expert_victim_policy": "heap",
+        "expert_cpu_backend": "ggml_pool",
+        "group_mixed_decode": false,
+        "overlap_shared": true
+      },
+      "cpu_backend_provenance": {
+        "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+        "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+        "library_revision_verified": false,
+        "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_cf3589155daae325ead2.so",
+        "q2_dot": "avx2_q8_0_scalar_float_order",
+        "activation_quantizers": [
+          "quantize_row_q8_K",
+          "quantize_row_q8_0"
+        ]
+      },
+      "supervisor_returncode": 0,
+      "supervisor_stop_reason": null,
+      "memory": {
+        "RssAnon": 829919232,
+        "RssFile": 55192346624
+      },
+      "gpu_pool_used_bytes": 12148603904,
+      "gpu_pool_reserved_bytes": 12335560704,
+      "cases": [
+        {
+          "name": "warmup",
+          "output_tokens": 128,
+          "token_ids_sha256": "aa9aed8e0de5fe77ca7207fd2d782daa129845acf6d6e76ec2e5159e4d44156f",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 128,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 127,
+            "prefill_seconds": 8.817056640625,
+            "ttft_seconds": 8.855884343967773,
+            "sampling_call_wall_seconds": 0.20282867859350517,
+            "decode_wall_seconds_after_first_token": 13.909222707035951,
+            "total_wall_seconds": 22.765107051003724,
+            "decode_forward_rate_N_minus_1_per_decode_second": 9.130632435395352,
+            "emitted_N_per_total_second": 5.62263993370312,
+            "emitted_N_per_decode_second": 9.202527178981143
+          },
+          "promotions_including_prefill": 21646,
+          "transfer_bytes_including_prefill": 44186240000
+        },
+        {
+          "name": "performance-short-r1",
+          "output_tokens": 324,
+          "token_ids_sha256": "882079f66b41cad830417421fc7adcb51ff942c99850219fb00ec21813ccd973",
+          "identical_to_previous_listed_run": true,
+          "timing": {
+            "emitted_tokens_including_eos": 324,
+            "first_token_from_prefill": 1,
+            "decode_forwards": 323,
+            "prefill_seconds": 6.84200732421875,
+            "ttft_seconds": 6.842704830982257,
+            "sampling_call_wall_seconds": 0.4100395157583989,
+            "decode_wall_seconds_after_first_token": 28.273501524992753,
+            "total_wall_seconds": 35.11620635597501,
+            "decode_forward_rate_N_minus_1_per_decode_second": 11.424124447920951,
+            "emitted_N_per_total_second": 9.226509171167105,
+            "emitted_N_per_decode_second": 11.459493254261263
+          },
+          "promotions_including_prefill": 0,
+          "transfer_bytes_including_prefill": 0
+        }
+      ]
+    }
+  ]
+}

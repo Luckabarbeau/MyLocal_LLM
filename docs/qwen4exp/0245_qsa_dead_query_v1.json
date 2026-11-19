@@ -1,0 +1,23 @@
+{
+  "scope": "Synthetic FP32 production-dimension QSA, 128 positions; not full-model speed",
+  "rounds": [
+    {
+      "with_unused_query_ms": 0.8710475467523793,
+      "optimized_ms": 0.7242230781230319
+    },
+    {
+      "optimized_ms": 0.9056589997271658,
+      "with_unused_query_ms": 1.0745888753262989
+    },
+    {
+      "with_unused_query_ms": 1.1297019059384183,
+      "optimized_ms": 0.9836523672674957
+    },
+    {
+      "optimized_ms": 1.0122428516297077,
+      "with_unused_query_ms": 1.037011367316154
+    }
+  ],
+  "final_output_bitwise_equal": true,
+  "device_pool_reserved_bytes": 426479104
+}

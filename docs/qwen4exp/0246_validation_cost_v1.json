@@ -1,0 +1,30 @@
+{
+  "scope": "same-process synthetic packed IQ3_S top10, D2560 F768, FP32 warp kernel; duplicate validation only",
+  "pairs": [
+    {
+      "redundant_ms": 0.287887430167757,
+      "single_validation_ms": 0.2874122600769624
+    },
+    {
+      "single_validation_ms": 0.2889997747843154,
+      "redundant_ms": 0.28783358517102897
+    },
+    {
+      "redundant_ms": 0.3100671651191078,
+      "single_validation_ms": 0.2906877698842436
+    },
+    {
+      "single_validation_ms": 0.28949005994945765,
+      "redundant_ms": 0.2891123597510159
+    },
+    {
+      "redundant_ms": 0.2868903550552204,
+      "single_validation_ms": 0.285837804840412
+    },
+    {
+      "single_validation_ms": 0.2837269948213361,
+      "redundant_ms": 0.287795405020006
+    }
+  ],
+  "outputs_bit_exact": true
+}

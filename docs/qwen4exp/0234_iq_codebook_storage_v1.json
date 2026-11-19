@@ -1,0 +1,560 @@
+{
+  "scope": "codebook storage only; real packed top10, one layer per actual format triple; no model forward",
+  "model_path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S",
+  "input": "identical synthetic FP32, seed234 std0.1",
+  "shape": [
+    1,
+    2560
+  ],
+  "routing": "ten evenly spaced expert IDs in ascending order; synthetic normalized routes",
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "cupy_version": "14.2.0",
+  "cuda_runtime": 13020,
+  "records": [
+    {
+      "layer": 0,
+      "formats": [
+        "IQ3_XXS",
+        "IQ3_XXS",
+        "IQ4_NL"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.6863359808921814,
+            "event_p10_ms": 0.6574112117290497,
+            "event_p90_ms": 0.7098271965980532,
+            "synchronized_wall_ms": 0.7361404859693721,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5360960066318512,
+            "event_p10_ms": 0.44011519849300385,
+            "event_p90_ms": 0.5629440248012544,
+            "synchronized_wall_ms": 0.555400489247404,
+            "samples": 20
+          },
+          "global_event_speedup": 1.2802482622548301,
+          "global_wall_speedup": 1.325422825908706
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.5342079997062683,
+            "event_p10_ms": 0.4774911880493164,
+            "event_p90_ms": 0.5678591787815094,
+            "synchronized_wall_ms": 0.5868905136594549,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.398063987493515,
+            "event_p10_ms": 0.31115199327468873,
+            "event_p90_ms": 0.40967361330986024,
+            "synchronized_wall_ms": 0.4157704970566556,
+            "samples": 20
+          },
+          "global_event_speedup": 1.3420153957407948,
+          "global_wall_speedup": 1.4115732545098827
+        }
+      }
+    },
+    {
+      "layer": 1,
+      "formats": [
+        "IQ2_S",
+        "IQ2_S",
+        "Q2_0"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.6390239894390106,
+            "event_p10_ms": 0.6124512135982514,
+            "event_p90_ms": 0.6848159790039063,
+            "synchronized_wall_ms": 0.6518684967886657,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5343680083751678,
+            "event_p10_ms": 0.4280352145433426,
+            "event_p90_ms": 0.656601619720459,
+            "synchronized_wall_ms": 0.5498374957824126,
+            "samples": 20
+          },
+          "global_event_speedup": 1.1958500123951397,
+          "global_wall_speedup": 1.1855657385843867
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.5282240211963654,
+            "event_p10_ms": 0.44197759926319125,
+            "event_p90_ms": 0.5351744174957276,
+            "synchronized_wall_ms": 0.5403870018199086,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.37649600207805634,
+            "event_p10_ms": 0.2885279983282089,
+            "event_p90_ms": 0.5299935817718507,
+            "synchronized_wall_ms": 0.38517800567205995,
+            "samples": 20
+          },
+          "global_event_speedup": 1.4030003460351548,
+          "global_wall_speedup": 1.4029539430140603
+        }
+      }
+    },
+    {
+      "layer": 2,
+      "formats": [
+        "IQ2_S",
+        "IQ2_S",
+        "IQ4_NL"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.66075199842453,
+            "event_p10_ms": 0.6290080130100251,
+            "event_p90_ms": 0.8415712237358095,
+            "synchronized_wall_ms": 0.7644034922122955,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5387199819087982,
+            "event_p10_ms": 0.42868160605430605,
+            "event_p90_ms": 0.6931167960166931,
+            "synchronized_wall_ms": 0.5551760114030913,
+            "samples": 20
+          },
+          "global_event_speedup": 1.2265221647865125,
+          "global_wall_speedup": 1.3768669332099304
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.539872020483017,
+            "event_p10_ms": 0.45202240645885466,
+            "event_p90_ms": 0.6027360141277314,
+            "synchronized_wall_ms": 0.5553150112973526,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.37726400792598724,
+            "event_p10_ms": 0.2932191967964172,
+            "event_p90_ms": 0.3884832084178925,
+            "synchronized_wall_ms": 0.4017824976472184,
+            "samples": 20
+          },
+          "global_event_speedup": 1.4310191514185755,
+          "global_wall_speedup": 1.3821284265720855
+        }
+      }
+    },
+    {
+      "layer": 12,
+      "formats": [
+        "IQ3_XXS",
+        "IQ3_XXS",
+        "Q2_0"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.6654399931430817,
+            "event_p10_ms": 0.6374655783176422,
+            "event_p90_ms": 0.6724192202091217,
+            "synchronized_wall_ms": 0.7091754814609885,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5416640043258667,
+            "event_p10_ms": 0.4285600006580353,
+            "event_p90_ms": 0.7701536178588868,
+            "synchronized_wall_ms": 0.5518824909813702,
+            "samples": 20
+          },
+          "global_event_speedup": 1.2285106409669249,
+          "global_wall_speedup": 1.2850117426264354
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.4864640086889267,
+            "event_p10_ms": 0.4663296103477478,
+            "event_p90_ms": 0.5581727743148803,
+            "synchronized_wall_ms": 0.5722200003219768,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.3921760022640228,
+            "event_p10_ms": 0.3067167907953262,
+            "event_p90_ms": 0.39955839812755584,
+            "synchronized_wall_ms": 0.4070719878654927,
+            "samples": 20
+          },
+          "global_event_speedup": 1.240422682368583,
+          "global_wall_speedup": 1.405697314920754
+        }
+      }
+    },
+    {
+      "layer": 17,
+      "formats": [
+        "IQ3_S",
+        "IQ3_S",
+        "IQ4_NL"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.6506879925727844,
+            "event_p10_ms": 0.6315840065479279,
+            "event_p90_ms": 0.6726367890834809,
+            "synchronized_wall_ms": 0.7136990170693025,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5296960175037384,
+            "event_p10_ms": 0.4474528133869171,
+            "event_p90_ms": 0.5590624153614046,
+            "synchronized_wall_ms": 0.6177200120873749,
+            "samples": 20
+          },
+          "global_event_speedup": 1.228417754845952,
+          "global_wall_speedup": 1.1553762272612784
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.5084799975156784,
+            "event_p10_ms": 0.442412793636322,
+            "event_p90_ms": 0.5329471886157989,
+            "synchronized_wall_ms": 0.5513539945241064,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.40932799875736237,
+            "event_p10_ms": 0.32532799541950225,
+            "event_p90_ms": 0.42777279317379,
+            "synchronized_wall_ms": 0.43262349208816886,
+            "samples": 20
+          },
+          "global_event_speedup": 1.24223116683765,
+          "global_wall_speedup": 1.2744430309663817
+        }
+      }
+    },
+    {
+      "layer": 21,
+      "formats": [
+        "IQ3_S",
+        "IQ3_S",
+        "Q2_0"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.6408159732818604,
+            "event_p10_ms": 0.6102944016456604,
+            "event_p90_ms": 0.6813535988330841,
+            "synchronized_wall_ms": 0.653087001410313,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5400319993495941,
+            "event_p10_ms": 0.44008320569992065,
+            "event_p90_ms": 0.7037856161594394,
+            "synchronized_wall_ms": 0.5868010048288852,
+            "samples": 20
+          },
+          "global_event_speedup": 1.1866259296738875,
+          "global_wall_speedup": 1.1129616275976848
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.4938880056142807,
+            "event_p10_ms": 0.43193599581718445,
+            "event_p90_ms": 0.5339551866054536,
+            "synchronized_wall_ms": 0.5434494960354641,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.4079679995775223,
+            "event_p10_ms": 0.321084788441658,
+            "event_p90_ms": 0.4132384091615677,
+            "synchronized_wall_ms": 0.419072006479837,
+            "samples": 20
+          },
+          "global_event_speedup": 1.2106047683292176,
+          "global_wall_speedup": 1.2967926457326167
+        }
+      }
+    },
+    {
+      "layer": 47,
+      "formats": [
+        "IQ4_XS",
+        "IQ4_XS",
+        "IQ4_NL"
+      ],
+      "expert_ids": [
+        0,
+        56,
+        113,
+        170,
+        227,
+        283,
+        340,
+        397,
+        454,
+        511
+      ],
+      "bit_exact": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "measurements": {
+        "sequential": {
+          "constant": {
+            "event_ms": 0.5314240157604218,
+            "event_p10_ms": 0.4535551995038986,
+            "event_p90_ms": 0.6631743848323824,
+            "synchronized_wall_ms": 0.5615794798359275,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.5234079957008362,
+            "event_p10_ms": 0.41297598779201505,
+            "event_p90_ms": 0.5504160106182099,
+            "synchronized_wall_ms": 0.552464509382844,
+            "samples": 20
+          },
+          "global_event_speedup": 1.0153150508311442,
+          "global_wall_speedup": 1.0164987438980755
+        },
+        "grouped": {
+          "constant": {
+            "event_ms": 0.3872319906949997,
+            "event_p10_ms": 0.35164799094200133,
+            "event_p90_ms": 0.48827200233936313,
+            "synchronized_wall_ms": 0.3937525034416467,
+            "samples": 20
+          },
+          "global": {
+            "event_ms": 0.3474240005016327,
+            "event_p10_ms": 0.2804351896047592,
+            "event_p90_ms": 0.3683903872966766,
+            "synchronized_wall_ms": 0.3902864991687238,
+            "samples": 20
+          },
+          "global_event_speedup": 1.1145804266138486,
+          "global_wall_speedup": 1.0088806665880197
+        }
+      }
+    }
+  ],
+  "passed": true,
+  "default_storage": "constant",
+  "cache_evidence": {
+    "module_objects_created": 6,
+    "nvrtc_compile_calls_observed": 0,
+    "materializations": [
+      {
+        "mode": "constant",
+        "family": "single",
+        "dtype": "float32",
+        "first_get_function_ms": 57.55017098272219
+      },
+      {
+        "mode": "constant",
+        "family": "single",
+        "dtype": "float16",
+        "first_get_function_ms": 0.21087098866701126
+      },
+      {
+        "mode": "constant",
+        "family": "grouped",
+        "dtype": "float32",
+        "first_get_function_ms": 0.22937101311981678
+      },
+      {
+        "mode": "global",
+        "family": "single",
+        "dtype": "float32",
+        "first_get_function_ms": 115.23847101489082
+      },
+      {
+        "mode": "global",
+        "family": "single",
+        "dtype": "float16",
+        "first_get_function_ms": 106.40208900440484
+      },
+      {
+        "mode": "global",
+        "family": "grouped",
+        "dtype": "float32",
+        "first_get_function_ms": 189.32352800038643
+      }
+    ],
+    "source_cache": {
+      "hits": 4,
+      "misses": 2,
+      "maxsize": 2,
+      "currsize": 2
+    },
+    "single_cache": {
+      "hits": 5,
+      "misses": 4,
+      "maxsize": null,
+      "currsize": 4
+    },
+    "grouped_cache": {
+      "hits": 2,
+      "misses": 2,
+      "maxsize": null,
+      "currsize": 2
+    },
+    "kernel_attributes": {
+      "constant": {
+        "max_threads_per_block": 1024,
+        "shared_size_bytes": 2048,
+        "const_size_bytes": 11408,
+        "local_size_bytes": 0,
+        "num_regs": 48,
+        "ptx_version": 120,
+        "binary_version": 120,
+        "cache_mode_ca": 0,
+        "max_dynamic_shared_size_bytes": 47104,
+        "preferred_shared_memory_carveout": -1
+      },
+      "global": {
+        "max_threads_per_block": 1024,
+        "shared_size_bytes": 2048,
+        "const_size_bytes": 0,
+        "local_size_bytes": 0,
+        "num_regs": 45,
+        "ptx_version": 120,
+        "binary_version": 120,
+        "cache_mode_ca": 0,
+        "max_dynamic_shared_size_bytes": 47104,
+        "preferred_shared_memory_carveout": -1
+      }
+    },
+    "note": "First module materialization includes load/JIT; CuPy disk cache may avoid NVRTC. Source misses count generated strings, not compilation; module keys include device/dtype/storage."
+  },
+  "cache_at_end": {
+    "source": {
+      "hits": 4,
+      "misses": 2,
+      "maxsize": 2,
+      "currsize": 2
+    },
+    "single": {
+      "hits": 6049,
+      "misses": 4,
+      "maxsize": null,
+      "currsize": 4
+    },
+    "grouped": {
+      "hits": 417,
+      "misses": 2,
+      "maxsize": null,
+      "currsize": 2
+    }
+  },
+  "significant_improvement": true,
+  "significance_rule": "median grouped CUDA-event speedup >=1.10x; no triple regresses in median event or synchronized wall timing",
+  "recommendation": "Recommend opt-in global for main benchmark storage-only A/B; leave default constant pending broader evidence",
+  "interpretation": "Storage-only timing can support the serialization hypothesis but does not establish a hardware cause without profiling",
+  "timing_notes": "20 warm samples/mode/path in balanced ABBA/BAAB order; excludes weight upload and JIT; includes grouped pointer-table upload; event interval includes host launch gaps; synchronized wall reported separately",
+  "logical_mmap_read_bytes": 142336000,
+  "max_single_mmap_read_bytes": 921600,
+  "additional_peak_rss_bytes": 871804928,
+  "checkpoint_size_mtime_unchanged": true
+}

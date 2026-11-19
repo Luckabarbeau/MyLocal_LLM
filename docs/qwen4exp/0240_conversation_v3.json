@@ -1,0 +1,768 @@
+{
+  "status": "completed_bounded_measurement",
+  "max_forwards": 24,
+  "turns": [
+    {
+      "prompt": "Hi",
+      "answer": "Hello! How can I help you today?",
+      "complete": true,
+      "statistics": {
+        "prompt_tokens": 13,
+        "new_prompt_tokens": 13,
+        "reused_tokens": 0,
+        "rebuilt_prefix": false,
+        "state_tokens": 22,
+        "generated_tokens": 9,
+        "stopped": true,
+        "prefill_seconds": 1.952284011989832,
+        "decode_seconds": 1.804824926017318,
+        "decode_forward_tokens": 9,
+        "decode_forwards_per_second": 4.986633257476211
+      },
+      "forward_records": [
+        {
+          "position": 0,
+          "token": 248045,
+          "seconds": 0.5371210090233944,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 7022501888,
+            "RssAnon": 637890560,
+            "RssFile": 5617053696
+          }
+        },
+        {
+          "position": 1,
+          "token": 846,
+          "seconds": 0.18851320398971438,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 7854460928,
+            "RssAnon": 637890560,
+            "RssFile": 6449012736
+          }
+        },
+        {
+          "position": 2,
+          "token": 198,
+          "seconds": 0.17322046600747854,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 8491364352,
+            "RssAnon": 637890560,
+            "RssFile": 7085916160
+          }
+        },
+        {
+          "position": 3,
+          "token": 12675,
+          "seconds": 0.16195243899710476,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 9076305920,
+            "RssAnon": 637890560,
+            "RssFile": 7670857728
+          }
+        },
+        {
+          "position": 4,
+          "token": 248046,
+          "seconds": 0.13297576102195308,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 9556381696,
+            "RssAnon": 637890560,
+            "RssFile": 8150933504
+          }
+        },
+        {
+          "position": 5,
+          "token": 198,
+          "seconds": 0.10455808899132535,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 9835327488,
+            "RssAnon": 637890560,
+            "RssFile": 8429879296
+          }
+        },
+        {
+          "position": 6,
+          "token": 248045,
+          "seconds": 0.1345490049570799,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10266112000,
+            "RssAnon": 637890560,
+            "RssFile": 8860663808
+          }
+        },
+        {
+          "position": 7,
+          "token": 74455,
+          "seconds": 0.08788070001173764,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10411831296,
+            "RssAnon": 637890560,
+            "RssFile": 9006383104
+          }
+        },
+        {
+          "position": 8,
+          "token": 198,
+          "seconds": 0.0978883079951629,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10644455424,
+            "RssAnon": 637890560,
+            "RssFile": 9239007232
+          }
+        },
+        {
+          "position": 9,
+          "token": 248068,
+          "seconds": 0.08055001101456583,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10761863168,
+            "RssAnon": 637890560,
+            "RssFile": 9356414976
+          }
+        },
+        {
+          "position": 10,
+          "token": 271,
+          "seconds": 0.07603905099676922,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10842968064,
+            "RssAnon": 637890560,
+            "RssFile": 9437519872
+          }
+        },
+        {
+          "position": 11,
+          "token": 248069,
+          "seconds": 0.0932234560023062,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 10964111360,
+            "RssAnon": 637890560,
+            "RssFile": 9558663168
+          }
+        },
+        {
+          "position": 12,
+          "token": 271,
+          "seconds": 0.08267901098588482,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 11077115904,
+            "RssAnon": 637890560,
+            "RssFile": 9671667712
+          }
+        },
+        {
+          "position": 13,
+          "token": 9419,
+          "seconds": 0.10059492802247405,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 11325120512,
+            "RssAnon": 637898752,
+            "RssFile": 9919664128
+          }
+        },
+        {
+          "position": 14,
+          "token": 0,
+          "seconds": 0.09681735100457445,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 11539394560,
+            "RssAnon": 637898752,
+            "RssFile": 10133938176
+          }
+        },
+        {
+          "position": 15,
+          "token": 2500,
+          "seconds": 0.2781816819915548,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 11897798656,
+            "RssAnon": 637898752,
+            "RssFile": 10492342272
+          }
+        },
+        {
+          "position": 16,
+          "token": 628,
+          "seconds": 0.23868882999522611,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 12189143040,
+            "RssAnon": 637898752,
+            "RssFile": 10783686656
+          }
+        },
+        {
+          "position": 17,
+          "token": 353,
+          "seconds": 0.18867410899838433,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 12377579520,
+            "RssAnon": 637898752,
+            "RssFile": 10972123136
+          }
+        },
+        {
+          "position": 18,
+          "token": 1438,
+          "seconds": 0.2843453829991631,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 12740255744,
+            "RssAnon": 637898752,
+            "RssFile": 11334799360
+          }
+        },
+        {
+          "position": 19,
+          "token": 488,
+          "seconds": 0.20539817196549848,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 12966789120,
+            "RssAnon": 637898752,
+            "RssFile": 11561332736
+          }
+        },
+        {
+          "position": 20,
+          "token": 3242,
+          "seconds": 0.2525055090081878,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 13256155136,
+            "RssAnon": 637898752,
+            "RssFile": 11850698752
+          }
+        },
+        {
+          "position": 21,
+          "token": 30,
+          "seconds": 0.15729357401141897,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 13385994240,
+            "RssAnon": 637898752,
+            "RssFile": 11980537856
+          }
+        }
+      ]
+    },
+    {
+      "prompt": "Explain GPU memory in one short sentence.",
+      "answer": "",
+      "complete": false,
+      "statistics": {},
+      "forward_records": [
+        {
+          "position": 22,
+          "token": 248046,
+          "seconds": 0.22002659703139216,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 13556084736,
+            "RssAnon": 637898752,
+            "RssFile": 12150628352
+          }
+        },
+        {
+          "position": 23,
+          "token": 198,
+          "seconds": 0.36348481400636956,
+          "experts": {
+            "gpu_experts": 480,
+            "native_cpu_experts": 0,
+            "cpu_submitted": 0
+          },
+          "memory": {
+            "VmRSS": 13946400768,
+            "RssAnon": 637898752,
+            "RssFile": 12540944384
+          }
+        }
+      ]
+    }
+  ],
+  "expert_statistics": {
+    "device": {
+      "requests": 11520,
+      "misses": 3586,
+      "promotions": 3586,
+      "hits": 7934,
+      "evictions": 1167,
+      "swap_evictions": 1167,
+      "resident_experts": 2419,
+      "resident_bytes": 6440345600,
+      "device_budget_bytes": 6442450944,
+      "protected_experts": 0,
+      "inflight_dispatches": 1,
+      "hit_rate": 0.6887152777777777
+    },
+    "host_dequant": {
+      "resident_experts": 0,
+      "used_bytes": 0,
+      "budget_bytes": 0
+    },
+    "execution": {
+      "gpu_experts": 11520,
+      "grouped_gpu_dispatches": 1152,
+      "admission_grouped_dispatches": 993
+    },
+    "cpu_workers": 4,
+    "cpu_packed_backend": "native",
+    "slots": {
+      "capacity": 2419,
+      "free_slots": 0,
+      "leased_slots": 2419,
+      "quarantined_slots": 0,
+      "stride_bytes": 2662400,
+      "device_reserved_bytes": 6440345600,
+      "staging_bytes": 4194304,
+      "promotions": 3586,
+      "transfer_bytes": 7381580800,
+      "asynchronous": false
+    }
+  },
+  "plan": {
+    "max_length": 256,
+    "cpu_workers": 4,
+    "dense_fp32_bytes": 3066007040,
+    "constructor_temporary_bytes": 340992000,
+    "host_static_bytes": 0,
+    "device_static_bytes": 5704430080,
+    "recurrent_bytes": 117669888,
+    "qsa_bytes": 14555136,
+    "ple_bytes": 368640,
+    "state_bytes": 132593664,
+    "host_reserved_bytes": 944971776,
+    "device_reserved_bytes": 13291555328,
+    "canonical_mmap_bytes": 83606638080,
+    "device_names": [
+      "output.weight",
+      "blk.0.attn_gate.weight",
+      "blk.0.attn_qkv.weight",
+      "blk.0.ffn_down_shexp.weight",
+      "blk.0.ffn_gate_shexp.weight",
+      "blk.0.ffn_up_shexp.weight",
+      "blk.0.ssm_out.weight",
+      "blk.1.attn_gate.weight",
+      "blk.1.attn_qkv.weight",
+      "blk.1.ffn_down_shexp.weight",
+      "blk.1.ffn_gate_shexp.weight",
+      "blk.1.ffn_up_shexp.weight",
+      "blk.1.ssm_out.weight",
+      "blk.2.attn_gate.weight",
+      "blk.2.attn_qkv.weight",
+      "blk.2.ffn_down_shexp.weight",
+      "blk.2.ffn_gate_shexp.weight",
+      "blk.2.ffn_up_shexp.weight",
+      "blk.2.ssm_out.weight",
+      "blk.3.attn_k.weight",
+      "blk.3.attn_output.weight",
+      "blk.3.attn_q.weight",
+      "blk.3.attn_v.weight",
+      "blk.3.ffn_down_shexp.weight",
+      "blk.3.ffn_gate_shexp.weight",
+      "blk.3.ffn_up_shexp.weight",
+      "blk.4.attn_gate.weight",
+      "blk.4.attn_qkv.weight",
+      "blk.4.ffn_down_shexp.weight",
+      "blk.4.ffn_gate_shexp.weight",
+      "blk.4.ffn_up_shexp.weight",
+      "blk.4.ssm_out.weight",
+      "blk.5.attn_gate.weight",
+      "blk.5.attn_qkv.weight",
+      "blk.5.ffn_down_shexp.weight",
+      "blk.5.ffn_gate_shexp.weight",
+      "blk.5.ffn_up_shexp.weight",
+      "blk.5.ssm_out.weight",
+      "blk.6.attn_gate.weight",
+      "blk.6.attn_qkv.weight",
+      "blk.6.ffn_down_shexp.weight",
+      "blk.6.ffn_gate_shexp.weight",
+      "blk.6.ffn_up_shexp.weight",
+      "blk.6.ssm_out.weight",
+      "blk.7.attn_k.weight",
+      "blk.7.attn_output.weight",
+      "blk.7.attn_q.weight",
+      "blk.7.attn_v.weight",
+      "blk.7.ffn_down_shexp.weight",
+      "blk.7.ffn_gate_shexp.weight",
+      "blk.7.ffn_up_shexp.weight",
+      "blk.8.attn_gate.weight",
+      "blk.8.attn_qkv.weight",
+      "blk.8.ffn_down_shexp.weight",
+      "blk.8.ffn_gate_shexp.weight",
+      "blk.8.ffn_up_shexp.weight",
+      "blk.8.ssm_out.weight",
+      "blk.9.attn_gate.weight",
+      "blk.9.attn_qkv.weight",
+      "blk.9.ffn_down_shexp.weight",
+      "blk.9.ffn_gate_shexp.weight",
+      "blk.9.ffn_up_shexp.weight",
+      "blk.9.ssm_out.weight",
+      "blk.10.attn_gate.weight",
+      "blk.10.attn_qkv.weight",
+      "blk.10.ffn_down_shexp.weight",
+      "blk.10.ffn_gate_shexp.weight",
+      "blk.10.ffn_up_shexp.weight",
+      "blk.10.ssm_out.weight",
+      "blk.11.attn_k.weight",
+      "blk.11.attn_output.weight",
+      "blk.11.attn_q.weight",
+      "blk.11.attn_v.weight",
+      "blk.11.ffn_down_shexp.weight",
+      "blk.11.ffn_gate_shexp.weight",
+      "blk.11.ffn_up_shexp.weight",
+      "blk.12.attn_gate.weight",
+      "blk.12.attn_qkv.weight",
+      "blk.12.ffn_down_shexp.weight",
+      "blk.12.ffn_gate_shexp.weight",
+      "blk.12.ffn_up_shexp.weight",
+      "blk.12.ssm_out.weight",
+      "blk.13.attn_gate.weight",
+      "blk.13.attn_qkv.weight",
+      "blk.13.ffn_down_shexp.weight",
+      "blk.13.ffn_gate_shexp.weight",
+      "blk.13.ffn_up_shexp.weight",
+      "blk.13.ssm_out.weight",
+      "blk.14.attn_gate.weight",
+      "blk.14.attn_qkv.weight",
+      "blk.14.ffn_down_shexp.weight",
+      "blk.14.ffn_gate_shexp.weight",
+      "blk.14.ffn_up_shexp.weight",
+      "blk.14.ssm_out.weight",
+      "blk.15.attn_k.weight",
+      "blk.15.attn_output.weight",
+      "blk.15.attn_q.weight",
+      "blk.15.attn_v.weight",
+      "blk.15.ffn_down_shexp.weight",
+      "blk.15.ffn_gate_shexp.weight",
+      "blk.15.ffn_up_shexp.weight",
+      "blk.16.attn_gate.weight",
+      "blk.16.attn_qkv.weight",
+      "blk.16.ffn_down_shexp.weight",
+      "blk.16.ffn_gate_shexp.weight",
+      "blk.16.ffn_up_shexp.weight",
+      "blk.16.ssm_out.weight",
+      "blk.17.attn_gate.weight",
+      "blk.17.attn_qkv.weight",
+      "blk.17.ffn_down_shexp.weight",
+      "blk.17.ffn_gate_shexp.weight",
+      "blk.17.ffn_up_shexp.weight",
+      "blk.17.ssm_out.weight",
+      "blk.18.attn_gate.weight",
+      "blk.18.attn_qkv.weight",
+      "blk.18.ffn_down_shexp.weight",
+      "blk.18.ffn_gate_shexp.weight",
+      "blk.18.ffn_up_shexp.weight",
+      "blk.18.ssm_out.weight",
+      "blk.19.attn_k.weight",
+      "blk.19.attn_output.weight",
+      "blk.19.attn_q.weight",
+      "blk.19.attn_v.weight",
+      "blk.19.ffn_down_shexp.weight",
+      "blk.19.ffn_gate_shexp.weight",
+      "blk.19.ffn_up_shexp.weight",
+      "blk.20.attn_gate.weight",
+      "blk.20.attn_qkv.weight",
+      "blk.20.ffn_down_shexp.weight",
+      "blk.20.ffn_gate_shexp.weight",
+      "blk.20.ffn_up_shexp.weight",
+      "blk.20.ssm_out.weight",
+      "blk.21.attn_gate.weight",
+      "blk.21.attn_qkv.weight",
+      "blk.21.ffn_down_shexp.weight",
+      "blk.21.ffn_gate_shexp.weight",
+      "blk.21.ffn_up_shexp.weight",
+      "blk.21.ssm_out.weight",
+      "blk.22.attn_gate.weight",
+      "blk.22.attn_qkv.weight",
+      "blk.22.ffn_down_shexp.weight",
+      "blk.22.ffn_gate_shexp.weight",
+      "blk.22.ffn_up_shexp.weight",
+      "blk.22.ssm_out.weight",
+      "blk.23.attn_k.weight",
+      "blk.23.attn_output.weight",
+      "blk.23.attn_q.weight",
+      "blk.23.attn_v.weight",
+      "blk.23.ffn_down_shexp.weight",
+      "blk.23.ffn_gate_shexp.weight",
+      "blk.23.ffn_up_shexp.weight",
+      "blk.24.attn_gate.weight",
+      "blk.24.attn_qkv.weight",
+      "blk.24.ffn_down_shexp.weight",
+      "blk.24.ffn_gate_shexp.weight",
+      "blk.24.ffn_up_shexp.weight",
+      "blk.24.ssm_out.weight",
+      "blk.25.attn_gate.weight",
+      "blk.25.attn_qkv.weight",
+      "blk.25.ffn_down_shexp.weight",
+      "blk.25.ffn_gate_shexp.weight",
+      "blk.25.ffn_up_shexp.weight",
+      "blk.25.ssm_out.weight",
+      "blk.26.attn_gate.weight",
+      "blk.26.attn_qkv.weight",
+      "blk.26.ffn_down_shexp.weight",
+      "blk.26.ffn_gate_shexp.weight",
+      "blk.26.ffn_up_shexp.weight",
+      "blk.26.ssm_out.weight",
+      "blk.27.attn_k.weight",
+      "blk.27.attn_output.weight",
+      "blk.27.attn_q.weight",
+      "blk.27.attn_v.weight",
+      "blk.27.ffn_down_shexp.weight",
+      "blk.27.ffn_gate_shexp.weight",
+      "blk.27.ffn_up_shexp.weight",
+      "blk.28.attn_gate.weight",
+      "blk.28.attn_qkv.weight",
+      "blk.28.ffn_down_shexp.weight",
+      "blk.28.ffn_gate_shexp.weight",
+      "blk.28.ffn_up_shexp.weight",
+      "blk.28.ssm_out.weight",
+      "blk.29.attn_gate.weight",
+      "blk.29.attn_qkv.weight",
+      "blk.29.ffn_down_shexp.weight",
+      "blk.29.ffn_gate_shexp.weight",
+      "blk.29.ffn_up_shexp.weight",
+      "blk.29.ssm_out.weight",
+      "blk.30.attn_gate.weight",
+      "blk.30.attn_qkv.weight",
+      "blk.30.ffn_down_shexp.weight",
+      "blk.30.ffn_gate_shexp.weight",
+      "blk.30.ffn_up_shexp.weight",
+      "blk.30.ssm_out.weight",
+      "blk.31.attn_k.weight",
+      "blk.31.attn_output.weight",
+      "blk.31.attn_q.weight",
+      "blk.31.attn_v.weight",
+      "blk.31.ffn_down_shexp.weight",
+      "blk.31.ffn_gate_shexp.weight",
+      "blk.31.ffn_up_shexp.weight",
+      "blk.32.attn_gate.weight",
+      "blk.32.attn_qkv.weight",
+      "blk.32.ffn_down_shexp.weight",
+      "blk.32.ffn_gate_shexp.weight",
+      "blk.32.ffn_up_shexp.weight",
+      "blk.32.ssm_out.weight",
+      "blk.33.attn_gate.weight",
+      "blk.33.attn_qkv.weight",
+      "blk.33.ffn_down_shexp.weight",
+      "blk.33.ffn_gate_shexp.weight",
+      "blk.33.ffn_up_shexp.weight",
+      "blk.33.ssm_out.weight",
+      "blk.34.attn_gate.weight",
+      "blk.34.attn_qkv.weight",
+      "blk.34.ffn_down_shexp.weight",
+      "blk.34.ffn_gate_shexp.weight",
+      "blk.34.ffn_up_shexp.weight",
+      "blk.34.ssm_out.weight",
+      "blk.35.attn_k.weight",
+      "blk.35.attn_output.weight",
+      "blk.35.attn_q.weight",
+      "blk.35.attn_v.weight",
+      "blk.35.ffn_down_shexp.weight",
+      "blk.35.ffn_gate_shexp.weight",
+      "blk.35.ffn_up_shexp.weight",
+      "blk.36.attn_gate.weight",
+      "blk.36.attn_qkv.weight",
+      "blk.36.ffn_down_shexp.weight",
+      "blk.36.ffn_gate_shexp.weight",
+      "blk.36.ffn_up_shexp.weight",
+      "blk.36.ssm_out.weight",
+      "blk.37.attn_gate.weight",
+      "blk.37.attn_qkv.weight",
+      "blk.37.ffn_down_shexp.weight",
+      "blk.37.ffn_gate_shexp.weight",
+      "blk.37.ffn_up_shexp.weight",
+      "blk.37.ssm_out.weight",
+      "blk.38.attn_gate.weight",
+      "blk.38.attn_qkv.weight",
+      "blk.38.ffn_down_shexp.weight",
+      "blk.38.ffn_gate_shexp.weight",
+      "blk.38.ffn_up_shexp.weight",
+      "blk.38.ssm_out.weight",
+      "blk.39.attn_k.weight",
+      "blk.39.attn_output.weight",
+      "blk.39.attn_q.weight",
+      "blk.39.attn_v.weight",
+      "blk.39.ffn_down_shexp.weight",
+      "blk.39.ffn_gate_shexp.weight",
+      "blk.39.ffn_up_shexp.weight",
+      "blk.40.attn_gate.weight",
+      "blk.40.attn_qkv.weight",
+      "blk.40.ffn_down_shexp.weight",
+      "blk.40.ffn_gate_shexp.weight",
+      "blk.40.ffn_up_shexp.weight",
+      "blk.40.ssm_out.weight",
+      "blk.41.attn_gate.weight",
+      "blk.41.attn_qkv.weight",
+      "blk.41.ffn_down_shexp.weight",
+      "blk.41.ffn_gate_shexp.weight",
+      "blk.41.ffn_up_shexp.weight",
+      "blk.41.ssm_out.weight",
+      "blk.42.attn_gate.weight",
+      "blk.42.attn_qkv.weight",
+      "blk.42.ffn_down_shexp.weight",
+      "blk.42.ffn_gate_shexp.weight",
+      "blk.42.ffn_up_shexp.weight",
+      "blk.42.ssm_out.weight",
+      "blk.43.attn_k.weight",
+      "blk.43.attn_output.weight",
+      "blk.43.attn_q.weight",
+      "blk.43.attn_v.weight",
+      "blk.43.ffn_down_shexp.weight",
+      "blk.43.ffn_gate_shexp.weight",
+      "blk.43.ffn_up_shexp.weight",
+      "blk.44.attn_gate.weight",
+      "blk.44.attn_qkv.weight",
+      "blk.44.ffn_down_shexp.weight",
+      "blk.44.ffn_gate_shexp.weight",
+      "blk.44.ffn_up_shexp.weight",
+      "blk.44.ssm_out.weight",
+      "blk.45.attn_gate.weight",
+      "blk.45.attn_qkv.weight",
+      "blk.45.ffn_down_shexp.weight",
+      "blk.45.ffn_gate_shexp.weight",
+      "blk.45.ffn_up_shexp.weight",
+      "blk.45.ssm_out.weight",
+      "blk.46.attn_gate.weight",
+      "blk.46.attn_qkv.weight",
+      "blk.46.ffn_down_shexp.weight",
+      "blk.46.ffn_gate_shexp.weight",
+      "blk.46.ffn_up_shexp.weight",
+      "blk.46.ssm_out.weight",
+      "blk.47.attn_k.weight",
+      "blk.47.attn_output.weight",
+      "blk.47.attn_q.weight",
+      "blk.47.attn_v.weight",
+      "blk.47.ffn_down_shexp.weight",
+      "blk.47.ffn_gate_shexp.weight",
+      "blk.47.ffn_up_shexp.weight"
+    ],
+    "host_budget_bytes": 8589934592,
+    "static_device_budget_bytes": 6442450944,
+    "device_budget_bytes": 15032385536,
+    "cache_bytes": 6442450944,
+    "headroom_bytes": 536870912,
+    "staging_bytes": 67108864,
+    "activation_bytes": 67108864,
+    "graph_workspace_bytes": 0
+  },
+  "default_pool_reserved_bytes": 12281210368,
+  "note": "Actual text, greedy, thinking disabled,16 output-token limit per turn; full top10 FP32. Per-step sync instrumentation; no throughput equivalence claim to Strata.",
+  "run": {
+    "returncode": 0,
+    "seconds": 11.568761813978199,
+    "sampled_peak_rss_bytes": 13916721152,
+    "stop_reason": null
+  }
+}

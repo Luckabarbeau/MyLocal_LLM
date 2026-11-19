@@ -1,0 +1,279 @@
+{
+  "includes_prefill": true,
+  "token_forwards": 400,
+  "instrumented_seconds": 49.90356177999996,
+  "cumulative_times_overlap": true,
+  "not_gpu_critical_path": true,
+  "rows": [
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/ggml_packed_cpu.py",
+      "line": 306,
+      "function": "_finish",
+      "primitive_calls": 18784,
+      "calls": 18784,
+      "internal_seconds": 6.212083471000001,
+      "cumulative_seconds": 6.219754443
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/expert_residency.py",
+      "line": 807,
+      "function": "try_forward_decode_batch",
+      "primitive_calls": 18784,
+      "calls": 18784,
+      "internal_seconds": 3.333749576,
+      "cumulative_seconds": 27.32219521
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_model.py",
+      "line": 48,
+      "function": "__call__",
+      "primitive_calls": 19200,
+      "calls": 19200,
+      "internal_seconds": 1.3146588460000002,
+      "cumulative_seconds": 35.626836961
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/lib/python3.12/site-packages/cupy/_creation/basic.py",
+      "line": 15,
+      "function": "empty",
+      "primitive_calls": 506376,
+      "calls": 506376,
+      "internal_seconds": 1.2431158340000001,
+      "cumulative_seconds": 1.2431158340000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/iq_packed_gpu.py",
+      "line": 249,
+      "function": "linear",
+      "primitive_calls": 119561,
+      "calls": 119561,
+      "internal_seconds": 1.1442664980000001,
+      "cumulative_seconds": 3.6878878160000004
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_weights.py",
+      "line": 331,
+      "function": "<lambda>",
+      "primitive_calls": 34400,
+      "calls": 34400,
+      "internal_seconds": 1.099938032,
+      "cumulative_seconds": 1.133618551
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/iq_packed_gpu.py",
+      "line": 223,
+      "function": "_validate_weight",
+      "primitive_calls": 287483,
+      "calls": 287483,
+      "internal_seconds": 1.019483984,
+      "cumulative_seconds": 1.9315057400000002
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/iq_packed_gpu.py",
+      "line": 262,
+      "function": "swiglu",
+      "primitive_calls": 83961,
+      "calls": 83961,
+      "internal_seconds": 0.9502578,
+      "cumulative_seconds": 3.3111949600000004
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/gguf_store.py",
+      "line": 245,
+      "function": "rows",
+      "primitive_calls": 318437,
+      "calls": 318437,
+      "internal_seconds": 0.9167695180000001,
+      "cumulative_seconds": 3.235320873
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/quantized_linear.py",
+      "line": 271,
+      "function": "quantized_linear",
+      "primitive_calls": 204285,
+      "calls": 204285,
+      "internal_seconds": 0.8162279090000001,
+      "cumulative_seconds": 9.34440621
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "function": "<built-in method builtins.isinstance>",
+      "primitive_calls": 9773404,
+      "calls": 9773404,
+      "internal_seconds": 0.775319198,
+      "cumulative_seconds": 1.54846682
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/ggml_packed_cpu.py",
+      "line": 272,
+      "function": "submit",
+      "primitive_calls": 18784,
+      "calls": 18784,
+      "internal_seconds": 0.749050497,
+      "cumulative_seconds": 1.899956498
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/lib/python3.12/site-packages/numpy/_core/_dtype.py",
+      "line": 342,
+      "function": "_name_get",
+      "primitive_calls": 717630,
+      "calls": 717630,
+      "internal_seconds": 0.653327322,
+      "cumulative_seconds": 1.8139850160000002
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/rotary_inference.py",
+      "line": 65,
+      "function": "forward",
+      "primitive_calls": 10800,
+      "calls": 10800,
+      "internal_seconds": 0.6500557530000001,
+      "cumulative_seconds": 0.885217247
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/quantized_weight.py",
+      "line": 57,
+      "function": "__post_init__",
+      "primitive_calls": 325237,
+      "calls": 325237,
+      "internal_seconds": 0.647738895,
+      "cumulative_seconds": 1.205188834
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/hyperconnection_read_gpu.py",
+      "line": 131,
+      "function": "read_gpu",
+      "primitive_calls": 38724,
+      "calls": 38724,
+      "internal_seconds": 0.6069789200000001,
+      "cumulative_seconds": 1.4088882610000002
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_gguf.py",
+      "line": 57,
+      "function": "source",
+      "primitive_calls": 103879,
+      "calls": 103879,
+      "internal_seconds": 0.599656048,
+      "cumulative_seconds": 5.903561185
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "function": "<method 'reshape' of 'cupy._core.core._ndarray_base' objects>",
+      "primitive_calls": 590404,
+      "calls": 590404,
+      "internal_seconds": 0.590503387,
+      "cumulative_seconds": 0.590503387
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/router_inference.py",
+      "line": 38,
+      "function": "forward",
+      "primitive_calls": 19200,
+      "calls": 19200,
+      "internal_seconds": 0.5609679280000001,
+      "cumulative_seconds": 0.9232839820000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/hyperconnection_decode_gpu.py",
+      "line": 102,
+      "function": "write_gpu",
+      "primitive_calls": 38400,
+      "calls": 38400,
+      "internal_seconds": 0.49968493900000005,
+      "cumulative_seconds": 0.49968493900000005
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "function": "<built-in method cuda_utils.launch>",
+      "primitive_calls": 84724,
+      "calls": 84724,
+      "internal_seconds": 0.484960457,
+      "cumulative_seconds": 0.5742909030000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/gated_delta_decode.py",
+      "line": 216,
+      "function": "try_decode",
+      "primitive_calls": 14400,
+      "calls": 14400,
+      "internal_seconds": 0.48298744600000004,
+      "cumulative_seconds": 1.0282246720000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/expert_residency.py",
+      "line": 201,
+      "function": "request",
+      "primitive_calls": 192000,
+      "calls": 192000,
+      "internal_seconds": 0.46967620200000004,
+      "cumulative_seconds": 1.4026634880000002
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "function": "<method 'get' of 'cupy._core.core._ndarray_base' objects>",
+      "primitive_calls": 37984,
+      "calls": 37984,
+      "internal_seconds": 0.45497186900000003,
+      "cumulative_seconds": 0.509859928
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/hyperconnection_read_gpu.py",
+      "line": 76,
+      "function": "_validate",
+      "primitive_calls": 38724,
+      "calls": 38724,
+      "internal_seconds": 0.430583449,
+      "cumulative_seconds": 0.5592829100000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/expert_residency.py",
+      "line": 745,
+      "function": "_select",
+      "primitive_calls": 192000,
+      "calls": 192000,
+      "internal_seconds": 0.430510035,
+      "cumulative_seconds": 8.148572607
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/ggml_packed_cpu.py",
+      "line": 167,
+      "function": "_projection",
+      "primitive_calls": 311637,
+      "calls": 311637,
+      "internal_seconds": 0.42094532300000004,
+      "cumulative_seconds": 0.5886769620000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/lib/python3.12/site-packages/numpy/_core/memmap.py",
+      "line": 311,
+      "function": "__array_finalize__",
+      "primitive_calls": 636874,
+      "calls": 636874,
+      "internal_seconds": 0.41603283500000005,
+      "cumulative_seconds": 0.504397628
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/quantized_linear.py",
+      "line": 239,
+      "function": "_triton_cupy_pointer",
+      "primitive_calls": 254172,
+      "calls": 254172,
+      "internal_seconds": 0.404072372,
+      "cumulative_seconds": 1.2021631670000001
+    },
+    {
+      "file": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/lib/python3.12/site-packages/numpy/_core/_dtype.py",
+      "line": 32,
+      "function": "__str__",
+      "primitive_calls": 509308,
+      "calls": 509308,
+      "internal_seconds": 0.38243155700000003,
+      "cumulative_seconds": 1.5789789360000002
+    }
+  ]
+}

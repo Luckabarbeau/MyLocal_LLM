@@ -1,0 +1,31 @@
+{
+  "geometry": {
+    "D": 2560,
+    "F": 640
+  },
+  "synthetic": true,
+  "provenance": {
+    "library_path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+    "library_sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839",
+    "reference_revision": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "library_revision_verified": false,
+    "bridge_path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_cf3589155daae325ead2.so",
+    "q2_dot": "avx2_q8_0_scalar_float_order",
+    "activation_quantizers": [
+      "quantize_row_q8_K",
+      "quantize_row_q8_0"
+    ]
+  },
+  "timings": {
+    "down_linear": {
+      "ggml": 0.00036149448715150356,
+      "simd": 8.735348819755018e-05,
+      "speedup": 4.138294813528026
+    },
+    "complete_expert": {
+      "ggml": 0.0005892555054742843,
+      "simd": 0.000315976474666968,
+      "speedup": 1.8648714468232048
+    }
+  }
+}

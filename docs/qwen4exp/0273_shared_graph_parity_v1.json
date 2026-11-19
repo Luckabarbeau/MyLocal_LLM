@@ -1,0 +1,13 @@
+{
+  "two_requests": true,
+  "prefixes": [
+    1,
+    2,
+    4,
+    8,
+    16
+  ],
+  "same_arithmetic_logits_exact": true,
+  "all_active_state_hashes_exact": true,
+  "shared_graph_calls": 1536
+}

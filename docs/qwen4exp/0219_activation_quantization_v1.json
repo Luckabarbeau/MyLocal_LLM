@@ -1,0 +1,3817 @@
+{
+  "scope": "B bounded arithmetic only; not full model parity",
+  "production_math_changed": false,
+  "provenance": {
+    "base_sha": "171e8846b4af9766c354064cb776cb34a50f053f",
+    "changed_source_files": [
+      "src/llama-model.cpp"
+    ],
+    "compared_files": 3603,
+    "zero_prefetch_control_flow_verified": true,
+    "cpu_only": true
+  },
+  "threads": 1,
+  "backend": "CPU direct allocation; no scheduler/repack",
+  "input_dtype": "F32",
+  "rows_per_tile": 32,
+  "results": [
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 19552129920,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 3.4965855655322287e-07,
+        "relative_l2": 3.4701629273024917e-07,
+        "cosine": 0.9999999999999404,
+        "rms": 0.378091498007146,
+        "norm": 2.1388084971986636,
+        "reference_norm": 2.1388085784743938
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.009995774722408535,
+        "relative_l2": 0.013360169626647583,
+        "cosine": 0.9999131457793863,
+        "rms": 0.3772309004795599,
+        "norm": 2.133940222417636,
+        "reference_norm": 2.1388085784743938
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.009995774371438726,
+        "relative_l2": 0.013360180729970899,
+        "cosine": 0.9999131456692569,
+        "rms": 0.3772308938370479,
+        "norm": 2.1339401848419133,
+        "reference_norm": 2.1388085784743938
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 6.242392758259996e-08,
+        "relative_l2": 8.082074216434805e-08,
+        "cosine": 0.9999999999999967,
+        "rms": 0.3772308938370479,
+        "norm": 2.1339401848419133,
+        "reference_norm": 2.133940222417636
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.009995870292186737,
+        "relative_l2": 0.013360207935708036,
+        "cosine": 0.9999131452217579,
+        "rms": 0.3772308938370479,
+        "norm": 2.1339401848419133,
+        "reference_norm": 2.1388084971986636
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 19552129920,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 5.94872558989934e-07,
+        "relative_l2": 3.042080778775354e-07,
+        "cosine": 0.999999999999954,
+        "rms": 0.6390873521536726,
+        "norm": 3.6152240038273367,
+        "reference_norm": 3.615224099708496
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.011114109921959159,
+        "relative_l2": 0.008040829902555105,
+        "cosine": 0.9999695852618937,
+        "rms": 0.6403180612013788,
+        "norm": 3.622185945533742,
+        "reference_norm": 3.615224099708496
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.01111411969846543,
+        "relative_l2": 0.008040837631274432,
+        "cosine": 0.999969585256828,
+        "rms": 0.6403180798465863,
+        "norm": 3.6221860510069632,
+        "reference_norm": 3.615224099708496
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.9591271871455262e-07,
+        "relative_l2": 1.025454629563481e-07,
+        "cosine": 0.9999999999999951,
+        "rms": 0.6403180798465863,
+        "norm": 3.6221860510069632,
+        "reference_norm": 3.622185945533742
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.011114239692687988,
+        "relative_l2": 0.008040796536346867,
+        "cosine": 0.9999695856385099,
+        "rms": 0.6403180798465863,
+        "norm": 3.6221860510069632,
+        "reference_norm": 3.6152240038273367
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.17.ffn_gate_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 19552129920,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 3.0677101904075244e-05,
+        "relative_l2": 1.005207511071053e-07,
+        "cosine": 0.9999999999999958,
+        "rms": 109.4171477170796,
+        "norm": 618.9568570306972,
+        "reference_norm": 618.9568826182954
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 2.510430571302578,
+        "relative_l2": 0.010557745363791204,
+        "cosine": 0.9999459161495963,
+        "rms": 109.21243193169839,
+        "norm": 617.7988096702254,
+        "reference_norm": 618.9568826182954
+      },
+      "graph_vs_fp64": {
+        "maxabs": 2.510442363919111,
+        "relative_l2": 0.010557743941917566,
+        "cosine": 0.9999459161130183,
+        "rms": 109.21243503438991,
+        "norm": 617.7988272216991,
+        "reference_norm": 618.9568826182954
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.3527184225713427e-05,
+        "relative_l2": 6.634033913437235e-08,
+        "cosine": 0.9999999999999982,
+        "rms": 109.21243503438991,
+        "norm": 617.7988272216991,
+        "reference_norm": 617.7988096702254
+      },
+      "graph_vs_fp32": {
+        "maxabs": 2.51043701171875,
+        "relative_l2": 0.010557745526300514,
+        "cosine": 0.9999459160211505,
+        "rms": 109.21243503438991,
+        "norm": 617.7988272216991,
+        "reference_norm": 618.9568570306972
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 19916074880,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 1.4733480035999946e-07,
+        "relative_l2": 2.8117248070194766e-07,
+        "cosine": 0.9999999999999606,
+        "rms": 0.30028289817838777,
+        "norm": 1.6986565886103007,
+        "reference_norm": 1.6986565782610772
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.011854317918684604,
+        "relative_l2": 0.014748766508204052,
+        "cosine": 0.9998912312725511,
+        "rms": 0.3002568769249516,
+        "norm": 1.698509390172223,
+        "reference_norm": 1.6986565782610772
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.01185427806975789,
+        "relative_l2": 0.014748765087611993,
+        "cosine": 0.9998912312933128,
+        "rms": 0.30025687431987613,
+        "norm": 1.6985093754356908,
+        "reference_norm": 1.6986565782610772
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 5.700729854840603e-08,
+        "relative_l2": 9.232911468777206e-08,
+        "cosine": 0.9999999999999957,
+        "rms": 0.30025687431987613,
+        "norm": 1.6985093754356908,
+        "reference_norm": 1.698509390172223
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01185433566570282,
+        "relative_l2": 0.014748777526755975,
+        "cosine": 0.9998912311097001,
+        "rms": 0.30025687431987613,
+        "norm": 1.6985093754356908,
+        "reference_norm": 1.6986565886103007
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 19916074880,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 4.941790623380626e-07,
+        "relative_l2": 3.3667316946648525e-07,
+        "cosine": 0.9999999999999438,
+        "rms": 0.6142665869822264,
+        "norm": 3.474816552891588,
+        "reference_norm": 3.474816446040602
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.010429434134606175,
+        "relative_l2": 0.007589345688619581,
+        "cosine": 0.9999714181190812,
+        "rms": 0.6146542516897784,
+        "norm": 3.477009515639882,
+        "reference_norm": 3.474816446040602
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.010429431888510865,
+        "relative_l2": 0.007589365910068781,
+        "cosine": 0.999971417985283,
+        "rms": 0.6146542699253145,
+        "norm": 3.4770096187956514,
+        "reference_norm": 3.474816446040602
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.6136242608766338e-07,
+        "relative_l2": 1.1166918790538664e-07,
+        "cosine": 0.9999999999999942,
+        "rms": 0.6146542699253145,
+        "norm": 3.4770096187956514,
+        "reference_norm": 3.477009515639882
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01042938232421875,
+        "relative_l2": 0.00758933403089735,
+        "cosine": 0.9999714182067858,
+        "rms": 0.6146542699253145,
+        "norm": 3.4770096187956514,
+        "reference_norm": 3.474816552891588
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.17.ffn_up_exps.weight",
+      "format": "IQ3_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 19916074880,
+      "traits": {
+        "weight_type": "iq3_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.916185301098494e-05,
+        "relative_l2": 9.185190983480569e-08,
+        "cosine": 0.9999999999999962,
+        "rms": 87.18001869279283,
+        "norm": 493.16465921315023,
+        "reference_norm": 493.1646458010498
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 1.8369681926376131,
+        "relative_l2": 0.010032365698009055,
+        "cosine": 0.9999528481294463,
+        "rms": 86.95627350419083,
+        "norm": 491.8989652922035,
+        "reference_norm": 493.1646458010498
+      },
+      "graph_vs_fp64": {
+        "maxabs": 1.8369708975162986,
+        "relative_l2": 0.010032355461315003,
+        "cosine": 0.9999528481627751,
+        "rms": 86.95627590768945,
+        "norm": 491.8989788884449,
+        "reference_norm": 493.1646458010498
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.3574113438608038e-05,
+        "relative_l2": 5.639714190568481e-08,
+        "cosine": 0.9999999999999988,
+        "rms": 86.95627590768945,
+        "norm": 491.8989788884449,
+        "reference_norm": 491.8989652922035
+      },
+      "graph_vs_fp32": {
+        "maxabs": 1.836965560913086,
+        "relative_l2": 0.010032343434658114,
+        "cosine": 0.9999528483522557,
+        "rms": 86.95627590768945,
+        "norm": 491.8989788884449,
+        "reference_norm": 493.16465921315023
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "format": "IQ3_XXS",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 1706991104,
+      "traits": {
+        "weight_type": "iq3_xxs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 3.2634665259045903e-07,
+        "relative_l2": 4.1638732146788174e-07,
+        "cosine": 0.9999999999999133,
+        "rms": 0.33079750455360785,
+        "norm": 1.8712732693555516,
+        "reference_norm": 1.8712732846713418
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.008655268981370756,
+        "relative_l2": 0.01360686719765759,
+        "cosine": 0.9999089367047123,
+        "rms": 0.3301917070371645,
+        "norm": 1.867846361100327,
+        "reference_norm": 1.8712732846713418
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.008655290830378248,
+        "relative_l2": 0.013606829408191124,
+        "cosine": 0.999908937147509,
+        "rms": 0.33019172076326525,
+        "norm": 1.8678464387468785,
+        "reference_norm": 1.8712732846713418
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 9.491603414346628e-08,
+        "relative_l2": 9.830702635147304e-08,
+        "cosine": 0.999999999999996,
+        "rms": 0.33019172076326525,
+        "norm": 1.8678464387468785,
+        "reference_norm": 1.867846361100327
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.008655153214931488,
+        "relative_l2": 0.013606748788681436,
+        "cosine": 0.9999089382322511,
+        "rms": 0.33019172076326525,
+        "norm": 1.8678464387468785,
+        "reference_norm": 1.8712732693555516
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "format": "IQ3_XXS",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 1706991104,
+      "traits": {
+        "weight_type": "iq3_xxs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 4.3130733562435353e-07,
+        "relative_l2": 2.900602764810983e-07,
+        "cosine": 0.9999999999999609,
+        "rms": 0.6337105031738015,
+        "norm": 3.5848079528266736,
+        "reference_norm": 3.5848082308534552
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.0074269377525471025,
+        "relative_l2": 0.005214653973544824,
+        "cosine": 0.9999864159328467,
+        "rms": 0.633602416522673,
+        "norm": 3.584196522394924,
+        "reference_norm": 3.5848082308534552
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.007426878352654875,
+        "relative_l2": 0.005214639375411563,
+        "cosine": 0.9999864160118933,
+        "rms": 0.6336024047857012,
+        "norm": 3.584196456000585,
+        "reference_norm": 3.5848082308534552
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 9.967185543580115e-08,
+        "relative_l2": 7.811692485974432e-08,
+        "cosine": 0.9999999999999971,
+        "rms": 0.6336024047857012,
+        "norm": 3.584196456000585,
+        "reference_norm": 3.584196522394924
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.007426798343658447,
+        "relative_l2": 0.005214710136126953,
+        "cosine": 0.9999864156306572,
+        "rms": 0.6336024047857012,
+        "norm": 3.584196456000585,
+        "reference_norm": 3.5848079528266736
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_gate_exps.weight",
+      "format": "IQ3_XXS",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 1706991104,
+      "traits": {
+        "weight_type": "iq3_xxs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.9369874337371584e-05,
+        "relative_l2": 9.934520180964916e-08,
+        "cosine": 0.9999999999999953,
+        "rms": 76.28217014950597,
+        "norm": 431.5171183707336,
+        "reference_norm": 431.51711398933645
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 2.614135207686587,
+        "relative_l2": 0.012747910461937496,
+        "cosine": 0.9999196438099068,
+        "rms": 76.1736026436786,
+        "norm": 430.90296781403737,
+        "reference_norm": 431.51711398933645
+      },
+      "graph_vs_fp64": {
+        "maxabs": 2.614132580226862,
+        "relative_l2": 0.012747930158417605,
+        "cosine": 0.9999196435364673,
+        "rms": 76.1736038912128,
+        "norm": 430.90297487115646,
+        "reference_norm": 431.51711398933645
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.754851359692111e-05,
+        "relative_l2": 7.346027062762003e-08,
+        "cosine": 0.9999999999999974,
+        "rms": 76.1736038912128,
+        "norm": 430.90297487115646,
+        "reference_norm": 430.90296781403737
+      },
+      "graph_vs_fp32": {
+        "maxabs": 2.614145278930664,
+        "relative_l2": 0.012747956848128121,
+        "cosine": 0.9999196432093781,
+        "rms": 76.1736038912128,
+        "norm": 430.90297487115646,
+        "reference_norm": 431.5171183707336
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "format": "IQ2_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 2609130880,
+      "traits": {
+        "weight_type": "iq2_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 2.753666514809794e-07,
+        "relative_l2": 3.510501523056324e-07,
+        "cosine": 0.99999999999994,
+        "rms": 0.3525404707632366,
+        "norm": 1.9942700601550591,
+        "reference_norm": 1.9942701749797922
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.010818879447558188,
+        "relative_l2": 0.013783285848142125,
+        "cosine": 0.9999050289478518,
+        "rms": 0.35243149382470745,
+        "norm": 1.9936535934972441,
+        "reference_norm": 1.9942701749797922
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.010818904557573283,
+        "relative_l2": 0.013783297353953703,
+        "cosine": 0.9999050287886502,
+        "rms": 0.35243149475371777,
+        "norm": 1.9936535987525197,
+        "reference_norm": 1.9942701749797922
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 9.491795710525608e-08,
+        "relative_l2": 9.166972486195586e-08,
+        "cosine": 0.9999999999999959,
+        "rms": 0.35243149475371777,
+        "norm": 1.9936535987525197,
+        "reference_norm": 1.9936535934972441
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.010818734765052795,
+        "relative_l2": 0.013783271511737267,
+        "cosine": 0.9999050291326194,
+        "rms": 0.35243149475371777,
+        "norm": 1.9936535987525197,
+        "reference_norm": 1.9942700601550591
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "format": "IQ2_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2609130880,
+      "traits": {
+        "weight_type": "iq2_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 3.3845877478455577e-07,
+        "relative_l2": 2.613331528538835e-07,
+        "cosine": 0.999999999999966,
+        "rms": 0.6836895275574496,
+        "norm": 3.8675320092967964,
+        "reference_norm": 3.8675319416399554
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.013000577041731298,
+        "relative_l2": 0.007304609594392523,
+        "cosine": 0.9999745322161866,
+        "rms": 0.6826080044897892,
+        "norm": 3.8614139909355774,
+        "reference_norm": 3.8675319416399554
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.013000551656751291,
+        "relative_l2": 0.007304591519411913,
+        "cosine": 0.999974532336189,
+        "rms": 0.6826080098567506,
+        "norm": 3.861414021295696,
+        "reference_norm": 3.8675319416399554
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.5889792237544498e-07,
+        "relative_l2": 8.996764606310615e-08,
+        "cosine": 0.9999999999999961,
+        "rms": 0.6826080098567506,
+        "norm": 3.861414021295696,
+        "reference_norm": 3.8614139909355774
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.013000458478927612,
+        "relative_l2": 0.007304582845710437,
+        "cosine": 0.9999745324268743,
+        "rms": 0.6826080098567506,
+        "norm": 3.861414021295696,
+        "reference_norm": 3.8675320092967964
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_gate_exps.weight",
+      "format": "IQ2_S",
+      "shape": [
+        512,
+        640,
+        2560
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2609130880,
+      "traits": {
+        "weight_type": "iq2_s",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 2.5504531521391982e-05,
+        "relative_l2": 8.839714126713045e-08,
+        "cosine": 0.9999999999999962,
+        "rms": 124.0797362469206,
+        "norm": 701.9009832642865,
+        "reference_norm": 701.9009890136097
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 2.9268488666572505,
+        "relative_l2": 0.009521674677382304,
+        "cosine": 0.9999561994562635,
+        "rms": 123.85714099585914,
+        "norm": 700.6417943724026,
+        "reference_norm": 701.9009890136097
+      },
+      "graph_vs_fp64": {
+        "maxabs": 2.9268516228582024,
+        "relative_l2": 0.009521670734165391,
+        "cosine": 0.9999561994686116,
+        "rms": 123.85714278384052,
+        "norm": 700.6418044867528,
+        "reference_norm": 701.9009890136097
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.438359467760165e-05,
+        "relative_l2": 6.247185408218888e-08,
+        "cosine": 0.999999999999998,
+        "rms": 123.85714278384052,
+        "norm": 700.6418044867528,
+        "reference_norm": 700.6417943724026
+      },
+      "graph_vs_fp32": {
+        "maxabs": 2.926868438720703,
+        "relative_l2": 0.009521691070329586,
+        "cosine": 0.9999561992602936,
+        "rms": 123.85714278384052,
+        "norm": 700.6418044867528,
+        "reference_norm": 701.9009832642865
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 1384648704,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 14.067819128203855,
+      "input_min": -57.86921691894531,
+      "input_max": 80.2589111328125,
+      "input_abs_dynamic_range": 2103341.75,
+      "fp32_vs_fp64": {
+        "maxabs": 8.805225846231224e-07,
+        "relative_l2": 6.816827373960855e-08,
+        "cosine": 0.9999999999999979,
+        "rms": 4.447160710427849,
+        "norm": 25.15693996295933,
+        "reference_norm": 25.156940196271265
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.040836993513848174,
+        "relative_l2": 0.003422563907470701,
+        "cosine": 0.9999943223592093,
+        "rms": 4.444472048913273,
+        "norm": 25.141730596645157,
+        "reference_norm": 25.156940196271265
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.0408372604081948,
+        "relative_l2": 0.003422556972523151,
+        "cosine": 0.9999943223707797,
+        "rms": 4.444472139295154,
+        "norm": 25.141731107922283,
+        "reference_norm": 25.156940196271265
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 5.804316316471159e-07,
+        "relative_l2": 5.7989652110256294e-08,
+        "cosine": 0.9999999999999986,
+        "rms": 4.444472139295154,
+        "norm": 25.141731107922283,
+        "reference_norm": 25.141730596645157
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.04083728790283203,
+        "relative_l2": 0.0034225543983357307,
+        "cosine": 0.9999943223740414,
+        "rms": 4.444472139295154,
+        "norm": 25.141731107922283,
+        "reference_norm": 25.15693996295933
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.3227119445800781,
+        "relative_l2": 0.0038968892090898385,
+        "cosine": 0.9999924071068196,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.89080125126765
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.88955767580416
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 1384648704,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.9496797447759464,
+      "input_min": -2.96992826461792,
+      "input_max": 3.0589334964752197,
+      "input_abs_dynamic_range": 944.7516479492188,
+      "fp32_vs_fp64": {
+        "maxabs": 1.0595152644121697e-07,
+        "relative_l2": 2.4182697880770323e-07,
+        "cosine": 0.9999999999999711,
+        "rms": 0.21270441871385629,
+        "norm": 1.2032378948872844,
+        "reference_norm": 1.2032379287152766
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.004229991882595874,
+        "relative_l2": 0.00785954940177478,
+        "cosine": 0.9999695720792564,
+        "rms": 0.21290170530202818,
+        "norm": 1.2043539163619525,
+        "reference_norm": 1.2032379287152766
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.004230005694182415,
+        "relative_l2": 0.007859547750664487,
+        "cosine": 0.9999695720755671,
+        "rms": 0.21290170160045346,
+        "norm": 1.204353895422684,
+        "reference_norm": 1.2032379287152766
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 4.472167347557843e-08,
+        "relative_l2": 1.0084474534224863e-07,
+        "cosine": 0.9999999999999949,
+        "rms": 0.21290170160045346,
+        "norm": 1.204353895422684,
+        "reference_norm": 1.2043539163619525
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.004230022430419922,
+        "relative_l2": 0.00785953695033764,
+        "cosine": 0.9999695721873048,
+        "rms": 0.21290170160045346,
+        "norm": 1.204353895422684,
+        "reference_norm": 1.2032378948872844
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.012242794036865234,
+        "relative_l2": 0.005441272860248058,
+        "cosine": 0.9999851968917249,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025208329755067
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025768455938913
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_exps.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 1384648704,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 166.13648887881203,
+      "input_min": -1371.760498046875,
+      "input_max": 1508.9998779296875,
+      "input_abs_dynamic_range": 4015145728.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.0014131120783532e-05,
+        "relative_l2": 6.976367423588306e-08,
+        "cosine": 0.9999999999999983,
+        "rms": 49.75331457704242,
+        "norm": 281.4472489914736,
+        "reference_norm": 281.44723821726893
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.5357219727294904,
+        "relative_l2": 0.005398098864347492,
+        "cosine": 0.9999855370353566,
+        "rms": 49.77559566001865,
+        "norm": 281.573289830391,
+        "reference_norm": 281.44723821726893
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.5357176146788163,
+        "relative_l2": 0.00539809980157592,
+        "cosine": 0.9999855370146793,
+        "rms": 49.77559397827152,
+        "norm": 281.57328031699257,
+        "reference_norm": 281.44723821726893
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.0512414831964634e-05,
+        "relative_l2": 6.660966718807785e-08,
+        "cosine": 0.9999999999999983,
+        "rms": 49.77559397827152,
+        "norm": 281.57328031699257,
+        "reference_norm": 281.573289830391
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.5357131958007812,
+        "relative_l2": 0.005398115045806543,
+        "cosine": 0.9999855369147297,
+        "rms": 49.77559397827152,
+        "norm": 281.57328031699257,
+        "reference_norm": 281.4472489914736
+      },
+      "activation_roundtrip": {
+        "maxabs": 5.78021240234375,
+        "relative_l2": 0.005151435341678132,
+        "cosine": 0.9999869617402755,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4202.957658562237
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4200.049374109304
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "format": "Q2_0",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 2339575680,
+      "traits": {
+        "weight_type": "q2_0",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 14.067819128203855,
+      "input_min": -57.86921691894531,
+      "input_max": 80.2589111328125,
+      "input_abs_dynamic_range": 2103341.75,
+      "fp32_vs_fp64": {
+        "maxabs": 8.583803312589566e-07,
+        "relative_l2": 6.953434768413782e-08,
+        "cosine": 0.9999999999999976,
+        "rms": 4.358943110956672,
+        "norm": 24.657905860510787,
+        "reference_norm": 24.65790544811109
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.04832191257224494,
+        "relative_l2": 0.0042285812675700585,
+        "cosine": 0.9999910680935968,
+        "rms": 4.359475217575094,
+        "norm": 24.660915910096392,
+        "reference_norm": 24.65790544811109
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.04832193222005898,
+        "relative_l2": 0.004228586972985527,
+        "cosine": 0.9999910680683277,
+        "rms": 4.359475179435913,
+        "norm": 24.660915694348603,
+        "reference_norm": 24.65790544811109
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 5.596284609055147e-07,
+        "relative_l2": 3.945016744146656e-08,
+        "cosine": 0.9999999999999992,
+        "rms": 4.359475179435913,
+        "norm": 24.660915694348603,
+        "reference_norm": 24.660915910096392
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.048322200775146484,
+        "relative_l2": 0.004228612010203025,
+        "cosine": 0.9999910679602775,
+        "rms": 4.359475179435913,
+        "norm": 24.660915694348603,
+        "reference_norm": 24.657905860510787
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.3227119445800781,
+        "relative_l2": 0.0038968892090898385,
+        "cosine": 0.9999924071068196,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.89080125126765
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.88955767580416
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "format": "Q2_0",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 2339575680,
+      "traits": {
+        "weight_type": "q2_0",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.9496797447759464,
+      "input_min": -2.96992826461792,
+      "input_max": 3.0589334964752197,
+      "input_abs_dynamic_range": 944.7516479492188,
+      "fp32_vs_fp64": {
+        "maxabs": 9.843204651360793e-08,
+        "relative_l2": 1.25108490703528e-07,
+        "cosine": 0.9999999999999926,
+        "rms": 0.34811332083467406,
+        "norm": 1.9692263182685303,
+        "reference_norm": 1.9692263630069775
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.002561125771968875,
+        "relative_l2": 0.003728811829274574,
+        "cosine": 0.9999930539834323,
+        "rms": 0.3481491284012797,
+        "norm": 1.969428876453847,
+        "reference_norm": 1.9692263630069775
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.002561122512339864,
+        "relative_l2": 0.0037288183266438522,
+        "cosine": 0.9999930539611526,
+        "rms": 0.34814913456999885,
+        "norm": 1.9694289113493926,
+        "reference_norm": 1.9692263630069775
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 5.23286871612072e-08,
+        "relative_l2": 5.2261321009984494e-08,
+        "cosine": 0.9999999999999989,
+        "rms": 0.34814913456999885,
+        "norm": 1.9694289113493926,
+        "reference_norm": 1.969428876453847
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.0025610923767089844,
+        "relative_l2": 0.0037288507283235912,
+        "cosine": 0.9999930538428394,
+        "rms": 0.34814913456999885,
+        "norm": 1.9694289113493926,
+        "reference_norm": 1.9692263182685303
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.012242794036865234,
+        "relative_l2": 0.005441272860248058,
+        "cosine": 0.9999851968917249,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025208329755067
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025768455938913
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.ffn_down_exps.weight",
+      "format": "Q2_0",
+      "shape": [
+        512,
+        2560,
+        640
+      ],
+      "expert": 511,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 2339575680,
+      "traits": {
+        "weight_type": "q2_0",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 166.13648887881203,
+      "input_min": -1371.760498046875,
+      "input_max": 1508.9998779296875,
+      "input_abs_dynamic_range": 4015145728.0,
+      "fp32_vs_fp64": {
+        "maxabs": 5.489475626063722e-06,
+        "relative_l2": 4.3845816264714024e-08,
+        "cosine": 0.9999999999999991,
+        "rms": 52.19186462315102,
+        "norm": 295.2417711824029,
+        "reference_norm": 295.2417678476269
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.6427769088744526,
+        "relative_l2": 0.005960615271644855,
+        "cosine": 0.9999823439797139,
+        "rms": 52.21526671795972,
+        "norm": 295.37415342186847,
+        "reference_norm": 295.2417678476269
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.6427766584205301,
+        "relative_l2": 0.005960617982347714,
+        "cosine": 0.9999823439670166,
+        "rms": 52.215267104800695,
+        "norm": 295.3741556101715,
+        "reference_norm": 295.2417678476269
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 3.6417491173779126e-06,
+        "relative_l2": 2.886591593005075e-08,
+        "cosine": 0.9999999999999994,
+        "rms": 52.215267104800695,
+        "norm": 295.3741556101715,
+        "reference_norm": 295.37415342186847
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.6427793502807617,
+        "relative_l2": 0.005960620659385452,
+        "cosine": 0.999982343945803,
+        "rms": 52.215267104800695,
+        "norm": 295.3741556101715,
+        "reference_norm": 295.2417711824029
+      },
+      "activation_roundtrip": {
+        "maxabs": 5.78021240234375,
+        "relative_l2": 0.005151435341678132,
+        "cosine": 0.9999869617402755,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4202.957658562237
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4200.049374109304
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "format": "Q4_K",
+      "shape": [
+        6144,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 883359744,
+      "traits": {
+        "weight_type": "q4_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 8.407454696879313e-07,
+        "relative_l2": 1.1069619335000641e-07,
+        "cosine": 0.9999999999999938,
+        "rms": 2.3016385165995117,
+        "norm": 13.020033623421288,
+        "reference_norm": 13.020033541903542
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.009476992118040428,
+        "relative_l2": 0.002320989397419537,
+        "cosine": 0.9999973788622925,
+        "rms": 2.3007568682766237,
+        "norm": 13.0150462673594,
+        "reference_norm": 13.020033541903542
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.009476774610975625,
+        "relative_l2": 0.002320953575366347,
+        "cosine": 0.9999973789728183,
+        "rms": 2.3007567028706157,
+        "norm": 13.015045331681721,
+        "reference_norm": 13.020033541903542
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 6.833173209486176e-07,
+        "relative_l2": 1.3629413078406665e-07,
+        "cosine": 0.9999999999999933,
+        "rms": 2.3007567028706157,
+        "norm": 13.015045331681721,
+        "reference_norm": 13.0150462673594
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.009477615356445312,
+        "relative_l2": 0.0023209784113676093,
+        "cosine": 0.999997378917535,
+        "rms": 2.3007567028706157,
+        "norm": 13.015045331681721,
+        "reference_norm": 13.020033623421288
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "format": "Q4_K",
+      "shape": [
+        6144,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 883359744,
+      "traits": {
+        "weight_type": "q4_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 7.383228656787644e-07,
+        "relative_l2": 2.7274973757918345e-07,
+        "cosine": 0.9999999999999634,
+        "rms": 0.9373202266734659,
+        "norm": 5.302283907392956,
+        "reference_norm": 5.3022841052650005
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.033816428350051275,
+        "relative_l2": 0.008886089083739541,
+        "cosine": 0.9999623802588362,
+        "rms": 0.9354760659926488,
+        "norm": 5.291851759208929,
+        "reference_norm": 5.3022841052650005
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.033816841053911695,
+        "relative_l2": 0.00888618110510451,
+        "cosine": 0.9999623795178756,
+        "rms": 0.9354760280069566,
+        "norm": 5.291851544329405,
+        "reference_norm": 5.3022841052650005
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 4.127038604195832e-07,
+        "relative_l2": 2.2883848198399915e-07,
+        "cosine": 0.9999999999999748,
+        "rms": 0.9354760280069566,
+        "norm": 5.291851544329405,
+        "reference_norm": 5.291851759208929
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.03381657600402832,
+        "relative_l2": 0.008886103752924339,
+        "cosine": 0.999962380134572,
+        "rms": 0.9354760280069566,
+        "norm": 5.291851544329405,
+        "reference_norm": 5.302283907392956
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_gate.weight",
+      "format": "Q4_K",
+      "shape": [
+        6144,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 883359744,
+      "traits": {
+        "weight_type": "q4_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 2.411075334407542e-05,
+        "relative_l2": 1.108064510265678e-07,
+        "cosine": 0.9999999999999938,
+        "rms": 92.50680868528015,
+        "norm": 523.2975338183057,
+        "reference_norm": 523.2975350508209
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 3.4388164201239704,
+        "relative_l2": 0.013915168887933066,
+        "cosine": 0.9999042399256705,
+        "rms": 92.36322843294292,
+        "norm": 522.4853212577286,
+        "reference_norm": 523.2975350508209
+      },
+      "graph_vs_fp64": {
+        "maxabs": 3.4388190252045376,
+        "relative_l2": 0.0139152208633228,
+        "cosine": 0.999904239146121,
+        "rms": 92.36323193238748,
+        "norm": 522.4853410535765,
+        "reference_norm": 523.2975350508209
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 4.2772922384415324e-05,
+        "relative_l2": 2.0933792665950918e-07,
+        "cosine": 0.9999999999999789,
+        "rms": 92.36323193238748,
+        "norm": 522.4853410535765,
+        "reference_norm": 522.4853212577286
+      },
+      "graph_vs_fp32": {
+        "maxabs": 3.438823699951172,
+        "relative_l2": 0.013915205946119308,
+        "cosine": 0.9999042393505896,
+        "rms": 92.36323193238748,
+        "norm": 522.4853410535765,
+        "reference_norm": 523.2975338183057
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "format": "Q6_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 892207104,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 1.0784017789866596e-06,
+        "relative_l2": 1.8681278299915252e-07,
+        "cosine": 0.9999999999999856,
+        "rms": 1.8299994798075587,
+        "norm": 10.352040333918234,
+        "reference_norm": 10.352039537234404
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.013295755094457462,
+        "relative_l2": 0.0034503243216611615,
+        "cosine": 0.9999940950559132,
+        "rms": 1.8305522339776201,
+        "norm": 10.355167183694071,
+        "reference_norm": 10.352039537234404
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.013295700022174062,
+        "relative_l2": 0.0034503471869062607,
+        "cosine": 0.9999940949776075,
+        "rms": 1.8305522373248972,
+        "norm": 10.35516720262913,
+        "reference_norm": 10.352039537234404
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 4.6631463601620737e-07,
+        "relative_l2": 9.865829030533706e-08,
+        "cosine": 0.999999999999995,
+        "rms": 1.8305522373248972,
+        "norm": 10.35516720262913,
+        "reference_norm": 10.355167183694071
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01329571008682251,
+        "relative_l2": 0.0034503077353304303,
+        "cosine": 0.999994095089984,
+        "rms": 1.8305522373248972,
+        "norm": 10.35516720262913,
+        "reference_norm": 10.352040333918234
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "format": "Q6_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 892207104,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 8.723370190644175e-07,
+        "relative_l2": 3.4438446595395107e-07,
+        "cosine": 0.999999999999947,
+        "rms": 1.0365785672827135,
+        "norm": 5.863773873265941,
+        "reference_norm": 5.863773201042498
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.01557777091290169,
+        "relative_l2": 0.006590961391067563,
+        "cosine": 0.9999790602866704,
+        "rms": 1.0378521688906073,
+        "norm": 5.870978451933715,
+        "reference_norm": 5.863773201042498
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.015577762098536452,
+        "relative_l2": 0.006590917795515176,
+        "cosine": 0.9999790604872776,
+        "rms": 1.0378520971559038,
+        "norm": 5.870978046140953,
+        "reference_norm": 5.863773201042498
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 7.818513698687468e-07,
+        "relative_l2": 2.5756549314677425e-07,
+        "cosine": 0.9999999999999692,
+        "rms": 1.0378520971559038,
+        "norm": 5.870978046140953,
+        "reference_norm": 5.870978451933715
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.015578031539916992,
+        "relative_l2": 0.0065908902968510085,
+        "cosine": 0.9999790605250433,
+        "rms": 1.0378520971559038,
+        "norm": 5.870978046140953,
+        "reference_norm": 5.863773873265941
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.attn_qkv.weight",
+      "format": "Q6_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 892207104,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 3.871904532104509e-05,
+        "relative_l2": 8.016214113941341e-08,
+        "cosine": 0.9999999999999971,
+        "rms": 162.3579373812921,
+        "norm": 918.43518801418,
+        "reference_norm": 918.4351696247787
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 4.093985011799816,
+        "relative_l2": 0.01052858478950579,
+        "cosine": 0.999953518591531,
+        "rms": 161.66366063168215,
+        "norm": 914.5077656328251,
+        "reference_norm": 918.4351696247787
+      },
+      "graph_vs_fp64": {
+        "maxabs": 4.093976928784286,
+        "relative_l2": 0.010528571654280746,
+        "cosine": 0.9999535187524876,
+        "rms": 161.66365978824288,
+        "norm": 914.5077608616123,
+        "reference_norm": 918.4351696247787
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 3.9487157518891536e-05,
+        "relative_l2": 1.1077163402261389e-07,
+        "cosine": 0.999999999999994,
+        "rms": 161.66365978824288,
+        "norm": 914.5077608616123,
+        "reference_norm": 914.5077656328251
+      },
+      "graph_vs_fp32": {
+        "maxabs": 4.093994140625,
+        "relative_l2": 0.010528568359726787,
+        "cosine": 0.9999535188720132,
+        "rms": 161.66365978824288,
+        "norm": 914.5077608616123,
+        "reference_norm": 918.43518801418
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "format": "Q5_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 2086084480,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 5.992501375118309e-07,
+        "relative_l2": 2.773792243319548e-07,
+        "cosine": 0.9999999999999679,
+        "rms": 0.8566916632286681,
+        "norm": 4.846179875639786,
+        "reference_norm": 4.846179327319543
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.016464018680972525,
+        "relative_l2": 0.006143129911787227,
+        "cosine": 0.999981823765323,
+        "rms": 0.8556674588831336,
+        "norm": 4.840386100935401,
+        "reference_norm": 4.846179327319543
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.016464396769939105,
+        "relative_l2": 0.006143148372445899,
+        "cosine": 0.9999818234953841,
+        "rms": 0.8556675725647411,
+        "norm": 4.840386744015685,
+        "reference_norm": 4.846179327319543
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 8.208180898305883e-07,
+        "relative_l2": 4.047485941669098e-07,
+        "cosine": 0.999999999999927,
+        "rms": 0.8556675725647411,
+        "norm": 4.840386744015685,
+        "reference_norm": 4.840386100935401
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01646438241004944,
+        "relative_l2": 0.006143172585716206,
+        "cosine": 0.9999818234796508,
+        "rms": 0.8556675725647411,
+        "norm": 4.840386744015685,
+        "reference_norm": 4.846179875639786
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "format": "Q5_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2086084480,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 5.580789064207892e-07,
+        "relative_l2": 2.561373778929225e-07,
+        "cosine": 0.9999999999999702,
+        "rms": 0.9454826484843872,
+        "norm": 5.348457537900217,
+        "reference_norm": 5.34845794260661
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.018300626279048715,
+        "relative_l2": 0.005641521925220519,
+        "cosine": 0.9999841742225334,
+        "rms": 0.9458638061343027,
+        "norm": 5.350613691171867,
+        "reference_norm": 5.34845794260661
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.018300420488676195,
+        "relative_l2": 0.005641472046146589,
+        "cosine": 0.9999841744876075,
+        "rms": 0.9458637695405213,
+        "norm": 5.350613484166179,
+        "reference_norm": 5.34845794260661
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 7.158591310840734e-07,
+        "relative_l2": 2.2604930905738981e-07,
+        "cosine": 0.9999999999999751,
+        "rms": 0.9458637695405213,
+        "norm": 5.350613484166179,
+        "reference_norm": 5.350613691171867
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01830078661441803,
+        "relative_l2": 0.005641510934397491,
+        "cosine": 0.9999841743000043,
+        "rms": 0.9458637695405213,
+        "norm": 5.350613484166179,
+        "reference_norm": 5.348457537900217
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.1.attn_qkv.weight",
+      "format": "Q5_K",
+      "shape": [
+        10240,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2086084480,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 2.3719354032891715e-05,
+        "relative_l2": 5.8170699628835876e-08,
+        "cosine": 0.9999999999999984,
+        "rms": 167.4346818934246,
+        "norm": 947.1535917812238,
+        "reference_norm": 947.1535820715676
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 4.584786021984215,
+        "relative_l2": 0.011434798897648434,
+        "cosine": 0.9999390776038966,
+        "rms": 166.9245940261466,
+        "norm": 944.2680990615978,
+        "reference_norm": 947.1535820715676
+      },
+      "graph_vs_fp64": {
+        "maxabs": 4.584769445500328,
+        "relative_l2": 0.011434784184405276,
+        "cosine": 0.9999390777831755,
+        "rms": 166.92459343786788,
+        "norm": 944.2680957337908,
+        "reference_norm": 947.1535820715676
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 5.148337865534813e-05,
+        "relative_l2": 1.2254531459314154e-07,
+        "cosine": 0.9999999999999926,
+        "rms": 166.92459343786788,
+        "norm": 944.2680957337908,
+        "reference_norm": 944.2680990615978
+      },
+      "graph_vs_fp32": {
+        "maxabs": 4.584770202636719,
+        "relative_l2": 0.011434786138731005,
+        "cosine": 0.9999390777913659,
+        "rms": 166.92459343786788,
+        "norm": 944.2680957337908,
+        "reference_norm": 947.1535917812238
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "format": "IQ4_XS",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 2032292864,
+      "traits": {
+        "weight_type": "iq4_xs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 4.1300376807384964e-07,
+        "relative_l2": 3.9800797431179453e-07,
+        "cosine": 0.9999999999999216,
+        "rms": 0.34414150352233536,
+        "norm": 1.9467583266270196,
+        "reference_norm": 1.946758407490134
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.00784636427526908,
+        "relative_l2": 0.009899418636753097,
+        "cosine": 0.9999518963624298,
+        "rms": 0.34458584686888794,
+        "norm": 1.9492719121751991,
+        "reference_norm": 1.946758407490134
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.007846497752618364,
+        "relative_l2": 0.009899455663785455,
+        "cosine": 0.9999518960112317,
+        "rms": 0.3445858506965328,
+        "norm": 1.9492719338276285,
+        "reference_norm": 1.946758407490134
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.3347734928448318e-07,
+        "relative_l2": 1.0914152994258626e-07,
+        "cosine": 0.999999999999994,
+        "rms": 0.3445858506965328,
+        "norm": 1.9492719338276285,
+        "reference_norm": 1.9492719121751991
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.007846221327781677,
+        "relative_l2": 0.009899347380920149,
+        "cosine": 0.9999518971374144,
+        "rms": 0.3445858506965328,
+        "norm": 1.9492719338276285,
+        "reference_norm": 1.9467583266270196
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "format": "IQ4_XS",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2032292864,
+      "traits": {
+        "weight_type": "iq4_xs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 5.820281663848625e-07,
+        "relative_l2": 4.19837610137492e-07,
+        "cosine": 0.9999999999999146,
+        "rms": 0.476818086697889,
+        "norm": 2.6972904199717798,
+        "reference_norm": 2.697290216909735
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.011483459083248215,
+        "relative_l2": 0.008707690198609326,
+        "cosine": 0.9999663192428287,
+        "rms": 0.4781891538879284,
+        "norm": 2.7050463472320936,
+        "reference_norm": 2.697290216909735
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.011483475655633346,
+        "relative_l2": 0.008707685914957753,
+        "cosine": 0.9999663192805901,
+        "rms": 0.4781891539812353,
+        "norm": 2.7050463477599167,
+        "reference_norm": 2.697290216909735
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 8.76386585524358e-08,
+        "relative_l2": 7.969909076076355e-08,
+        "cosine": 0.9999999999999967,
+        "rms": 0.4781891539812353,
+        "norm": 2.7050463477599167,
+        "reference_norm": 2.7050463472320936
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.011483609676361084,
+        "relative_l2": 0.008707589729999217,
+        "cosine": 0.9999663198967194,
+        "rms": 0.4781891539812353,
+        "norm": 2.7050463477599167,
+        "reference_norm": 2.6972904199717798
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_up_shexp.weight",
+      "format": "IQ4_XS",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 2032292864,
+      "traits": {
+        "weight_type": "iq4_xs",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.730654948062238e-05,
+        "relative_l2": 1.063641541903555e-07,
+        "cosine": 0.9999999999999944,
+        "rms": 75.49589607494673,
+        "norm": 427.0692805307975,
+        "reference_norm": 427.0692836395698
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 1.1592045482598934,
+        "relative_l2": 0.007339184831988367,
+        "cosine": 0.9999736357781696,
+        "rms": 75.41344427386271,
+        "norm": 426.60286270945704,
+        "reference_norm": 427.0692836395698
+      },
+      "graph_vs_fp64": {
+        "maxabs": 1.1592161537816565,
+        "relative_l2": 0.007339198290621776,
+        "cosine": 0.9999736356932807,
+        "rms": 75.41344328363233,
+        "norm": 426.60285710786815,
+        "reference_norm": 427.0692836395698
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.1605521763158322e-05,
+        "relative_l2": 6.717765469304186e-08,
+        "cosine": 0.9999999999999978,
+        "rms": 75.41344328363233,
+        "norm": 426.60285710786815,
+        "reference_norm": 426.60286270945704
+      },
+      "graph_vs_fp32": {
+        "maxabs": 1.159210205078125,
+        "relative_l2": 0.007339183494392465,
+        "cosine": 0.9999736357942336,
+        "rms": 75.41344328363233,
+        "norm": 426.60285710786815,
+        "reference_norm": 427.0692805307975
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        2560,
+        640
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 1385570304,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 14.067819128203855,
+      "input_min": -57.86921691894531,
+      "input_max": 80.2589111328125,
+      "input_abs_dynamic_range": 2103341.75,
+      "fp32_vs_fp64": {
+        "maxabs": 4.6902979367047237e-07,
+        "relative_l2": 5.918751068884558e-08,
+        "cosine": 0.9999999999999984,
+        "rms": 3.230804018001436,
+        "norm": 18.27618743850848,
+        "reference_norm": 18.276187576084837
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.020349958206063334,
+        "relative_l2": 0.0030363630065313365,
+        "cosine": 0.9999954125716752,
+        "rms": 3.231472020178817,
+        "norm": 18.279966229464268,
+        "reference_norm": 18.276187576084837
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.02035003207068975,
+        "relative_l2": 0.0030363667617618155,
+        "cosine": 0.999995412562113,
+        "rms": 3.231472048277526,
+        "norm": 18.279966388414568,
+        "reference_norm": 18.276187576084837
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.8853595779310126e-07,
+        "relative_l2": 3.931095587102065e-08,
+        "cosine": 0.9999999999999993,
+        "rms": 3.231472048277526,
+        "norm": 18.279966388414568,
+        "reference_norm": 18.279966229464268
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.020349740982055664,
+        "relative_l2": 0.003036365096810503,
+        "cosine": 0.9999954125687581,
+        "rms": 3.231472048277526,
+        "norm": 18.279966388414568,
+        "reference_norm": 18.27618743850848
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.3227119445800781,
+        "relative_l2": 0.0038968892090898385,
+        "cosine": 0.9999924071068196,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.89080125126765
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 14.067769971567518,
+        "norm": 355.88955767580416,
+        "reference_norm": 355.88955767580416
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        2560,
+        640
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 1385570304,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.9496797447759464,
+      "input_min": -2.96992826461792,
+      "input_max": 3.0589334964752197,
+      "input_abs_dynamic_range": 944.7516479492188,
+      "fp32_vs_fp64": {
+        "maxabs": 9.138122208929289e-08,
+        "relative_l2": 1.3555530359719948e-07,
+        "cosine": 0.9999999999999909,
+        "rms": 0.23917839388535667,
+        "norm": 1.3529973138371423,
+        "reference_norm": 1.3529973236743669
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.002973031056823172,
+        "relative_l2": 0.00530851699314029,
+        "cosine": 0.999986466777618,
+        "rms": 0.23892270474964747,
+        "norm": 1.3515509176632565,
+        "reference_norm": 1.3529973236743669
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.002973044402748426,
+        "relative_l2": 0.005308513921975311,
+        "cosine": 0.9999864667918134,
+        "rms": 0.23892270523072012,
+        "norm": 1.3515509203846146,
+        "reference_norm": 1.3529973236743669
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.85563146462664e-08,
+        "relative_l2": 5.254271029742403e-08,
+        "cosine": 0.9999999999999986,
+        "rms": 0.23892270523072012,
+        "norm": 1.3515509203846146,
+        "reference_norm": 1.3515509176632565
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.0029729530215263367,
+        "relative_l2": 0.005308508755237238,
+        "cosine": 0.9999864668115962,
+        "rms": 0.23892270523072012,
+        "norm": 1.3515509203846146,
+        "reference_norm": 1.3529973138371423
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.012242794036865234,
+        "relative_l2": 0.005441272860248058,
+        "cosine": 0.9999851968917249,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025208329755067
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.949701885707422,
+        "norm": 24.025768455938913,
+        "reference_norm": 24.025768455938913
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ffn_down_shexp.weight",
+      "format": "IQ4_NL",
+      "shape": [
+        2560,
+        640
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_859",
+      "shard": 0,
+      "packed_byte_offset": 1385570304,
+      "traits": {
+        "weight_type": "iq4_nl",
+        "activation_type": "q8_0",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 166.13648887881203,
+      "input_min": -1371.760498046875,
+      "input_max": 1508.9998779296875,
+      "input_abs_dynamic_range": 4015145728.0,
+      "fp32_vs_fp64": {
+        "maxabs": 5.0580968249391844e-06,
+        "relative_l2": 6.635978227776494e-08,
+        "cosine": 0.999999999999998,
+        "rms": 32.315257464844585,
+        "norm": 182.80270151344646,
+        "reference_norm": 182.80270381876733
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.4568784169302518,
+        "relative_l2": 0.006429570106723886,
+        "cosine": 0.9999811667359765,
+        "rms": 32.252715172261155,
+        "norm": 182.44890887987287,
+        "reference_norm": 182.80270381876733
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.4568797778065914,
+        "relative_l2": 0.006429579781247102,
+        "cosine": 0.999981166645923,
+        "rms": 32.25271563891492,
+        "norm": 182.44891151966522,
+        "reference_norm": 182.80270381876733
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 6.194516416258011e-06,
+        "relative_l2": 7.261758722469465e-08,
+        "cosine": 0.9999999999999973,
+        "rms": 32.25271563891492,
+        "norm": 182.44891151966522,
+        "reference_norm": 182.44890887987287
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.456878662109375,
+        "relative_l2": 0.0064295665696700675,
+        "cosine": 0.999981166706863,
+        "rms": 32.25271563891492,
+        "norm": 182.44891151966522,
+        "reference_norm": 182.80270151344646
+      },
+      "activation_roundtrip": {
+        "maxabs": 5.78021240234375,
+        "relative_l2": 0.005151435341678132,
+        "cosine": 0.9999869617402755,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4202.957658562237
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 166.02152884187547,
+        "norm": 4200.049374109304,
+        "reference_norm": 4200.049374109304
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "format": "Q5_K",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "real_A",
+      "shard": 0,
+      "packed_byte_offset": 6194075264,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.6241011068939127,
+      "input_min": -2.902385950088501,
+      "input_max": 4.690593242645264,
+      "input_abs_dynamic_range": 743301.625,
+      "fp32_vs_fp64": {
+        "maxabs": 3.492436081997674e-07,
+        "relative_l2": 2.3495818203077737e-07,
+        "cosine": 0.9999999999999758,
+        "rms": 0.5782838173891964,
+        "norm": 3.271267269810751,
+        "reference_norm": 3.271267002290677
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.01002839071205286,
+        "relative_l2": 0.007614766844596858,
+        "cosine": 0.9999710150628622,
+        "rms": 0.5783393286200628,
+        "norm": 3.271581288752972,
+        "reference_norm": 3.271267002290677
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.010028088377208144,
+        "relative_l2": 0.007614614053745977,
+        "cosine": 0.9999710162249401,
+        "rms": 0.5783393227685812,
+        "norm": 3.2715812556519936,
+        "reference_norm": 3.271267002290677
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 4.083023076306702e-07,
+        "relative_l2": 3.746376696602322e-07,
+        "cosine": 0.9999999999999298,
+        "rms": 0.5783393227685812,
+        "norm": 3.2715812556519936,
+        "reference_norm": 3.271581288752972
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.010028064250946045,
+        "relative_l2": 0.007614676901654769,
+        "cosine": 0.9999710157361987,
+        "rms": 0.5783393227685812,
+        "norm": 3.2715812556519936,
+        "reference_norm": 3.271267269810751
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.018407437950372696,
+        "relative_l2": 0.011651424596939486,
+        "cosine": 0.9999321206361005,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.57729580827164
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.6240339754879927,
+        "norm": 31.573899197947846,
+        "reference_norm": 31.573899197947846
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "format": "Q5_K",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 6194075264,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0103536156686819,
+      "input_min": -3.571040153503418,
+      "input_max": 3.404045820236206,
+      "input_abs_dynamic_range": 6903.1171875,
+      "fp32_vs_fp64": {
+        "maxabs": 3.8214863207208793e-07,
+        "relative_l2": 2.905935679907143e-07,
+        "cosine": 0.9999999999999614,
+        "rms": 0.6001120227417769,
+        "norm": 3.394746246018288,
+        "reference_norm": 3.3947465344056074
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.013004228997215928,
+        "relative_l2": 0.00936681289971567,
+        "cosine": 0.9999564434571606,
+        "rms": 0.6005607428107207,
+        "norm": 3.3972845900471262,
+        "reference_norm": 3.3947465344056074
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.013004079638343657,
+        "relative_l2": 0.009366797254596913,
+        "cosine": 0.9999564436167732,
+        "rms": 0.6005607528129127,
+        "norm": 3.397284646628068,
+        "reference_norm": 3.3947465344056074
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.9331391254429064e-07,
+        "relative_l2": 1.6907615844164053e-07,
+        "cosine": 0.9999999999999857,
+        "rms": 0.6005607528129127,
+        "norm": 3.397284646628068,
+        "reference_norm": 3.3972845900471262
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.013003885746002197,
+        "relative_l2": 0.009366784940089717,
+        "cosine": 0.9999564437992527,
+        "rms": 0.6005607528129127,
+        "norm": 3.397284646628068,
+        "reference_norm": 3.394746246018288
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.014019191265106201,
+        "relative_l2": 0.006893325878469142,
+        "cosine": 0.9999762663126911,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.12029868319073
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 1.0105580975939046,
+        "norm": 51.130644741175374,
+        "reference_norm": 51.130644741175374
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.4.ffn_up_shexp.weight",
+      "format": "Q5_K",
+      "shape": [
+        640,
+        2560
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_2779",
+      "shard": 0,
+      "packed_byte_offset": 6194075264,
+      "traits": {
+        "weight_type": "q5_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 153.80195972191945,
+      "input_min": -1303.3643798828125,
+      "input_max": 2294.89404296875,
+      "input_abs_dynamic_range": 35668484096.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.7755941939867625e-05,
+        "relative_l2": 8.132329871931514e-08,
+        "cosine": 0.9999999999999969,
+        "rms": 86.60934279660862,
+        "norm": 489.9364288447377,
+        "reference_norm": 489.93642976300714
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 3.228986680340104,
+        "relative_l2": 0.014421970733392086,
+        "cosine": 0.9998968747652667,
+        "rms": 86.71509615679628,
+        "norm": 490.53466018971335,
+        "reference_norm": 489.93642976300714
+      },
+      "graph_vs_fp64": {
+        "maxabs": 3.228984377900389,
+        "relative_l2": 0.014421981838074383,
+        "cosine": 0.9998968746006697,
+        "rms": 86.71509585286795,
+        "norm": 490.5346584704351,
+        "reference_norm": 489.93642976300714
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 3.809273738397678e-05,
+        "relative_l2": 1.8689180402219156e-07,
+        "cosine": 0.9999999999999825,
+        "rms": 86.71509585286795,
+        "norm": 490.5346584704351,
+        "reference_norm": 490.53466018971335
+      },
+      "graph_vs_fp32": {
+        "maxabs": 3.2289810180664062,
+        "relative_l2": 0.0144219788964531,
+        "cosine": 0.9998968746455236,
+        "rms": 86.71509585286795,
+        "norm": 490.5346584704351,
+        "reference_norm": 489.9364288447377
+      },
+      "activation_roundtrip": {
+        "maxabs": 8.9725341796875,
+        "relative_l2": 0.01101924508887721,
+        "cosine": 0.9999392983763699,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7781.8320210998845
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 153.816549542365,
+        "norm": 7782.570214112058,
+        "reference_norm": 7782.570214112058
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "format": "Q6_K",
+      "shape": [
+        2560,
+        6144
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 2060279680,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 14.67361270965578,
+      "input_min": -97.36798095703125,
+      "input_max": 94.02566528320312,
+      "input_abs_dynamic_range": 19041674.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.1631927112176754e-05,
+        "relative_l2": 1.7483217353811818e-07,
+        "cosine": 0.9999999999999849,
+        "rms": 22.520674485502113,
+        "norm": 127.39617316474724,
+        "reference_norm": 127.39617154150194
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.14565946796617268,
+        "relative_l2": 0.0033278985363373857,
+        "cosine": 0.999994513503828,
+        "rms": 22.52774127634974,
+        "norm": 127.43614897058393,
+        "reference_norm": 127.39617154150194
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.1456599688727529,
+        "relative_l2": 0.0033279771286606414,
+        "cosine": 0.9999945132538022,
+        "rms": 22.527742083656726,
+        "norm": 127.43615353740189,
+        "reference_norm": 127.39617154150194
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.413691467140211e-05,
+        "relative_l2": 3.075316334042106e-07,
+        "cosine": 0.9999999999999533,
+        "rms": 22.527742083656726,
+        "norm": 127.43615353740189,
+        "reference_norm": 127.43614897058393
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.14565658569335938,
+        "relative_l2": 0.003328002422579379,
+        "cosine": 0.9999945131655821,
+        "rms": 22.527742083656726,
+        "norm": 127.43615353740189,
+        "reference_norm": 127.39617316474724
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.3811454772949219,
+        "relative_l2": 0.003971808062882679,
+        "cosine": 0.9999921176479862,
+        "rms": 14.671985067270366,
+        "norm": 1150.0440617134952,
+        "reference_norm": 1150.1716422999907
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 14.671985067270366,
+        "norm": 1150.0440617134952,
+        "reference_norm": 1150.0440617134952
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "format": "Q6_K",
+      "shape": [
+        2560,
+        6144
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_6363",
+      "shard": 0,
+      "packed_byte_offset": 2060279680,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 1.0025465016167339,
+      "input_min": -3.238804578781128,
+      "input_max": 3.918776273727417,
+      "input_abs_dynamic_range": 17279.275390625,
+      "fp32_vs_fp64": {
+        "maxabs": 1.7986071134679094e-06,
+        "relative_l2": 3.4427464751123083e-07,
+        "cosine": 0.9999999999999452,
+        "rms": 1.654196248532066,
+        "norm": 9.357547078002971,
+        "reference_norm": 9.357546202124292
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.0229924913653321,
+        "relative_l2": 0.005184113746214475,
+        "cosine": 0.9999866263258276,
+        "rms": 1.6535824580550753,
+        "norm": 9.354074954734909,
+        "reference_norm": 9.357546202124292
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.02299028842673323,
+        "relative_l2": 0.005184050454542883,
+        "cosine": 0.9999866267046713,
+        "rms": 1.6535822240526814,
+        "norm": 9.354073631017473,
+        "reference_norm": 9.357546202124292
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.202938598871995e-06,
+        "relative_l2": 4.3269801881522756e-07,
+        "cosine": 0.9999999999999164,
+        "rms": 1.6535822240526814,
+        "norm": 9.354073631017473,
+        "reference_norm": 9.354074954734909
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.02298903465270996,
+        "relative_l2": 0.005183989993727254,
+        "cosine": 0.9999866270517058,
+        "rms": 1.6535822240526814,
+        "norm": 9.354073631017473,
+        "reference_norm": 9.357547078002971
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.01530909538269043,
+        "relative_l2": 0.006778714593894266,
+        "cosine": 0.9999770302269692,
+        "rms": 1.002633081960096,
+        "norm": 78.59006240116285,
+        "reference_norm": 78.58327591594711
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 1.002633081960096,
+        "norm": 78.59006240116285,
+        "reference_norm": 78.59006240116285
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.ssm_out.weight",
+      "format": "Q6_K",
+      "shape": [
+        2560,
+        6144
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_6363",
+      "shard": 0,
+      "packed_byte_offset": 2060279680,
+      "traits": {
+        "weight_type": "q6_K",
+        "activation_type": "q8_K",
+        "reference_quantizer_available": false,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 165.25930504564943,
+      "input_min": -2663.194580078125,
+      "input_max": 1928.85888671875,
+      "input_abs_dynamic_range": 277527166976.0,
+      "fp32_vs_fp64": {
+        "maxabs": 8.591324666440414e-05,
+        "relative_l2": 1.4413257806202241e-07,
+        "cosine": 0.9999999999999895,
+        "rms": 229.0148393890168,
+        "norm": 1295.5035673945747,
+        "reference_norm": 1295.5035740732803
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 3.459095640324392,
+        "relative_l2": 0.0071512584581044395,
+        "cosine": 0.9999756853169421,
+        "rms": 229.37222437292277,
+        "norm": 1297.5252421594878,
+        "reference_norm": 1295.5035740732803
+      },
+      "graph_vs_fp64": {
+        "maxabs": 3.459111321476115,
+        "relative_l2": 0.007151247544707337,
+        "cosine": 0.9999756853506603,
+        "rms": 229.37221797514144,
+        "norm": 1297.5252059681713,
+        "reference_norm": 1295.5035740732803
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 0.00013716984300771173,
+        "relative_l2": 1.7027030137283456e-07,
+        "cosine": 0.9999999999999859,
+        "rms": 229.37221797514144,
+        "norm": 1297.5252059681713,
+        "reference_norm": 1297.5252421594878
+      },
+      "graph_vs_fp32": {
+        "maxabs": 3.45904541015625,
+        "relative_l2": 0.0071512582402726566,
+        "cosine": 0.9999756852824628,
+        "rms": 229.37221797514144,
+        "norm": 1297.5252059681713,
+        "reference_norm": 1295.5035673945747
+      },
+      "activation_roundtrip": {
+        "maxabs": 10.47857666015625,
+        "relative_l2": 0.007938802578328897,
+        "cosine": 0.9999688363544142,
+        "rms": 165.39224949691754,
+        "norm": 12964.051797713146,
+        "reference_norm": 12953.631123481426
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 165.39224949691754,
+        "norm": 12964.051797713146,
+        "reference_norm": 12964.051797713146
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "format": "BF16",
+      "shape": [
+        320,
+        10240
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 2033163264,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 14.779393050672263,
+      "input_min": -99.30458068847656,
+      "input_max": 97.22001647949219,
+      "input_abs_dynamic_range": 27295008.0,
+      "fp32_vs_fp64": {
+        "maxabs": 1.5911651317424003e-05,
+        "relative_l2": 1.694168104152847e-07,
+        "cosine": 0.9999999999999861,
+        "rms": 43.341148337125226,
+        "norm": 245.17455914874643,
+        "reference_norm": 245.1745654101536
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.12360530443025652,
+        "relative_l2": 0.0014091800368872984,
+        "cosine": 0.9999990127978932,
+        "rms": 43.3457312084237,
+        "norm": 245.2004837837261,
+        "reference_norm": 245.1745654101536
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.12360413216187283,
+        "relative_l2": 0.001409176941857482,
+        "cosine": 0.9999990128001786,
+        "rms": 43.345730365135935,
+        "norm": 245.2004790133701,
+        "reference_norm": 245.1745654101536
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 7.10746178356203e-06,
+        "relative_l2": 6.839594814580306e-08,
+        "cosine": 0.9999999999999978,
+        "rms": 43.345730365135935,
+        "norm": 245.2004790133701,
+        "reference_norm": 245.2004837837261
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.12360382080078125,
+        "relative_l2": 0.001409148048577331,
+        "cosine": 0.9999990128436145,
+        "rms": 43.345730365135935,
+        "norm": 245.2004790133701,
+        "reference_norm": 245.17455914874643
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.24932098388671875,
+        "relative_l2": 0.001670995467554048,
+        "cosine": 0.9999986038861028,
+        "rms": 14.779373715056222,
+        "norm": 1495.5674665728652,
+        "reference_norm": 1495.569423199638
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 0.9999999999999998,
+        "rms": 14.779373715056222,
+        "norm": 1495.5674665728652,
+        "reference_norm": 1495.5674665728652
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "format": "BF16",
+      "shape": [
+        320,
+        10240
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_10459",
+      "shard": 0,
+      "packed_byte_offset": 2033163264,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.9974388506993648,
+      "input_min": -3.5036780834198,
+      "input_max": 3.713712453842163,
+      "input_abs_dynamic_range": 215030.75,
+      "fp32_vs_fp64": {
+        "maxabs": 3.7615072780994296e-06,
+        "relative_l2": 3.5531808942716934e-07,
+        "cosine": 0.9999999999999367,
+        "rms": 3.548961852056333,
+        "norm": 20.075959934091216,
+        "reference_norm": 20.075959760827086
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.013260851096591253,
+        "relative_l2": 0.0013434721175808405,
+        "cosine": 0.9999990991856039,
+        "rms": 3.5487550813873288,
+        "norm": 20.074790262553584,
+        "reference_norm": 20.075959760827086
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.013261367795083245,
+        "relative_l2": 0.0013435315234848518,
+        "cosine": 0.9999990991048269,
+        "rms": 3.5487551408171782,
+        "norm": 20.074790598739586,
+        "reference_norm": 20.075959760827086
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.660580892348662e-06,
+        "relative_l2": 1.5063335618792788e-07,
+        "cosine": 0.9999999999999889,
+        "rms": 3.5487551408171782,
+        "norm": 20.074790598739586,
+        "reference_norm": 20.074790262553584
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.01326131820678711,
+        "relative_l2": 0.001343521773926731,
+        "cosine": 0.9999990991184213,
+        "rms": 3.5487551408171782,
+        "norm": 20.074790598739586,
+        "reference_norm": 20.075959934091216
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.007807016372680664,
+        "relative_l2": 0.001668192864710908,
+        "cosine": 0.9999986085668716,
+        "rms": 0.9974392224803061,
+        "norm": 100.93375266000608,
+        "reference_norm": 100.93371503841993
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 0.9974392224803061,
+        "norm": 100.93375266000608,
+        "reference_norm": 100.93375266000608
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_down.weight",
+      "format": "BF16",
+      "shape": [
+        320,
+        10240
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_10459",
+      "shard": 0,
+      "packed_byte_offset": 2033163264,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 163.85646396738477,
+      "input_min": -2119.477783203125,
+      "input_max": 2172.39111328125,
+      "input_abs_dynamic_range": 89956696064.0,
+      "fp32_vs_fp64": {
+        "maxabs": 0.0002476972688754131,
+        "relative_l2": 1.6509055581747907e-07,
+        "cosine": 0.9999999999999863,
+        "rms": 461.53758119745527,
+        "norm": 2610.850827497259,
+        "reference_norm": 2610.8508530301315
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 1.6562344935222768,
+        "relative_l2": 0.0017271791000969356,
+        "cosine": 0.9999985086673046,
+        "rms": 461.5267385723491,
+        "norm": 2610.789492347352,
+        "reference_norm": 2610.8508530301315
+      },
+      "graph_vs_fp64": {
+        "maxabs": 1.656206307187631,
+        "relative_l2": 0.001727198640509995,
+        "cosine": 0.9999985086344952,
+        "rms": 461.5267188510443,
+        "norm": 2610.789380786805,
+        "reference_norm": 2610.8508530301315
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 0.00012501825756316975,
+        "relative_l2": 9.059002836754513e-08,
+        "cosine": 0.9999999999999969,
+        "rms": 461.5267188510443,
+        "norm": 2610.789380786805,
+        "reference_norm": 2610.789492347352
+      },
+      "graph_vs_fp32": {
+        "maxabs": 1.65631103515625,
+        "relative_l2": 0.0017272510404176314,
+        "cosine": 0.9999985085437713,
+        "rms": 461.5267188510443,
+        "norm": 2610.789380786805,
+        "reference_norm": 2610.850827497259
+      },
+      "activation_roundtrip": {
+        "maxabs": 7.477783203125,
+        "relative_l2": 0.0017172195716294095,
+        "cosine": 0.9999985378241621,
+        "rms": 163.83058017931205,
+        "norm": 16578.489080110816,
+        "reference_norm": 16581.108335303867
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 163.83058017931205,
+        "norm": 16578.489080110816,
+        "reference_norm": 16578.489080110816
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "format": "BF16",
+      "shape": [
+        10240,
+        320
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "deterministic_width_substitute",
+      "shard": 0,
+      "packed_byte_offset": 2039839744,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 16.038834581488622,
+      "input_min": -97.82122039794922,
+      "input_max": 50.767372131347656,
+      "input_abs_dynamic_range": 1851667.625,
+      "fp32_vs_fp64": {
+        "maxabs": 3.4769155483616032e-06,
+        "relative_l2": 6.233273515490618e-08,
+        "cosine": 0.999999999999998,
+        "rms": 16.144478831764506,
+        "norm": 91.32696368530681,
+        "reference_norm": 91.32696335228862
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.07926675494237401,
+        "relative_l2": 0.0016727484598912938,
+        "cosine": 0.9999986024438722,
+        "rms": 16.145337099351238,
+        "norm": 91.33181877995204,
+        "reference_norm": 91.32696335228862
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.07926902189793594,
+        "relative_l2": 0.0016727788257550657,
+        "cosine": 0.9999986023926027,
+        "rms": 16.145336958092745,
+        "norm": 91.33181798087332,
+        "reference_norm": 91.32696335228862
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.5840417947620153e-06,
+        "relative_l2": 7.329369188299942e-08,
+        "cosine": 0.9999999999999973,
+        "rms": 16.145336958092745,
+        "norm": 91.33181798087332,
+        "reference_norm": 91.33181877995204
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.0792694091796875,
+        "relative_l2": 0.0016727812295755018,
+        "cosine": 0.9999986023883833,
+        "rms": 16.145336958092745,
+        "norm": 91.33181798087332,
+        "reference_norm": 91.32696368530681
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.17877960205078125,
+        "relative_l2": 0.0016786792477755694,
+        "cosine": 0.9999986267956626,
+        "rms": 16.034522139329766,
+        "norm": 286.83425192213366,
+        "reference_norm": 286.91139523266355
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0000000000000002,
+        "rms": 16.034522139329766,
+        "norm": 286.83425192213366,
+        "reference_norm": 286.83425192213366
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "format": "BF16",
+      "shape": [
+        10240,
+        320
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "random_seed_539",
+      "shard": 0,
+      "packed_byte_offset": 2039839744,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 0.9915850924832321,
+      "input_min": -2.8710360527038574,
+      "input_max": 2.588437795639038,
+      "input_abs_dynamic_range": 869.513671875,
+      "fp32_vs_fp64": {
+        "maxabs": 6.689664644454751e-07,
+        "relative_l2": 1.8336899913545688e-07,
+        "cosine": 0.9999999999999835,
+        "rms": 1.08795037403947,
+        "norm": 6.154376696622,
+        "reference_norm": 6.154376606368014
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.0031082550726750924,
+        "relative_l2": 0.0012123560312913124,
+        "cosine": 0.9999992975034704,
+        "rms": 1.0882265719070667,
+        "norm": 6.1559391077030154,
+        "reference_norm": 6.154376606368014
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.0031082960508683755,
+        "relative_l2": 0.0012123501044378972,
+        "cosine": 0.9999992975087737,
+        "rms": 1.0882265638708863,
+        "norm": 6.155939062243515,
+        "reference_norm": 6.154376606368014
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 1.434236764907837e-07,
+        "relative_l2": 5.496316940111429e-08,
+        "cosine": 0.9999999999999983,
+        "rms": 1.0882265638708863,
+        "norm": 6.155939062243515,
+        "reference_norm": 6.1559391077030154
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.003107786178588867,
+        "relative_l2": 0.0012123067294518776,
+        "cosine": 0.9999992975576119,
+        "rms": 1.0882265638708863,
+        "norm": 6.155939062243515,
+        "reference_norm": 6.154376696622
+      },
+      "activation_roundtrip": {
+        "maxabs": 0.0071468353271484375,
+        "relative_l2": 0.0016384987044431893,
+        "cosine": 0.9999987047702176,
+        "rms": 0.9918881781280148,
+        "norm": 17.743435138981287,
+        "reference_norm": 17.738013378143382
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0000000000000002,
+        "rms": 0.9918881781280148,
+        "norm": 17.743435138981287,
+        "reference_norm": 17.743435138981287
+      },
+      "finite": true
+    },
+    {
+      "tensor": "blk.0.hc_attn_up.weight",
+      "format": "BF16",
+      "shape": [
+        10240,
+        320
+      ],
+      "expert": null,
+      "row_range": [
+        0,
+        32
+      ],
+      "input_source": "multirange_seed_539",
+      "shard": 0,
+      "packed_byte_offset": 2039839744,
+      "traits": {
+        "weight_type": "bf16",
+        "activation_type": "bf16",
+        "reference_quantizer_available": true,
+        "optimized_reference_bytes_equal": true
+      },
+      "input_rms": 151.03069693067755,
+      "input_min": -1800.783203125,
+      "input_max": 791.2590942382812,
+      "input_abs_dynamic_range": 25405239296.0,
+      "fp32_vs_fp64": {
+        "maxabs": 2.2864186774995687e-05,
+        "relative_l2": 5.329196980749979e-08,
+        "cosine": 0.9999999999999989,
+        "rms": 161.28204681620338,
+        "norm": 912.349031899069,
+        "reference_norm": 912.3490110505907
+      },
+      "activation_rounding_vs_fp64": {
+        "maxabs": 0.5835540653115459,
+        "relative_l2": 0.0014048641588817815,
+        "cosine": 0.9999991033079123,
+        "rms": 161.21342294613473,
+        "norm": 911.9608366680546,
+        "reference_norm": 912.3490110505907
+      },
+      "graph_vs_fp64": {
+        "maxabs": 0.5835675119435564,
+        "relative_l2": 0.0014048433216305551,
+        "cosine": 0.9999991033355319,
+        "rms": 161.21342357873985,
+        "norm": 911.9608402466097,
+        "reference_norm": 912.3490110505907
+      },
+      "graph_vs_rounded_oracle": {
+        "maxabs": 2.709743648665608e-05,
+        "relative_l2": 6.138071971536334e-08,
+        "cosine": 0.9999999999999983,
+        "rms": 161.21342357873985,
+        "norm": 911.9608402466097,
+        "reference_norm": 911.9608366680546
+      },
+      "graph_vs_fp32": {
+        "maxabs": 0.583587646484375,
+        "relative_l2": 0.0014048623877227241,
+        "cosine": 0.9999991033184377,
+        "rms": 161.21342357873985,
+        "norm": 911.9608402466097,
+        "reference_norm": 912.349031899069
+      },
+      "activation_roundtrip": {
+        "maxabs": 1.11334228515625,
+        "relative_l2": 0.0012085300676518724,
+        "cosine": 0.9999992755383162,
+        "rms": 151.0468694938724,
+        "norm": 2702.008543814704,
+        "reference_norm": 2701.719240209311
+      },
+      "reference_vs_cpu_activation": {
+        "maxabs": 0.0,
+        "relative_l2": 0.0,
+        "cosine": 1.0,
+        "rms": 151.0468694938724,
+        "norm": 2702.008543814704,
+        "reference_norm": 2702.008543814704
+      },
+      "finite": true
+    }
+  ],
+  "metadata": {
+    "qwen4exp.block_count": 48,
+    "qwen4exp.context_length": 262144,
+    "qwen4exp.embedding_length": 2560,
+    "qwen4exp.attention.head_count": 24,
+    "qwen4exp.attention.head_count_kv": 2,
+    "qwen4exp.rope.freq_base": 10000000.0,
+    "qwen4exp.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+    "qwen4exp.expert_count": 512,
+    "qwen4exp.expert_used_count": 10,
+    "qwen4exp.attention.key_length": 256,
+    "qwen4exp.attention.value_length": 256,
+    "qwen4exp.expert_feed_forward_length": 640,
+    "qwen4exp.expert_shared_feed_forward_length": 640,
+    "qwen4exp.ssm.conv_kernel": 4,
+    "qwen4exp.ssm.state_size": 128,
+    "qwen4exp.ssm.group_count": 16,
+    "qwen4exp.ssm.time_step_rank": 48,
+    "qwen4exp.ssm.inner_size": 6144,
+    "qwen4exp.full_attention_interval": 4,
+    "qwen4exp.rope.dimension_count": 64,
+    "qwen4exp.hyper_connection.count": 4,
+    "qwen4exp.hyper_connection.low_rank": 320,
+    "qwen4exp.attention.indexer.head_count": 4,
+    "qwen4exp.attention.indexer.key_length": 128,
+    "qwen4exp.attention.indexer.top_k": 2048,
+    "qwen4exp.ple.ngram_size": 3,
+    "qwen4exp.ple.heads_per_ngram": 8,
+    "qwen4exp.ple.conv_kernel": 4,
+    "qwen4exp.ple.eos_token_id": 248044,
+    "qwen4exp.embedding_length_per_layer_input": 160,
+    "qwen4exp.ple.image_token_id": 248056
+  },
+  "shards": [
+    "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+    "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf"
+  ],
+  "packed_bytes_read": 1263360,
+  "hc_audit": {
+    "source": "src/models/qwen4exp.cpp:build_hc_mix; ggml/src/ggml-cpu/ops.cpp:ggml_compute_forward_dsv4_hc_pre_f32",
+    "chain": "F32 grouped RMSNorm * gamma -> BF16 down matmul (activation BF16) -> scale 1/4 -> F32 SiLU -> BF16 up matmul (activation BF16) -> F32 fused sigmoid(gate)*xn stream sum /4",
+    "fused_mixing_dtype": "F32; no BF16 cast inside fused HC pre",
+    "limitation": "HC down/up are separate bounded row tiles on substitute inputs, not a composed HC replay. No retained pre-HC normalized streams/gates available; cannot attribute earliest HC read divergence from these tiles alone.",
+    "fp32_baseline": "D(BF16 W) x in F32 and FP64; activation rounding isolated per matmul, not full HC mixed baseline"
+  }
+}

@@ -10,7 +10,11 @@ from mini_llm.ops.quantized_weight import BLOCK_FORMATS, PackedGGUFWeight
 
 
 class Qwen4ExpGGUFIndex:
-    def __init__(self, store: MultiShardTensorStore, *, model_id="qwen4exp"):
+    def __init__(self, store: MultiShardTensorStore, *, model_id="qwen4exp", cache_source_handles=True):
+        if not isinstance(cache_source_handles, bool):
+            raise TypeError('cache_source_handles must be bool')
+        self.cache_source_handles = cache_source_handles
+        self._sources = {}  # At most n_layers*n_experts immutable zero-copy bundles.
         if store.closed:
             raise RuntimeError("GGUF store is closed")
         if not model_id:
@@ -62,13 +66,24 @@ class Qwen4ExpGGUFIndex:
         for value, limit in ((key.layer_id, self.n_layers), (key.expert_id, self.n_experts)):
             if isinstance(value, bool) or not isinstance(value, Integral) or not 0 <= value < limit:
                 raise IndexError(key)
+        if self.store.closed:
+            raise RuntimeError('GGUF store is closed')
+        if self.cache_source_handles and key in self._sources:
+            return self._sources[key]
         weights = []
         for projection in ("gate", "up", "down"):
             name = f"blk.{key.layer_id}.ffn_{projection}_exps.weight"
             desc = self.descriptors[name]
             raw = self.store.rows(name, 0, desc.shape[-2], outer=(key.expert_id,))
             weights.append(PackedGGUFWeight(raw, desc.shape[1:], desc.quant_type))
-        return ExpertBundle(key, tuple(weights), self.store, "mmap")
+        bundle = ExpertBundle(key, tuple(weights), self.store, "mmap")
+        if self.cache_source_handles:
+            self._sources[key] = bundle
+        return bundle
+
+    def clear_source_cache(self):
+        """Release metadata/views; outstanding native batches retain their owners."""
+        self._sources.clear()
 
     def provider(self, key):
         return self.source(key).weights

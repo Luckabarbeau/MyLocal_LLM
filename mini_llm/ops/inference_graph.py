@@ -34,7 +34,12 @@ class CapturedArrayInference:
             self.input = x.copy()
             self.mutable = tuple(a.copy() for a in mutable_arrays)
             # Warm every high-level operation/toolchain on private state first.
-            warm_output = enqueue(self.input, self.mutable)
+            try:
+                warm_output = enqueue(self.input, self.mutable)
+            except BaseException:
+                # Graph-owned warmup buffers may already have queued consumers.
+                self.capture_stream.synchronize()
+                raise
             self.capture_stream.synchronize()
             # Capture starts from caller values, not the warmed private state.
             for target, source in zip(self.mutable, mutable_arrays):
@@ -66,7 +71,14 @@ class CapturedArrayInference:
         """Metadata-only eligibility check; never migrate live graph scratch."""
         return not self.calls or xp.cuda.get_current_stream().ptr == self._replay_stream
 
-    def forward(self, x, mutable_arrays):
+    def forward(self, x, mutable_arrays, *, borrow_output=False):
+        """Replay; borrowed arrays expire at the next replay on this stream.
+
+        Tuple outputs support internal multi-boundary segments. Fresh ownership
+        remains the default; borrowing requires serialized downstream consumers.
+        """
+        if not isinstance(borrow_output, bool):
+            raise TypeError('borrow_output must be bool')
         if not self.matches(x, mutable_arrays):
             raise ValueError('Graph operand shape/dtype/device/layout changed')
         stream = xp.cuda.get_current_stream()
@@ -81,8 +93,12 @@ class CapturedArrayInference:
         self.graph.launch(stream=stream)
         for target, source in zip(mutable_arrays, self.mutable):
             xp.copyto(target, source)
-        # Return fresh ownership: subsequent replays cannot overwrite outputs.
-        out = self.output.copy()
+        if borrow_output:
+            out = self.output
+        elif isinstance(self.output, tuple):
+            out = tuple(a.copy() for a in self.output)
+        else:
+            out = self.output.copy()
         self.calls += 1
         return out
 

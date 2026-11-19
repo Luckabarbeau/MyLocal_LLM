@@ -24,6 +24,10 @@ extern "C" __global__ void iq_warp_gate_up(
     const int lane = threadIdx.x % 32;
     if (pair >= (long long)experts * f) return;
     const int expert = pair / f, row = pair % f;
+    if (!table[(long long)expert * width]) {
+        if (!lane) hidden[pair] = 0.0f;
+        return;
+    }
     const unsigned char* gr = (const unsigned char*)table[(long long)expert * width]
                            + (long long)row * (d / gqk) * gqb;
     const unsigned char* ur = (const unsigned char*)table[(long long)expert * width + 1]
@@ -45,6 +49,10 @@ extern "C" __global__ void iq_warp_down_weighted(
     const int lane = threadIdx.x % 32;
     if (pair >= (long long)experts * d) return;
     const int expert = pair / d, row = pair % d;
+    if (!table[(long long)expert * width + 2]) {
+        if (!lane) terms[pair] = 0.0f;
+        return;
+    }
     const unsigned char* wr = (const unsigned char*)table[(long long)expert * width + 2]
                            + (long long)row * (f / dqk) * dqb;
     const float* h = hidden + (long long)expert * f;

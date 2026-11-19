@@ -20,6 +20,7 @@ import threading
 from typing import Callable
 
 from mini_llm.ops.native_packed_cpu import packed_cpu_expert
+from mini_llm.ops.expert_victim_index import ExpertVictimIndex
 
 import numpy as np
 
@@ -59,6 +60,9 @@ class AdaptiveExpertCache:
     the policy is deliberately conservative about replacing popular experts.
     Any temporary allocations during materialization are outside this budget.
     Reserve sufficient physical VRAM for kernels, KV state and capture pools.
+    victim_policy='heap' opts into bounded log-density ranking instead of the
+    default sort. Floating near ties need not match sort bit-for-bit; exact
+    current-score admission thresholds are unchanged.
     """
 
     def __init__(
@@ -69,6 +73,7 @@ class AdaptiveExpertCache:
         score_half_life: int = 8192,
         replacement_margin: float = 1.05,
         idle_eviction_requests: int = 0,
+        victim_policy: str = "sort",
     ):
         if int(device_budget_bytes) != device_budget_bytes or device_budget_bytes < 0:
             raise ValueError("device_budget_bytes must be a nonnegative integer")
@@ -80,6 +85,11 @@ class AdaptiveExpertCache:
             raise ValueError("replacement_margin must be finite and >= 1")
         if int(idle_eviction_requests) != idle_eviction_requests or idle_eviction_requests < 0:
             raise ValueError("idle_eviction_requests must be a nonnegative integer")
+        if victim_policy not in {"sort", "heap"}:
+            raise ValueError("victim_policy must be 'sort' or 'heap'")
+        self.victim_policy = victim_policy
+        self._victim_index = (ExpertVictimIndex(int(score_half_life))
+                              if victim_policy == "heap" else None)
         self.idle_eviction_requests = int(idle_eviction_requests)
         self.device_budget_bytes = int(device_budget_bytes)
         self.promote_after = int(promote_after)
@@ -95,6 +105,30 @@ class AdaptiveExpertCache:
         # event completes. This prevents reusing their storage too early.
         self._protected = Counter()
         self._inflight_groups = []  # [(event, frozenset(ExpertKey))]
+        self._admission_limit = None
+        self._admission_window = 1
+        self._admission_start = 0
+        self._admission_attempts = 0
+
+    def set_admission_budget(self, max_promotions=None, *, window_requests=480):
+        """Bound synchronous placement attempts, not expert execution or routing.
+
+        None preserves unrestricted adaptive admission; zero freezes placement.
+        A positive limit admits at most that many complete-bundle attempts in
+        each request-count window, including failed materialization attempts.
+        Set only on the executor's serialized dispatch thread. Configuration
+        starts a new window without evicting weights or resetting routing heat.
+        """
+        if (max_promotions is not None and (isinstance(max_promotions, bool) or
+                not isinstance(max_promotions, int) or max_promotions < 0)):
+            raise ValueError('max_promotions must be None or a nonnegative integer')
+        if (isinstance(window_requests, bool) or not isinstance(window_requests, int)
+                or window_requests < 1):
+            raise ValueError('window_requests must be a positive integer')
+        self._admission_limit = max_promotions
+        self._admission_window = window_requests
+        self._admission_start = self._step
+        self._admission_attempts = 0
 
     def protect(self, keys):
         for key in keys:
@@ -151,6 +185,8 @@ class AdaptiveExpertCache:
             if key in busy or self._step - self._usage[key].last_step < min_idle_requests:
                 continue
             self.used_bytes -= self.resident.pop(key)[1]
+            if self._victim_index is not None:
+                self._victim_index.remove(key)
             self.counters["evictions"] += 1
             self.counters["idle_evictions"] += 1
             evicted += 1
@@ -185,12 +221,23 @@ class AdaptiveExpertCache:
             self.evict_idle(self.idle_eviction_requests)
 
         if key in self.resident:
+            if self._victim_index is not None:
+                self._victim_index.update(key, usage.score, self.resident[key][1], usage.last_step)
             self.counters["hits"] += 1
             return self.resident[key][0]
         self.counters["misses"] += 1
         if usage.hits < self.promote_after or size_bytes > self.device_budget_bytes:
             self.counters["cpu_fallbacks"] += 1
             return None
+
+        if self._admission_limit is not None:
+            if self._step - self._admission_start > self._admission_window:
+                self._admission_start = self._step - 1
+                self._admission_attempts = 0
+            if self._admission_attempts >= self._admission_limit:
+                self.counters['admission_deferred'] += 1
+                self.counters['cpu_fallbacks'] += 1
+                return None
 
         candidates = []
         freed = 0
@@ -200,33 +247,39 @@ class AdaptiveExpertCache:
             # Prefer experts with the lowest decayed request density per byte.
             # Sort keys only: retaining a victim handle here keeps its slot
             # leased even after deletion, causing a false allocation failure.
-            for victim in sorted(
-                self.resident,
-                key=lambda key: (self._effective_score(key) / self.resident[key][1],
-                                 self._usage[key].last_step),
-            ):
-                victim_size = self.resident[victim][1]
-                if victim in busy:
-                    self.counters["busy_victim_skips"] += 1
-                    continue
-                # Avoid replacing a more valuable resident with a cold expert.
-                victim_density = self._effective_score(victim) / victim_size
-                if usage.score / size_bytes <= self.replacement_margin * victim_density:
-                    break
-                candidates.append(victim)
-                freed += victim_size
-                if freed >= required:
-                    break
+            victims = (self._victim_index.victims() if self._victim_index is not None
+                       else nullcontext(sorted(
+                           self.resident,
+                           key=lambda key: (self._effective_score(key) / self.resident[key][1],
+                                            self._usage[key].last_step),
+                       )))
+            with victims as ordered_victims:
+                for victim in ordered_victims:
+                    victim_size = self.resident[victim][1]
+                    if victim in busy:
+                        self.counters["busy_victim_skips"] += 1
+                        continue
+                    # Avoid replacing a more valuable resident with a cold expert.
+                    victim_density = self._effective_score(victim) / victim_size
+                    if usage.score / size_bytes <= self.replacement_margin * victim_density:
+                        break
+                    candidates.append(victim)
+                    freed += victim_size
+                    if freed >= required:
+                        break
             if freed < required:
                 self.counters["cpu_fallbacks"] += 1
                 return None
 
+        self._admission_attempts += 1
         # Evict only after deciding promotion is possible. Keeping the removed
         # objects alive until after materialization can temporarily exceed the
         # budget, so release them here and rely on the caller's VRAM reserve.
         for victim in candidates:
             self.used_bytes -= self.resident[victim][1]
             del self.resident[victim]
+            if self._victim_index is not None:
+                self._victim_index.remove(victim)
             self.counters["evictions"] += 1
             self.counters["swap_evictions"] += 1
         try:
@@ -243,6 +296,8 @@ class AdaptiveExpertCache:
             self.counters["cpu_fallbacks"] += 1
             return None
         self.resident[key] = (handle, size_bytes)
+        if self._victim_index is not None:
+            self._victim_index.update(key, usage.score, size_bytes, usage.last_step)
         self.used_bytes += size_bytes
         self.counters["promotions"] += 1
         return handle
@@ -254,14 +309,20 @@ class AdaptiveExpertCache:
         self._inflight_groups.clear()
         self._protected.clear()
         self.resident.clear()
+        if self._victim_index is not None:
+            self._victim_index.clear()
         self._usage.clear()
         self._step = 0
+        self._admission_start = 0
+        self._admission_attempts = 0
         self.used_bytes = 0
         self.counters.clear()
 
     def statistics(self):
         return {
             **dict(self.counters),
+            "admission_budget": self._admission_limit,
+            "admission_window_requests": self._admission_window,
             "resident_experts": len(self.resident),
             "resident_bytes": self.used_bytes,
             "device_budget_bytes": self.device_budget_bytes,
@@ -372,6 +433,9 @@ class HeterogeneousExpertExecutor:
         group_after_admission: bool = False,
         expert_slot_stride_bytes: int = 0,
         slot_staging_budget_bytes: int = 64 * 1024**2,
+        expert_victim_policy: str = "sort",
+        group_mixed_decode: bool = False,
+        device_expert_plan: bool = False,
     ):
         if execution_mode not in {"mixed", "cpu", "gpu"}:
             raise ValueError("execution_mode must be 'mixed', 'cpu' or 'gpu'")
@@ -382,6 +446,15 @@ class HeterogeneousExpertExecutor:
         if not isinstance(group_after_admission, bool):
             raise TypeError('group_after_admission must be bool')
         self.group_after_admission = group_after_admission
+        if not isinstance(group_mixed_decode, bool):
+            raise TypeError('group_mixed_decode must be bool')
+        self.group_mixed_decode = group_mixed_decode
+        if not isinstance(device_expert_plan, bool):
+            raise TypeError('device_expert_plan must be bool')
+        if device_expert_plan and BACKEND_NAME != 'cupy':
+            raise RuntimeError('Device expert plans require CuPy')
+        self.device_expert_plan = device_expert_plan
+        self._device_expert_plans = {}
         if (isinstance(expert_slot_stride_bytes, bool) or
                 not isinstance(expert_slot_stride_bytes, int) or expert_slot_stride_bytes < 0):
             raise ValueError('expert_slot_stride_bytes must be a nonnegative integer')
@@ -399,9 +472,15 @@ class HeterogeneousExpertExecutor:
             raise ValueError("d_model and d_ff must be positive")
         if compute_dtype not in {"float16", "float32"}:
             raise ValueError("compute_dtype must be 'float16' or 'float32'")
-        if cpu_packed_backend not in {"reference", "auto", "native"}:
-            raise ValueError("cpu_packed_backend must be 'reference', 'auto' or 'native'")
+        if cpu_packed_backend not in {"reference", "auto", "native", "ggml", "ggml_pool"}:
+            raise ValueError("cpu_packed_backend must be reference, auto, native, ggml or ggml_pool")
         self.cpu_packed_backend = cpu_packed_backend
+        self._ggml_cpu = None
+        if cpu_packed_backend in ('ggml', 'ggml_pool'):
+            if compute_dtype != 'float32':
+                raise ValueError('GGML packed CPU execution requires float32 activations')
+            from mini_llm.ops.ggml_packed_cpu import GGMLPackedCPUExecutor
+            self._ggml_cpu = GGMLPackedCPUExecutor()
         self._dispatch_depth = 0
         self.host_provider = host_provider
         self.model_id = model_id
@@ -412,12 +491,20 @@ class HeterogeneousExpertExecutor:
             device_budget_bytes, promote_after=1 if execution_mode == "gpu" else promote_after,
             score_half_life=score_half_life,
             idle_eviction_requests=idle_eviction_requests,
+            victim_policy=expert_victim_policy,
         )
         self.host_cache = CPUDequantizedExpertCache(host_dequant_budget_bytes)
         self.cpu_workers = int(cpu_workers)
         self._pool = (ThreadPoolExecutor(max_workers=self.cpu_workers,
                                          thread_name_prefix="mylocal-moe-cpu")
                       if self.cpu_workers else None)
+        self._ggml_row_pool = None
+        if cpu_packed_backend == 'ggml_pool':
+            if not self.cpu_workers:
+                raise ValueError('ggml_pool requires positive cpu_workers')
+            from .ggml_packed_cpu import GGMLPackedCPURowPool
+            self._ggml_row_pool = GGMLPackedCPURowPool(
+                self._ggml_cpu, self.d_model, self.d_ff, self.cpu_workers)
         self._worker_local = threading.local()
         self.counters = Counter()
 
@@ -460,6 +547,12 @@ class HeterogeneousExpertExecutor:
         if self._pool is not None:
             self._pool.shutdown(wait=True)
             self._pool = None
+        if self._ggml_row_pool is not None:
+            self._ggml_row_pool.close()
+            self._ggml_row_pool = None
+        for plan in self._device_expert_plans.values():
+            plan.close()
+        self._device_expert_plans.clear()
         if self._slot_arena is not None:
             # Arena backing cannot retire before consumers on other streams.
             for event, _ in self.cache._inflight_groups:
@@ -552,6 +645,10 @@ class HeterogeneousExpertExecutor:
         x_cpu = np.asarray(x_host, dtype=dtype)
         gate, up, down = weights
         if isinstance(gate, PackedGGUFWeight):
+            if self._ggml_cpu is not None:
+                result = self._ggml_cpu.expert(x_cpu, weights)
+                self.counters['ggml_cpu_experts'] += 1
+                return result.astype(x_host.dtype, copy=False)
             if self.cpu_packed_backend != "reference":
                 native = packed_cpu_expert(x_cpu, weights, backend=self.cpu_packed_backend)
                 if native is not None:
@@ -717,7 +814,15 @@ class HeterogeneousExpertExecutor:
                                      x, ready, device_id, gpu_y, trace)
         return self._pool.submit(self._run_cpu, key, weights, x, trace)
 
-    def try_forward_decode_batch(self, layer_id, expert_ids, x, routing_weights, slots):
+    def try_forward_device_plan(self, layer_id, x, weights, indices, n_experts, *, on_cpu_submitted=None):
+        if not self.device_expert_plan:
+            return None
+        from .device_expert_plan import try_forward
+        return try_forward(self, layer_id, x, weights, indices, n_experts,
+                                   on_cpu_submitted=on_cpu_submitted)
+
+    def try_forward_decode_batch(self, layer_id, expert_ids, x, routing_weights, slots, *,
+                                     on_cpu_submitted=None):
         """Share one immutable activation across CPU misses in singleton decode.
 
         Called only inside dispatch_scope, with unique ascending IDs. FP32-only
@@ -744,6 +849,8 @@ class HeterogeneousExpertExecutor:
                         x, experts, routing_weights, routing_slots=slots)):
                 # _prepare already counted requests and published complete bundles.
                 # The surrounding dispatch scope protects new and old residents alike.
+                if on_cpu_submitted is not None:
+                    on_cpu_submitted()
                 output = grouped_quantized_experts_forward(
                     x, experts, routing_weights, routing_slots=slots)
                 self.counters['gpu_experts'] += len(experts)
@@ -752,6 +859,18 @@ class HeterogeneousExpertExecutor:
                 return output
         outputs = [None] * len(prepared)
         jobs = []
+        gpu = [i for i, (_, expert, _, _) in enumerate(prepared) if expert is not None]
+        mixed_terms = None
+        mixed_experts = None
+        if self.group_mixed_decode and cpu and gpu and BACKEND_NAME == 'cupy':
+            from .grouped_quantized_experts import supports_grouped_quantized_experts
+            from .iq_packed_gpu import supports_type
+            candidates = [prepared[i][1] for i in gpu]
+            if (all(isinstance(e, PackedExpertFFNInference) and e.fuse_gate_up and
+                    all(supports_type(w.quant_type) for w in (e.gate, e.up, e.down))
+                    for e in candidates) and supports_grouped_quantized_experts(
+                        x, candidates, routing_weights[:len(gpu)])):
+                mixed_experts = candidates
         if cpu:
             if BACKEND_NAME == "cupy":
                 stream = xp.cuda.get_current_stream()
@@ -768,16 +887,33 @@ class HeterogeneousExpertExecutor:
                 host_out = np.empty((len(cpu), self.d_model), dtype=x.dtype)
             host_x.flags.writeable = False
         try:
-            for row, i in enumerate(cpu):
-                key, _, weights, _ = prepared[i]
-                jobs.append(self._pool.submit(
-                    self._run_cpu_decode_row, key, weights, host_x, host_out[row:row + 1]))
-                self.counters["cpu_submitted"] += 1
-            # Launch unchanged resident math only after all CPU jobs are queued.
-            for i, (_, expert, _, _) in enumerate(prepared):
-                if expert is not None:
-                    self.counters["gpu_experts"] += 1
-                    outputs[i] = expert.forward(x)
+            row_pool = self._ggml_row_pool
+            if cpu and row_pool is not None and len(cpu) <= row_pool.capacity and all(
+                    isinstance(w, PackedGGUFWeight) for i in cpu for w in prepared[i][2]):
+                jobs.append(row_pool.submit(host_x, [prepared[i][2] for i in cpu], out=host_out))
+                self.counters['cpu_submitted'] += len(cpu)
+                self.counters['ggml_cpu_experts'] += len(cpu)
+                self.counters['ggml_row_batches'] += 1
+            else:
+                for row, i in enumerate(cpu):
+                    key, _, weights, _ = prepared[i]
+                    jobs.append(self._pool.submit(
+                        self._run_cpu_decode_row, key, weights, host_x, host_out[row:row + 1]))
+                    self.counters["cpu_submitted"] += 1
+            # Launch independent shared/resident work only after CPU inputs are published.
+            if on_cpu_submitted is not None:
+                on_cpu_submitted()
+            if mixed_experts is not None:
+                from .iq_packed_gpu import grouped_terms
+                gpu_slots = xp.asarray([slots[i] for i in gpu], dtype=xp.int32)
+                mixed_terms = grouped_terms(x, mixed_experts, routing_weights[gpu_slots])
+                self.counters['gpu_experts'] += len(gpu)
+                self.counters['mixed_grouped_gpu_dispatches'] += 1
+            else:
+                for i, (_, expert, _, _) in enumerate(prepared):
+                    if expert is not None:
+                        self.counters["gpu_experts"] += 1
+                        outputs[i] = expert.forward(x)
         finally:
             # Drain even after submission/GPU failure, and retain the original
             # exception if one is already propagating through this finally.
@@ -801,6 +937,14 @@ class HeterogeneousExpertExecutor:
                 device_out = host_out
             for row, i in enumerate(cpu):
                 outputs[i] = device_out[row:row + 1]
+        if mixed_terms is not None:
+            from .mixed_expert_combine_gpu import combine
+            positions = {i: row for row, i in enumerate(gpu)}
+            positions.update({i: -row-1 for row, i in enumerate(cpu)})
+            output = combine(mixed_terms, device_out, routing_weights,
+                             tuple(positions[i] for i in range(len(prepared))), tuple(slots))
+            self.counters['decode_batch_dispatches'] += 1
+            return output
         output = xp.zeros_like(x)
         for slot, expert_out in zip(slots, outputs):
             output += routing_weights[slot:slot + 1] * expert_out

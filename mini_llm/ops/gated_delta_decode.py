@@ -213,7 +213,7 @@ def _eligible(mixer, qkv, gate, log_decay, beta, state):
     return True
 
 
-def try_decode(mixer, qkv, gate, log_decay, beta, state):
+def try_decode(mixer, qkv, gate, log_decay, beta, state, *, capture_owned=False):
     """Return a fused output, or None without mutation for unsupported metadata.
 
     Retain actual arrays (including intermediates/weights) until the recorded
@@ -227,15 +227,19 @@ def try_decode(mixer, qkv, gate, log_decay, beta, state):
     if kernels is None:
         return None
     stream = xp.cuda.get_current_stream()
-    pending = _PENDING.setdefault((device, stream.ptr), deque())
-    while pending and pending[0][0].done:
-        pending.popleft()
+    # A bounded graph pool plus its adapter owns inputs/state/weights during
+    # warmup and capture, and fences warmup even on failure. No global retention.
+    owned_capture = capture_owned
+    pending = None if owned_capture else _PENDING.setdefault((device, stream.ptr), deque())
+    if pending is not None:
+        while pending and pending[0][0].done:
+            pending.popleft()
     rule, conv = mixer.rule, mixer.conv
     batch = qkv.shape[0]
     convolved = xp.empty_like(qkv)
     readout = xp.empty_like(gate)
     output = xp.empty_like(gate)
-    event = xp.cuda.Event(disable_timing=True)
+    event = None if owned_capture else xp.cuda.Event(disable_timing=True)
     bias = conv.weight if conv.bias is None else conv.bias
     refs = (qkv, gate, log_decay, beta, state.conv.history, state.delta.memory,
             conv.weight, bias, mixer.norm.norm.gamma, rule._head_indices,
@@ -256,8 +260,9 @@ def try_decode(mixer, qkv, gate, log_decay, beta, state):
             f32(mixer.norm.norm.eps),
             i32(mixer.norm.gate_activation == "sigmoid")), stream=stream)
     finally:
-        event.record(stream)
-        pending.append((event, refs))
+        if event is not None:
+            event.record(stream)
+            pending.append((event, refs))
     state.conv.length = int(state.conv.length) + 1
     state.delta.length = int(state.delta.length) + 1
     return output

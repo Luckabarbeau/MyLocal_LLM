@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import math
 from numbers import Real
 
-from mini_llm.backend import xp
+from mini_llm.backend import BACKEND_NAME, xp
 from mini_llm.ops.causal_conv_inference import _positive_int
 from mini_llm.ops.gated_delta_inference import GatedDeltaMixerInference
 
@@ -80,9 +80,18 @@ class Qwen4ExpRecurrentMixerInference:
     """
 
     def __init__(self, spec, *, qkv, z, beta, alpha, out, conv_weight,
-                 norm_weight, ssm_a, dt_bias):
+                 norm_weight, ssm_a, dt_bias, fast_coefficients=False, graph_decode=False):
         if not isinstance(spec, Qwen4ExpMixerSpec):
             raise TypeError("spec must be Qwen4ExpMixerSpec")
+        if not isinstance(fast_coefficients, bool):
+            raise TypeError('fast_coefficients must be bool')
+        if not isinstance(graph_decode, bool):
+            raise TypeError('graph_decode must be bool')
+        if graph_decode and BACKEND_NAME != 'cupy':
+            raise RuntimeError('GDN graph decode requires CuPy')
+        self.fast_coefficients = fast_coefficients
+        self.graph_decode = graph_decode
+        self._decode_graph = None
         self.spec = spec
         self.projections = {}
         self._widths = {"qkv": (spec.qkv_channels, spec.d_model),
@@ -111,7 +120,13 @@ class Qwen4ExpRecurrentMixerInference:
 
     def _project(self, hidden, name):
         projection = self.projections[name]
-        result = projection(hidden) if callable(projection) else hidden @ projection.T
+        if callable(projection):
+            result = projection(hidden)
+        elif self.graph_decode:
+            from mini_llm.ops.inference_matmul import matmul_inference
+            result = matmul_inference(hidden, projection.T)
+        else:
+            result = hidden @ projection.T
         return _fp32(result, name + " output", (*hidden.shape[:-1], self._widths[name][0]))
 
     def create_state(self, batch_size):
@@ -127,16 +142,51 @@ class Qwen4ExpRecurrentMixerInference:
             raise TypeError("hidden must be a backend float32 array")
         if hidden.ndim != 3 or hidden.shape[0] < 1 or hidden.shape[-1] != self.spec.d_model:
             raise ValueError("hidden must be [positive batch,time,d_model]")
+        if self.graph_decode and hidden.shape[:2] == (1, 1):
+            from mini_llm.ops.causal_conv_inference import CausalConvState
+            from mini_llm.ops.gated_delta_inference import DeltaMixerState, DeltaRuleState
+            from mini_llm.ops.inference_graph import CapturedArrayInference
+            if not isinstance(state, DeltaMixerState):
+                raise TypeError('state must be DeltaMixerState')
+            arrays = (state.conv.history, state.delta.memory)
+            expected = ((1, self.spec.conv_kernel_size-1, self.spec.qkv_channels),
+                        (1, self.spec.n_value_heads, self.spec.head_dim, self.spec.head_dim))
+            if (any(a.shape != shape or a.dtype != xp.float32 or not a.flags.c_contiguous
+                    for a, shape in zip(arrays, expected)) or
+                    state.conv.length != state.delta.length or state.length < 0):
+                raise ValueError('GDN graph state shape/dtype/layout/length mismatch')
+            if self._decode_graph is None:
+                def enqueue(x, mutable):
+                    private = DeltaMixerState(CausalConvState(mutable[0]), DeltaRuleState(mutable[1]))
+                    return self._forward_uncaptured(x, private, capture_owned=True)
+                self._decode_graph = CapturedArrayInference(enqueue, hidden, arrays,
+                    pool_limit_bytes=16*1024**2)
+            output = self._decode_graph.forward(hidden, arrays)
+            state.conv.length = int(state.conv.length)+1
+            state.delta.length = int(state.delta.length)+1
+            return output
+        return self._forward_uncaptured(hidden, state)
+
+    def _forward_uncaptured(self, hidden, state, *, capture_owned=False):
         batch, time = hidden.shape[:2]
         spec = self.spec
         qkv = xp.ascontiguousarray(self._project(hidden, "qkv"))
         gate = self._project(hidden, "z").reshape(batch, time, spec.n_value_heads, spec.head_dim)
         beta_logits = self._project(hidden, "beta")
         alpha = self._project(hidden, "alpha")
-        beta = xp.exp(-xp.logaddexp(xp.float32(0), -beta_logits))
-        log_decay = self.ssm_a * xp.logaddexp(xp.float32(0), alpha + self.dt_bias)
-        mixed = self.mixer.forward(qkv, gate, log_decay, beta, state)
+        if self.fast_coefficients and BACKEND_NAME == 'cupy':
+            from mini_llm.ops.qwen4exp_elementwise_gpu import delta_coefficients
+            beta, log_decay = delta_coefficients(beta_logits, alpha, self.dt_bias, self.ssm_a)
+        else:
+            beta = xp.exp(-xp.logaddexp(xp.float32(0), -beta_logits))
+            log_decay = self.ssm_a * xp.logaddexp(xp.float32(0), alpha + self.dt_bias)
+        mixed = self.mixer.forward(qkv, gate, log_decay, beta, state,
+                                   capture_owned=capture_owned)
         return self._project(mixed.reshape(batch, time, spec.inner_size), "out")
+
+    def graph_statistics(self):
+        return (self._decode_graph.statistics() if self._decode_graph is not None else
+                dict(calls=0, pool_reserved_bytes=0, pool_used_bytes=0))
 
     def step(self, hidden, state):
         """[B,D] -> [B,D], using exactly the sequence-forward graph."""

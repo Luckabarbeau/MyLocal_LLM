@@ -327,6 +327,14 @@ def test_plan_before_payload_accounts_expansion_and_temporary(source):
         weights.memory_plan(8,cpu_workers=10000)
 
 
+def test_worker_cap_survives_submitting_host_pin(source,monkeypatch):
+    weights = Qwen4ExpWeights(Qwen4ExpGGUFIndex(source))
+    if weights._worker_capacity < 2:
+        pytest.skip('Needs multiple initially available CPUs')
+    monkeypatch.setattr(os,'sched_getaffinity',lambda pid:{0})
+    assert weights.memory_plan(8,cpu_workers=2)['cpu_workers'] == 2
+
+
 def test_native_projections_never_full_decode_and_selected_rows_only(source,monkeypatch):
     original = PackedGGUFWeight.dequantize_reference
     def bounded(self):

@@ -31,18 +31,105 @@ class Qwen4ExpLayer:
 
 
 class Qwen4ExpMoE:
-    def __init__(self, router, experts, gate, up, down, shared_gate, *, scale=1.0):
+    def __init__(self, router, experts, gate, up, down, shared_gate, *, scale=1.0,
+                 fast_elementwise=False, overlap_shared=False, shared_graph_decode=False,
+                                  defer_shared=False):
+        if not isinstance(fast_elementwise, bool):
+            raise TypeError('fast_elementwise must be bool')
+        if not isinstance(overlap_shared, bool):
+            raise TypeError('overlap_shared must be bool')
+        if overlap_shared and BACKEND_NAME != 'cupy':
+            raise ValueError('overlap_shared requires CuPy')
+        if not isinstance(shared_graph_decode,bool):
+            raise TypeError('shared_graph_decode must be bool')
+        if shared_graph_decode and BACKEND_NAME!='cupy':
+            raise ValueError('Shared graph decode requires CuPy')
+        if not isinstance(defer_shared, bool):
+            raise TypeError('defer_shared must be bool')
+        if defer_shared and not overlap_shared:
+            raise ValueError('defer_shared requires overlap_shared')
+        self.defer_shared = defer_shared
+        self.shared_graph_decode = shared_graph_decode
+        self._shared_graph_enabled = shared_graph_decode
+        self._shared_graph = None
+        self.fast_elementwise = fast_elementwise
+        self._shared_stream = xp.cuda.Stream(non_blocking=True) if overlap_shared else None
         self.router, self.experts = router, experts
         self.gate, self.up, self.down = gate, up, down
         self.shared_gate, self.scale = shared_gate, np.float32(scale)
 
-    def __call__(self, hidden):
+    def _compute_shared(self,hidden,unused=()):
+        gate=self.gate(hidden)
+        if self.fast_elementwise and BACKEND_NAME=='cupy':
+            from mini_llm.ops.qwen4exp_elementwise_gpu import shared_hidden
+            shared=self.down(shared_hidden(gate,self.up(hidden)))
+        else:
+            shared=self.down((gate*_sigmoid(gate))*self.up(hidden))
+        if self.shared_graph_decode:
+            from mini_llm.ops.inference_matmul import matmul_inference
+            score=matmul_inference(hidden.reshape(1,-1),self.shared_gate.reshape(-1,1)).reshape(())
+        else:
+            score=hidden@self.shared_gate
+        return shared,score
+
+    def _run_shared(self,hidden):
+        if not self._shared_graph_enabled:
+            return self._compute_shared(hidden)
+        if self._shared_graph is None:
+            from mini_llm.ops.inference_graph import CapturedArrayInference
+            self._shared_graph=CapturedArrayInference(self._compute_shared,hidden,(),pool_limit_bytes=2*1024**2)
+        return self._shared_graph.forward(hidden,(),borrow_output=True)
+
+    def graph_statistics(self):
+        return (self._shared_graph.statistics() if self._shared_graph is not None else
+                dict(calls=0,pool_reserved_bytes=0,pool_used_bytes=0))
+
+    def __call__(self, hidden, *, routing=None):
         x = hidden.reshape(1,1,-1)
-        weights, ids = self.router.forward(x)
+        if self._shared_stream is not None:
+            caller = xp.cuda.get_current_stream()
+            if caller.is_capturing():
+                raise RuntimeError('Shared expert overlap requires an uncaptured dispatch seam')
+            ready = xp.cuda.Event(disable_timing=True)
+            complete = xp.cuda.Event(disable_timing=True)
+            launched = False
+            shared = shared_score = None
+            def launch_shared():
+                nonlocal launched, shared, shared_score
+                # The CPU input-ready fence is ahead of shared work in deferred
+                # mode; stream ownership still protects every shared consumer.
+                ready.record(caller)
+                self._shared_stream.wait_event(ready)
+                launched = True
+                try:
+                    with self._shared_stream:
+                        shared,shared_score = self._run_shared(hidden)
+                finally:
+                    complete.record(self._shared_stream)
+            try:
+                if not self.defer_shared:
+                    launch_shared()
+                weights, ids = self.router.forward(x) if routing is None else routing
+                if self.defer_shared:
+                    routed = self.experts.forward(x, weights*self.scale, ids,
+                        on_cpu_submitted=launch_shared).reshape(-1)
+                else:
+                    routed = self.experts.forward(x, weights*self.scale, ids).reshape(-1)
+            finally:
+                if launched:
+                    # Fence also on failure before input/weight owners can retire.
+                    caller.wait_event(complete)
+            if self.fast_elementwise:
+                from mini_llm.ops.qwen4exp_elementwise_gpu import combine_shared
+                return combine_shared(routed, shared, shared_score)
+            return routed + _sigmoid(shared_score)*shared
+        weights, ids = self.router.forward(x) if routing is None else routing
         routed = self.experts.forward(x, weights*self.scale, ids).reshape(-1)
-        gate = self.gate(hidden)
-        shared = self.down((gate*_sigmoid(gate))*self.up(hidden))
-        return routed + _sigmoid(hidden @ self.shared_gate)*shared
+        shared,shared_score = self._run_shared(hidden)
+        if self.fast_elementwise and BACKEND_NAME == 'cupy':
+            from mini_llm.ops.qwen4exp_elementwise_gpu import combine_shared
+            return combine_shared(routed,shared,shared_score)
+        return routed+_sigmoid(shared_score)*shared
 
 
 @dataclass(eq=False)
@@ -92,24 +179,55 @@ class Qwen4ExpGGUFModel:
                expert_promote_after=3, qsa_fast_decode=False,
                hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False,
                hc_graph_decode=False, hc_native_read=False, group_after_admission=False,
-               expert_cache_slots=False, **budgets):
+               elementwise_fast_decode=False, expert_victim_policy='sort',
+               expert_cpu_backend='native', group_mixed_decode=False,
+               expert_cache_slots=False, overlap_shared=False, gdn_graph_decode=False,
+               device_expert_plan=False, pre_moe_graph=False, shared_graph_decode=False,
+                              defer_shared=False, **budgets):
         expert_promote_after = integer(expert_promote_after, 'expert_promote_after', 1)
+        if expert_cpu_backend not in ('native', 'ggml', 'ggml_pool'):
+            raise ValueError('expert_cpu_backend must be native, ggml or ggml_pool')
         for name, value in (('qsa_fast_decode', qsa_fast_decode),
                             ('hc_fast_decode', hc_fast_decode), ('router_fast_decode', router_fast_decode),
                             ('gdn_fast_decode', gdn_fast_decode), ('hc_graph_decode', hc_graph_decode),
                             ('hc_native_read', hc_native_read),
+                            ('elementwise_fast_decode', elementwise_fast_decode),
+                            ('overlap_shared', overlap_shared),
+                            ('gdn_graph_decode', gdn_graph_decode),
+                            ('device_expert_plan', device_expert_plan),
+                            ('pre_moe_graph', pre_moe_graph),
+                            ('shared_graph_decode',shared_graph_decode),
+                                                        ('defer_shared',defer_shared),
+                            ('group_mixed_decode', group_mixed_decode),
                             ('group_after_admission', group_after_admission),
                             ('expert_cache_slots', expert_cache_slots)):
             if not isinstance(value, bool):
                 raise TypeError(f'{name} must be bool')
+        if pre_moe_graph and (BACKEND_NAME != 'cupy' or not hc_native_read or not hc_fast_decode or
+                not router_fast_decode or not gdn_fast_decode or hc_graph_decode or gdn_graph_decode):
+            raise ValueError('Pre-MoE graph requires native HC/router/GDN and no nested graph mode')
         if diagnostic_callback is not None and not callable(diagnostic_callback):
             raise TypeError('diagnostic_callback must be callable')
         index, h = weights.index, weights.headers
+        if device_expert_plan:
+            if BACKEND_NAME != 'cupy' or expert_cpu_backend != 'ggml_pool':
+                raise ValueError('Device expert plans require CuPy and ggml_pool')
+            if (len(h.recurrent) > 64 or index.n_experts > 512 or index.top_k > 10 or
+                    max(h.width, index.d_ff) > 4096):
+                raise ValueError('Unsupported bounded device expert plan geometry')
+            per_device = index.n_experts*24+index.top_k*(32+4*(2*h.width+index.d_ff))+4*h.width+4
+            per_host = 4*(h.width+index.top_k+1+index.top_k*h.width)
+            budgets['activation_bytes'] = integer(budgets.get('activation_bytes', 64*1024**2),
+                'activation_bytes') + len(h.recurrent)*2*per_device
+            budgets['staging_bytes'] = integer(budgets.get('staging_bytes', 64*1024**2),
+                'staging_bytes') + len(h.recurrent)*2*per_host
         if expert_executor is not None:
             if (expert_executor.d_model,expert_executor.d_ff,expert_executor.compute_dtype,
                     expert_executor.cpu_packed_backend,expert_executor.model_id) != (
-                    index.d_model,index.d_ff,'float32','native',index.model_id):
+                    index.d_model,index.d_ff,'float32',expert_cpu_backend,index.model_id):
                 raise ValueError('Borrowed executor geometry/precision/backend/model identity mismatch')
+            if getattr(expert_executor, 'device_expert_plan', False) != device_expert_plan:
+                raise ValueError('Borrowed executor device-plan configuration mismatch')
             if expert_executor.host_cache.budget_bytes:
                 raise ValueError('Full expert host-dequant cache is forbidden')
             budgets['cache_bytes'] = expert_executor.cache.device_budget_bytes
@@ -129,25 +247,54 @@ class Qwen4ExpGGUFModel:
             # Account for pinned allocator rounding plus other transfer scratch.
             budgets['staging_bytes'] = max(integer(budgets.get('staging_bytes', 64*1024**2),
                 'staging_bytes'), 2 * (1 << (slot_stride-1).bit_length()))
+        graph_reservation = len(h.recurrent)*2*1024**2 if shared_graph_decode else 0
+        if shared_graph_decode and BACKEND_NAME!='cupy':
+            raise RuntimeError('Shared graph decode requires CuPy')
+        if gdn_graph_decode or pre_moe_graph:
+            if BACKEND_NAME != 'cupy':
+                raise RuntimeError('GDN graph decode requires CuPy')
+            graph_reservation += sum(h.recurrent) * 16 * 1024**2
         if hc_graph_decode:
             if BACKEND_NAME != 'cupy':
                 raise RuntimeError('HC graph decode requires CuPy')
-            graph_reservation = (2 * len(h.recurrent) + 1) * 2 * 1024**2
+            graph_reservation += (2 * len(h.recurrent) + 1) * 2 * 1024**2
+        if graph_reservation:
             budgets['graph_workspace_bytes'] = max(
                 integer(budgets.get('graph_workspace_bytes', 0), 'graph_workspace_bytes'),
                 graph_reservation)
         plan = weights.memory_plan(max_length, **budgets)
         weights.approve(plan)
+        if gdn_graph_decode or pre_moe_graph:
+            for i, recurrent in enumerate(h.recurrent):
+                if recurrent and any(
+                        weights.store.tensors[f'blk.{i}.{name}.weight'].quant_type not in {'F32', 'F16', 'BF16'}
+                        and f'blk.{i}.{name}.weight' not in weights.device_names
+                        for name in ('attn_qkv', 'attn_gate', 'ssm_beta', 'ssm_alpha', 'ssm_out')):
+                    raise ValueError('GDN capture requires every recurrent projection on the GPU')
+        if shared_graph_decode and any(weights.store.tensors[f'blk.{i}.{name}.weight'].quant_type not in
+                {'F32','F16','BF16'} and f'blk.{i}.{name}.weight' not in weights.device_names
+                for i in range(len(h.recurrent))
+                for name in ('ffn_gate_shexp','ffn_up_shexp','ffn_down_shexp')):
+            raise ValueError('Shared capture requires every shared projection on GPU')
         executor = expert_executor
         try:
             if executor is None:
                 executor = HeterogeneousExpertExecutor(index.provider, model_id=index.model_id,
                     d_model=index.d_model, d_ff=index.d_ff, compute_dtype='float32',
-                    cpu_packed_backend='native', cpu_workers=plan['cpu_workers'],
+                    cpu_packed_backend=expert_cpu_backend, cpu_workers=plan['cpu_workers'],
                     device_budget_bytes=plan['cache_bytes'], host_dequant_budget_bytes=0,
                     promote_after=expert_promote_after, group_after_admission=group_after_admission,
+                    expert_victim_policy=expert_victim_policy,
+                    group_mixed_decode=group_mixed_decode, device_expert_plan=device_expert_plan,
                     expert_slot_stride_bytes=slot_stride, slot_staging_budget_bytes=plan['staging_bytes'])
             dense, project = weights.dense, weights.projection
+            def recurrent_project(name):
+                return weights.projection(name, capturable=gdn_graph_decode or pre_moe_graph)
+            def shared_project(name):
+                base=weights.projection(name,capturable=shared_graph_decode)
+                if not shared_graph_decode:
+                    return base
+                return lambda x:base(x.reshape(-1,x.shape[-1])).reshape(x.shape[:-1]+(-1,))
             def hc(stem, inject=True):
                 # HC copies these small matrices. No host dictionary retains
                 # the constructor inputs after this call returns.
@@ -170,11 +317,12 @@ class Qwen4ExpGGUFModel:
                         conv=dense(p+'ple_conv1d.weight'))
                 if rec:
                     mixer = Qwen4ExpRecurrentMixerInference(h.mixer,
-                        qkv=project(p+'attn_qkv.weight'), z=project(p+'attn_gate.weight'),
-                        beta=project(p+'ssm_beta.weight'),alpha=project(p+'ssm_alpha.weight'),
-                        out=project(p+'ssm_out.weight'),conv_weight=dense(p+'ssm_conv1d.weight'),
+                        qkv=recurrent_project(p+'attn_qkv.weight'), z=recurrent_project(p+'attn_gate.weight'),
+                        beta=recurrent_project(p+'ssm_beta.weight'),alpha=recurrent_project(p+'ssm_alpha.weight'),
+                        out=recurrent_project(p+'ssm_out.weight'),conv_weight=dense(p+'ssm_conv1d.weight'),
                         norm_weight=dense(p+'ssm_norm.weight'),ssm_a=dense(p+'ssm_a'),
-                        dt_bias=dense(p+'ssm_dt.bias'))
+                        dt_bias=dense(p+'ssm_dt.bias'), fast_coefficients=elementwise_fast_decode,
+                        graph_decode=gdn_graph_decode)
                     mixer.mixer._decode_fastpath_enabled = gdn_fast_decode
                 else:
                     mixer = Qwen4ExpAttention(h.attention,
@@ -190,11 +338,14 @@ class Qwen4ExpGGUFModel:
                 router.b_router = xp.zeros(index.n_experts,dtype=xp.float32)
                 # Both paths retain full softmax; fusion is explicitly switchable.
                 router._decode_fastpath_enabled = router_fast_decode
+                router._capturable_logits = pre_moe_graph and rec
                 experts = ExpertsInference(h.width,index.d_ff,index.n_experts,
                     expert_executor=executor,layer_id=i)
-                moe = Qwen4ExpMoE(router,experts,project(p+'ffn_gate_shexp.weight'),
-                    project(p+'ffn_up_shexp.weight'),project(p+'ffn_down_shexp.weight'),
-                    dense(p+'ffn_gate_inp_shexp.weight'),scale=h.expert_scale)
+                moe = Qwen4ExpMoE(router,experts,shared_project(p+'ffn_gate_shexp.weight'),
+                    shared_project(p+'ffn_up_shexp.weight'),shared_project(p+'ffn_down_shexp.weight'),
+                    dense(p+'ffn_gate_inp_shexp.weight'),scale=h.expert_scale,
+                    fast_elementwise=elementwise_fast_decode, overlap_shared=overlap_shared,
+                    shared_graph_decode=shared_graph_decode, defer_shared=defer_shared)
                 blocks.append(Qwen4ExpLayer(attn_hc,mixer,ffn_hc,moe,rec,ple))
             result = cls.from_components(width=h.width,vocab=h.vocab,blocks=blocks,
                 final_hc=hc('output_hc_',False),embedding=weights.embedding,
@@ -203,6 +354,14 @@ class Qwen4ExpGGUFModel:
             result.weights, result.index = weights, index
             result.expert_executor, result._owns_executor = executor, expert_executor is None
             result.plan = plan
+            if pre_moe_graph:
+                from .qwen4exp_pre_moe_graph import Qwen4ExpPreMoEGraph
+                result._pre_moe_segments = {i:Qwen4ExpPreMoEGraph(b.attention_hc,b.mixer,b.ffn_hc,b.moe.router)
+                    for i,b in enumerate(blocks) if b.recurrent}
+            else:
+                result._pre_moe_segments = {}
+            result._shared_graph_owners=tuple(b.moe for b in blocks) if shared_graph_decode else ()
+            result._gdn_graph_owners = tuple(b.mixer for b in blocks if b.recurrent) if gdn_graph_decode else ()
             result._hc_graph_owners = (tuple(hc for b in blocks for hc in
                 (b.attention_hc, b.ffn_hc)) + (result.final_hc,)) if hc_graph_decode else ()
             m = weights.store.metadata
@@ -259,7 +418,13 @@ class Qwen4ExpGGUFModel:
                             'resident_device_bytes', self.expert_executor.cache.used_bytes) +
                         sum(s.reserved_bytes for s in self._states) +
                         sum(hc.graph_statistics()['pool_reserved_bytes']
-                            for hc in getattr(self, '_hc_graph_owners', ())))
+                            for hc in getattr(self, '_hc_graph_owners', ())) +
+                        sum(m.graph_statistics()['pool_reserved_bytes']
+                            for m in getattr(self, '_gdn_graph_owners', ())) +
+                        sum(s.graph_statistics()['pool_reserved_bytes']
+                            for s in getattr(self, '_pre_moe_segments', {}).values()) +
+                        sum(s.graph_statistics()['pool_reserved_bytes']
+                            for s in getattr(self,'_shared_graph_owners',())))
         return self.weights.memory_plan(length, resident_device_bytes=resident, **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
             'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers',
@@ -334,17 +499,25 @@ class Qwen4ExpGGUFModel:
                 for i,b in enumerate(self.blocks):
                     if b.ple is not None:
                         streams,state.ple[i] = b.ple.step(token,streams,state.ple[i])
-                    hidden,gains = b.attention_hc.read(streams)
-                    self._diagnostic(i,'hc_attention_read',hidden)
-                    if b.recurrent:
-                        mixed = b.mixer.forward(hidden[None,None,:],state.recurrent[i])[0,0]
+                    segment = (getattr(self,'_pre_moe_segments',{}).get(i)
+                               if self.diagnostic_callback is None else None)
+                    routing = None
+                    if segment is not None:
+                        streams,hidden,gains,rw,ri = segment.forward(streams,state.recurrent[i])
+                        routing = rw,ri
                     else:
-                        mixed = b.mixer.step(hidden,state.qsa[i],position=state.length)
-                    streams = b.attention_hc.write(streams,mixed,gains)
-                    self._diagnostic(i,'post_mixer',streams)
-                    hidden,gains = b.ffn_hc.read(streams)
-                    self._diagnostic(i,'hc_ffn_read',hidden)
-                    streams = b.ffn_hc.write(streams,b.moe(hidden),gains)
+                        hidden,gains = b.attention_hc.read(streams)
+                        self._diagnostic(i,'hc_attention_read',hidden)
+                        if b.recurrent:
+                            mixed = b.mixer.forward(hidden[None,None,:],state.recurrent[i])[0,0]
+                        else:
+                            mixed = b.mixer.step(hidden,state.qsa[i],position=state.length)
+                        streams = b.attention_hc.write(streams,mixed,gains)
+                        self._diagnostic(i,'post_mixer',streams)
+                        hidden,gains = b.ffn_hc.read(streams)
+                        self._diagnostic(i,'hc_ffn_read',hidden)
+                    moe = b.moe(hidden,routing=routing) if routing is not None else b.moe(hidden)
+                    streams = b.ffn_hc.write(streams,moe,gains)
                     self._diagnostic(i,'post_moe',streams)
                 logits = None
                 if project_logits or self.diagnostic_callback is not None:
@@ -419,11 +592,15 @@ class Qwen4ExpGGUFModel:
         try:
             if self._owns_executor:
                 self.expert_executor.close()
-            if getattr(self, '_hc_graph_owners', ()):
+            if (getattr(self, '_hc_graph_owners', ()) or getattr(self, '_gdn_graph_owners', ()) or
+                    getattr(self, '_pre_moe_segments', {}) or getattr(self,'_shared_graph_owners',())):
                 # Graphs can have run on their bound non-default streams.
                 xp.cuda.runtime.deviceSynchronize()
             self.blocks = ()
             self._hc_graph_owners = ()
+            self._gdn_graph_owners = ()
+            self._pre_moe_segments = {}
+            self._shared_graph_owners = ()
             self.embedding = self.output = self.final_hc = None
             if self.weights is not None:
                 self.weights.close()

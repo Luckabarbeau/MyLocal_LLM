@@ -176,7 +176,17 @@ def test_cached_single_kernel_per_call_and_no_array_helpers(monkeypatch):
     device = xp.cuda.runtime.getDevice()
     kernels = gpu._kernels(device)
     assert gpu._kernels(device) is kernels
-    assert all(k.options == ("--fmad=false",) for k in kernels)
+    constructor = xp.ElementwiseKernel
+    options = []
+
+    def constructed(*args, **kwargs):
+        options.append(kwargs.get('options'))
+        return constructor(*args, **kwargs)
+
+    with monkeypatch.context() as construction:
+        construction.setattr(xp, 'ElementwiseKernel', constructed)
+        gpu._kernels.__wrapped__(device)
+    assert options == [("--fmad=false",)] * 3
     a = xp.ones(17, dtype=xp.float32)
     scalar = xp.ones((), dtype=xp.float32)
     calls = []

@@ -189,6 +189,10 @@ class Qwen4ExpWeights:
     def __init__(self, index, *, owns_store=False):
         self.index, self.store = index, index.store
         self.owns_store = owns_store
+        # The submitting host may be pinned later; that does not shrink an
+        # already approved native worker team with independent affinity.
+        self._worker_capacity = min(32, len(os.sched_getaffinity(0))
+            if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1))
         self.headers = inspect_headers(index)
         self.plan = None
         self.device_names = frozenset()
@@ -220,7 +224,7 @@ class Qwen4ExpWeights:
         if length > h.context:
             raise ValueError('max_length exceeds checkpoint context')
         workers = integer(cpu_workers, 'cpu_workers', 1)
-        cap = min(32, len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1))
+        cap = self._worker_capacity
         if workers > cap:
             raise ValueError(f'cpu_workers exceeds fixed positive cap {cap}')
         budgets = dict(host_budget_bytes=host_budget_bytes, static_device_budget_bytes=static_device_budget_bytes,
@@ -323,11 +327,14 @@ class Qwen4ExpWeights:
             host = raw.view('<f4' if t.quant_type == 'F32' else '<f2').astype(np.float32, copy=True)
         return xp.asarray(host.reshape(t.shape), dtype=xp.float32)
 
-    def projection(self, name):
+    def projection(self, name, *, capturable=False):
         self._ready()
         desc = self.store.tensors[name]
         if desc.quant_type in DENSE:
             weight = self.dense(name)
+            if capturable:
+                from mini_llm.ops.inference_matmul import matmul_inference
+                return lambda x: matmul_inference(x, weight.T)
             return lambda x: x @ weight.T
         weight = self.store.packed_weight(name)
         if name in self.device_names:
@@ -356,6 +363,8 @@ class Qwen4ExpWeights:
 
     def close(self):
         self.device.clear()
+        if isinstance(self.index, Qwen4ExpGGUFIndex):
+            self.index.clear_source_cache()
         if self.owns_store:
             self.store.close()
         self.closed = True

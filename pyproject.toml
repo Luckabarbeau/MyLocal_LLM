@@ -52,4 +52,4 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-"mini_llm.ops" = ["native_packed_cpu.cpp", "gguf_codebooks.h"]
+"mini_llm.ops" = ["native_packed_cpu.cpp", "gguf_codebooks.h", "ggml_packed_cpu.cpp", "q2_cpu_simd.h"]

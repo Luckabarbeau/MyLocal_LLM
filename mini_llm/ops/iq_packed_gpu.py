@@ -401,7 +401,22 @@ def grouped(x, experts, routes, slots=None, block_k=512):
     return _grouped_validated(x, experts, routes, slots, block_k)
 
 
-def _grouped_validated(x, experts, routes, slots, block_k):
+def grouped_terms(x, experts, routes, slots=None, block_k=512):
+    """Return fresh weighted FP32 [E,D] terms without allocating/reducing out.
+
+    The validation, ascending-handle order, route strides/slots and caller-owned
+    weight lifetime contract are identical to :func:`grouped`. A GPU subset must
+    supply its own [E] routes; slots index that subset, not the full router.
+    """
+    from .grouped_quantized_experts import _unsupported_reason
+
+    reason = _unsupported_reason(x, experts, routes, block_k, slots)
+    if reason is not None:
+        raise ValueError(f"Unsupported grouped IQ experts: {reason}")
+    return _grouped_validated(x, experts, routes, slots, block_k, return_terms=True)
+
+
+def _grouped_validated(x, experts, routes, slots, block_k, return_terms=False):
     """Internal launch seam; caller must have checked _unsupported_reason."""
     scheduling = _grouped_kernel()
     projections = (experts[0].gate, experts[0].up, experts[0].down)
@@ -418,7 +433,7 @@ def _grouped_validated(x, experts, routes, slots, block_k):
     table = cp.asarray(pointers)
     hidden = cp.empty((e, f), cp.float32)
     terms = cp.empty((e, d), cp.float32)
-    out = cp.empty((1, d), cp.float32)
+    out = None if return_terms else cp.empty((1, d), cp.float32)
     formats = [(_FORMAT_ID[w.quant_type], *BLOCK_FORMATS[w.quant_type]) for w in projections]
     warp = scheduling in ('warp', 'warp_specialized')
     if warp:
@@ -432,7 +447,6 @@ def _grouped_validated(x, experts, routes, slots, block_k):
         module = _grouped_module(x.device.id)
         gate_up = module.get_function('iq_grouped_gate_up')
         down = module.get_function('iq_grouped_down_weighted')
-    reduce = module.get_function("iq_grouped_ordered_reduce")
     ints = lambda values: tuple(np.int32(v) for v in values)
     extra = ints((e,)) if warp else ()
     block = (128,) if warp else (256,)
@@ -442,5 +456,8 @@ def _grouped_validated(x, experts, routes, slots, block_k):
     down(((e*d + rows_per_block - 1)//rows_per_block,), block,
          (hidden, table, routes, terms) + ints((d, f, width))
          + (np.int64(routes.strides[0] // routes.itemsize),) + ints((*formats[2], block_k)) + extra)
+    if return_terms:
+        return terms
+    reduce = module.get_function("iq_grouped_ordered_reduce")
     reduce(((d + 255) // 256,), (256,), (terms, out) + ints((d, e)))
     return out

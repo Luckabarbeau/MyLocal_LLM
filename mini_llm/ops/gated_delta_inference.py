@@ -213,7 +213,7 @@ class GatedDeltaMixerInference:
         v = qkv[..., 2*self.q_width:].reshape(batch, time, self.rule.n_value_heads, self.rule.value_dim)
         return q, k, v
 
-    def forward(self, qkv, gate, log_decay, beta, state):
+    def forward(self, qkv, gate, log_decay, beta, state, *, capture_owned=False):
         _float_array(qkv, "qkv")
         _float_array(gate, "gate")
         if qkv.ndim != 3 or qkv.shape[-1] != self.channels:
@@ -230,7 +230,8 @@ class GatedDeltaMixerInference:
         if self.norm.norm.gamma is None:
             raise RuntimeError("set_weights must be called before forward")
         if self._decode_fastpath_enabled:
-            decoded = try_decode(self, qkv, gate, log_decay, beta, state)
+            decoded = try_decode(self, qkv, gate, log_decay, beta, state,
+                                 capture_owned=capture_owned)
             if decoded is not None:
                 return decoded
         convolved = self.conv.forward(qkv, state.conv)

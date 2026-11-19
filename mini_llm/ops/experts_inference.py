@@ -157,20 +157,42 @@ class ExpertsInference:
         for i in range(self.n_experts):
             self.experts[i].set_weights(experts.experts[i])
 
-    def forward(self, x, weights, expert_indices):
+    def forward(self, x, weights, expert_indices, *, on_cpu_submitted=None):
         """Sparse inference dispatch matching the training forward semantics.
 
         Managed one-token decode reuses its input row for unique top-k routes.
         Native inference, prefill, and repeated IDs retain RoutingPlan dispatch.
         Both paths reduce in ascending expert order with the same dtype and
         routing-weight multiply/add boundaries as the training forward.
+
+        Optional callback runs once after CPU submission and before waiting.
+        Paths without asynchronous CPU work run it before returning. Submitted
+        jobs are drained even when it raises; no callback is invoked on decline.
         """
+        if on_cpu_submitted is not None:
+            invoked = False
+            def after_submit():
+                nonlocal invoked
+                if not invoked:
+                    invoked = True
+                    on_cpu_submitted()
+        else:
+            after_submit = None
         batch_size, seq_len, d_model = x.shape
         k = weights.shape[-1]
         N = batch_size * seq_len
 
         x_flat = x.reshape(N, d_model)
         weights_flat = weights.reshape(N, k)
+
+        device_plan = getattr(self.expert_executor, 'try_forward_device_plan', None)
+        if N == 1 and device_plan is not None:
+            args = (self.layer_id, x_flat, weights_flat.reshape(-1),
+                    expert_indices.reshape(-1), self.n_experts)
+            output = (device_plan(*args, on_cpu_submitted=after_submit) if after_submit is not None
+                      else device_plan(*args))
+            if output is not None:
+                return output.reshape(batch_size, seq_len, d_model)
 
         singleton_plan = (
             _SingletonRoutingPlan.from_router_outputs(expert_indices, self.n_experts)
@@ -197,12 +219,16 @@ class ExpertsInference:
                 output = grouped(self.layer_id, active, x_flat, weights_flat.reshape(-1),
                                  tuple(singleton_plan.slots[e] for e in active))
                 if output is not None:
+                    if after_submit is not None:
+                        after_submit()
                     return output.reshape(batch_size, seq_len, d_model)
             batched = getattr(self.expert_executor, "try_forward_decode_batch", None)
             if singleton_plan is not None and batched is not None:
                 active = singleton_plan.active_expert_ids()
-                output = batched(self.layer_id, active, x_flat, weights_flat.reshape(-1),
-                                 tuple(singleton_plan.slots[e] for e in active))
+                args = (self.layer_id, active, x_flat, weights_flat.reshape(-1),
+                        tuple(singleton_plan.slots[e] for e in active))
+                output = (batched(*args, on_cpu_submitted=after_submit) if after_submit is not None
+                          else batched(*args))
                 if output is not None:
                     return output.reshape(batch_size, seq_len, d_model)
             y_flat = xp.zeros((N, d_model), dtype=x.dtype)
@@ -232,7 +258,9 @@ class ExpertsInference:
                             self.layer_id, exp_idx, expert_input
                         )
                         jobs.append((token_indices, expert_weights, pending))
-                except Exception:
+                    if after_submit is not None:
+                        after_submit()
+                except BaseException:
                     # A provider or GPU kernel may fail after some workers were
                     # submitted. Drain them before allowing their inputs to die.
                     for _, _, pending in jobs:
@@ -260,6 +288,8 @@ class ExpertsInference:
                 if error is not None:
                     raise error
             else:
+                if after_submit is not None:
+                    after_submit()
                 for exp_idx in routing_plan.active_expert_ids():
                     if singleton_plan is not None:
                         slot = singleton_plan.slots[exp_idx]

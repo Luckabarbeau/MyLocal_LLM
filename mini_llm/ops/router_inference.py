@@ -38,9 +38,12 @@ class RouterInference:
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
         x2 = x.reshape(batch_size * seq_len, self.d_model)
-        logits = (x2 @ self.W_router + self.b_router).reshape(
-            batch_size, seq_len, self.n_experts
-        )
+        if getattr(self, '_capturable_logits', False):
+            from .inference_matmul import matmul_inference
+            logits = matmul_inference(x2, self.W_router) + self.b_router
+        else:
+            logits = x2 @ self.W_router + self.b_router
+        logits = logits.reshape(batch_size, seq_len, self.n_experts)
         if self.renormalize_selected and self._decode_fastpath_enabled and x.dtype == xp.float32:
             decoded = try_normalized_topk(logits, self.k, self.normalization_floor)
             if decoded is not None:

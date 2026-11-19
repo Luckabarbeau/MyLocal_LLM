@@ -186,6 +186,8 @@ def inspect_headers(index):
 
 class Qwen4ExpWeights:
     """Own only a factory-opened store. No dense or packed host weight cache."""
+    hc_bf16_names = frozenset()
+
     def __init__(self, index, *, owns_store=False):
         self.index, self.store = index, index.store
         self.owns_store = owns_store
@@ -207,6 +209,23 @@ class Qwen4ExpWeights:
         except Exception:
             store.close()
             raise
+
+    def configure_hc_bf16(self):
+        """Keep exact checkpoint HC matrices packed, before placement approval."""
+        if self.plan is not None or BACKEND_NAME!='cupy':
+            raise ValueError('BF16 HC storage requires unapproved CuPy placement')
+        names=frozenset(n for n in self.headers.shapes if
+            ('hc_' in n) and n.endswith(('down.weight','up.weight','inject.weight')))
+        if any(self.store.tensors[n].quant_type!='BF16' for n in names):
+            raise ValueError('Packed BF16 HC requires checkpoint BF16 matrices')
+        self.hc_bf16_names=names
+
+    def hc_matrix(self,name):
+        if name not in self.hc_bf16_names:
+            return self.dense(name)
+        self._ready()
+        desc=self.store.tensors[name]
+        return xp.asarray(self.store.tensor_bytes(name).view('<u2').reshape(desc.shape))
 
     def memory_plan(self, max_length, *, host_budget_bytes=8*GiB,
                     static_device_budget_bytes=4*GiB, device_budget_bytes=8*GiB,
@@ -249,7 +268,7 @@ class Qwen4ExpWeights:
         device_static = 0
         names = []
         if BACKEND_NAME == 'cupy':
-            device_static = h.dense_bytes
+            device_static = h.dense_bytes-sum(self.store.tensors[n].nbytes for n in self.hc_bf16_names)
             if device_static > static_device_budget_bytes:
                 raise MemoryError('Dense FP32 backbone exceeds static_device_budget_bytes; use NumPy CPU')
             for name, desc in self.store.tensors.items():
@@ -297,7 +316,9 @@ class Qwen4ExpWeights:
         budgets.update(activation_bytes=activation, staging_bytes=staging)
         return dict(max_length=length, cpu_workers=workers, dense_fp32_bytes=h.dense_bytes,
             constructor_temporary_bytes=h.constructor_bytes, host_static_bytes=host_static,
-            device_static_bytes=device_static, recurrent_bytes=recurrent, qsa_bytes=qsa, ple_bytes=ple,
+            device_static_bytes=device_static,
+            hc_bf16_saved_bytes=sum(self.store.tensors[n].nbytes for n in self.hc_bf16_names),
+            recurrent_bytes=recurrent, qsa_bytes=qsa, ple_bytes=ple,
             state_bytes=state,
             host_reserved_bytes=host_total, device_reserved_bytes=device_total,
             canonical_mmap_bytes=sum(t.nbytes for t in self.store.tensors.values()),

@@ -38,10 +38,22 @@ class Qwen4ExpHyperConnection:
     """
 
     def __init__(self, gamma, down, up, inject=None, *, epsilon, fast_decode=False,
-                 graph_decode=False, graph_pool_bytes=2 * 1024**2, native_read=False):
+                 graph_decode=False, graph_pool_bytes=2 * 1024**2, native_read=False,
+                 packed_bf16=False):
+        if not isinstance(packed_bf16,bool):
+            raise TypeError('packed_bf16 must be bool')
+        if packed_bf16 and (xp.__name__!='cupy' or not native_read or not fast_decode or graph_decode):
+            raise ValueError('Packed BF16 HC requires native single-token CuPy read')
+        def weight(name,value):
+            if not packed_bf16:
+                return _fp32(name,value)
+            if not isinstance(value,xp.ndarray) or value.dtype!=xp.uint16 or not value.flags.c_contiguous:
+                raise TypeError(f'{name} must be contiguous CuPy uint16 BF16 storage')
+            return value
         gamma = _fp32("gamma", gamma)
-        down = _fp32("down", down)
-        up = _fp32("up", up)
+        down = weight("down", down)
+        up = weight("up", up)
+        self.packed_bf16=packed_bf16
         if gamma.ndim == 1 and gamma.size > 0 and gamma.size % 4 == 0:
             gamma = gamma.reshape(4, -1)
         if gamma.ndim != 2 or gamma.shape[0] != 4 or gamma.shape[1] <= 0:
@@ -53,7 +65,7 @@ class Qwen4ExpHyperConnection:
         if up.shape != (wide, down.shape[0]):
             raise ValueError("up must have shape [4*D, R]")
         if inject is not None:
-            _fp32("inject", inject)
+            weight("inject", inject)
             if inject.shape != (4, wide):
                 raise ValueError("inject must have shape [4, 4*D]")
         epsilon = float(epsilon)
@@ -122,6 +134,9 @@ class Qwen4ExpHyperConnection:
     def read(self, streams):
         """Read a feature-gated mix and the scalar write gain for each stream."""
         self._streams(streams)
+        if self.packed_bf16:
+            from ..ops.hyperconnection_read_gpu import read_gpu
+            return read_gpu(streams,self.gamma,self.down,self.up,self.inject,self.epsilon)
         if self.native_read and self._fast_eligible(streams) and eligible(streams, self.inject):
             from ..ops.hyperconnection_read_gpu import read_gpu
             return read_gpu(streams, self.gamma, self.down, self.up, self.inject, self.epsilon)

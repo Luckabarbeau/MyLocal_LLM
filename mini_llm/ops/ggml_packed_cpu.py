@@ -102,6 +102,8 @@ def _load_bridge():
     lib.mylocal_ggml_pool_configure.restype = C.c_int
     lib.mylocal_ggml_pool_set_task_mode.argtypes = [C.c_void_p,C.c_int]
     lib.mylocal_ggml_pool_set_task_mode.restype = C.c_int
+    lib.mylocal_ggml_pool_set_fused_hidden.argtypes = [C.c_void_p,C.c_int]
+    lib.mylocal_ggml_pool_set_fused_hidden.restype = C.c_int
     lib.mylocal_ggml_pool_register.argtypes = [C.c_void_p,C.c_void_p,C.c_void_p]
     lib.mylocal_ggml_pool_register.restype = C.c_int
     lib.mylocal_ggml_pool_submit_registered.argtypes = [C.c_void_p,C.c_void_p,C.c_int,C.c_void_p,C.c_void_p]
@@ -267,7 +269,7 @@ class GGMLPackedCPURowPool:
     for wake latency; sleeping remains the default. No affinity policy is imposed.
     """
     def __init__(self, executor, d_model, d_ff, workers, capacity=10, *, spin_us=None,
-                 host_help=None, cpu_ids=None, scheduler=None):
+                 host_help=None, cpu_ids=None, scheduler=None, fused_hidden=None):
         for name, value, maximum in (('d_model', d_model, 65536), ('d_ff', d_ff, 65536),
                                       ('workers', workers, 256), ('capacity', capacity, 512)):
             if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= maximum:
@@ -295,6 +297,14 @@ class GGMLPackedCPURowPool:
         scheduler = os.environ.get('MINI_LLM_GGML_POOL_SCHEDULER','barrier') if scheduler is None else scheduler
         if scheduler not in ('barrier','tasks'):
             raise ValueError('scheduler must be barrier or tasks')
+        if fused_hidden is None:
+            text=os.environ.get('MINI_LLM_GGML_POOL_FUSED_HIDDEN','0')
+            if text not in ('0','1'):
+                raise ValueError('MINI_LLM_GGML_POOL_FUSED_HIDDEN must be 0 or 1')
+            fused_hidden=text=='1'
+        if not isinstance(fused_hidden,bool):
+            raise TypeError('fused_hidden must be bool')
+        self.fused_hidden=fused_hidden
         self.scheduler = scheduler
         self.host_help, self.cpu_ids = host_help, cpu_ids
         self.spin_us = spin_us
@@ -311,6 +321,7 @@ class GGMLPackedCPURowPool:
             self._handle, int(host_help), cpus.ctypes.data if cpus is not None else None,
             len(cpus) if cpus is not None else 0))
         executor._check(executor._bridge.mylocal_ggml_pool_set_task_mode(self._handle,int(scheduler=='tasks')))
+        executor._check(executor._bridge.mylocal_ggml_pool_set_fused_hidden(self._handle,int(fused_hidden)))
 
     def register(self, key, weights):
         """Retain one immutable source bundle and its validated native metadata."""

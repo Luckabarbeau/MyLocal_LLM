@@ -120,9 +120,7 @@ class NativeExpertHandoff:
                                 p.cpu_rows.nbytes, runtime.memcpyHostToDevice, self.stream.ptr)
             if on_cpu_submitted is not None:
                 on_cpu_submitted()
-            p.gate_up(((p.k*p.f+3)//4,), (128,), (x,p.selected,p.hidden)+p.gate_args)
-            p.down(((p.k*p.d+3)//4,), (128,),
-                (p.hidden,p.selected,p.routes,p.terms)+p.down_args)
+            p.launch_resident(x)
         finally:
             # Includes callback/kernel failure: don't recycle pinned storage or
             # destroy the shared CPU pool before the native consumers finish.
@@ -157,6 +155,8 @@ class NativeExpertHandoff:
         e.counters['ggml_row_batches'] += batches
         e.counters['native_handoff_cpu_ns'] += elapsed_ns
         e.counters['gpu_experts'] += hits
+        if p.q8 is not None:
+            e.counters['q8_gpu_experts'] += hits
         e.counters['decode_activation_d2h'] += runs
         e.counters['decode_results_h2d'] += runs
         cache = e.cache
@@ -169,6 +169,7 @@ class NativeExpertHandoff:
 
     def statistics(self):
         return dict(layer=self.plan.layer, calls=int(self.production[0]),
+                    gpu_arithmetic='q8_1' if self.plan.q8 is not None else 'fp32',
             cpu_experts=int(self.production[1]), gpu_experts=int(self.production[2]),
             cpu_seconds=int(self.production[4])*1e-9,
             graph=None if self.graph is None else self.graph.statistics(),

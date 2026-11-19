@@ -279,6 +279,10 @@ def replay_case(model, tokenizer, row, prompt, xp, sample_token, guard, journal)
         cache_before=before, cache_after=model.expert_executor.statistics(), memory=guard())
     del state, logits
     gc.collect()  # Release request state, not the shared expert executor/cache.
+    # The next request's planner credits live model allocations, not unused pool
+    # blocks. Retire unused scratch at this synchronized, untimed request seam.
+    if hasattr(xp, 'get_default_memory_pool'):
+        xp.get_default_memory_pool().free_all_blocks()
     return report
 
 
@@ -288,6 +292,7 @@ def child(args):
     deadline = time.monotonic()+180
     rows = select_records(BENCHMARK / 'outputs.jsonl', args.cases)
     options = dict(MODEL_OPTIONS, expert_victim_policy=args.victim_policy,
+                   cache_bytes=int(getattr(args,'expert_cache_gib',6)*GiB),
                    expert_cpu_backend=args.cpu_backend, cpu_workers=args.cpu_workers,
                    group_mixed_decode=args.group_mixed_decode,
                    overlap_shared=args.overlap_shared,
@@ -362,6 +367,7 @@ def child(args):
             cpu_configuration=dict(workers=args.cpu_workers,
                 host_help=getattr(model.expert_executor._ggml_row_pool, 'host_help', False),
                 scheduler=getattr(model.expert_executor._ggml_row_pool,'scheduler','barrier'),
+                fused_hidden=getattr(model.expert_executor._ggml_row_pool,'fused_hidden',False),
                                 native_moe_handoff=os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')=='1',
                                                 native_moe_graph=os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH','0')=='1',
                                                                 device_plan_specialized=os.environ.get('MINI_LLM_DEVICE_PLAN_SPECIALIZED','0')=='1',
@@ -372,6 +378,9 @@ def child(args):
                 worker_cpus=getattr(model.expert_executor._ggml_row_pool, 'cpu_ids', None),
                 host_affinity=sorted(os.sched_getaffinity(0))),
             sampled_highwater_bytes=highwater, final_memory=guard(),
+            packed_gpu_arithmetic=dict(experts_q8=os.environ.get('MINI_LLM_EXPERT_GPU_Q8','0')=='1',
+                linear_q8=os.environ.get('MINI_LLM_LINEAR_GPU_Q8','0')=='1',
+                hc_bf16_storage=os.environ.get('MINI_LLM_HC_BF16_WEIGHTS','0')=='1'),
             gpu_pool_used_bytes=pool.used_bytes(), gpu_pool_reserved_bytes=pool.total_bytes(),
             gpu_pool_limit_bytes=pool.get_limit(), plan=model.plan,
             time_budget_seconds=180, journal_interval_forwards=32)
@@ -385,7 +394,8 @@ def parent(args):
         '--mem-available-floor-gib', str(args.mem_available_floor_gib),
         '--rss-anon-limit-gib', str(args.rss_anon_limit_gib),
         '--victim-policy', args.victim_policy, '--cpu-backend', args.cpu_backend,
-        '--cpu-workers', str(args.cpu_workers)]
+        '--cpu-workers', str(args.cpu_workers),
+        '--expert-cache-gib',str(getattr(args,'expert_cache_gib',6))]
     if args.group_mixed_decode:
         command.append('--group-mixed-decode')
     if getattr(args,'shared_graph_decode',False):
@@ -446,6 +456,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='Exclusive new directory')
     parser.add_argument('--cases', nargs='+', choices=CASES, default=list(CASES[:2]))
     parser.add_argument('--host-warm-gib', type=float, default=0)
+    parser.add_argument('--expert-cache-gib',type=float,default=6)
     parser.add_argument('--victim-policy', choices=('sort', 'heap'), default='sort')
     parser.add_argument('--cpu-backend', choices=('native', 'ggml', 'ggml_pool'), default='native')
     parser.add_argument('--cpu-workers', type=int, default=15)
@@ -463,7 +474,7 @@ def main():
     parser.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if any(not math.isfinite(v) or v < 0 for v in
-           (args.host_warm_gib, args.mem_available_floor_gib, args.rss_anon_limit_gib)):
+           (args.host_warm_gib, args.mem_available_floor_gib, args.rss_anon_limit_gib,args.expert_cache_gib)):
         parser.error('Memory budgets must be finite and nonnegative')
     if args.cpu_workers < 1:
         parser.error('CPU workers must be positive')

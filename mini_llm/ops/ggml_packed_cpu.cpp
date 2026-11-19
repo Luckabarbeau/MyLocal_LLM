@@ -65,7 +65,7 @@ public:
     alignas(64) std::atomic<size_t> epoch{0};
     alignas(64) std::atomic<int> phase{0};
     std::atomic<int> spin_us{0};
-    std::atomic<bool> host_help{false}, task_mode{false};
+    std::atomic<bool> host_help{false}, task_mode{false}, fused_hidden{false};
     alignas(64) std::atomic<uint64_t> task_queue{0};
     alignas(64) std::atomic<uint32_t> task_remaining{0}, task_total{0}, task_chunk{1};
     static constexpr uint64_t task_mask = (uint64_t(1)<<22)-1;
@@ -202,7 +202,13 @@ public:
             if (task_remaining.fetch_sub(1,std::memory_order_acq_rel)==1) {
                 std::lock_guard<std::mutex> lock(mutex);
                 task_queue.store((tag<<22)|task_mask,std::memory_order_release);
-                if (p<2) publish_task_phase(p+1);
+                if (p==0 && fused_hidden.load(std::memory_order_relaxed)) {
+                    // The final gate task acquires every gate write through the
+                    // completion counter. Quantize the bounded hidden rows here,
+                    // avoiding a mostly idle worker phase for <=capacity rows.
+                    compute_range(1,0,size_t(count));
+                    publish_task_phase(2);
+                } else if (p<2) publish_task_phase(p+1);
                 else { phase=3; busy=false; done.notify_all(); barrier.notify_all(); }
             }
         }
@@ -313,6 +319,14 @@ extern "C" int mylocal_ggml_pool_set_task_mode(void *pool, int enabled) noexcept
     std::lock_guard<std::mutex> lock(p.mutex);
     if (p.busy) return 4;
     p.task_mode.store(enabled);
+    return 0;
+}
+extern "C" int mylocal_ggml_pool_set_fused_hidden(void *pool, int enabled) noexcept {
+    if (!pool || (enabled!=0 && enabled!=1)) return 1;
+    auto &p = *static_cast<RowPool *>(pool);
+    std::lock_guard<std::mutex> lock(p.mutex);
+    if (p.busy) return 4;
+    p.fused_hidden.store(enabled,std::memory_order_relaxed);
     return 0;
 }
 extern "C" int mylocal_ggml_pool_configure(void *pool, int help, const int *cpus, int n) noexcept {

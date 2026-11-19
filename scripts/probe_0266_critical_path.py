@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--pre-moe-graph', action='store_true')
     parser.add_argument('--shared-graph-decode', action='store_true')
     parser.add_argument('--defer-shared', action='store_true')
+    parser.add_argument('--cpu-workers', type=int, default=15)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     os.environ['MINI_LLM_BACKEND'] = 'cupy'
@@ -83,7 +84,7 @@ def main():
     runner.replay_case = replay
     runner.child(SimpleNamespace(output=args.output, cases=['warmup', 'performance-short-r1'],
         host_warm_gib=50, mem_available_floor_gib=4, rss_anon_limit_gib=8,
-        victim_policy='heap', cpu_backend='ggml_pool', cpu_workers=15,
+        victim_policy='heap', cpu_backend='ggml_pool', cpu_workers=args.cpu_workers,
         group_mixed_decode=False, promotion_limit=0, overlap_shared=True,
         gdn_graph_decode=not args.pre_moe_graph, pre_moe_graph=args.pre_moe_graph,
         shared_graph_decode=args.shared_graph_decode, defer_shared=args.defer_shared,

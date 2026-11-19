@@ -15,6 +15,7 @@ large-prefill GEMM and fast quantized CPU kernels are separate milestones.
 
 from dataclasses import dataclass
 import math
+import os
 
 import numpy as np
 
@@ -304,6 +305,12 @@ def quantized_linear(x, weight, *, block_k=512, cpu_packed_backend="reference"):
         return y.astype(x_cpu.dtype).reshape(shape)
     if not isinstance(weight, DevicePackedGGUFWeight):
         raise TypeError("Expected PackedGGUFWeight or DevicePackedGGUFWeight")
+    if (BACKEND_NAME == "cupy" and os.environ.get("MINI_LLM_LINEAR_GPU_Q8") == "1"
+            and isinstance(x, xp.ndarray) and x.dtype == xp.float32
+            and x.flags.c_contiguous):
+        from mini_llm.ops import mixed_q8_gpu
+        if weight.quant_type in mixed_q8_gpu.FORMATS:
+            return mixed_q8_gpu.linear(x.reshape(-1, x.shape[-1]), weight).reshape(shape)
     if BACKEND_NAME == "cupy" and iq_packed_gpu.supports_type(weight.quant_type):
         return iq_packed_gpu.linear(x, weight, block_k=block_k)
     if BACKEND_NAME != "cupy" or triton is None:

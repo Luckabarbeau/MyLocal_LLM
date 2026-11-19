@@ -119,10 +119,23 @@ class DeviceExpertPlan:
         self.down_args = tuple(np.int32(v) for v in (self.d,self.f,3)) + (np.int64(1),) + tuple(
             np.int32(v) for v in (*self.layout[2],256,k))
         self.combine_args = np.int32(self.d),np.int32(k)
+        self.resident_row_bytes = tuple(w.nbytes//w.shape[0] for w in source)
+        self.q8 = None
+        if os.environ.get('MINI_LLM_EXPERT_GPU_Q8','0')=='1':
+            from .mixed_q8_gpu import GroupedQ8Plan
+            self.q8 = GroupedQ8Plan(self)
         self.native_handoff = None
         if os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF', '0') == '1':
             from .native_expert_handoff import NativeExpertHandoff
             self.native_handoff = NativeExpertHandoff(self)
+
+    def launch_resident(self,x):
+        if self.q8 is not None:
+            return self.q8.forward(x)
+        self.gate_up(((self.k*self.f+3)//4,),(128,),
+                     (x,self.selected,self.hidden)+self.gate_args)
+        self.down(((self.k*self.d+3)//4,),(128,),
+                  (self.hidden,self.selected,self.routes,self.terms)+self.down_args)
 
     @staticmethod
     def cache_fingerprint(executor):
@@ -191,9 +204,7 @@ class DeviceExpertPlan:
                     if on_cpu_submitted is not None:
                         on_cpu_submitted()
                     if len(misses) < k:
-                        self.gate_up(((k*f+3)//4,), (128,), (x,self.selected,self.hidden)+self.gate_args)
-                        self.down(((k*d+3)//4,), (128,),
-                            (self.hidden,self.selected,self.routes,self.terms)+self.down_args)
+                        self.launch_resident(x)
                         executor.counters['gpu_experts'] += k-len(misses)
                 finally:
                     if job is not None:

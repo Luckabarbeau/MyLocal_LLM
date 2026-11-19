@@ -270,6 +270,11 @@ class Qwen4ExpGGUFModel:
             budgets['graph_workspace_bytes'] = max(
                 integer(budgets.get('graph_workspace_bytes', 0), 'graph_workspace_bytes'),
                 graph_reservation)
+        hc_bf16=os.environ.get('MINI_LLM_HC_BF16_WEIGHTS','0')=='1'
+        if hc_bf16:
+            if not hc_native_read or not hc_fast_decode or hc_graph_decode:
+                raise ValueError('BF16 HC storage requires native HC read')
+            weights.configure_hc_bf16()
         plan = weights.memory_plan(max_length, **budgets)
         weights.approve(plan)
         if gdn_graph_decode or pre_moe_graph:
@@ -317,10 +322,10 @@ class Qwen4ExpGGUFModel:
                 # HC copies these small matrices. No host dictionary retains
                 # the constructor inputs after this call returns.
                 return Qwen4ExpHyperConnection(dense(stem+'norm.weight'),
-                    dense(stem+'down.weight'),dense(stem+'up.weight'),
-                    dense(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps,
+                    weights.hc_matrix(stem+'down.weight'),weights.hc_matrix(stem+'up.weight'),
+                    weights.hc_matrix(stem+'inject.weight') if inject else None, epsilon=h.mixer.rms_eps,
                     fast_decode=hc_fast_decode, graph_decode=hc_graph_decode,
-                    native_read=hc_native_read)
+                    native_read=hc_native_read,packed_bf16=hc_bf16)
             blocks = []
             for i, rec in enumerate(h.recurrent):
                 p = f'blk.{i}.'

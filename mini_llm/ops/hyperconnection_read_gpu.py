@@ -15,16 +15,20 @@ from .hyperconnection_decode_gpu import _OPTIONS, _SIGMOID, _kernels as _decode_
 
 
 _SOURCE = _SIGMOID + r'''
+__device__ float hc_weight(const float* p, int i) { return p[i]; }
+__device__ float hc_weight(const unsigned short* p, int i) {
+    return __uint_as_float((unsigned int)p[i] << 16);
+}
 extern "C" __global__ void hc_read_down_inject(
-    const float* n, const float* down, const float* inject,
+    const float* n, const HC_W* down, const HC_W* inject,
     float* low, float* gains, int wide, int rank) {
     int row = blockIdx.x, lane = threadIdx.x;
     bool gain = row >= rank;
-    const float* w = gain ? inject + (long long)(row - rank) * wide
+    const HC_W* w = gain ? inject + (long long)(row - rank) * wide
                           : down + (long long)row * wide;
     float sum = 0.0f;
     for (int j = lane; j < wide; j += 256) {
-        float product = n[j] * w[j];
+        float product = n[j] * hc_weight(w,j);
         sum += product;
     }
     __shared__ float sums[256];
@@ -48,7 +52,7 @@ __device__ float row_sum(float v) {
 }
 
 extern "C" __global__ void hc_read_up_mix(
-    const float* n, const float* low, const float* up,
+    const float* n, const float* low, const HC_W* up,
     float* mixed, int d, int rank) {
     int lane = threadIdx.x & 31;
     int feature = blockIdx.x * 8 + threadIdx.x / 32;
@@ -56,10 +60,10 @@ extern "C" __global__ void hc_read_up_mix(
     float mix = 0.0f;
     for (int c = 0; c < 4; ++c) {
         int k = c * d + feature;
-        const float* w = up + (long long)k * rank;
+        const HC_W* w = up + (long long)k * rank;
         float dot = 0.0f;
         for (int r = lane; r < rank; r += 32) {
-            float product = low[r] * w[r];
+            float product = low[r] * hc_weight(w,r);
             dot += product;
         }
         dot = row_sum(dot);
@@ -77,12 +81,14 @@ def _validate(streams, gamma, down, up, inject, epsilon):
     if xp.__name__ != "cupy":
         raise TypeError("read_gpu requires the CuPy backend")
     device = xp.cuda.runtime.getDevice()
+    weight_dtype=xp.uint16 if isinstance(down,xp.ndarray) and down.dtype==xp.uint16 else xp.float32
     for name, a in (("streams", streams), ("gamma", gamma), ("down", down),
                     ("up", up), ("inject", inject)):
         if name == "inject" and a is None:
             continue
-        if not isinstance(a, xp.ndarray) or a.dtype != xp.float32:
-            raise TypeError(f"{name} must be a CuPy float32 array")
+        dtype=xp.float32 if name in ('streams','gamma') else weight_dtype
+        if not isinstance(a, xp.ndarray) or a.dtype != dtype:
+            raise TypeError(f"{name} must be a CuPy {dtype} array")
         if not a.flags.c_contiguous:
             raise ValueError(f"{name} must be C-contiguous")
         if a.device.id != device:
@@ -124,8 +130,16 @@ def supports_read_gpu(streams, gamma, down, up, inject, epsilon):
 @lru_cache(maxsize=None)
 def _kernels(device):
     return (_decode_kernels(device)[0],
-            xp.RawKernel(_SOURCE, "hc_read_down_inject", options=_OPTIONS),
-            xp.RawKernel(_SOURCE, "hc_read_up_mix", options=_OPTIONS))
+            xp.RawKernel('#define HC_W float\n'+_SOURCE, "hc_read_down_inject", options=_OPTIONS),
+            xp.RawKernel('#define HC_W float\n'+_SOURCE, "hc_read_up_mix", options=_OPTIONS))
+
+
+@lru_cache(maxsize=None)
+def _bf16_kernels(device):
+    source='#define HC_W unsigned short\n'+_SOURCE
+    return (_decode_kernels(device)[0],
+            xp.RawKernel(source,'hc_read_down_inject',options=_OPTIONS),
+            xp.RawKernel(source,'hc_read_up_mix',options=_OPTIONS))
 
 
 def read_gpu(streams, gamma, down, up, inject, epsilon):
@@ -136,7 +150,7 @@ def read_gpu(streams, gamma, down, up, inject, epsilon):
     Unsupported inputs raise rather than silently selecting another graph.
     """
     d, rank, epsilon, device = _validate(streams, gamma, down, up, inject, epsilon)
-    norm, project, mix = _kernels(device)
+    norm, project, mix = (_bf16_kernels(device) if down.dtype==xp.uint16 else _kernels(device))
     leading = streams.shape[:-2]
     normalized = xp.empty((4 * d,), dtype=xp.float32)
     low = xp.empty((rank,), dtype=xp.float32)

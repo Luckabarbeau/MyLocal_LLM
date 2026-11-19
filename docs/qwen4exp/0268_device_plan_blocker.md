@@ -1,4 +1,12 @@
-# 0268 — Persistent device expert plan: implemented, numerical gate unresolved
+# 0268 — Persistent device expert plan: historical blocker, now resolved
+
+## Resolution — verified after the original report
+
+The retained test oracle now explicitly uses the same warp arithmetic as the device plan. Mixed/all-GPU output comparisons are bit-exact. A separate block-versus-warp test records maximum absolute FP32 difference **3.725290298461914e-9**, relative L2 **2.3721347696171626e-7**. No production mathematical correction or broad tolerance relaxation was necessary.
+
+The follow-up focused GPU group passed **97 tests / 1 skipped**. Real longer model run `diagnostics_0268_plan_v1` completed at **17.57999 decode forwards/s**, 512 response tokens. Subsequent verified pipeline work reaches a best longer **26.95159/s**, not 50/s; see `0268_0279_performance_v2.json` and current implementation status. The old one-correction stopping rule was explicitly superseded by the user.
+
+**Everything below is the preserved historical failure report, not the current validation state.**
 
 ## Objective / architecture
 

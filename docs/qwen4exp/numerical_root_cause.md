@@ -6,6 +6,22 @@
 
 Production model/kernel mathematics and the pinned reference's mathematical implementation remain unchanged. Identical-input DeltaNet/QSA replay and continuous-state replay now pass over 16 fixed text tokens; full-model incremental/prefill logits and all active-state hashes match at prefixes 1/2/4/8/16. **The requested short-text validation gate has passed, with no demonstrated mathematical defect.** Initial performance profiling has started. Full independent model equivalence and arbitrary long-context correctness remain unclaimed.
 
+## 0280 — Deferred validation is not removed validation
+
+`0280_deferred_validation_parity_v1.json` verifies bit-exact actual-checkpoint logits and all active-state hashes against synchronous0276atprefixes1/2/4/8/16 over two requests. The optional deferred path performs the same finite checks ondevice, conditionally commits QSA cache rows only on valid status, then reports first-invalid-layer once before returning a successful modelstep. A failed request is marked non-resumable; a subsequent request starts clean. Focused tests cover all checked projections, new pooled history, sparse-width transition, failure reporting/reset. No mathematical correction or tolerance relaxation.
+
+The same413-token longer response measures24.84/s versus best26.95/s, so removing per-layer host fences did **not** produce a speed gain. Those fences expose upstream dependencies as well as readback overhead. Node-level tracing corrects the prior incomplete captured-kernel view; integrate packedGPUQ8 only behind new numerical gates, not by relabeling existingFP32kernels. Latest selected regressions1939CPU passed/1025skipped and1211CuPy passed/18skipped. See `0280_qsa_validation_dependencies.md`; independent-reference equivalence limitations remain unchanged.
+
+## Optimization validation follow-up — 0268–0279
+
+The device-plan exactness failure is resolved as an **arithmetic oracle mismatch**, not a graph defect: candidate warp reduction versus default block reduction. Same-warp comparisons are bit-exact; separate block/warp maxabs3.725290298461914e-9 and relativeL2 2.3721347696171626e-7 quantify ordinary FP32 order effects. No model equation was changed to chase this difference.
+
+New deferred shared scheduling, native CPU host-function handoff, captured handoff, QSA frontend capture and input-only graph operands have versioned fixed-prefix comparison files `0274_deferred_parity_v1.json`, `0275_native_handoff_parity_v1.json`, `0276_native_graph_parity_v1.json`, `0278_qsa_frontend_parity_v1.json`, `0279_input_only_parity_v1.json`. Each verifies bit-exact **same-arithmetic** logits and all active-state hashes at1/2/4/8/16 over two isolated requests. QSA capture uses runtime RoPE factors, preserves validation before cache commit, and falls back to existing sparse/diagnostic operations beyond the all-causal-cell regime. Native dispatch tests independently vary routing/input, validate complete CPU/GPU combination and drain/fence failure paths.
+
+These checks preserve verified optimization states; they **do not establish new all-layer independent llama.cpp equivalence**, arbitrary long-context correctness, or model-wide GPU Q8 parity. CPU experts still use per-format GGML Q8_K/Q8_0, GPU experts FP32 activations. No new production mathematical defect was demonstrated. The original BF16/activation-quantization attribution and remaining independent-reference limits above/below still apply.
+
+Latest broader inference regressions:1939CPU passed/1016skipped;1202CuPy passed/18skipped. Best longer throughput26.95decode forwards/s, target50/s unmet. All0273–0279 longer responses have identical413tokenIDs, but matching sampled text is not the numerical acceptance criterion. See `0274_0279_native_handoff.md` for exact ownership/precision limits and memory/performance evidence.
+
 ## Provenance and safety
 
 Original source HEAD: `171e8846b4af9766c354064cb776cb34a50f053f`, clean at inspection. Isolated reference: `/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch`, CPU-only shared build. Positive source inventory comparison verifies the only source difference is `init_mappings(true, ...)` → `false`; zero-prefetch control flow and CPU build flags were checked before loading. This run compared 3,603 source files; earlier report counts differ because inventory exclusions differ, not because a different model graph was authorized.

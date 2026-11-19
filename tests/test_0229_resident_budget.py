@@ -27,6 +27,7 @@ def capacity(monkeypatch):
         runtime=SimpleNamespace(memGetInfo=mem_info))))
     monkeypatch.setattr(storage, 'supports_packed_gpu_type', lambda kind: kind == 'packed')
     weights = storage.Qwen4ExpWeights.__new__(storage.Qwen4ExpWeights)
+    weights._worker_capacity = 1  # Match constructor-owned snapshot in this mocked planner.
     weights.headers = SimpleNamespace(context=16, width=8, vocab=8, dense_bytes=1000,
         constructor_bytes=128, recurrent=(True, False), ple_layers=(),
         mixer=SimpleNamespace(conv_kernel_size=4, qkv_channels=8, n_value_heads=2, head_dim=4),

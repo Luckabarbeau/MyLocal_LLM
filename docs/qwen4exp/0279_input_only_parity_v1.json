@@ -1,0 +1,47 @@
+{
+  "control": "docs/qwen4exp/diagnostics_0276_parity_v1",
+  "candidate": "docs/qwen4exp/diagnostics_0279_parity_v1",
+  "all_active_state_hashes_exact": true,
+  "logits": [
+    {
+      "file": "logits_0_1.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_0_16.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_0_2.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_0_4.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_0_8.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_1_1.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_1_16.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_1_2.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_1_4.npy",
+      "exact": true
+    },
+    {
+      "file": "logits_1_8.npy",
+      "exact": true
+    }
+  ]
+}

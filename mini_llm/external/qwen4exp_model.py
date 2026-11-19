@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 import threading
 import weakref
+import os
 
 import numpy as np
 
@@ -91,6 +92,7 @@ class Qwen4ExpMoE:
             if caller.is_capturing():
                 raise RuntimeError('Shared expert overlap requires an uncaptured dispatch seam')
             ready = xp.cuda.Event(disable_timing=True)
+            ready.record(caller)  # Only hidden is needed, not routed/CPU completion.
             complete = xp.cuda.Event(disable_timing=True)
             launched = False
             shared = shared_score = None
@@ -98,7 +100,6 @@ class Qwen4ExpMoE:
                 nonlocal launched, shared, shared_score
                 # The CPU input-ready fence is ahead of shared work in deferred
                 # mode; stream ownership still protects every shared consumer.
-                ready.record(caller)
                 self._shared_stream.wait_event(ready)
                 launched = True
                 try:
@@ -258,6 +259,13 @@ class Qwen4ExpGGUFModel:
             if BACKEND_NAME != 'cupy':
                 raise RuntimeError('HC graph decode requires CuPy')
             graph_reservation += (2 * len(h.recurrent) + 1) * 2 * 1024**2
+        qsa_front_graph = qsa_fast_decode and os.environ.get('MINI_LLM_QSA_FRONTEND_GRAPH','0')=='1'
+        if qsa_front_graph:
+            if BACKEND_NAME != 'cupy':
+                raise RuntimeError('QSA frontend graph requires CuPy')
+            graph_reservation += (len(h.recurrent)-sum(h.recurrent))*2*1024**2
+        if device_expert_plan and os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH','0')=='1':
+            graph_reservation += len(h.recurrent)*1024**2
         if graph_reservation:
             budgets['graph_workspace_bytes'] = max(
                 integer(budgets.get('graph_workspace_bytes', 0), 'graph_workspace_bytes'),
@@ -276,6 +284,11 @@ class Qwen4ExpGGUFModel:
                 for i in range(len(h.recurrent))
                 for name in ('ffn_gate_shexp','ffn_up_shexp','ffn_down_shexp')):
             raise ValueError('Shared capture requires every shared projection on GPU')
+        if qsa_front_graph and any(weights.store.tensors[f'blk.{i}.{name}.weight'].quant_type not in
+                {'F32','F16','BF16'} and f'blk.{i}.{name}.weight' not in weights.device_names
+                for i, recurrent in enumerate(h.recurrent) if not recurrent
+                for name in ('attn_q','attn_k','attn_v','indexer.k_proj')):
+            raise ValueError('QSA frontend capture requires every input projection on GPU')
         executor = expert_executor
         try:
             if executor is None:
@@ -295,6 +308,11 @@ class Qwen4ExpGGUFModel:
                 if not shared_graph_decode:
                     return base
                 return lambda x:base(x.reshape(-1,x.shape[-1])).reshape(x.shape[:-1]+(-1,))
+            def qsa_project(name):
+                base=weights.projection(name,capturable=qsa_front_graph)
+                if not qsa_front_graph:
+                    return base
+                return lambda x:base(x.reshape(1,-1)).reshape(-1)
             def hc(stem, inject=True):
                 # HC copies these small matrices. No host dictionary retains
                 # the constructor inputs after this call returns.
@@ -326,9 +344,9 @@ class Qwen4ExpGGUFModel:
                     mixer.mixer._decode_fastpath_enabled = gdn_fast_decode
                 else:
                     mixer = Qwen4ExpAttention(h.attention,
-                        query_gate=project(p+'attn_q.weight'),key=project(p+'attn_k.weight'),
-                        value=project(p+'attn_v.weight'),output=project(p+'attn_output.weight'),
-                        index_query=project(p+'indexer.q_proj.weight'),index_key=project(p+'indexer.k_proj.weight'),
+                        query_gate=qsa_project(p+'attn_q.weight'),key=qsa_project(p+'attn_k.weight'),
+                        value=qsa_project(p+'attn_v.weight'),output=project(p+'attn_output.weight'),
+                        index_query=project(p+'indexer.q_proj.weight'),index_key=qsa_project(p+'indexer.k_proj.weight'),
                         gamma_q=dense(p+'attn_q_norm.weight'),gamma_k=dense(p+'attn_k_norm.weight'),
                         gamma_index_q=dense(p+'indexer.q_norm.weight'),gamma_index_k=dense(p+'indexer.k_norm.weight'),
                         fast_decode=qsa_fast_decode)
@@ -361,6 +379,15 @@ class Qwen4ExpGGUFModel:
             else:
                 result._pre_moe_segments = {}
             result._shared_graph_owners=tuple(b.moe for b in blocks) if shared_graph_decode else ()
+            result._qsa_frontend_owners=tuple(b.mixer for b in blocks if not b.recurrent) if qsa_front_graph else ()
+            result._qsa_validation_status = None
+            result._qsa_validation_views = {}
+            if os.environ.get('MINI_LLM_QSA_DEFER_VALIDATION','0')=='1':
+                if not qsa_fast_decode or BACKEND_NAME!='cupy':
+                    raise ValueError('Deferred QSA validation requires fast CuPy QSA')
+                result._qsa_validation_status = xp.zeros(len(blocks),dtype=xp.uint32)
+                result._qsa_validation_views = {i:result._qsa_validation_status[i:i+1].reshape(())
+                                                for i,b in enumerate(blocks) if not b.recurrent}
             result._gdn_graph_owners = tuple(b.mixer for b in blocks if b.recurrent) if gdn_graph_decode else ()
             result._hc_graph_owners = (tuple(hc for b in blocks for hc in
                 (b.attention_hc, b.ffn_hc)) + (result.final_hc,)) if hc_graph_decode else ()
@@ -424,7 +451,12 @@ class Qwen4ExpGGUFModel:
                         sum(s.graph_statistics()['pool_reserved_bytes']
                             for s in getattr(self, '_pre_moe_segments', {}).values()) +
                         sum(s.graph_statistics()['pool_reserved_bytes']
-                            for s in getattr(self,'_shared_graph_owners',())))
+                            for s in getattr(self,'_shared_graph_owners',())) +
+                        sum(s._frontend_graph.statistics()['pool_reserved_bytes']
+                            for s in getattr(self,'_qsa_frontend_owners',()) if s._frontend_graph is not None) +
+                        sum(p.native_handoff.graph.statistics()['pool_reserved_bytes']
+                            for p in getattr(self.expert_executor,'_device_expert_plans',{}).values()
+                            if p.native_handoff is not None and p.native_handoff.graph is not None))
         return self.weights.memory_plan(length, resident_device_bytes=resident, **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
             'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers',
@@ -495,6 +527,10 @@ class Qwen4ExpGGUFModel:
             # Revalidate after acquiring the execution lock.
             self._validate(state)
             try:
+                deferred_status = (getattr(self,'_qsa_validation_status',None)
+                                   if self.diagnostic_callback is None else None)
+                if deferred_status is not None:
+                    deferred_status.fill(0)
                 streams = self.final_hc.initialize(self.embedding(token))
                 for i,b in enumerate(self.blocks):
                     if b.ple is not None:
@@ -511,7 +547,11 @@ class Qwen4ExpGGUFModel:
                         if b.recurrent:
                             mixed = b.mixer.forward(hidden[None,None,:],state.recurrent[i])[0,0]
                         else:
-                            mixed = b.mixer.step(hidden,state.qsa[i],position=state.length)
+                            if deferred_status is None:
+                                mixed = b.mixer.step(hidden,state.qsa[i],position=state.length)
+                            else:
+                                mixed = b.mixer.step(hidden,state.qsa[i],position=state.length,
+                                    validation_status=self._qsa_validation_views[i])
                         streams = b.attention_hc.write(streams,mixed,gains)
                         self._diagnostic(i,'post_mixer',streams)
                         hidden,gains = b.ffn_hc.read(streams)
@@ -527,6 +567,10 @@ class Qwen4ExpGGUFModel:
                     if logits.shape != (1,self.config.vocab_size) or logits.dtype != xp.float32:
                         raise ValueError('Output must be FP32 [1,vocab]')
                     self._diagnostic(-1,'logits',logits)
+                if deferred_status is not None:
+                    invalid = np.flatnonzero(asnumpy(deferred_status))
+                    if invalid.size:
+                        raise ValueError(f'QSA hidden/projections must be finite (first layer {int(invalid[0])})')
             except Exception:
                 # Operators can already have committed recurrent/PLE history.
                 # Never retry or pretend this request remains resumable.
@@ -593,7 +637,9 @@ class Qwen4ExpGGUFModel:
             if self._owns_executor:
                 self.expert_executor.close()
             if (getattr(self, '_hc_graph_owners', ()) or getattr(self, '_gdn_graph_owners', ()) or
-                    getattr(self, '_pre_moe_segments', {}) or getattr(self,'_shared_graph_owners',())):
+                    getattr(self, '_pre_moe_segments', {}) or getattr(self,'_shared_graph_owners',()) or
+                                        getattr(self,'_qsa_frontend_owners',()) or
+                                                            getattr(self,'_qsa_validation_status',None) is not None):
                 # Graphs can have run on their bound non-default streams.
                 xp.cuda.runtime.deviceSynchronize()
             self.blocks = ()
@@ -601,6 +647,9 @@ class Qwen4ExpGGUFModel:
             self._gdn_graph_owners = ()
             self._pre_moe_segments = {}
             self._shared_graph_owners = ()
+            self._qsa_frontend_owners = ()
+            self._qsa_validation_views = {}
+            self._qsa_validation_status = None
             self.embedding = self.output = self.final_hc = None
             if self.weights is not None:
                 self.weights.close()

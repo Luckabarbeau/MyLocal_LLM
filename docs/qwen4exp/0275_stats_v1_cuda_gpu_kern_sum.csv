@@ -1,0 +1,61 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+43.4,86297148,768,112366.1,115810.0,1728,176003,30675.1,iq_warp_gate_up
+14.1,27977616,720,38857.8,6368.0,3136,810159,118436.2,_packed_linear_decode_kernel
+12.4,24711757,768,32176.8,33216.0,4224,51809,10933.9,iq_warp_down_weighted
+7.1,14110079,192,73490.0,73409.5,69985,77313,1955.8,qsa_decode
+4.6,9095625,64,142119.1,184803.5,13280,186020,74846.1,packed_linear
+3.3,6484226,400,16210.6,16161.0,15744,17536,290.8,hc_read_down_inject
+3.3,6473267,400,16183.2,16160.0,15617,17409,297.3,hc_read_up_mix
+1.5,3061013,192,15942.8,15936.0,15712,16256,101.4,normalized_topk
+1.2,2372366,32,74136.4,74114.0,30464,118274,44066.6,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)"
+1.1,2208141,400,5520.4,5504.5,5280,5888,126.8,hc_norm
+1.0,1956710,2528,774.0,736.0,576,1600,163.7,cupy_multiply__float32_float32_float32
+0.9,1786393,768,2326.0,2368.0,1824,2624,147.5,plan_routes
+0.8,1605953,2272,706.8,640.0,576,2016,146.8,cupy_copy__float32_float32
+0.7,1469719,192,7654.8,7648.0,7328,8289,204.1,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)9, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)"
+0.7,1468245,768,1911.8,1856.0,1728,2496,151.4,combine_planned
+0.5,927409,768,1207.6,1184.0,1088,1408,39.0,qwen4exp_combine_shared
+0.4,857455,960,893.2,864.0,736,1344,118.3,hc_decode_write
+0.4,747279,832,898.2,960.0,608,1216,120.9,cupy_multiply__float32_float_float32
+0.3,678163,192,3532.1,3488.0,3328,4032,140.2,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, float, float, float, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<const float>, cublasGemvTensorStridedBatched<float>, float>>(T13)"
+0.3,640682,848,755.5,800.0,576,1056,130.4,cupy_add__float32_float32_float32
+0.3,555814,64,8684.6,8704.0,8000,9376,404.2,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix_sort::DeviceRadixSortOnesweepKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix::policy_hub<float, unsigned long, unsigned long long>::Policy1000, (cub::CUB_300102_SM_750_800_860_890_900_1000_1200::SortOrder)0, float, unsigned long, unsigned long long, int, int, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::identity_decomposer_t>(T7 *, T7 *, T5 *, const T5 *, T3 *, const T3 *, T4 *, const T4 *, T6, int, int, T8)"
+0.2,482284,192,2511.9,2496.0,2432,2625,34.7,finite_arrays
+0.2,416326,240,1734.7,1760.0,1504,1984,115.7,rmsnorm_fp32_fused
+0.2,374917,256,1464.5,1536.0,1120,1728,161.5,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::reduce::DeviceFixedSizeSegmentedReduceKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::fixed_size_segmented_reduce::policy_hub<float, int, cuda::std::__4::plus<void>>::Policy500, float *, float *, int, cuda::std::__4::plus<void>, float, float>(T2, T3, T4, int, T5, T6)"
+0.2,335720,464,723.5,640.0,608,1056,120.5,cupy_subtract__float32_float32_float32
+0.1,210373,256,821.8,832.0,608,1152,81.4,cupy_true_divide__float32_float_float32
+0.1,207845,256,811.9,832.0,608,992,71.8,cupy_sqrt__float32_float32
+0.1,188451,240,785.2,768.0,608,1120,74.3,cupy_add__float32_float_float32
+0.1,187682,224,837.9,832.0,672,1184,73.2,cupy_true_divide__float_float32_float32
+0.1,137670,16,8604.4,8608.0,8576,8704,36.5,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix_sort::DeviceRadixSortSingleTileKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix::policy_hub<float, unsigned long, unsigned long long>::Policy1000, (cub::CUB_300102_SM_750_800_860_890_900_1000_1200::SortOrder)0, float, unsigned long, unsigned long long, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::identity_decomposer_t>(const T3 *, T3 *, const T4 *, T4 *, T5, int, int, T6)"
+0.0,69281,64,1082.5,1088.0,1024,1312,40.9,cupy_take
+0.0,63200,80,790.0,736.0,672,960,90.6,cupy_true_divide__float32_float32_float32
+0.0,63137,32,1973.0,1968.0,1824,2112,110.2,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::scan::DeviceScanKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::scan::policy_hub<float, float, float, unsigned int, cuda::std::__4::plus<void>>::Policy1000, float *, float *, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::ScanTileState<float, (bool)1>, cuda::std::__4::plus<void>, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::NullType, unsigned int, float, (bool)0, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::NullType>(T2, T3, T4, int, T5, T6, T7)"
+0.0,48064,16,3004.0,3008.0,2976,3136,38.5,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix_sort::DeviceRadixSortHistogramKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix::policy_hub<float, unsigned long, unsigned long long>::Policy1000, (cub::CUB_300102_SM_750_800_860_890_900_1000_1200::SortOrder)0, float, unsigned long long, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::identity_decomposer_t>(T4 *, const T3 *, T4, int, int, T5)"
+0.0,42722,64,667.5,640.0,608,800,62.9,cupy_add__float_float32_float32
+0.0,39584,48,824.7,800.0,672,1024,133.4,cupy_exp__float32_float32
+0.0,38913,32,1216.0,1216.0,1088,1344,97.2,cupy_cub_any_pass1
+0.0,37057,32,1158.0,1152.0,704,1696,451.7,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::transform::transform_kernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::transform::policy_hub<(bool)0, cuda::std::__4::tuple<thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::counting_iterator<unsigned long, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::compile_time_value<(int)1>>, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::constant_iterator<long, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default>>, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::device_ptr<unsigned long>>::policy1000, int, cuda::std::__4::modulus<unsigned long>, unsigned long *, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::counting_iterator<unsigned long, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::compile_time_value<(int)1>>, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::constant_iterator<long, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default, thrust::THRUST_300102_SM_750_800_860_890_900_1000_1200_NS::use_default>>(T2, int, bool, T3, T4, cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::transform::kernel_arg<T5>...)"
+0.0,34914,16,2182.1,2176.0,2144,2272,31.3,cupy_remainder__int64_int_int64
+0.0,34880,32,1090.0,1088.0,896,1344,186.2,cupy_cub_any_pass2
+0.0,34464,16,2154.0,2144.0,2080,2272,50.6,cupy_floor_divide__int64_int_int64
+0.0,32672,48,680.7,640.0,576,800,73.7,cupy_absolute__float32_float32
+0.0,31584,32,987.0,944.0,800,1280,165.0,cupy_where__bool_float32_float32_float32
+0.0,28000,16,1750.0,1760.0,1664,1824,36.4,cupy_searchsorted_kernel
+0.0,27264,16,1704.0,1696.0,1696,1728,14.3,cupy_less__int64_int_bool
+0.0,27168,16,1698.0,1696.0,1664,1792,34.0,cupy_greater__int64_int_bool
+0.0,23008,32,719.0,704.0,640,864,71.8,cupy_greater_equal__float32_float_bool
+0.0,22592,32,706.0,704.0,640,768,61.9,cupy_negative__float32_float32
+0.0,18370,32,574.1,576.0,480,832,98.2,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::scan::DeviceScanInitKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::ScanTileState<float, (bool)1>>(T1, int)"
+0.0,18240,16,1140.0,1152.0,1088,1216,34.8,"void gen_sequenced<curandStateXORWOW, double, int, &curand_uniform_double_noargs<curandStateXORWOW>, rng_config<curandStateXORWOW, (curandOrdering)101>>(T1 *, T2 *, unsigned long, unsigned long, T3)"
+0.0,17569,16,1098.1,1088.0,1056,1248,51.8,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::reduce::DeviceReduceSingleTileKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::reduce::policy_hub<float, unsigned int, nan_handling_max<float>>::Policy1000, float *, float *, unsigned int, nan_handling_max<float>, float, float, cuda::std::__4::identity>(T2, T3, T4, T5, T6, T8)"
+0.0,17024,16,1064.0,1056.0,1024,1152,46.0,cupy_where__bool_float32_float_float32
+0.0,14944,16,934.0,928.0,864,992,29.1,cupy_maximum__float32_float_float32
+0.0,14720,16,920.0,928.0,896,928,14.3,"void cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix_sort::DeviceRadixSortExclusiveSumKernel<cub::CUB_300102_SM_750_800_860_890_900_1000_1200::detail::radix::policy_hub<float, unsigned long, unsigned long long>::Policy1000, unsigned long long>(T2 *)"
+0.0,14560,16,910.0,832.0,800,1120,111.4,cupy_less__float32_float32_bool
+0.0,13344,16,834.0,832.0,832,864,8.0,cupy_multiply__float64_float32_float64
+0.0,13344,16,834.0,832.0,832,864,8.0,cupy_random_x_mod_1
+0.0,12672,16,792.0,800.0,768,800,14.3,cupy_minimum__int64_int_int64
+0.0,12384,16,774.0,768.0,704,832,29.1,cupy_sign__float32_float32
+0.0,12160,16,760.0,768.0,736,768,14.3,cupy_multiply__float_float32_float32

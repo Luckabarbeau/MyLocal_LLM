@@ -1,6 +1,40 @@
 # Qwen4Exp performance and memory history
 
-## Latest — recurrent graphs, critical-path measurement and worker latency (0265–0268)
+## Current follow-up —0280 validation-dependency experiment
+
+Best remains26.95159decode forwards/s. Deferred QSA finite validation with conditional GPU cache writes retains all checks and passes exact same-arithmetic logits/state parity, but same413-token longer workload **24.84134/s** shows no gain. Sampling-call wait decreased while total decode did not: do not mistake shifted wait attribution for eliminated critical work. Node-level graph capture reveals380.77mssummedGPUkernels/363.54msGPUoperationunion in635.60ms/16tokens; dominant copy waits are4-byte QSA status readbacks. Times overlap, profiling overhead applies. See `0280_qsa_validation_dependencies.md` and `0279_node_copy_attribution_v2.json`.
+
+Latest full selected inference regressions1939CPU passed/1025skipped,1211actualCuPy passed/18skipped. Current source hashes/measurements: `0268_0280_performance_v3.json`. Integrated mixed-format GPUQ8 and nativeCPU/PCIesplit work remain pending;50/s not reached. No model equations/checkpoint/reference changed.
+
+## Prior — 0268–0279 host/GPU execution pipeline
+
+The 0268 block/warp oracle mismatch is resolved; same-warp outputs are bit-exact. Current best longer run **26.95159 decode forwards/s**, not 50/s. Complete benchmark records/source hashes: `0268_0279_performance_v2.json`; contracts/limits: `0269_0273_execution_pipeline.md` and `0274_0279_native_handoff.md`.
+
+| Configuration | Response tokens | Decode forwards/s |
+|---|---:|---:|
+|0268 persistent device plan|512|17.57999|
+|0269 unpinned host participation|512|17.72739|
+|0270 pre-MoE recurrent graph|512|17.88268|
+|0271 registration, old barrier scheduler|512|8.49598|
+|0272 task-completion scheduler|512|18.96007|
+|0273 shared expert graph|413|18.88463|
+|0274 deferred shared launch|413|19.31426|
+|0275 native asynchronous CPU handoff|413|24.29482|
+|0276 captured native handoff|413|25.86397|
+|0277 specialized resident kernels|413|24.62057|
+|0277 23 workers + participating callback|413|**26.95159**|
+|0278 QSA frontend capture|413|26.12946|
+|0279 input-only graph operands|413|25.41335|
+
+0273–0279 have identical output IDs. No ratio across the 512/413-token trajectories is an identical-input speedup. Neutral/regressing candidates remain opt-in. One sequential run per configuration, not randomized confidence intervals. CPU format-specific Q8_K/Q8_0 and packed GPU FP32 activation arithmetic are retained.
+
+0275 sampled RssAnon 852914176 / RssFile 55074443264 bytes; default GPU pool used/reserved 12157392896 / 12345454080 bytes. These are category-specific sampled maxima/snapshots, not device-wide peak VRAM. Graph private pools are separately bounded/accounted (native graphs ~1.52 MB total; QSA frontend ~2.49 MB). Model planning now reserves their caps and credits only owned pools. No full packed/dequantized expert duplication or full PLE allocation.
+
+Final tested source: **1939 CPU passed / 1016 skipped; 1202 actual GPU passed / 18 skipped**. Fixed-prefix same-arithmetic parity remains exact for new handoff/graph scopes. Latest 15-worker captured-handoff trace ~588 ms/16 tokens contains ~182 ms runtime memcpy API time; graph-node kernels were not exported in detail, so visible kernel totals are incomplete. Those times overlap CPU/native/GPU dependencies. Next measurement requires node-level graph tracing and call-site correlation. A mapped-host cuStreamWaitValue32 probe returned error 801, not a usable completion path.
+
+Strata emitted-token throughput still includes differing suffix/tail/KV/context/host-placement behavior; no exact full-configuration equivalence claim. **50/s remains unmet.**
+
+## Historical — recurrent graphs, critical-path measurement and worker latency (0265–0268)
 
 0265captures the complete recurrent segment with Triton FP32 dense projections. Same-arithmetic control/capture logits and all active-state hashes are exact at1/2/4/8/16 over two requests. Long273-token response **12.60665decode forwards/s**; previous cuBLAS path sampled a different trajectory, so not an identical-input ratio.
 

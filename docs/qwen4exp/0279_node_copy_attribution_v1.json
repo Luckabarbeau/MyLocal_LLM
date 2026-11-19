@@ -1,0 +1,7 @@
+{
+  "gpu_operation_union_ms": 363.543719,
+  "copy_api_groups": [],
+  "trace_workers": 15,
+  "graph_node_tracing": true,
+  "additive_wall_attribution": false
+}

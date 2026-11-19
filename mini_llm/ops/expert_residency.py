@@ -547,12 +547,21 @@ class HeterogeneousExpertExecutor:
         if self._pool is not None:
             self._pool.shutdown(wait=True)
             self._pool = None
+        # Native stream callbacks borrow this pool: retire their GPU/CPU work
+        # before joining/destroying its workers or canonical registry owners.
+        error = None
+        for plan in self._device_expert_plans.values():
+            try:
+                plan.close()
+            except Exception as exc:
+                if error is None:
+                    error = exc
+        self._device_expert_plans.clear()
         if self._ggml_row_pool is not None:
             self._ggml_row_pool.close()
             self._ggml_row_pool = None
-        for plan in self._device_expert_plans.values():
-            plan.close()
-        self._device_expert_plans.clear()
+        if error is not None:
+            raise error
         if self._slot_arena is not None:
             # Arena backing cannot retire before consumers on other streams.
             for event, _ in self.cache._inflight_groups:
@@ -564,12 +573,16 @@ class HeterogeneousExpertExecutor:
         return self.cache.used_bytes if self._slot_arena is None else self._slot_arena.nbytes
 
     def statistics(self):
+        for plan in self._device_expert_plans.values():
+            plan.flush_statistics()
         return {
             "device": self.cache.statistics(),
             "host_dequant": self.host_cache.statistics(),
             "execution": dict(self.counters),
             "cpu_workers": self.cpu_workers,
             "cpu_packed_backend": self.cpu_packed_backend,
+            "native_handoffs": [p.native_handoff.statistics() for p in self._device_expert_plans.values()
+                                if p.native_handoff is not None],
             "slots": None if self._slot_arena is None else self._slot_arena.statistics(),
         }
 

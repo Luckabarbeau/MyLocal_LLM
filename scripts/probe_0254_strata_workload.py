@@ -295,7 +295,7 @@ def child(args):
                    device_expert_plan=getattr(args, 'device_expert_plan', False),
                    pre_moe_graph=getattr(args, 'pre_moe_graph', False),
                    shared_graph_decode=getattr(args,'shared_graph_decode',False),
-                                      defer_shared=getattr(args,'defer_shared',False))
+                   defer_shared=getattr(args,'defer_shared',False))
     tokenizer, prompts, provenance = preflight(rows)  # Fail closed before model open.
     (args.output/'preflight.json').write_text(json.dumps(dict(provenance=provenance,
         prompts=prompts, comparison=COMPARISON, model_options=options), indent=2))
@@ -356,10 +356,18 @@ def child(args):
             gdn_graph_statistics=[m.graph_statistics() for m in getattr(model, '_gdn_graph_owners', ())],
             pre_graph_statistics=[m.graph_statistics() for m in getattr(model, '_pre_moe_segments', {}).values()],
             shared_graph_statistics=[m.graph_statistics() for m in getattr(model,'_shared_graph_owners',())],
+            qsa_frontend_graph_statistics=[b.mixer._frontend_graph.statistics() for b in model.blocks
+                if not b.recurrent and b.mixer._frontend_graph is not None],
             cpu_pool_spin_us=getattr(model.expert_executor._ggml_row_pool, 'spin_us', None),
             cpu_configuration=dict(workers=args.cpu_workers,
                 host_help=getattr(model.expert_executor._ggml_row_pool, 'host_help', False),
                 scheduler=getattr(model.expert_executor._ggml_row_pool,'scheduler','barrier'),
+                                native_moe_handoff=os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')=='1',
+                                                native_moe_graph=os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH','0')=='1',
+                                                                device_plan_specialized=os.environ.get('MINI_LLM_DEVICE_PLAN_SPECIALIZED','0')=='1',
+                                                                                qsa_frontend_graph=os.environ.get('MINI_LLM_QSA_FRONTEND_GRAPH','0')=='1',
+                                                                                                graph_readonly_inputs=os.environ.get('MINI_LLM_GRAPH_READONLY_INPUTS','0')=='1',
+                                                                                                                qsa_defer_validation=os.environ.get('MINI_LLM_QSA_DEFER_VALIDATION','0')=='1',
                 registered_experts=len(getattr(model.expert_executor._ggml_row_pool,'_registered',{})),
                 worker_cpus=getattr(model.expert_executor._ggml_row_pool, 'cpu_ids', None),
                 host_affinity=sorted(os.sched_getaffinity(0))),

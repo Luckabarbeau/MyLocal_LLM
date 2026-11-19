@@ -356,6 +356,64 @@ extern "C" void mylocal_ggml_pool_destroy(void *pool) noexcept {
     delete static_cast<RowPool *>(pool);
 }
 
+// A CUDA host node calls this original bridge without entering Python or CUDA.
+// D2H/event dependencies publish the inputs; H2D/event dependencies consume the
+// output. One serialized model stream owns each handoff and the shared row pool.
+struct NativeHandoff {
+    RowPool *pool;
+    const float *input;
+    const int *metadata;
+    float *output;
+    int k;
+    std::vector<int> registry;
+    uint64_t runs = 0, misses = 0, hits = 0, errors = 0, elapsed_ns = 0, batches = 0;
+    NativeHandoff(RowPool *p, const float *x, const int *m, float *y, int n,
+                  const int *ids, int experts)
+        : pool(p), input(x), metadata(m), output(y), k(n), registry(ids,ids+experts) {}
+};
+extern "C" void *mylocal_ggml_handoff_create(void *pool, const float *x, const int *meta,
+        float *out, int k, const int *registry, int n) noexcept {
+    if (!pool || !x || !meta || !out || !registry || k<1 || k>16 || n<k || n>512 ||
+            k>static_cast<RowPool *>(pool)->capacity) return nullptr;
+    try { return new NativeHandoff(static_cast<RowPool *>(pool),x,meta,out,k,registry,n); }
+    catch (...) { return nullptr; }
+}
+extern "C" void mylocal_ggml_handoff_run(void *handle) noexcept {
+    auto &h = *static_cast<NativeHandoff *>(handle);
+    int indices[16], count=0, error=0, previous=-1;
+    const auto start=std::chrono::steady_clock::now();
+    ++h.runs;
+    try {
+        if (h.metadata[h.k]) error=1;
+        for (int i=0; i<h.k && !error; ++i) {
+            const int id=h.metadata[i];
+            if (id<=previous || id<0 || size_t(id)>=h.registry.size()) { error=1; break; }
+            previous=id;
+            if (h.registry[id]>=0) indices[count++]=h.registry[id];
+        }
+        if (!error && count) {
+            error=h.pool->submit_registered(indices,count,h.input,h.output);
+            if (!error) h.pool->wait();
+        }
+    } catch (...) { error=3; }
+    if (error) {
+        ++h.errors;
+        // Poison, never silently reuse stale CPU rows on an invalid epoch.
+        std::fill(h.output,h.output+size_t(h.k)*h.pool->d,NAN);
+    } else { h.misses+=count; h.hits+=h.k-count; h.batches+=bool(count); }
+    h.elapsed_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now()-start).count();
+}
+extern "C" void mylocal_ggml_handoff_stats(void *handle, uint64_t *out) noexcept {
+    if (!handle || !out) return;
+    const auto &h=*static_cast<NativeHandoff *>(handle);
+    out[0]=h.runs; out[1]=h.misses; out[2]=h.hits; out[3]=h.errors;
+    out[4]=h.elapsed_ns; out[5]=h.batches;
+}
+extern "C" void mylocal_ggml_handoff_destroy(void *handle) noexcept {
+    delete static_cast<NativeHandoff *>(handle);
+}
+
 extern "C" int mylocal_ggml_linear(
     const uint8_t *w, size_t stride, int type, Quantize quantize, Dot dot,
     int n, int k, const float *x, int m, float *out) noexcept {

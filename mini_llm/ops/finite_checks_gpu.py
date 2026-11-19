@@ -26,12 +26,11 @@ def _kernel(device, count):
         return xp.RawKernel(source, 'finite_arrays', options=('--std=c++11',))
 
 
-def all_finite_gpu(*arrays):
-    """Return a host bool after one current-stream validation/readback.
+def finite_status_gpu(*arrays, out=None):
+    """Enqueue complete finite validation; return device uint32 (0 means valid).
 
-    Accepts 1..8 FP32 arrays on the current CuPy device. Strided views are
-    copied to bounded contiguous validation scratch, not modified. All checks
-    finish before returning; this routine is deliberately not graph-capturable.
+    No host read. Consumers must check the status before committing state or
+    exposing a successful request. The synchronous wrapper preserves its API.
     """
     if BACKEND_NAME != 'cupy':
         raise RuntimeError('Batched GPU validation requires CuPy')
@@ -43,8 +42,20 @@ def all_finite_gpu(*arrays):
     if any(a.device.id != device for a in arrays):
         raise ValueError('Finite validation requires the current device')
     contiguous = [xp.ascontiguousarray(a) for a in arrays]
-    status = xp.zeros((), dtype=xp.uint32)
+    if out is None:
+        status = xp.zeros((), dtype=xp.uint32)
+    else:
+        if (not isinstance(out,xp.ndarray) or out.shape != () or out.dtype != xp.uint32 or
+                out.device.id != device or not out.flags.c_contiguous):
+            raise ValueError('Finite status must be a current-device uint32 scalar')
+        status = out
+        status.fill(0)
     args = tuple(item for a in contiguous for item in (a, np.int64(a.size))) + (status,)
     blocks = max(1, min(32, (max(a.size for a in contiguous) + 255) // 256))
     _kernel(device, len(arrays))((blocks,), (256,), args)
-    return int(status.item()) == 0
+    return status
+
+
+def all_finite_gpu(*arrays):
+    """Return a host bool after one complete current-stream validation/readback."""
+    return int(finite_status_gpu(*arrays).item()) == 0

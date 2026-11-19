@@ -1,0 +1,1293 @@
+{
+  "trace_workers": 15,
+  "graph_node_tracing": true,
+  "gpu_operation_union_ms": 363.543719,
+  "copy_api_groups": [
+    {
+      "boundary": "L31/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 23.386795,
+      "max_api_ms": 5.219548
+    },
+    {
+      "boundary": "L23/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 21.702852,
+      "max_api_ms": 4.568238
+    },
+    {
+      "boundary": "L35/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 18.229131,
+      "max_api_ms": 4.484674
+    },
+    {
+      "boundary": "L27/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 14.649091,
+      "max_api_ms": 4.583031
+    },
+    {
+      "boundary": "L39/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 14.085451,
+      "max_api_ms": 4.118952
+    },
+    {
+      "boundary": "L47/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 14.046647,
+      "max_api_ms": 3.500087
+    },
+    {
+      "boundary": "L19/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 13.857061,
+      "max_api_ms": 2.731879
+    },
+    {
+      "boundary": "L7/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 13.164372,
+      "max_api_ms": 1.762884
+    },
+    {
+      "boundary": "L15/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 12.269475,
+      "max_api_ms": 1.11512
+    },
+    {
+      "boundary": "sampler_and_output_wait",
+      "transfers": [
+        [
+          1,
+          2
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 12.10938,
+      "max_api_ms": 0.809254
+    },
+    {
+      "boundary": "L11/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 11.558435,
+      "max_api_ms": 1.332529
+    },
+    {
+      "boundary": "L43/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 10.78428,
+      "max_api_ms": 1.999603
+    },
+    {
+      "boundary": "L3/mixer",
+      "transfers": [
+        [
+          4,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 9.641068,
+      "max_api_ms": 1.035838
+    },
+    {
+      "boundary": "try_forward_device_plan",
+      "transfers": [
+        [
+          10240,
+          8
+        ]
+      ],
+      "calls": 1536,
+      "api_wall_ms": 6.944502,
+      "max_api_ms": 0.01312
+    },
+    {
+      "boundary": "try_forward_device_plan",
+      "transfers": [
+        [
+          40,
+          8
+        ]
+      ],
+      "calls": 1536,
+      "api_wall_ms": 5.345694,
+      "max_api_ms": 0.011924
+    },
+    {
+      "boundary": "try_forward_device_plan",
+      "transfers": [
+        [
+          80,
+          8
+        ]
+      ],
+      "calls": 1536,
+      "api_wall_ms": 5.201591,
+      "max_api_ms": 0.009371
+    },
+    {
+      "boundary": "token/64",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.382363,
+      "max_api_ms": 0.008651
+    },
+    {
+      "boundary": "token/65",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.34164,
+      "max_api_ms": 0.01025
+    },
+    {
+      "boundary": "token/64",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.334969,
+      "max_api_ms": 0.009832
+    },
+    {
+      "boundary": "token/65",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.314301,
+      "max_api_ms": 0.006836
+    },
+    {
+      "boundary": "token/64",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.240318,
+      "max_api_ms": 0.012346
+    },
+    {
+      "boundary": "token/75",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.231429,
+      "max_api_ms": 0.004725
+    },
+    {
+      "boundary": "token/75",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.22578,
+      "max_api_ms": 0.004467
+    },
+    {
+      "boundary": "token/79",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.222664,
+      "max_api_ms": 0.004454
+    },
+    {
+      "boundary": "token/68",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.221924,
+      "max_api_ms": 0.006745
+    },
+    {
+      "boundary": "token/79",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.220074,
+      "max_api_ms": 0.006911
+    },
+    {
+      "boundary": "token/66",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.219174,
+      "max_api_ms": 0.004582
+    },
+    {
+      "boundary": "token/74",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.218927,
+      "max_api_ms": 0.004175
+    },
+    {
+      "boundary": "token/67",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.216517,
+      "max_api_ms": 0.004053
+    },
+    {
+      "boundary": "token/69",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.215551,
+      "max_api_ms": 0.004507
+    },
+    {
+      "boundary": "token/65",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.214655,
+      "max_api_ms": 0.00953
+    },
+    {
+      "boundary": "token/74",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.214168,
+      "max_api_ms": 0.004185
+    },
+    {
+      "boundary": "token/69",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.21332,
+      "max_api_ms": 0.006286
+    },
+    {
+      "boundary": "token/73",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.213215,
+      "max_api_ms": 0.003973
+    },
+    {
+      "boundary": "token/70",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.212651,
+      "max_api_ms": 0.003859
+    },
+    {
+      "boundary": "token/78",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.211837,
+      "max_api_ms": 0.004061
+    },
+    {
+      "boundary": "token/77",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.211807,
+      "max_api_ms": 0.003978
+    },
+    {
+      "boundary": "token/71",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.211594,
+      "max_api_ms": 0.003902
+    },
+    {
+      "boundary": "token/67",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.211302,
+      "max_api_ms": 0.007118
+    },
+    {
+      "boundary": "token/68",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.210602,
+      "max_api_ms": 0.00394
+    },
+    {
+      "boundary": "token/76",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.210591,
+      "max_api_ms": 0.004834
+    },
+    {
+      "boundary": "token/71",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.209975,
+      "max_api_ms": 0.003841
+    },
+    {
+      "boundary": "token/66",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.209708,
+      "max_api_ms": 0.004587
+    },
+    {
+      "boundary": "token/72",
+      "transfers": [
+        [
+          122880,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.208628,
+      "max_api_ms": 0.003872
+    },
+    {
+      "boundary": "token/73",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.2081,
+      "max_api_ms": 0.003857
+    },
+    {
+      "boundary": "token/76",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.206433,
+      "max_api_ms": 0.004595
+    },
+    {
+      "boundary": "token/78",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.20619,
+      "max_api_ms": 0.003723
+    },
+    {
+      "boundary": "token/70",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.205217,
+      "max_api_ms": 0.00368
+    },
+    {
+      "boundary": "token/77",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.205112,
+      "max_api_ms": 0.003526
+    },
+    {
+      "boundary": "token/72",
+      "transfers": [
+        [
+          3145728,
+          8
+        ]
+      ],
+      "calls": 72,
+      "api_wall_ms": 0.204042,
+      "max_api_ms": 0.003956
+    },
+    {
+      "boundary": "L3/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.159742,
+      "max_api_ms": 0.008582
+    },
+    {
+      "boundary": "L11/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.158195,
+      "max_api_ms": 0.008478
+    },
+    {
+      "boundary": "L27/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.156453,
+      "max_api_ms": 0.008038
+    },
+    {
+      "boundary": "L19/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.155812,
+      "max_api_ms": 0.008049
+    },
+    {
+      "boundary": "L7/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.151645,
+      "max_api_ms": 0.007984
+    },
+    {
+      "boundary": "L47/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.151635,
+      "max_api_ms": 0.007541
+    },
+    {
+      "boundary": "L23/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.151546,
+      "max_api_ms": 0.008802
+    },
+    {
+      "boundary": "L39/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.151197,
+      "max_api_ms": 0.007156
+    },
+    {
+      "boundary": "L35/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.150573,
+      "max_api_ms": 0.007919
+    },
+    {
+      "boundary": "L43/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.150132,
+      "max_api_ms": 0.007827
+    },
+    {
+      "boundary": "L31/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.148313,
+      "max_api_ms": 0.007622
+    },
+    {
+      "boundary": "L15/mixer",
+      "transfers": [
+        [
+          2048,
+          8
+        ]
+      ],
+      "calls": 32,
+      "api_wall_ms": 0.146984,
+      "max_api_ms": 0.007904
+    },
+    {
+      "boundary": "token/75",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.146531,
+      "max_api_ms": 0.007551
+    },
+    {
+      "boundary": "sampler_and_output_wait",
+      "transfers": [
+        [
+          8,
+          2
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 0.141717,
+      "max_api_ms": 0.010857
+    },
+    {
+      "boundary": "token/66",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.136326,
+      "max_api_ms": 0.007093
+    },
+    {
+      "boundary": "token/79",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.134806,
+      "max_api_ms": 0.007032
+    },
+    {
+      "boundary": "token/74",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.133452,
+      "max_api_ms": 0.0073
+    },
+    {
+      "boundary": "token/67",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.132899,
+      "max_api_ms": 0.007832
+    },
+    {
+      "boundary": "token/70",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.132046,
+      "max_api_ms": 0.007261
+    },
+    {
+      "boundary": "token/72",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.131906,
+      "max_api_ms": 0.007301
+    },
+    {
+      "boundary": "token/68",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.131419,
+      "max_api_ms": 0.007089
+    },
+    {
+      "boundary": "token/69",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.131117,
+      "max_api_ms": 0.007272
+    },
+    {
+      "boundary": "token/78",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.130556,
+      "max_api_ms": 0.006838
+    },
+    {
+      "boundary": "token/71",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.130323,
+      "max_api_ms": 0.007145
+    },
+    {
+      "boundary": "token/76",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.13006,
+      "max_api_ms": 0.007212
+    },
+    {
+      "boundary": "token/73",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.129548,
+      "max_api_ms": 0.007064
+    },
+    {
+      "boundary": "token/77",
+      "transfers": [
+        [
+          40960,
+          8
+        ]
+      ],
+      "calls": 36,
+      "api_wall_ms": 0.128636,
+      "max_api_ms": 0.00698
+    },
+    {
+      "boundary": "thrust::stable_sort_by_key",
+      "transfers": [
+        [
+          80,
+          8
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 0.095818,
+      "max_api_ms": 0.010406
+    },
+    {
+      "boundary": "L27/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.079899,
+      "max_api_ms": 0.005512
+    },
+    {
+      "boundary": "L31/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.077551,
+      "max_api_ms": 0.005427
+    },
+    {
+      "boundary": "L7/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.077405,
+      "max_api_ms": 0.005533
+    },
+    {
+      "boundary": "L11/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.076323,
+      "max_api_ms": 0.005283
+    },
+    {
+      "boundary": "L3/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.076231,
+      "max_api_ms": 0.005477
+    },
+    {
+      "boundary": "L23/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.075168,
+      "max_api_ms": 0.005474
+    },
+    {
+      "boundary": "L19/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.073531,
+      "max_api_ms": 0.005235
+    },
+    {
+      "boundary": "L15/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.071133,
+      "max_api_ms": 0.005097
+    },
+    {
+      "boundary": "L39/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.06983,
+      "max_api_ms": 0.005117
+    },
+    {
+      "boundary": "L43/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.069365,
+      "max_api_ms": 0.004865
+    },
+    {
+      "boundary": "L47/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.067283,
+      "max_api_ms": 0.00438
+    },
+    {
+      "boundary": "L35/mixer",
+      "transfers": [
+        [
+          512,
+          8
+        ]
+      ],
+      "calls": 20,
+      "api_wall_ms": 0.066628,
+      "max_api_ms": 0.004938
+    },
+    {
+      "boundary": "thrust::stable_sort_by_key",
+      "transfers": [
+        [
+          160,
+          8
+        ]
+      ],
+      "calls": 16,
+      "api_wall_ms": 0.046541,
+      "max_api_ms": 0.004476
+    },
+    {
+      "boundary": "token/64",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.03847,
+      "max_api_ms": 0.024522
+    },
+    {
+      "boundary": "token/65",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.016363,
+      "max_api_ms": 0.008667
+    },
+    {
+      "boundary": "token/67",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.014785,
+      "max_api_ms": 0.008103
+    },
+    {
+      "boundary": "token/78",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.014782,
+      "max_api_ms": 0.008109
+    },
+    {
+      "boundary": "token/74",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.014627,
+      "max_api_ms": 0.007983
+    },
+    {
+      "boundary": "token/70",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.014108,
+      "max_api_ms": 0.007755
+    },
+    {
+      "boundary": "token/69",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.014001,
+      "max_api_ms": 0.007224
+    },
+    {
+      "boundary": "token/75",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013907,
+      "max_api_ms": 0.007723
+    },
+    {
+      "boundary": "token/72",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013829,
+      "max_api_ms": 0.007514
+    },
+    {
+      "boundary": "token/79",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013741,
+      "max_api_ms": 0.006909
+    },
+    {
+      "boundary": "token/77",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013632,
+      "max_api_ms": 0.007111
+    },
+    {
+      "boundary": "token/68",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013597,
+      "max_api_ms": 0.006949
+    },
+    {
+      "boundary": "token/73",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013466,
+      "max_api_ms": 0.006982
+    },
+    {
+      "boundary": "token/71",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.013184,
+      "max_api_ms": 0.006763
+    },
+    {
+      "boundary": "token/76",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.012665,
+      "max_api_ms": 0.006388
+    },
+    {
+      "boundary": "token/66",
+      "transfers": [
+        [
+          10240,
+          1
+        ]
+      ],
+      "calls": 2,
+      "api_wall_ms": 0.012634,
+      "max_api_ms": 0.006612
+    }
+  ],
+  "additive_wall_attribution": false,
+  "supersedes": "0279_node_copy_attribution_v1.json (versioned API name filter matched no rows)"
+}

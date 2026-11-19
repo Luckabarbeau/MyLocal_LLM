@@ -167,6 +167,11 @@ class Qwen4ExpAttention:
             norm.set_weights(gamma.copy())
             self.norms.append(norm)
         self.rope = RotaryEmbeddingInference(c.rotary_dim, base=c.rope_base, layout="half")
+        import os
+        self._frontend_graph = None
+        self._frontend_capturable = (self.fast_decode and BACKEND_NAME == 'cupy' and
+                                      os.environ.get('MINI_LLM_QSA_FRONTEND_GRAPH','0') == '1')
+        self._frontend_graph_enabled = self._frontend_capturable
 
     @staticmethod
     def _array(name, array, shape, *, check_finite=True):
@@ -179,7 +184,12 @@ class Qwen4ExpAttention:
 
     def _project(self, name, hidden, *, check_finite=True):
         weight, size = self.projections[name]
-        result = weight(hidden) if callable(weight) else weight @ hidden
+        if (not callable(weight) and self._frontend_capturable and
+                name in ('query_gate','key','value','index_key')):
+            from ..ops.inference_matmul import matmul_inference
+            result = matmul_inference(hidden.reshape(1,-1),weight.T).reshape(-1)
+        else:
+            result = weight(hidden) if callable(weight) else weight @ hidden
         return self._array(name, result, (size,), check_finite=check_finite)
 
     def _rotate(self, array, position):
@@ -216,11 +226,15 @@ class Qwen4ExpAttention:
             array.fill(0)
         state.length = 0
 
-    def step(self, hidden, state, *, position, diagnostics=False):
+    def step(self, hidden, state, *, position, diagnostics=False, validation_status=None):
         """Return output, or (output, diagnostic dict) with copied scores/IDs.
 
         No arbitrary/multimodal position vectors, offsets, holes, sliding window,
         batching, cache quantization or custom masks. Causality is cell <= t.
+        An explicit device validation_status defers the host error check only:
+        cache writes remain conditional on complete finite validation. The owner
+        must reject/retire the request if status is nonzero; length has advanced
+        speculatively and that failed request must not be resumed.
         """
         c = self.config
         self._state(state)
@@ -230,17 +244,26 @@ class Qwen4ExpAttention:
         if t >= state.max_length:
             raise ValueError("QSA cache capacity exceeded")
         batch_validation = self.fast_decode and BACKEND_NAME == 'cupy'
+        if validation_status is not None and (not batch_validation or diagnostics):
+            raise ValueError('Deferred QSA validation requires fast CuPy execution without diagnostics')
         self._array("hidden", hidden, (c.d_model,), check_finite=not batch_validation)
-        qg = self._project("query_gate", hidden, check_finite=not batch_validation).reshape(c.n_q_heads, 2*c.head_dim)
-        k = self._project("key", hidden, check_finite=not batch_validation).reshape(c.n_kv_heads, c.head_dim)
-        v = self._project("value", hidden, check_finite=not batch_validation).reshape(c.n_kv_heads, c.head_dim)
         n = t + 1
         all_cells = (self.fast_decode and BACKEND_NAME == "cupy" and not diagnostics
                      and n <= c.index_topk + c.block_size - 1)
-        raw = self._project("index_key", hidden, check_finite=not batch_validation)
-        projected = [hidden, qg, k, v, raw] if batch_validation else None
-        q = self._rotate(self.norms[0].forward(qg[:, :c.head_dim]), t)
-        k = self._rotate(self.norms[1].forward(k), t)
+        if self._frontend_graph_enabled and all_cells:
+            if self._frontend_graph is None:
+                from .qwen4exp_qsa_frontend_graph import QSAFrontendGraph
+                self._frontend_graph = QSAFrontendGraph(self)
+            qg, raw_k, v, raw, q, k = self._frontend_graph.forward(hidden, t)
+            projected = [hidden, qg, raw_k, v, raw]
+        else:
+            qg = self._project("query_gate", hidden, check_finite=not batch_validation).reshape(c.n_q_heads, 2*c.head_dim)
+            k = self._project("key", hidden, check_finite=not batch_validation).reshape(c.n_kv_heads, c.head_dim)
+            v = self._project("value", hidden, check_finite=not batch_validation).reshape(c.n_kv_heads, c.head_dim)
+            raw = self._project("index_key", hidden, check_finite=not batch_validation)
+            projected = [hidden, qg, k, v, raw] if batch_validation else None
+            q = self._rotate(self.norms[0].forward(qg[:, :c.head_dim]), t)
+            k = self._rotate(self.norms[1].forward(k), t)
         if not all_cells:
             iq = self._project("index_query", hidden, check_finite=not batch_validation).reshape(c.index_heads, c.index_dim)
             if batch_validation:
@@ -298,16 +321,21 @@ class Qwen4ExpAttention:
                 contexts[h] = probability @ vals
             gated = contexts * _sigmoid(qg[:, c.head_dim:])
         result = self._project("output", gated.reshape(-1), check_finite=not batch_validation)
-        if batch_validation:
-            from ..ops.finite_checks_gpu import all_finite_gpu
-            # Validate every original projection, even if downstream math masks
-            # a bad value. Keep the persistent caches transactional on failure.
-            if not all_finite_gpu(*projected, result):
-                raise ValueError('QSA hidden and projections must be finite')
-        # All callbacks and output shapes validated before any state write.
-        state.keys[t], state.values[t], state.raw_index[t] = k, v, raw
-        if new_pool is not None:
-            state.pooled[completed - 1] = new_pool
+        if validation_status is not None:
+            from ..ops.finite_checks_gpu import finite_status_gpu
+            from ..ops.qsa_commit_gpu import commit_qsa
+            finite_status_gpu(*projected,result,out=validation_status)
+            commit_qsa(validation_status,state,k,v,raw,new_pool,t,completed)
+        else:
+            if batch_validation:
+                from ..ops.finite_checks_gpu import all_finite_gpu
+                # Validate even projections whose bad values might be masked.
+                if not all_finite_gpu(*projected, result):
+                    raise ValueError('QSA hidden and projections must be finite')
+            # All callbacks and output shapes validated before any state write.
+            state.keys[t], state.values[t], state.raw_index[t] = k, v, raw
+            if new_pool is not None:
+                state.pooled[completed - 1] = new_pool
         state.length = n
         if diagnostics:
             return result, {"selected_ids": ids.copy(), "cell_scores": scores.copy(),

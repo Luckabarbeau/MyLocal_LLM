@@ -8,6 +8,20 @@ The initial path reuses `AdaptiveExpertCache` and `HeterogeneousExpertExecutor`;
 
 No full-model dequantization, full PLE allocation, pinned copy of all experts, or per-token mandatory expert upload is allowed. Reference CPU execution with zero decoded-host budget expands only rows; native CPU kernels decode lanes directly. Metadata/indexing and sparse source construction allocate no weight payload copies.
 
+## Optional deferred QSA validation (0280)
+
+A model-owned48-element uint32 status buffer (~192bytes) replaces per-layer host finite-check readbacks only when explicitly requested. All original finite checks still run; GPU commit kernels suppress every K/V/raw/pool write for an invalid layer. One model-step status read reports the first invalid layer before successful return, marks the request failed/non-resumable and prevents subsequent reuse. Statuses reset for isolated requests; close fences pending operations. Standalone/default QSA keeps synchronous validation. This is not token-wide rollback, and it demonstrated no throughput gain. See `0280_qsa_validation_dependencies.md`.
+
+## Frozen native handoff / graph ownership (0275–0279)
+
+The optional native handoff retains immutable descriptors/canonical mmap owners, not copied expert payloads. At most32768registered descriptors (~4MiB metadata) and64device plans are allowed. Each plan owns pinned input/metadata/result slabs and GPU scratch bounded by top-k<=16 and widths<=4096. All current layer residents have cache leases until their plan's retirement fence; admission changes invalidate and retire plans before release.
+
+CUDA host functions call only native CPU-pool arithmetic, never Python/CUDA. Main/CPU/shared stream events order producer input, complete native output transfers, packed GPU readers and combination. Exception paths retain inputs and join pending native work; executor shutdown retires **all** plans before destroying the shared row pool. Statistics is an explicit synchronization seam and reports errors; native failures cannot silently reuse old rows. Frozen execution pauses per-expert decayed heat and reports aggregate counters, so this is not a general adaptive mover.
+
+Captured native graphs reserve1MiB/layer; QSA frontend graphs2MiB/QSA layer, separately added to model preflight. Later memory planning credits only actual owned private pools, including native/QSA pools, and model close fences graph-bound streams before clearing owners. Observed total private native reservations1,523,712bytes; QSAfrontend2,488,320bytes. Mutable recurrent/convolution arrays still copy back; only explicitly input-only routing/RoPE operands may omit copy-back (0279).
+
+0275 sampled RssAnon852,914,176bytes and RssFile55,074,443,264bytes are separate category observations, not a simultaneous total or guaranteed peak. Default GPU pool snapshots12,157,392,896used/12,345,454,080reservedbytes exclude private graph pools and driver allocations. No device-wide high-water claim. PLE remains disk-mapped; warming50GiB touches reclaimable expert pages without a second packed/private or pinned expert bank. See `0274_0279_native_handoff.md` for limitations.
+
 ## Measured checkpoint storage
 
 | Category | Packed bytes | GiB |

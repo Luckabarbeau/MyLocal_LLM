@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pytest
 
+from mini_llm.backend import xp
 from mini_llm.external.gguf_tokenizer import load_gguf_tokenizer
 from mini_llm.external.qwen4exp_chat import ChatSession, render_chat
 from test_0106p_qwen_tokenizer import _reader, _byte_encode
@@ -99,7 +100,7 @@ class FakeModel:
         self.states.append(state)
         return state
     def logits(self):
-        result = np.full((1, 256), -100, dtype=np.float32)
+        result = xp.full((1, 256), -100, dtype=xp.float32)
         result[0, self.reply[self.index]] = 100
         return result
     def prefill(self, ids, state):

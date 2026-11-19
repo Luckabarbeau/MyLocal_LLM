@@ -5,6 +5,7 @@ complete CPU misses use the existing native row pool. Not a placement mover or a
 whole-token CUDA graph. Serial single-stream dispatch only, at most64 plans.
 """
 from functools import lru_cache
+import os
 
 import numpy as np
 from mini_llm.backend import xp
@@ -107,22 +108,34 @@ class DeviceExpertPlan:
         self.plan_kernel = module.get_function('plan_routes')
         self.combine_kernel = module.get_function('combine_planned')
         from .iq_grouped_warp_gpu import module as warp_module
-        module = warp_module(self.device, iq._codebook_storage())
+        self.layout = tuple((iq._FORMAT_ID[fmt], *BLOCK_FORMATS[fmt]) for fmt in self.formats)
+        specialization = ((self.d,self.f,3,*self.layout[0],*self.layout[1],*self.layout[2])
+                          if os.environ.get('MINI_LLM_DEVICE_PLAN_SPECIALIZED','0')=='1' else None)
+        module = warp_module(self.device, iq._codebook_storage(), specialization)
         self.gate_up = module.get_function('iq_warp_gate_up')
         self.down = module.get_function('iq_warp_down_weighted')
-        self.layout = tuple((iq._FORMAT_ID[fmt], *BLOCK_FORMATS[fmt]) for fmt in self.formats)
         self.gate_args = tuple(np.int32(v) for v in
             (self.d,self.f,3,*self.layout[0],*self.layout[1],256,k))
         self.down_args = tuple(np.int32(v) for v in (self.d,self.f,3)) + (np.int64(1),) + tuple(
             np.int32(v) for v in (*self.layout[2],256,k))
         self.combine_args = np.int32(self.d),np.int32(k)
+        self.native_handoff = None
+        if os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF', '0') == '1':
+            from .native_expert_handoff import NativeExpertHandoff
+            self.native_handoff = NativeExpertHandoff(self)
 
     @staticmethod
     def cache_fingerprint(executor):
         cache = executor.cache
         return (cache.counters['promotions'], cache.counters['evictions'], cache.device_budget_bytes)
 
+    def flush_statistics(self):
+        if self.native_handoff is not None:
+            self.native_handoff.flush_statistics()
+
     def close(self):
+        if self.native_handoff is not None:
+            self.native_handoff.close()
         if self.pending:
             self.retired.synchronize()
             self.pending = False
@@ -134,6 +147,12 @@ class DeviceExpertPlan:
             return None
         if stream.is_capturing():
             raise RuntimeError('Device expert CPU handoff is an uncaptured dispatch seam')
+        if self.native_handoff is not None:
+            try:
+                return self.native_handoff.forward(x, routes, ids, on_cpu_submitted)
+            finally:
+                self.retired.record(stream)
+                self.pending = True
         if self.pending and not self.retired.done:
             self.retired.synchronize()  # Protect pinned DMA slabs on unusually early reuse.
         self.pending = False

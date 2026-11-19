@@ -104,6 +104,16 @@ RemainingStratamechanisms are notclaimedimplemented: profile/sizedslots, protect
 
 0268implements a frozen device residency/route plan with persistent pointer tables, pinned slabs and GPU ordered combination. It is **not validated**: retest94passed1skipped2failed, possible block/warp oracle mismatch; no real model benchmark or default enablement. Source/ownership design is implemented, not proven correct merely by architecture resemblance. See `0268_device_plan_blocker.md`.50t/s remains unmet and correction-cycle stop rules apply.
 
+## Adaptation progress — 0268 resolution through 0279
+
+The historical 0268 stop above is superseded: identical-warp oracle comparisons are exact; block/warp maxabs3.73e-9/relativeL2 2.37e-7 is ordinary changed reduction ordering. Device-plan long run17.58/s. Task-completion scheduling with generation-tagged claims removes all-worker rendezvous tails (0272); unpinned host participation works, exact copied affinity regresses. A23-worker plus callback participant team was measured, not silently limited by OMP/BLAS thread settings.
+
+0274 queues shared work after publishing CPU inputs.0275/0276 add a stream-ordered original native host function and capture the complete route/copy/CPU/GPU-join segment, with lifetime-resident leases and canonical metadata registration. No Python/GIL callback or expert payload duplication. Same-arithmetic full-state replay checks remain exact. Best longer same413-token response26.95/s. Private graph pools and callback cleanup are accounted/fenced; per-expert heat is explicitly paused during frozen placement, not adaptive moving.
+
+0277 specialized GPU kernels,0278 dynamic-input short-QSA frontend capture and0279 input-only graph operands are correct in their tested scopes but show no demonstrated longer-run gain. CPU spans remain13–15ms/forward; runtime memcpy blocking remains prominent. An isolated cuStreamWaitValue32 mapped-memory probe fails with CUDA801 on this machine, so it is not a valid assumed doorbell mechanism. A bounded native service/alternative device wait would need separate ownership/failure validation before replacing the host function.
+
+Re-read pinned `src/kernels/cpu/native_expert.cpp`: GGML singleton dots versus gated optional IQ AVX2/window kernels, exact-check dispatch, and byte-equivalent SIMD Q8_K preparation are separate opportunities. Actual selected GGML reports AVX2/FMA/AVX-VNNI enabled, AVX512 disabled. Do not infer a scalar-only IQ fallback from low utilization. Strata's multi-token suffix batching, route-tail omissions and PCIe-served misses still prevent an exact emitted-token/full-forward comparison. See `0269_0273_execution_pipeline.md`, `0274_0279_native_handoff.md`;50/s remains unmet.
+
 ## Validation and rollout rule
 
 Each adaptation gets a numbered patch and independently switchable tests. Report operator/layer/state/model scopes separately, with matched long sampled requests and the retained FP32/GGML references. Default paths are preserved until their replacement is supported by numerical, ownership and memory evidence. This audit is a reproducible implementation map, **not a claim that all listed elements are implemented**, nor evidence of50t/s.

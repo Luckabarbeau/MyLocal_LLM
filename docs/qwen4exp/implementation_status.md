@@ -1,6 +1,31 @@
 # Qwen4Exp implementation status
 
-## Current milestone — SHORT-TEXT GATE PASSED; ~44× MEASURED DECODE SPEEDUP
+## Current — through0280; best longer decode26.95/s, target50/s unmet
+
+**0280 implemented/numerically validated within path, not performance optimized:** node-level graph trace attributes the dominant runtime copy waits to4-byteQSAfinite-status reads. An opt-in device-status/conditional-cache-commit path preserves every check, reports the first bad layer once/modelstep and isolates failed requests. Focused9tests pass; actual checkpoint fixed-prefix logits/all-state hashes remain bit-exact over two requests. Longer same413-token run24.84134/s does not improve26.95159/s; keep default off.
+
+Latest verified source: **1939CPU passed/1025skipped,1211actualCuPy passed/18skipped**. JUnit and source hashes: `0280_{cpu,gpu}_regression_v1.xml`, `0268_0280_performance_v3.json`. Node trace:635.60ms/16tokens,380.77mssummedkernels,363.54msGPUoperationunion; overlapping diagnostic spans, not throughput/exclusive attribution. Coarse earlier graph traces omitted captured kernel nodes. Current priority is integrated mixed-format packedGPUQ8/nativeCPUcost/CPU–PCIesplitting, not blind fence deletion. See `0280_qsa_validation_dependencies.md`. No production mathematical defect demonstrated; fullmodelGPUQ8 remains unintegrated.
+
+## Validated history — 0268–0279 execution scopes; best longer decode 26.95/s
+
+**50 tokens/s remains unmet. No new production graph defect was found or corrected.**
+
+- **0268 resolved:** the 3.73e-9 FP32 difference was a block/warp test-oracle mismatch. Same-warp comparisons are bit-exact; measured block/warp relative L2 2.3721e-7. Longer run 17.58/s. The old blocker below is historical.
+- **0269–0273:** host participation, optional affinity, pre-MoE/shared graphs, immutable native descriptor registration and generation-tagged task completion. Best 0272 long 18.96/s. Exact Strata affinity regressed here and is not the default. See `0269_0273_execution_pipeline.md`.
+- **0274 implemented/numerically validated within path:** deferred shared launch after CPU work publication, once-only callback/error draining; long 19.31/s.
+- **0275 implemented/numerically validated within path:** stream-ordered native CPU host function, fixed resident leases, bounded canonical registrations, no Python completion wait; long 24.29/s.
+- **0276 implemented/numerically validated within path:** captured native handoff with runtime routes/activations, owned pinned buffers and ordered CPU/GPU join; long 25.86/s.
+- **0277 operator validated:** existing specialized resident kernels wired to device plan, no demonstrated model gain (24.62/s). Native CPU timing added. Larger unpinned **23-worker + participating callback team reached 26.95159/s**, ~17.06 active-core equivalents.
+- **0278 implemented/numerically validated within path:** short-context QSA frontend graph, dynamic RoPE inputs, unchanged validation/commit/sparse fallback; 26.13/s, no demonstrated gain.
+- **0279 implemented/numerically validated within path:** input-only graph operands avoid unnecessary copy-back without changing default mutable-state semantics; 25.41/s, no demonstrated gain.
+
+0273–0279 responses have the same 413 output IDs. These are single sequential runs, not confidence intervals. New 0274/0275/0276/0278/0279 fixed-token captures have bit-exact same-arithmetic logits and all active-state hashes at prefixes 1/2/4/8/16 across two requests. This is not a new independent llama.cpp equivalence claim. GPU experts still use FP32 activations; CPU experts use GGML per-format Q8_K/Q8_0. All-format GPU Q8_1 is not integrated.
+
+**Verified final source state:** NumPy inference regressions **1939 passed, 1016 skipped**; actual CuPy inference regressions **1202 passed, 18 skipped**. Relevant Qwen3-Next models/mixers/decoders included; entire training suite not run. XML, source hashes, timing and memory: `0279_{cpu,gpu}_regression_v1.xml`, `0268_0279_performance_v2.json`.
+
+Frozen native handoff intentionally pauses per-expert decayed heat, retains all canonical sources/resident leases, and collects exact aggregate counts at synchronized statistics/cleanup seams. It is not an asynchronous placement mover. Peak RAM/VRAM scopes, flags, failed/neutral experiments and current critical-path evidence are in `0274_0279_native_handoff.md`. Current next dependency is node-level graph timeline/copy-call attribution and a supported native completion mechanism; an isolated mapped-memory `cuStreamWaitValue32` probe returned CUDA error 801 (unsupported).
+
+## Historical milestone — SHORT-TEXT GATE PASSED; ~44× MEASURED DECODE SPEEDUP
 
 The original local two-shard IQ3_S checkpoint now constructs and executes all48 layers on NumPy and CuPy/RTX5080, using packed CPU/GPU routed experts backed by mapped canonical sources. No pruned model, full expert expansion, whole-PLE allocation, new checkpoint download, or all-resident GPU intermediate architecture is used.
 
@@ -8,7 +33,7 @@ The original local two-shard IQ3_S checkpoint now constructs and executes all48 
 
 Status vocabulary: Not started; In progress; Implemented but unvalidated; Numerically validated; End-to-end validated; Performance optimized. Validation scope is always stated; an operator claim is not a model claim.
 
-## Latest — 0265–0267 validated scopes; 0268 numerical gate blocked
+## Historical — initial 0265–0268 report (0268 blocker resolved above)
 
 - **0265:** opt-in whole recurrent segment graph, existing Triton FP32 GEMV plus fused DeltaNet;16MiB cap per recurrent layer, explicit preflight/cleanup. GPU focused41passed2skipped; CPU model/workload57passed4skipped. Real fixed-prefix same-GEMV control/capture over two requests has bit-exact logits and all active-state hashes at1/2/4/8/16. This is replay parity, not new llama.cpp equivalence. Long sampled273-token response12.60665forwards/s.
 - **0266:** current-path Nsight capture inside the longer response:16tokens/1.48257s, GPU operation union405.990ms,41,969driverlaunches, CPU completion-wait spans321.591ms. Times overlap; not an exclusive decomposition. Retesting mixed grouping12.55698/s gives no demonstrated gain.

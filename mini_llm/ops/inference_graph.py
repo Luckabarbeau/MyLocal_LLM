@@ -12,9 +12,13 @@ from mini_llm.backend import BACKEND_NAME, xp
 
 
 class CapturedArrayInference:
-    def __init__(self, enqueue, x, mutable_arrays, *, pool_limit_bytes=32 * 1024**2):
+    def __init__(self, enqueue, x, mutable_arrays, *, pool_limit_bytes=32 * 1024**2,
+                 copy_back_mutable=True):
         if BACKEND_NAME != 'cupy':
             raise RuntimeError('CUDA graph replay requires CuPy')
+        if not isinstance(copy_back_mutable, bool):
+            raise TypeError('copy_back_mutable must be bool')
+        self.copy_back_mutable = copy_back_mutable
         arrays = (x, *mutable_arrays)
         if not arrays or any(not isinstance(a, xp.ndarray) or not a.flags.c_contiguous
                              for a in arrays):
@@ -91,8 +95,9 @@ class CapturedArrayInference:
         for target, source in zip(self.mutable, mutable_arrays):
             xp.copyto(target, source)
         self.graph.launch(stream=stream)
-        for target, source in zip(mutable_arrays, self.mutable):
-            xp.copyto(target, source)
+        if self.copy_back_mutable:
+            for target, source in zip(mutable_arrays, self.mutable):
+                xp.copyto(target, source)
         if borrow_output:
             out = self.output
         elif isinstance(self.output, tuple):
@@ -103,6 +108,7 @@ class CapturedArrayInference:
         return out
 
     def statistics(self):
-        return dict(calls=self.calls, pool_reserved_bytes=int(self.pool.total_bytes()),
+        return dict(calls=self.calls, copy_back_mutable=self.copy_back_mutable,
+                    pool_reserved_bytes=int(self.pool.total_bytes()),
                     pool_used_bytes=int(self.pool.used_bytes()),
                     pool_limit_bytes=int(self.pool.get_limit()))

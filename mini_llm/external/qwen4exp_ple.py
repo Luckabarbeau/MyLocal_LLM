@@ -7,6 +7,7 @@ Only caller-owned PLEState carries token or convolution history.
 from dataclasses import dataclass
 import math
 import operator
+import os
 from typing import Any
 
 import numpy as np
@@ -129,6 +130,9 @@ class Qwen4ExpPLE:
                 or epsilon > np.finfo(np.float32).max):
             raise ValueError("epsilon must be finite positive float32")
         self.epsilon = xp.float32(epsilon)
+        self._batched_rows = os.environ.get("MINI_LLM_PLE_BATCHED_ROWS", "0") == "1"
+        self._row_reader = None
+        self._closed = False
 
     @staticmethod
     def _projection(weight, name, shape):
@@ -161,7 +165,25 @@ class Qwen4ExpPLE:
         return PLEState((-1, -1), xp.zeros((9, 4, self.width), dtype=xp.float32))
 
     def embedding(self, token, predecessors):
-        """Read/decode exactly sixteen rows on CPU, copy only 2560 FP32 values."""
+        """Opt-in bounded packed-row I/O; identical IQ4_NL decoding and layout."""
+        if self._closed or self.store.closed:
+            raise RuntimeError("PLE or GGUF store is closed")
+        if not self._batched_rows:
+            return self.embedding_reference(token, predecessors)
+        indices = self.config.rows(token, predecessors)
+        if self._row_reader is None:
+            from ..ops.packed_row_reader import PackedRowReader
+            desc = self.store.tensors[self.table_name]
+            self._row_reader = PackedRowReader(self.store.paths[desc.shard_index],
+                offset=desc.data_offset, row_count=desc.shape[0], row_bytes=desc.row_bytes)
+        raw = self._row_reader.read_batch(indices)
+        rows = PackedGGUFWeight(raw, (16, 160), "IQ4_NL").dequantize_reference()
+        return xp.asarray(rows.reshape(self.width), dtype=xp.float32)
+
+    def embedding_reference(self, token, predecessors):
+        """Original sixteen independent mapped row decodes, retained as oracle."""
+        if self._closed or self.store.closed:
+            raise RuntimeError("PLE or GGUF store is closed")
         indices = self.config.rows(token, predecessors)
         rows = np.empty((16, 160), dtype=np.float32)
         for h, index in enumerate(indices):
@@ -169,6 +191,12 @@ class Qwen4ExpPLE:
             rows[h] = PackedGGUFWeight(raw, (1, 160), "IQ4_NL").dequantize_rows_reference(
                 np.array([0], dtype=np.int64), tile_rows=1)[0]
         return xp.asarray(rows.reshape(self.width), dtype=xp.float32)
+
+    def close(self):
+        """Retire bounded I/O workers before the model releases the GGUF store."""
+        if self._row_reader is not None:
+            self._row_reader.close()
+        self._closed = True
 
     def _norm(self, array, gamma):
         return array / xp.sqrt(xp.mean(array * array, axis=-1, keepdims=True,
@@ -196,6 +224,20 @@ class Qwen4ExpPLE:
         if history.shape != (9, 4, self.width):
             raise ValueError("normalized_history must have shape [9,4,2560]")
         emb = self.embedding(token, state.predecessors)
+        result, new_history = self.apply_embedding(streams, emb, history)
+        new_state = PLEState((int(state.predecessors[1]), int(token)), new_history)
+        return result, new_state
+
+    def apply_embedding(self, streams, emb, history):
+        """GPU-only PLE math; row lookup and immutable token history stay outside capture."""
+        if self._closed:
+            raise RuntimeError("PLE is closed")
+        for name, array, shape in (("streams", streams, (4, self.width)),
+                ("embedding", emb, (self.width,)),
+                ("normalized_history", history, (9, 4, self.width))):
+            _fp32(name, array)
+            if array.shape != shape:
+                raise ValueError(f"{name} must have shape {shape}")
         key = self._norm(self._project(self.key, emb, 4 * self.width).reshape(4, self.width),
                          self.gamma_key)
         query = self._norm(streams, self.gamma_query)
@@ -212,5 +254,4 @@ class Qwen4ExpPLE:
         result = streams + (u + conv * _sigmoid(conv))
         # Store normalized z exactly once; the four residual streams are not time.
         new_history = xp.concatenate((history[1:], z[None, ...]), axis=0)
-        new_state = PLEState((int(state.predecessors[1]), int(token)), new_history)
-        return result, new_state
+        return result, new_history

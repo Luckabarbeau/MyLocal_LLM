@@ -1,0 +1,823 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="49" time="2.852" timestamp="2026-11-20T14:35:10.682249-05:00" hostname="lucka-Z890-AORUS-ELITE-WIFI7"><testcase classname="tests.test_0313_recurrent_block_graph" name="test_import_and_subclass_contract" time="0.000" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_plan_validation_never_reads_back_native_service" time="0.000" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_upgrade_retires_all_old_pools_and_preserves_bound_policy" time="1.002" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[nonrecurrent]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[ple]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[operators]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[unfrozen]" time="0.007" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[idle]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[fingerprint]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[identity]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[handoff]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[capture]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[service]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[stage]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_constructor_rejects_ineligible_plan_before_retiring_segment[handle]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[shape]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[dtype]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[history]" time="0.003" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[memory]" time="0.003" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[layout]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[length]" time="0.003" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_base_geometry_contract_does_not_advance_state[negative]" time="0.003" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[fingerprint]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[plan_fingerprint]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[identity]" time="0.007" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[handoff]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[unfrozen]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_replay_revalidates_frozen_live_plan_before_state_changes[stream]" time="0.005" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_private_warmup_and_capture_failure_leave_caller_recurrence_untouched[False]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_private_warmup_and_capture_failure_leave_caller_recurrence_untouched[True]" time="0.004" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-warp_fp32-cpu_only]" time="0.135" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-warp_fp32-mixed]" time="0.067" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-warp_fp32-all_gpu]" time="0.078" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-q8-cpu_only]" time="0.092" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-q8-mixed]" time="0.068" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[copied_state-q8-all_gpu]" time="0.075" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-warp_fp32-cpu_only]" time="0.089"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbe060&gt;, hits = 0, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbe060&gt;, hits = 0, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-warp_fp32-mixed]" time="0.072"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbfe60&gt;, hits = 3, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbfe60&gt;, hits = 3, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-warp_fp32-all_gpu]" time="0.072"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbfc80&gt;, hits = 10, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9fbfc80&gt;, hits = 10, q8 = False, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-q8-cpu_only]" time="0.075"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232ca7dc050&gt;, hits = 0, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232ca7dc050&gt;, hits = 0, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-q8-mixed]" time="0.091"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232ca3f6900&gt;, hits = 3, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232ca3f6900&gt;, hits = 3, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_service_exact_layer_sequence_and_warmup_statistics[bound_recapture-q8-all_gpu]" time="0.088"><failure message="cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument">configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9be5a60&gt;, hits = 10, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+&gt;           handoff.flush_statistics()
+
+tests/test_0313_recurrent_block_graph.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError
+
+During handling of the above exception, another exception occurred:
+
+configuration = None
+selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7232c9be5a60&gt;, hits = 10, q8 = True, bound = True
+
+    @gpu
+    @pytest.mark.parametrize('hits', [0, 3, 10], ids=['cpu_only', 'mixed', 'all_gpu'])
+    @pytest.mark.parametrize('q8', [False, True], ids=['warp_fp32', 'q8'])
+    @pytest.mark.parametrize('bound', [False, True], ids=['copied_state', 'bound_recapture'])
+    def test_real_native_service_exact_layer_sequence_and_warmup_statistics(
+            configuration, selected_library, monkeypatch, hits, q8, bound):
+        monkeypatch.setenv('MINI_LLM_EXPERT_GPU_Q8', str(int(q8)))
+        monkeypatch.setenv('MINI_LLM_BOUND_RECURRENT_STATE', str(int(bound)))
+        executor, segment, block, plan, rand = native_case(selected_library, hits)
+        handoff = plan.native_handoff
+        old = (segment.graph, handoff.graph, block.moe._shared_graph)
+        graph = None
+        try:
+            raw_before = int(handoff.stats[0])
+            warm_before = len(handoff.timeline_warmup_ordinals)
+            production_before = handoff.production.copy()
+            graph = Qwen4ExpRecurrentBlockGraph(segment, block, plan)
+            assert all(g is not None and g.closed for g in old)
+            assert segment.graph is handoff.graph is block.moe._shared_graph is None
+            def forbidden(*args, **kwargs):
+                pytest.fail('Whole-layer enqueue must not enter Python dispatch/host callbacks')
+            monkeypatch.setattr(handoff, '_enqueue_callback', forbidden)
+            monkeypatch.setattr(handoff, 'forward', forbidden)
+            monkeypatch.setattr(plan, 'forward', forbidden)
+            monkeypatch.setattr(block.moe, '_run_shared', forbidden)
+            reference = [block.mixer.create_state(1) for _ in range(2)]
+            captured = [block.mixer.create_state(1) for _ in range(2)]
+            for step in range(6):
+                session = step % 2
+                streams = rand((4, 256))
+                expected = uncaptured_block(segment, block, handoff, streams, reference[session]).get()
+                actual = graph.forward(streams, captured[session])
+                executor.check_native_service()  # Model-level safety boundary, once per token.
+                np.testing.assert_array_equal(actual.get().view(np.uint32), expected.view(np.uint32))
+                assert_state(captured[session], snapshot(reference[session]), step//2+1)
+            handoff.flush_statistics()
+            captures = 6 if bound else 1
+            assert graph.calls == 6 and graph.captures == captures
+            assert int(handoff.stats[0])-raw_before == 12+captures
+            assert len(handoff.timeline_warmup_ordinals)-warm_before == captures
+            assert int(handoff.production[0]-production_before[0]) == 12
+            assert int(handoff.production[1]-production_before[1]) == 12*(10-hits)
+            assert int(handoff.production[2]-production_before[2]) == 12*hits
+            assert handoff.production[3] == 0
+            assert sum(handoff.statistics()['route_heat']) == int(handoff.production[0])*10
+            stats = graph.graph_statistics()
+            assert stats['scope'] == 'recurrent_decoder_block' and stats['complete_block']
+            assert stats['bound_state'] == bound and stats['native_handoff']
+            assert stats['gpu_arithmetic'] == ('q8_1' if q8 else 'fp32')
+            assert stats['pool_reserved_bytes'] &lt;= graph.pool_limit_bytes
+            assert executor.statistics()['execution']['native_handoff_dispatches'] == 13
+            if bound:
+                assert graph.graph is not None
+                assert all(a is b for a, b in zip(graph.graph.bound_arrays(), state_arrays(captured[1])))
+            graph.close()
+            assert graph.graph is None and handoff.handle is not None
+        finally:
+&gt;           if graph is not None: graph.close()
+                                  ^^^^^^^^^^^^^
+
+tests/test_0313_recurrent_block_graph.py:389: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/external/qwen4exp_recurrent_block_graph.py:141: in close
+    self.handoff.flush_statistics()
+mini_llm/ops/native_expert_handoff.py:267: in flush_statistics
+    p.retired.synchronize()
+cupy/cuda/stream.pyx:165: in cupy.cuda.stream.Event.synchronize
+    ???
+cupy_backends/cuda/api/runtime.pyx:1090: in cupy_backends.cuda.api.runtime.eventSynchronize
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+&gt;   ???
+E   cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorInvalidValue: invalid argument
+
+cupy_backends/cuda/api/runtime.pyx:146: CUDARuntimeError</failure></testcase><testcase classname="tests.test_0313_recurrent_block_graph" name="test_service_readback_is_warmup_only_not_per_replay" time="0.006" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_original_plan_stream_required_even_before_first_replay" time="0.003" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_gpu_branch_failure_drains_private_native_batch_and_excludes_warmup" time="0.075" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_invalid_warmup_route_errors_are_not_discarded[duplicate]" time="0.068" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_invalid_warmup_route_errors_are_not_discarded[negative]" time="0.069" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_invalid_warmup_route_errors_are_not_discarded[range]" time="0.062" /><testcase classname="tests.test_0313_recurrent_block_graph" name="test_real_native_invalid_warmup_route_errors_are_not_discarded[wide]" time="0.071" /></testsuite></testsuites>

@@ -85,6 +85,10 @@ def main():
                     token_ids=list(range(1,17)), requests=reports,
             graph_statistics=[m.graph_statistics() for m in model._gdn_graph_owners],
             pre_graph_statistics=[m.graph_statistics() for m in model._pre_moe_segments.values()],
+            token_graph_statistics=(model._token_graph.graph_statistics()
+                if getattr(model, '_token_graph', None) is not None else None),
+            qsa_block_graph_statistics={i:g.graph_statistics() for i,g in
+                getattr(model, '_qsa_block_segments', {}).items()},
             shared_graph_statistics=[m.graph_statistics() for m in model._shared_graph_owners],
             final_memory=guard(), plan=model.plan,
             same_arithmetic=True, routing='no GPU admissions; complete CPU/Q8 staged expert split',

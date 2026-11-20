@@ -99,7 +99,7 @@ Natural response intervals (including prompt prefill) read **3,048,243,200 / 1,8
 
 - `0307_cpu_regression_v1.xml`: **471 passed, 43 skipped**.
 - `0307_gpu_regression_v1.xml`: **201 passed, 4 skipped**, including Qwen3-Next mixer, attention, decoder and model.
-- `0307_parity_comparison_v1.json`: actual checkpoint fixed IDs 1..16, two independent requests, 10 logit boundaries at prefixes 1/2/4/8/16. All logits bit-exact (maxabs 0), every persistent-state hash and reset-request comparison identical to retained uncaptured control.
+- `0307_parity_comparison_v1.json`, repeated on final source in `0307_parity_comparison_v2.json`: actual checkpoint fixed IDs 1..16, two independent requests, 10 logit boundaries at prefixes 1/2/4/8/16. All logits bit-exact (maxabs 0), every persistent-state hash and reset-request comparison identical to retained uncaptured control.
 - The full-model parity fixture freezes empty GPU expert placement: it validates dense projections, state, native CPU experts, fused shared branch and publication. Resident packed GPU arithmetic is independently checked against extracted Strata rows and real checkpoint operators; do not claim the CPU-placement fixture validates every resident GPU route.
 - No new independent llama.cpp full-model numerical-equivalence claim, no relaxed tolerance and no training-suite claim. All original result files, initial indentation-error outputs and losing experiments are retained.
 

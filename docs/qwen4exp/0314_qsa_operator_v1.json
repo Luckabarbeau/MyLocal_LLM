@@ -1,0 +1,159 @@
+{
+  "scope": "synthetic standalone operators, NOT model latency or throughput",
+  "precision": "FP32 only; no tensor-core dot, TF32, FP16 or BF16",
+  "rounding": "FP32 tree reductions and split-context log-sum-exp merge differ from serial",
+  "tolerance": {
+    "new_fp64_atol": 4e-06,
+    "new_fp64_rtol": 2e-05,
+    "old_fp64_atol": 8e-06,
+    "old_fp64_rtol": 4e-05
+  },
+  "device": 0,
+  "device_name": "NVIDIA GeForce RTX 5080",
+  "cupy": "14.2.0",
+  "triton": "3.8.0",
+  "heads": 24,
+  "kv_heads": 2,
+  "dim": 256,
+  "scale": 0.0625,
+  "seed": 314,
+  "warmups": 10,
+  "repetitions": 100,
+  "trials": 7,
+  "timing": "CuPy events on a nonblocking current stream; alternating A/B trial order",
+  "cases": [
+    {
+      "n": 141,
+      "accepted": true,
+      "inputs_bitwise_unchanged": true,
+      "errors": {
+        "new_fp64": {
+          "max_abs": 1.0220046996189946e-07,
+          "relative_l2": 1.662529570399675e-07
+        },
+        "old_fp64": {
+          "max_abs": 3.005160298386045e-07,
+          "relative_l2": 4.981483416630426e-07
+        },
+        "new_old": {
+          "max_abs": 2.980232238769531e-07,
+          "relative_l2": 4.923039637136669e-07
+        }
+      },
+      "samples_ms": {
+        "serial": [
+          0.0446892786026001,
+          0.046690878868103025,
+          0.04799007892608643,
+          0.047696318626403805,
+          0.05024479866027832,
+          0.050101761817932126,
+          0.047714881896972657
+        ],
+        "cooperative": [
+          0.019236799478530884,
+          0.023108160495758055,
+          0.02315808057785034,
+          0.02397984027862549,
+          0.022272961139678957,
+          0.022901439666748048,
+          0.019075520038604736
+        ]
+      },
+      "median_ms": {
+        "serial": 0.047714881896972657,
+        "cooperative": 0.022901439666748048
+      },
+      "speedup": 2.08348831301871
+    },
+    {
+      "n": 435,
+      "accepted": true,
+      "inputs_bitwise_unchanged": true,
+      "errors": {
+        "new_fp64": {
+          "max_abs": 5.684251025428466e-08,
+          "relative_l2": 1.6408297615292512e-07
+        },
+        "old_fp64": {
+          "max_abs": 1.3590731431922798e-07,
+          "relative_l2": 5.166030692817455e-07
+        },
+        "new_old": {
+          "max_abs": 1.341104507446289e-07,
+          "relative_l2": 5.370676437328804e-07
+        }
+      },
+      "samples_ms": {
+        "serial": [
+          0.118023681640625,
+          0.12253696441650391,
+          0.12128576278686523,
+          0.118023681640625,
+          0.124486083984375,
+          0.1237606430053711,
+          0.12049951553344726
+        ],
+        "cooperative": [
+          0.02304255962371826,
+          0.021255359649658204,
+          0.021885120868682863,
+          0.01959936022758484,
+          0.02051520109176636,
+          0.022145919799804688,
+          0.024105279445648192
+        ]
+      },
+      "median_ms": {
+        "serial": 0.12128576278686523,
+        "cooperative": 0.021885120868682863
+      },
+      "speedup": 5.5419279388318365
+    },
+    {
+      "n": 1024,
+      "accepted": true,
+      "inputs_bitwise_unchanged": true,
+      "errors": {
+        "new_fp64": {
+          "max_abs": 4.2175718029113796e-08,
+          "relative_l2": 1.8508544561513247e-07
+        },
+        "old_fp64": {
+          "max_abs": 7.883438986680535e-08,
+          "relative_l2": 5.621060961653984e-07
+        },
+        "new_old": {
+          "max_abs": 8.940696716308594e-08,
+          "relative_l2": 5.898693414239123e-07
+        }
+      },
+      "samples_ms": {
+        "serial": [
+          0.2549545669555664,
+          0.2695894432067871,
+          0.2945759963989258,
+          0.2932595252990723,
+          0.27190336227416995,
+          0.2634227180480957,
+          0.2663795280456543
+        ],
+        "cooperative": [
+          0.020560319423675536,
+          0.020337920188903808,
+          0.02369247913360596,
+          0.02163935899734497,
+          0.025703999996185303,
+          0.022627840042114256,
+          0.021395199298858643
+        ]
+      },
+      "median_ms": {
+        "serial": 0.2695894432067871,
+        "cooperative": 0.02163935899734497
+      },
+      "speedup": 12.458291543657289
+    }
+  ],
+  "accepted": true
+}

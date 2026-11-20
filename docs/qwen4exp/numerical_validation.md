@@ -1,6 +1,16 @@
 # Qwen4Exp numerical validation record
 
-## Current follow-ups — 0293–0307 (local arithmetic/state, not new reference equivalence)
+## Current follow-ups — 0310–0317
+
+Final selected source regressions: `0317_final_cpu_v1.xml` **407 passed/107 skipped/1 deselected**; `0317_final_gpu_v1.xml` **284 passed/23 skipped/1 deselected**. These are selected inference/diagnostic suites, not a full training-suite run. The CPU selection includes Qwen3-Next decoder/model passes; some GPU Qwen3-Next modules are collection-skipped, not newly passed.
+
+Packed PLE parallel row reads and one batched IQ4_NL decode preserve exact row bits, order, duplicated indices, convolution state and request resets. Native full recurrent blocks and chains preserve ten actual-checkpoint logit boundaries and every saved state hash across two16-token requests, compared with retained local arithmetic. Complete QSA graphs preserve these against a separate same-capture-ready-projection control: all12QSA layers captured, runtime positions advance, conditional cache/pool commits remain valid, and cache pointer changes force retirement/recapture. Standalone tests cover mixed GPU/CPU/native expert execution; full-model fixtures freeze empty GPU expert placement. No new independent-reference model equivalence is inferred.
+
+**0314 is deliberately separate:** cooperative FP32 attention changes reduction order. Independent FP64 operator relative L2 is1.64–1.85e-7, maxabs4.22e-8–1.02e-7 at n141/435/1024; serial-FP32 differences remain ~1e-7. Actual quantized model prefix1 is exact, then relative L2 logits3.62–6.89% for prefixes2/4/8/16, maxabs0.530–1.260. This is consistent with previously demonstrated quantization sensitivity but is **not a quality acceptance result or proof that every difference is explained**. Keep opt-in, preserve serial oracle and require matched-input state/layer attribution before default enablement. No tolerance was widened to hide a model discrepancy.
+
+Precision/alignment and numerical acceptance scopes, saved comparisons and source hashes: `0310_0317_strata_comparison.md`, `0310_0317_results_v2.json`. No checkpoint or pinned reference mathematics changed.
+
+## Prior follow-ups — 0293–0307 (local arithmetic/state, not new reference equivalence)
 
 New CPU IQ3_S gather, IQ3_XXS gather/pair and IQ4_NL VNNI retain the pinned GGML activation producer, integer sums, FMA/reduction order and final scale placement. Exact uint32 tests cover widths, scale extremes, readonly/unaligned sources and concurrent mixed-expert ownership; losing kernels stay opt-in/off. Task-factor changes preserve exact outputs.
 
@@ -9,6 +19,8 @@ Native GPU shared-branch capture and kernel publication preserve complete top10,
 Shared-memory IQ2_S/IQ3_S/IQ3_XXS codebooks retain packed bytes and exact Strata Q8_1 integer/FP32 arithmetic. Extracted pinned Strata row oracles and actual six mixed checkpoint triples remain bit-exact; active/inactive expert blocks and final partial row blocks are tested. No activation precision or broad tolerance was changed for performance.
 
 `0307_parity_comparison_v1.json`: actual checkpoint fixed IDs1..16, two requests, ten logits at prefixes1/2/4/8/16; all maxabs0 and every persistent-state/reset hash identical to `diagnostics_0296_parity_uncaptured_v1`. Candidate enables bound state, GPU copies, fused shared, kernel publication and shared grids. **The full-model fixture has frozen empty GPU expert placement**; dense GPU/state/nativeCPU behavior is validated there, while resident GPU arithmetic is tested separately. Do not conflate this with new independent llama.cpp model equivalence or exhaustive long-context validation.
+
+Final-source repeat `0307_parity_comparison_v2.json` also passes all10bit-exact logits boundaries and every state hash after the inactive-grid optimization; prior captures are preserved. Additional payload-read-free page-census diagnostics pass10tests (`0308_tests_v2.xml`).
 
 Final selected regressions: `0307_cpu_regression_v1.xml`471passed43skipped; `0307_gpu_regression_v1.xml`201passed4skipped, including Qwen3-Next. Detailed patch scopes and artifacts: `0295_0307_critical_path_optimization.md`, `0295_0307_optimization_results_v2.json`. Existing reference discrepancies are not hidden by generated-token agreement or forced-token replay.
 

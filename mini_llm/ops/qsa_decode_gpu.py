@@ -6,6 +6,7 @@ storage and the single output allocation as its running numerator. No selected
 KV copies, host transfers, default-stream override, or context-sized scratch.
 """
 
+import os
 import numpy as np
 
 from ..backend import xp
@@ -91,6 +92,13 @@ def qsa_decode_gpu(q, qg, k, v, keys, values, n, scale):
     honored, including callback views and caller-owned strided cache storage.
     Only keys/values[:n-1] are read; the current k/v are not yet committed.
     """
+    if (os.environ.get('MINI_LLM_QSA_WARP_DOTS', '0') == '1' and
+            q.shape[1] == 256 and q.shape[0] <= 24 and n <= 8192):
+        from .qsa_warp_dots_gpu import qsa_warp_dots_gpu
+        return qsa_warp_dots_gpu(q, qg, k, v, keys, values, n, scale, value_tile=32)
+    if os.environ.get('MINI_LLM_QSA_COOPERATIVE', '0') == '1' and n <= 8192:
+        from .qsa_cooperative_gpu import qsa_cooperative_gpu
+        return qsa_cooperative_gpu(q, qg, k, v, keys, values, n, scale)
     device = q.device.id
     if device not in _KERNELS:
         _KERNELS[device] = xp.RawKernel(

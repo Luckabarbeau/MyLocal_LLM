@@ -1,6 +1,33 @@
 # Qwen4Exp performance and memory history
 
-## Current — 0293–0307; gains scoped to measured critical paths
+## Current — 0310–0317 fresh Strata comparison and bounded experiments
+
+**50 complete decode forwards/s remains unmet.** Fresh Strata full-top10/no-draft clean repeats measure36.48/49.26 forwards/s (profiled32.04/47.63); hot second response is not the two-response sustained rate. Effective context1024 and retained prompt/continuation IDs match the local diagnostic, but INT8 versus FP32 KV, cache7.233 versus7GiB and expert placement remain distinct. No unchanged full `standard-v1`/262144-context equivalence claim.
+
+| Local controlled experiment | Response1 / response2 forwards/s | Decision |
+|---|---:|---|
+| PLE control0312 | 39.81 / 39.79 | Baseline |
+| Bounded batched PLE0312 | 39.44 / 40.19 | Cold fault reduction, no hot gain |
+| Complete recurrent block0313 | 38.24 / 41.04 | Exact within-path parity; opt-in |
+| Cooperative FP32 QSA0314 | 39.51 / 41.70 | Operator2.08–12.46x; model quality gate open |
+| Recurrent chain0315 | 39.18 / 39.95 | No demonstrated hot gain |
+| Complete QSA block0317 | 41.44 / 39.94 | Runtime positions/state exact; no demonstrated hot gain |
+
+All responses emit359 forced IDs/358post-prefill forwards, after128output-token warmup, with full head/sampling cost. These are not natural-conversation rates. PLE diagnosis measured2.625ms/step and4282embedding-thread major faults; bounded reader measured0.526ms first/0.115ms repeat, zero embedding-thread major faults. This does not isolate every expert/storage stall.
+
+CPU observation tested rather than inferred: 50us spin gives~9.52active-core equivalents/41.04hot forwards/s; 2000us gives18.21cores/34.88s. Strata's pinned pool source defaults20ms spin, not our50us. Captured19-worker affinity+500us gives16.50s; creating the native service before submitter pinning fixes the inherited-one-core setup mismatch but still gives21.15s, so neither affinity/spin setting is promoted. Higher CPU load is not equivalent to higher throughput.
+
+0313's16-token trace:443.334msGPUspan,215.746msnon-wait operationunion,137.167mssummedwaitkernels,62graphlaunches/token. Categories overlap and gaps are not an exclusive host-overhead budget. Complete-block/chain experiments do not justify treating every launch or gap as removable critical latency.
+
+Final selected regressions407CPU/284CuPupassed, skips scoped in `0317_final_{cpu,gpu}_v1.xml`. Full patch/provenance/guard/source ledger: `0310_0317_strata_comparison.md`, `0310_0317_results_v2.json`. All old results preserved; experimental switches remain off.
+
+## Prior — 0308–0309 page residency and RAM-source negative result
+
+Complete1224tensorpagecensus performs zero payload disk reads during the census, finds~14.88GBcanonical routed-expert payload nonresident; a26.82GiBPLEtable remains mostly disk-backed.10diagnostictests pass. This is a snapshot, not exact timed-decode fault attribution or CPU-complement residency.
+
+Bounded4GiBanonymoushostsource/2111bundles uses no pinning or GPUstaging, retains identical371naturalIDs and measures32.51596forwards/s, **not an improvement** over earlier35.15922/snatural repeat. Setup1.9063s is outside decode; its I/O is included in the broader interval counters and must not be mislabeled decode-only. AnonymousRSS~4.81GiB, chargedservicepeak~8.56GiB, zeroOOMkills. No automatic budget growth or default change. Report `0308_0309_storage_residency.md`; latest results/sourceSHA256s `0295_0309_optimization_results_v1.json`. **50/s remains unmet.**
+
+## Prior — 0293–0307; gains scoped to measured critical paths
 
 **50/s remains unmet.** Earlier best controlled observation42.64032/s; latest adjacent control/shared-grid40.05676/40.17001forwards/s (358forwards, same359response IDs), not a robust gain. Real packed GPU shared-grid operators improve1.085–1.857x bit-exactly, but CPU completion hides much of that benefit. 15/23workers, larger task factors, IQ3_XXS gather/pair, IQ4VNNI and parallel HC did not establish full-model gains; none was silently promoted.
 

@@ -24,6 +24,10 @@ Repeat the command with new output names and add `--shared-grid` to the configur
 
 Use new output names and add `--natural` (and optionally `--shared-grid`). This removes forced tokens. Actual retained runs emit371tokens,370decode forwards,31.96/35.16forwards/s; both have identical IDs but substantial disk reads/major faults. Never quote the hotter forced rate as this rate.
 
+## Bounded host-source follow-up
+
+`--resident-host-gib 0|1|2|4` selects an explicitly approved anonymous CPU expert source; default0. The4GiBnatural trial did **not** improve throughput and is not a recommended faster configuration. No pinning/staging is enabled. It cannot be combined with this wrapper'strace mode. See `0308_0309_storage_residency.md` before experimenting; do not extrapolate to larger/full-complement allocations.
+
 ## Optional diagnostic variants
 
 - `--workers 15|19|23`: tested15/23did not beat the earlier19-worker control.

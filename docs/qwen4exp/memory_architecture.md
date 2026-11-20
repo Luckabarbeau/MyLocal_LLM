@@ -1,6 +1,22 @@
 # Qwen4Exp memory and execution architecture
 
-## Current — 0293–0307 ownership and bounded execution additions
+## Current — 0310–0317 bounded I/O and complete-block graph ownership
+
+- Optional `PackedRowReader` keeps a separate read-only descriptor, at most8I/O workers/16pending unique row reads per serialized batch, and an LRU of at most65536immutable90-byte PLE rows:5,898,240payloadbytes plus bounded Python overhead. `POSIX_FADV_RANDOM` reduces read-ahead; this is **not O_DIRECT** and OS page caching remains possible. No table-wide copy or full unquantized expert expansion. Reader workers/descriptors retire before model/store cleanup. Original mapped decoding remains available/default.
+- Complete recurrent block graphs borrow frozen native plans, canonical sources and protected GPU expert leases; warmup touches private state, request pointer changes recapture, and outside-capture retirement events protect graph teardown. Adjacent chains cap length3 and reserve16MiB/member. They do not silently change cache placement or expert arithmetic.
+- Complete QSA block graphs use runtime position and RoPE-factor inputs, bound request-owned KV/raw/pool/status buffers, conditional finite-validated commits, and8MiBprivate graph pools. Model eligibility limits cache payload to6MiB and all-cell-equivalent contexts; larger/sparse contexts retain the original path. Private warmup never updates caller caches. Bound orphaned QSA allocations and graph pools are included in planning; close graphs before native plan/service retirement.
+- Cooperative QSA uses bounded FP32 partial scratch (up to64parts at n8192), not a persistent KV copy. It remains opt-in/not quality accepted. No switch silently changes checkpoint quantization or native CPU Q8 contracts.
+- Model benchmarks remain sequential under0290verified32/36GiBhigh/hard limits, swap0 and12GiBhostreserve. A7.25GiBlocal-cache attempt failed VRAM headroom before tokens and was retained; subsequent comparisons explicitly use7GiB. No safety margin was reduced, full complement pinned, or unrelated server left running. Fresh Strata uses bounded mmap mode rather than the older~43GiBpinned configuration.
+
+ProcessfileRSS, chargedcgrouppeak, finalCuPupoolbytes and device-widepeak are separate scopes. Use `0310_0317_results_v2.json` guards rather than systemd's small launcher peak. Capture-time device peak is unavailable. Full interface/lifetime/benchmark limitations: `0310_0317_strata_comparison.md`.
+
+## Prior — 0308–0309 page-source diagnosis
+
+`probe_0308_page_residency.py` queries owned live read-only mappings without touching payloads, bounded8192page-statusbytes/syscall. It counts all1224storetensors, weights partial tensor-edge pages and recognizes `per_layer_token_embd.weight` asPLE. Latest canonical routed50.292GB/35.410GBresident; PLE28.866GB/~0.697GBresident. Nonresident canonical experts may already have GPUcopies; this is not the required CPUcomplement missing-byte count. Privacy-redacted/unowned-file census is rejected.
+
+0309approved4GiBanonymous source contains2111complete warmup-selected bundles, keeps canonical mmapindependent and substitutes CPUregistry views only; no expert pinning, GPUstaging or PLEcopy. Chargedservicepeak8.56GiB/anonymousRSS5.16GB, unchanged32/36GiBmodellimits/12GiBhostreserve. Natural32.52/sdoes not demonstrate a gain, so no larger source is authorized by this result. Census initially hit768MiBMemoryHigh duringmetadata setup; successfulmetadata-onlyrun used1792/2048MiBbounds, not relaxed model guards. Full report/limitations: `0308_0309_storage_residency.md`.
+
+## Prior — 0293–0307 ownership and bounded execution additions
 
 - Canonical mmap bytes remain immutable and independent of optional staged/registered copies. Integrated staging owns one bounded16MiBhost+16MiBVRAM arena with two complete8MiBslots; service-thread CUDA DMA was rejected after a captured scheduling deadlock. GPU kernels pull complete published bundles instead. Source-pinned staging never silently stages an unregistered expert; CPU fallback remains complete. Staging remains experimental/off.
 - Request-bound recurrent graph operands retain exact buffer owners and recapture on pointer changes. Warmup stays private. Explicit retirement fences capture/replay readers; the planner credits actually orphaned bound allocations without weakening reservations or headroom. Stable state binding removes repeated recurrence copies, not state updates.

@@ -14,7 +14,7 @@ def main():
         '0297_sized725_v1','0297_deferred_v1','0298_phases_v1','0299_workers23_v1',
         '0300_workers15_v1','0302_qsa_v1','0304_factor8_v1','0305_fused_v1',
         '0305_control_v1','0306_publish_v1','0306_combined_v1','0307_control_v2',
-        '0307_long_v1','0307_long_v2','0307_combined_v1','0307_natural_v1','0307_natural_v2')
+        '0307_long_v1','0307_long_v2','0307_combined_v1','0307_natural_v1','0307_natural_v2','0309_host4_v1')
     results=[]
     for name in names:
         path=DOC/('diagnostics_'+name)/'result.json'
@@ -52,7 +52,7 @@ def main():
         if path.is_file() and path.suffix in ('.py','.cpp','.h'):
             sources[name]=hashlib.sha256(path.read_bytes()).hexdigest()
     tests=[]
-    for name in ('0307_cpu_regression_v1.xml','0307_gpu_regression_v1.xml'):
+    for name in ('0307_cpu_regression_v1.xml','0307_gpu_regression_v1.xml','0308_tests_v2.xml'):
         path=DOC/name
         suites=list(ET.parse(path).getroot().iter('testsuite'))
         totals={key:sum(int(s.attrib.get(key,'0')) for s in suites)
@@ -66,8 +66,10 @@ def main():
         comparison_limit='Full top10, no suffix drafting, context1024 FP32 KV; historical Strata emitted-token rates are not equivalent.',
         results=results,guards=guards,tests=tests,source_sha256=sources,
         latest_gpu_operator_speedup_range=[min(r['speedup'] for r in operators['rows']),max(r['speedup'] for r in operators['rows'])],
+        page_residency_artifact='docs/qwen4exp/diagnostics_0308_census_v4/result.json',
+        page_residency_groups=json.loads((DOC/'diagnostics_0308_census_v4/result.json').read_text())['groups'],
         local_parity=json.loads((DOC/'0307_parity_comparison_v1.json').read_text()))
-    output=DOC/'0295_0307_optimization_results_v2.json'
+    output=DOC/'0295_0309_optimization_results_v1.json'
     if output.exists(): raise FileExistsError(output)
     output.write_text(json.dumps(result,indent=2,allow_nan=False))
     print(json.dumps(dict(output=str(output.relative_to(ROOT)),tests=tests,

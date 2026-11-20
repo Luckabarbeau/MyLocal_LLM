@@ -1,0 +1,797 @@
+{
+  "scope": "synthetic standalone operator only; no model, weights, IQ data, or quantization",
+  "precision": "FP32 serial d=0..255 accumulation; --fmad=false; exact uint32 equality required",
+  "provenance": {
+    "git_head": "27523d0eccf91813aba1c1dadcc3d3b4b17e29cb",
+    "git_status": "M docs/qwen4exp/0295_0307_critical_path_optimization.md\n M docs/qwen4exp/0307_reproduce.md\n M docs/qwen4exp/implementation_status.md\n M docs/qwen4exp/memory_architecture.md\n M docs/qwen4exp/numerical_root_cause.md\n M docs/qwen4exp/numerical_validation.md\n M docs/qwen4exp/performance_history.md\n M docs/qwen4exp/reference_contract.md\n M mini_llm/external/qwen4exp_model.py\n M mini_llm/external/qwen4exp_ple.py\n M mini_llm/ops/qsa_decode_gpu.py\n M scripts/analyze_0307_optimization_results.py\n M scripts/probe_0254_strata_workload.py\n M scripts/probe_0265_gdn_graph_parity.py\n M scripts/probe_0302_decode_configuration.py\n?? docs/qwen4exp/0295_0309_optimization_results_v1.json\n?? docs/qwen4exp/0307_parity_comparison_v2.json\n?? docs/qwen4exp/0308_0309_storage_residency.md\n?? docs/qwen4exp/0308_tests_v1.xml\n?? docs/qwen4exp/0308_tests_v2.xml\n?? docs/qwen4exp/0310_0317_results_v1.json\n?? docs/qwen4exp/0310_0317_results_v2.json\n?? docs/qwen4exp/0310_0317_strata_comparison.md\n?? docs/qwen4exp/0312_cpu_tests_v1.xml\n?? docs/qwen4exp/0312_gpu_tests_v1.xml\n?? docs/qwen4exp/0313_critical_path_v1.json\n?? docs/qwen4exp/0313_gpu_tests_v1.xml\n?? docs/qwen4exp/0313_gpu_tests_v2.xml\n?? docs/qwen4exp/0313_trace_v1.sqlite\n?? docs/qwen4exp/0314_gpu_tests_v1.xml\n?? docs/qwen4exp/0314_integration_tests_v1.xml\n?? docs/qwen4exp/0314_qsa_operator_v1.json\n?? docs/qwen4exp/0315_gpu_tests_v1.xml\n?? docs/qwen4exp/0317_critical_path_v1.json\n?? docs/qwen4exp/0317_final_cpu_v1.xml\n?? docs/qwen4exp/0317_final_gpu_v1.xml\n?? docs/qwen4exp/0317_gpu_tests_v1.xml\n?? docs/qwen4exp/0317_trace_v1.sqlite\n?? docs/qwen4exp/0319_gpu_tests_v1.xml\n?? docs/qwen4exp/diagnostics_0218_v1/\n?? docs/qwen4exp/diagnostics_0220_v1/\n?? docs/qwen4exp/diagnostics_0220_v2/\n?? docs/qwen4exp/diagnostics_0222_v1/\n?? docs/qwen4exp/diagnostics_0223_v1/\n?? docs/qwen4exp/diagnostics_0224_v1/\n?? docs/qwen4exp/diagnostics_0225_v1/\n?? docs/qwen4exp/diagnostics_0226_v1/\n?? docs/qwen4exp/diagnostics_0227_v1/\n?? docs/qwen4exp/diagnostics_0229_v1/\n?? docs/qwen4exp/diagnostics_0229_v10/\n?? docs/qwen4exp/diagnostics_0229_v2/\n?? docs/qwen4exp/diagnostics_0229_v3/\n?? docs/qwen4exp/diagnostics_0229_v4/\n?? docs/qwen4exp/diagnostics_0229_v5/\n?? docs/qwen4exp/diagnostics_0229_v6/\n?? docs/qwen4exp/diagnostics_0229_v7/\n?? docs/qwen4exp/diagnostics_0229_v8/\n?? docs/qwen4exp/diagnostics_0229_v9/\n?? docs/qwen4exp/diagnostics_0231_profile_v1/\n?? docs/qwen4exp/diagnostics_0231_profile_v2/\n?? docs/qwen4exp/diagnostics_0233_lifecycle_v1/\n?? docs/qwen4exp/diagnostics_0233_lifecycle_v2/\n?? docs/qwen4exp/diagnostics_0240_v2/\n?? docs/qwen4exp/diagnostics_0240_v3/\n?? docs/qwen4exp/diagnostics_0242_v1/\n?? docs/qwen4exp/diagnostics_0242_v2/\n?? docs/qwen4exp/diagnostics_0242_v3/\n?? docs/qwen4exp/diagnostics_0242_v4/\n?? docs/qwen4exp/diagnostics_0242_v5/\n?? docs/qwen4exp/diagnostics_0243_off_v1/\n?? docs/qwen4exp/diagnostics_0246_profile_v1/\n?? docs/qwen4exp/diagnostics_0246_v1/\n?? docs/qwen4exp/diagnostics_0246_v2/\n?? docs/qwen4exp/diagnostics_0247_v1/\n?? docs/qwen4exp/diagnostics_0248_ab_v1/\n?? docs/qwen4exp/diagnostics_0248_v1/\n?? docs/qwen4exp/diagnostics_0249_model_ab_v1/\n?? docs/qwen4exp/diagnostics_0249_v1/\n?? docs/qwen4exp/diagnostics_0250_v1/\n?? docs/qwen4exp/diagnostics_0251_ab_v1/\n?? docs/qwen4exp/diagnostics_0254_v1/\n?? docs/qwen4exp/diagnostics_0255_long_v1/\n?? docs/qwen4exp/diagnostics_0256_long_v1/\n?? docs/qwen4exp/diagnostics_0257_fullwarm_v1/\n?? docs/qwen4exp/diagnostics_0257_long_v1/\n?? docs/qwen4exp/diagnostics_0257_profile_v1/\n?? docs/qwen4exp/diagnostics_0259_long_control_v1/\n?? docs/qwen4exp/diagnostics_0259_long_control_v2/\n?? docs/qwen4exp/diagnostics_0259_long_pool_v1/\n?? docs/qwen4exp/diagnostics_0260_bounded_v1/\n?? docs/qwen4exp/diagnostics_0260_frozen_v1/\n?? docs/qwen4exp/diagnostics_0261_frozen_simd_v1/\n?? docs/qwen4exp/diagnostics_0262_overlap_v1/\n?? docs/qwen4exp/diagnostics_0263_host_profile_v1/\n?? docs/qwen4exp/diagnostics_0264_sources_v1/\n?? docs/qwen4exp/diagnostics_0265_gdn_graph_v1/\n?? docs/qwen4exp/diagnostics_0265_parity_control_v1/\n?? docs/qwen4exp/diagnostics_0265_parity_control_v2/\n?? docs/qwen4exp/diagnostics_0265_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0266_grouped_v1/\n?? docs/qwen4exp/diagnostics_0266_timeline_v1/\n?? docs/qwen4exp/diagnostics_0267_spin500_v1/\n?? docs/qwen4exp/diagnostics_0268_plan_v1/\n?? docs/qwen4exp/diagnostics_0269_help_only_v1/\n?? docs/qwen4exp/diagnostics_0269_pin_only_v1/\n?? docs/qwen4exp/diagnostics_0269_plan_timeline_v1/\n?? docs/qwen4exp/diagnostics_0269_strata_cpu_v1/\n?? docs/qwen4exp/diagnostics_0269_strata_cpu_v2/\n?? docs/qwen4exp/diagnostics_0270_parity_control_v1/\n?? docs/qwen4exp/diagnostics_0270_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0270_pre_graph_v1/\n?? docs/qwen4exp/diagnostics_0270_profile_v1/\n?? docs/qwen4exp/diagnostics_0271_registry_v1/\n?? docs/qwen4exp/diagnostics_0272_tasks_v1/\n?? docs/qwen4exp/diagnostics_0273_parity_control_v1/\n?? docs/qwen4exp/diagnostics_0273_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0273_shared_graph_v1/\n?? docs/qwen4exp/diagnostics_0274_deferred_v1/\n?? docs/qwen4exp/diagnostics_0274_host_profile_v1/\n?? docs/qwen4exp/diagnostics_0274_parity_v1/\n?? docs/qwen4exp/diagnostics_0274_timeline_v1/\n?? docs/qwen4exp/diagnostics_0275_native_handoff_v1/\n?? docs/qwen4exp/diagnostics_0275_parity_v1/\n?? docs/qwen4exp/diagnostics_0275_timeline_v1/\n?? docs/qwen4exp/diagnostics_0276_native_graph_v1/\n?? docs/qwen4exp/diagnostics_0276_parity_v1/\n?? docs/qwen4exp/diagnostics_0277_specialized_v1/\n?? docs/qwen4exp/diagnostics_0277_workers23_v1/\n?? docs/qwen4exp/diagnostics_0278_parity_control_v1/\n?? docs/qwen4exp/diagnostics_0278_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0278_qsa_frontend_v1/\n?? docs/qwen4exp/diagnostics_0278_timeline_v1/\n?? docs/qwen4exp/diagnostics_0279_input_only_v1/\n?? docs/qwen4exp/diagnostics_0279_node_timeline_v1/\n?? docs/qwen4exp/diagnostics_0279_parity_v1/\n?? docs/qwen4exp/diagnostics_0280_deferred_validation_v1/\n?? docs/qwen4exp/diagnostics_0280_parity_v1/\n?? docs/qwen4exp/diagnostics_0281_expert_q8_v1/\n?? docs/qwen4exp/diagnostics_0282_all_q8_v1/\n?? docs/qwen4exp/diagnostics_0282_all_q8_v2/\n?? docs/qwen4exp/diagnostics_0282_q8_profile_v1/\n?? docs/qwen4exp/diagnostics_0282_q8_workers19_spin50_v1/\n?? docs/qwen4exp/diagnostics_0283_fused_hidden_v1/\n?? docs/qwen4exp/diagnostics_0284_bf16_hc_cache7_v1/\n?? docs/qwen4exp/diagnostics_0284_bf16_hc_v1/\n?? docs/qwen4exp/diagnostics_0284_q8_bf16_parity_control_v1/\n?? docs/qwen4exp/diagnostics_0284_q8_bf16_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0284_q8_graphs_cache7_v1/\n?? docs/qwen4exp/diagnostics_0285_q8_bf16_profile_v1/\n?? docs/qwen4exp/diagnostics_0285_q8_workers15_v1/\n?? docs/qwen4exp/diagnostics_0285_warm_profile_v1/\n?? docs/qwen4exp/diagnostics_0287_native_service_v1/\n?? docs/qwen4exp/diagnostics_0287_native_service_v2/\n?? docs/qwen4exp/diagnostics_0287_native_service_v3/\n?? docs/qwen4exp/diagnostics_0287_service_parity_v1/\n?? docs/qwen4exp/diagnostics_0287_service_parity_v2/\n?? docs/qwen4exp/diagnostics_0287_service_parity_v3/\n?? docs/qwen4exp/diagnostics_0288_cache8_v1/\n?? docs/qwen4exp/diagnostics_0288_cache8_v2/\n?? docs/qwen4exp/diagnostics_0288_forced_control_v1/\n?? docs/qwen4exp/diagnostics_0288_forced_sized_v1/\n?? docs/qwen4exp/diagnostics_0288_reproduce_v1/\n?? docs/qwen4exp/diagnostics_0288_sized_slots_v1/\n?? docs/qwen4exp/diagnostics_0289_resident_host_v1/\n?? docs/qwen4exp/diagnostics_0290_cpu_regression_v1/\n?? docs/qwen4exp/diagnostics_0290_guard_tests_v1/\n?? docs/qwen4exp/diagnostics_0290_isolation_smoke_v1/\n?? docs/qwen4exp/diagnostics_0290_timeout_v1/\n?? docs/qwen4exp/diagnostics_0291_baseline_guard_v1/\n?? docs/qwen4exp/diagnostics_0291_baseline_guard_v2/\n?? docs/qwen4exp/diagnostics_0291_baseline_v1/\n?? docs/qwen4exp/diagnostics_0291_baseline_v2/\n?? docs/qwen4exp/diagnostics_0291_export_guard_v1/\n?? docs/qwen4exp/diagnostics_0291_host_guard_v1/\n?? docs/qwen4exp/diagnostics_0291_host_v1/\n?? docs/qwen4exp/diagnostics_0291_resident512_guard_v1/\n?? docs/qwen4exp/diagnostics_0291_resident512_v1/\n?? docs/qwen4exp/diagnostics_0291_timeline_guard_v1/\n?? docs/qwen4exp/diagnostics_0291_timeline_v1/\n?? docs/qwen4exp/diagnostics_0292_cpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0292_deferred_guard_v1/\n?? docs/qwen4exp/diagnostics_0292_deferred_v1/\n?? docs/qwen4exp/diagnostics_0292_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0292_split_guard_v1/\n?? docs/qwen4exp/diagnostics_0292_split_v1/\n?? docs/qwen4exp/diagnostics_0293_capture_diagnosis_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_gpu_tests_guard_v2/\n?? docs/qwen4exp/diagnostics_0293_parity_graph_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0293_parity_uncaptured_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_parity_uncaptured_v1/\n?? docs/qwen4exp/diagnostics_0293_service_control_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_service_control_v1/\n?? docs/qwen4exp/diagnostics_0293_stage1_guard_v1/\n?? docs/qwen4exp/diagnostics_0293_stage1_guard_v2/\n?? docs/qwen4exp/diagnostics_0293_stage1_v1/\n?? docs/qwen4exp/diagnostics_0293_stage1_v2/\n?? docs/qwen4exp/diagnostics_0293_timeout_trace_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_pinned1_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_pinned1_v1/\n?? docs/qwen4exp/diagnostics_0294_pinned2_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_pinned2_v1/\n?? docs/qwen4exp/diagnostics_0294_readonly_control_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_readonly_control_v1/\n?? docs/qwen4exp/diagnostics_0294_readonly_guard_v1/\n?? docs/qwen4exp/diagnostics_0294_readonly_v1/\n?? docs/qwen4exp/diagnostics_0295_cache8_guard_v1/\n?? docs/qwen4exp/diagnostics_0295_cache8_v1/\n?? docs/qwen4exp/diagnostics_0295_heat_guard_v1/\n?? docs/qwen4exp/diagnostics_0295_heat_v1/\n?? docs/qwen4exp/diagnostics_0295_policy_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0295_profile_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_bound_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_bound_v1/\n?? docs/qwen4exp/diagnostics_0296_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_gpu_tests_guard_v2/\n?? docs/qwen4exp/diagnostics_0296_kernel_copy_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_kernel_copy_v1/\n?? docs/qwen4exp/diagnostics_0296_parity_graph_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_parity_graph_v1/\n?? docs/qwen4exp/diagnostics_0296_parity_uncaptured_guard_v1/\n?? docs/qwen4exp/diagnostics_0296_parity_uncaptured_v1/\n?? docs/qwen4exp/diagnostics_0297_cpu_regression_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_cpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_deferred_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_deferred_v1/\n?? docs/qwen4exp/diagnostics_0297_gpu_regression_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_long_v1/\n?? docs/qwen4exp/diagnostics_0297_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_operator_v1/\n?? docs/qwen4exp/diagnostics_0297_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_parity_v1/\n?? docs/qwen4exp/diagnostics_0297_sized725_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_sized725_v1/\n?? docs/qwen4exp/diagnostics_0297_sized75_guard_v1/\n?? docs/qwen4exp/diagnostics_0297_sized75_v1/\n?? docs/qwen4exp/diagnostics_0298_overlap_guard_v1/\n?? docs/qwen4exp/diagnostics_0298_overlap_v1/\n?? docs/qwen4exp/diagnostics_0298_phase_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0298_phases_guard_v1/\n?? docs/qwen4exp/diagnostics_0298_phases_v1/\n?? docs/qwen4exp/diagnostics_0298_timeline_guard_v1/\n?? docs/qwen4exp/diagnostics_0298_timeline_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0298_timeline_v1/\n?? docs/qwen4exp/diagnostics_0299_cpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0299_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0299_operator_v1/\n?? docs/qwen4exp/diagnostics_0299_workers23_guard_v1/\n?? docs/qwen4exp/diagnostics_0299_workers23_v1/\n?? docs/qwen4exp/diagnostics_0300_cpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0300_cpu_guard_v2/\n?? docs/qwen4exp/diagnostics_0300_cpu_guard_v3/\n?? docs/qwen4exp/diagnostics_0300_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0300_operator_guard_v2/\n?? docs/qwen4exp/diagnostics_0300_operator_v1/\n?? docs/qwen4exp/diagnostics_0300_operator_v2/\n?? docs/qwen4exp/diagnostics_0300_workers15_guard_v1/\n?? docs/qwen4exp/diagnostics_0300_workers15_v1/\n?? docs/qwen4exp/diagnostics_0301_gpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0301_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0301_operator_v1/\n?? docs/qwen4exp/diagnostics_0302_profile_guard_v1/\n?? docs/qwen4exp/diagnostics_0302_profile_v1/\n?? docs/qwen4exp/diagnostics_0302_qsa_guard_v1/\n?? docs/qwen4exp/diagnostics_0302_qsa_v1/\n?? docs/qwen4exp/diagnostics_0303_cpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0303_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0303_operator_v1/\n?? docs/qwen4exp/diagnostics_0304_cpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0304_factor8_guard_v1/\n?? docs/qwen4exp/diagnostics_0304_factor8_v1/\n?? docs/qwen4exp/diagnostics_0304_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0304_operator_v1/\n?? docs/qwen4exp/diagnostics_0305_control_guard_v1/\n?? docs/qwen4exp/diagnostics_0305_control_v1/\n?? docs/qwen4exp/diagnostics_0305_fused_guard_v1/\n?? docs/qwen4exp/diagnostics_0305_fused_v1/\n?? docs/qwen4exp/diagnostics_0305_gpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0305_trace_guard_v1/\n?? docs/qwen4exp/diagnostics_0305_trace_guard_v2/\n?? docs/qwen4exp/diagnostics_0305_trace_v1/\n?? docs/qwen4exp/diagnostics_0305_trace_v2/\n?? docs/qwen4exp/diagnostics_0306_combined_guard_v1/\n?? docs/qwen4exp/diagnostics_0306_combined_v1/\n?? docs/qwen4exp/diagnostics_0306_gpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0306_publish_guard_v1/\n?? docs/qwen4exp/diagnostics_0306_publish_v1/\n?? docs/qwen4exp/diagnostics_0306_trace_guard_v1/\n?? docs/qwen4exp/diagnostics_0306_trace_v1/\n?? docs/qwen4exp/diagnostics_0307_combined_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_combined_v1/\n?? docs/qwen4exp/diagnostics_0307_control_guard_v2/\n?? docs/qwen4exp/diagnostics_0307_control_v2/\n?? docs/qwen4exp/diagnostics_0307_cpu_regression_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_gpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_gpu_regression_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_long_guard_v2/\n?? docs/qwen4exp/diagnostics_0307_long_v1/\n?? docs/qwen4exp/diagnostics_0307_long_v2/\n?? docs/qwen4exp/diagnostics_0307_natural_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_natural_guard_v2/\n?? docs/qwen4exp/diagnostics_0307_natural_v1/\n?? docs/qwen4exp/diagnostics_0307_natural_v2/\n?? docs/qwen4exp/diagnostics_0307_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_operator_guard_v2/\n?? docs/qwen4exp/diagnostics_0307_operator_v1/\n?? docs/qwen4exp/diagnostics_0307_operator_v2/\n?? docs/qwen4exp/diagnostics_0307_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0307_parity_guard_v2/\n?? docs/qwen4exp/diagnostics_0307_parity_v1/\n?? docs/qwen4exp/diagnostics_0307_parity_v2/\n?? docs/qwen4exp/diagnostics_0308_census_guard_v1/\n?? docs/qwen4exp/diagnostics_0308_census_guard_v2/\n?? docs/qwen4exp/diagnostics_0308_census_guard_v3/\n?? docs/qwen4exp/diagnostics_0308_census_guard_v4/\n?? docs/qwen4exp/diagnostics_0308_census_v2/\n?? docs/qwen4exp/diagnostics_0308_census_v3/\n?? docs/qwen4exp/diagnostics_0308_census_v4/\n?? docs/qwen4exp/diagnostics_0308_test_guard_v1/\n?? docs/qwen4exp/diagnostics_0308_test_guard_v2/\n?? docs/qwen4exp/diagnostics_0309_host4_guard_v1/\n?? docs/qwen4exp/diagnostics_0309_host4_v1/\n?? docs/qwen4exp/diagnostics_0310_preflight_v1/\n?? docs/qwen4exp/diagnostics_0310_strata_guard_v1/\n?? docs/qwen4exp/diagnostics_0310_strata_guard_v2/\n?? docs/qwen4exp/diagnostics_0310_strata_hot_guard_v4/\n?? docs/qwen4exp/diagnostics_0310_strata_hot_v4/\n?? docs/qwen4exp/diagnostics_0310_strata_profile_guard_v3/\n?? docs/qwen4exp/diagnostics_0310_strata_profile_v3/\n?? docs/qwen4exp/diagnostics_0310_strata_v1/\n?? docs/qwen4exp/diagnostics_0310_strata_v2/\n?? docs/qwen4exp/diagnostics_0311_local_guard_v1/\n?? docs/qwen4exp/diagnostics_0311_local_guard_v2/\n?? docs/qwen4exp/diagnostics_0311_local_v1/\n?? docs/qwen4exp/diagnostics_0311_local_v2/\n?? docs/qwen4exp/diagnostics_0312_candidate_guard_v1/\n?? docs/qwen4exp/diagnostics_0312_candidate_v1/\n?? docs/qwen4exp/diagnostics_0312_control_guard_v1/\n?? docs/qwen4exp/diagnostics_0312_control_v1/\n?? docs/qwen4exp/diagnostics_0312_cpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0312_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0312_profile_guard_v1/\n?? docs/qwen4exp/diagnostics_0312_profile_v1/\n?? docs/qwen4exp/diagnostics_0313_fullblock_guard_v1/\n?? docs/qwen4exp/diagnostics_0313_fullblock_v1/\n?? docs/qwen4exp/diagnostics_0313_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0313_gpu_tests_guard_v2/\n?? docs/qwen4exp/diagnostics_0313_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0313_parity_v1/\n?? docs/qwen4exp/diagnostics_0313_trace_guard_v1/\n?? docs/qwen4exp/diagnostics_0313_trace_v1/\n?? docs/qwen4exp/diagnostics_0313_trace_v1_trace.nsys-rep\n?? docs/qwen4exp/diagnostics_0314_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0314_integration_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0314_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0314_long_v1/\n?? docs/qwen4exp/diagnostics_0314_operator_guard_v1/\n?? docs/qwen4exp/diagnostics_0314_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0314_parity_v1/\n?? docs/qwen4exp/diagnostics_0315_chain_guard_v1/\n?? docs/qwen4exp/diagnostics_0315_chain_v1/\n?? docs/qwen4exp/diagnostics_0315_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0315_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0315_parity_v1/\n?? docs/qwen4exp/diagnostics_0316_affinity500_guard_v1/\n?? docs/qwen4exp/diagnostics_0316_affinity500_guard_v2/\n?? docs/qwen4exp/diagnostics_0316_affinity500_v1/\n?? docs/qwen4exp/diagnostics_0316_affinity500_v2/\n?? docs/qwen4exp/diagnostics_0316_spin2000_guard_v1/\n?? docs/qwen4exp/diagnostics_0316_spin2000_v1/\n?? docs/qwen4exp/diagnostics_0317_baseline_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_baseline_parity_v1/\n?? docs/qwen4exp/diagnostics_0317_final_cpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_final_gpu_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_long_v1/\n?? docs/qwen4exp/diagnostics_0317_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_parity_v1/\n?? docs/qwen4exp/diagnostics_0317_trace_guard_v1/\n?? docs/qwen4exp/diagnostics_0317_trace_v1/\n?? docs/qwen4exp/diagnostics_0317_trace_v1_trace.nsys-rep\n?? docs/qwen4exp/diagnostics_0318_combined_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0318_combined_long_v1/\n?? docs/qwen4exp/diagnostics_0318_combined_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0318_combined_parity_v1/\n?? docs/qwen4exp/diagnostics_0318_publish_long_guard_v1/\n?? docs/qwen4exp/diagnostics_0318_publish_long_v1/\n?? docs/qwen4exp/diagnostics_0318_publish_parity_guard_v1/\n?? docs/qwen4exp/diagnostics_0318_publish_parity_v1/\n?? docs/qwen4exp/diagnostics_0319_gpu_tests_guard_v1/\n?? docs/qwen4exp/diagnostics_0319_operator_guard_v1/\n?? mini_llm/external/qwen4exp_qsa_block_graph.py\n?? mini_llm/external/qwen4exp_recurrent_block_graph.py\n?? mini_llm/external/qwen4exp_recurrent_chain_graph.py\n?? mini_llm/ops/packed_row_reader.py\n?? mini_llm/ops/qsa_cooperative_gpu.py\n?? mini_llm/ops/qsa_graph_gpu.py\n?? mini_llm/ops/qsa_staged_gpu.py\n?? scripts/analyze_0310_0317_results.py\n?? scripts/probe_0308_page_residency.py\n?? scripts/probe_0310_strata_comparison.py\n?? scripts/probe_0311_local_ple.py\n?? scripts/probe_0314_qsa_operator.py\n?? scripts/probe_0319_qsa_staged_operator.py\n?? strata_launch_bench_capture.sh\n?? tests/test_0308_page_residency.py\n?? tests/test_0310_strata_comparison.py\n?? tests/test_0311_local_ple.py\n?? tests/test_0312_packed_row_reader.py\n?? tests/test_0312_ple_batched_io.py\n?? tests/test_0313_recurrent_block_graph.py\n?? tests/test_0314_qsa_cooperative.py\n?? tests/test_0315_recurrent_chain_graph.py\n?? tests/test_0317_qsa_block_graph.py\n?? tests/test_0319_qsa_staged.py",
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "argv": [
+      "scripts/probe_0319_qsa_staged_operator.py",
+      "--output",
+      "docs/qwen4exp/0319_qsa_operator_v1.json"
+    ],
+    "isolation_cgroup": "0::/user.slice/user-1000.slice/user@1000.service/app.slice/mylocal-bench-0c53e892d6e14c1fa4d508366c1394e2.service\n",
+    "files": {
+      "scripts/probe_0319_qsa_staged_operator.py": {
+        "sha256": "7320a65b0329222a10483feeb1ba374efea2afa3f22c520969fd14749d25b26c"
+      },
+      "mini_llm/ops/qsa_decode_gpu.py": {
+        "sha256": "6f0e0cd6da956b99dba76b409817d141c0e81339a66e35aeb8ea9b87496e7a83"
+      },
+      "mini_llm/ops/qsa_staged_gpu.py": {
+        "sha256": "58242e4f7e7c870dcd2774586a244216e5aac64046874b9f42f5b74acba4d3e9"
+      }
+    },
+    "kernels": {
+      "serial": {
+        "sha256": "46a614c6a98ee068c1906053a6da062b5e2a188c8a51dee16e6b08c07ab841bc",
+        "source": "\n#define INFINITY (__int_as_float(0x7f800000))\nextern \"C\" __global__ void qsa_decode(\n    const float* q, const float* qg, const float* k, const float* v,\n    const float* keys, const float* values, float* out,\n    int n, int dim, int groups, float scale,\n    long long qs0, long long qs1, long long gs0, long long gs1,\n    long long k0, long long k1, long long v0, long long v1,\n    long long ks0, long long ks1, long long ks2,\n    long long vs0, long long vs1, long long vs2) {\n    const int h = blockIdx.x, kh = h / groups, lane = threadIdx.x;\n    __shared__ float reduction[128], weights[128];\n    __shared__ float maximum, denominator, alpha;\n    if (lane == 0) { maximum = -INFINITY; denominator = 0.0f; }\n    for (int d = lane; d < dim; d += 128) out[h * dim + d] = 0.0f;\n    __syncthreads();\n    for (int base = 0; base < n; base += 128) {\n        const int cell = base + lane, count = min(128, n - base);\n        float logit = -INFINITY;\n        if (cell < n) {\n            float dot = 0.0f;\n            for (int d = 0; d < dim; ++d) {\n                float key = cell == n - 1 ? k[kh * k0 + d * k1]\n                    : keys[cell * ks0 + kh * ks1 + d * ks2];\n                dot += q[h * qs0 + d * qs1] * key;\n            }\n            logit = dot * scale;\n        }\n        reduction[lane] = logit;\n        __syncthreads();\n        for (int s = 64; s; s >>= 1) {\n            if (lane < s) reduction[lane] = fmaxf(reduction[lane], reduction[lane + s]);\n            __syncthreads();\n        }\n        if (lane == 0) {\n            float next = fmaxf(maximum, reduction[0]);\n            alpha = expf(maximum - next);\n            maximum = next;\n        }\n        __syncthreads();\n        float weight = cell < n ? expf(logit - maximum) : 0.0f;\n        weights[lane] = weight;\n        reduction[lane] = weight;\n        __syncthreads();\n        for (int s = 64; s; s >>= 1) {\n            if (lane < s) reduction[lane] += reduction[lane + s];\n            __syncthreads();\n        }\n        if (lane == 0) denominator = denominator * alpha + reduction[0];\n        for (int d = lane; d < dim; d += 128) {\n            float sum = 0.0f;\n            for (int j = 0; j < count; ++j) {\n                int token = base + j;\n                float value = token == n - 1 ? v[kh * v0 + d * v1]\n                    : values[token * vs0 + kh * vs1 + d * vs2];\n                sum += weights[j] * value;\n            }\n            out[h * dim + d] = out[h * dim + d] * alpha + sum;\n        }\n        // All readers must finish before the next tile overwrites shared data.\n        __syncthreads();\n    }\n    for (int d = lane; d < dim; d += 128) {\n        float gate = qg[h * gs0 + (dim + d) * gs1];\n        float z = expf(-fabsf(gate));\n        float sigmoid = gate >= 0.0f ? 1.0f / (1.0f + z) : z / (1.0f + z);\n        out[h * dim + d] = (out[h * dim + d] / denominator) * sigmoid;\n    }\n}\n"
+      },
+      "staged": {
+        "sha256": "5afe2d22feb77e8b4c98f10ff27a62961278b73a7ef18efd2436340e785cea6e",
+        "source": "\n#define INFINITY (__int_as_float(0x7f800000))\nextern \"C\" __global__ void qsa_decode(\n    const float* q, const float* qg, const float* k, const float* v,\n    const float* keys, const float* values, float* out,\n    int n, int dim, int groups, float scale,\n    long long qs0, long long qs1, long long gs0, long long gs1,\n    long long k0, long long k1, long long v0, long long v1,\n    long long ks0, long long ks1, long long ks2,\n    long long vs0, long long vs1, long long vs2) {\n    const int h = blockIdx.x, kh = h / groups, lane = threadIdx.x;\n    __shared__ float reduction[128], weights[128];\n    __shared__ float staged[256 * 33];\n    __shared__ float maximum, denominator, alpha;\n    if (lane == 0) { maximum = -INFINITY; denominator = 0.0f; }\n    for (int d = lane; d < dim; d += 128) out[h * dim + d] = 0.0f;\n    __syncthreads();\n    for (int base = 0; base < n; base += 128) {\n        const int cell = base + lane, count = min(128, n - base);\n        float logit = -INFINITY;\n        for (int g = 0; g < 4; ++g) {\n            for (int index = lane; index < 8192; index += 128) {\n                const int token = base + g * 32 + index / 256;\n                const int d = index % 256;\n                float key = token < n ? (token == n - 1\n                    ? k[kh * k0 + d * k1]\n                    : keys[token * ks0 + kh * ks1 + d * ks2]) : 0.0f;\n                staged[d * 33 + index / 256] = key;\n            }\n            __syncthreads();\n            if (lane / 32 == g && cell < n) {\n                float dot = 0.0f;\n                for (int d = 0; d < 256; ++d) {\n                    float key = staged[d * 33 + lane % 32];\n                    dot += q[h * qs0 + d * qs1] * key;\n                }\n                logit = dot * scale;\n            }\n            __syncthreads();\n        }\n        reduction[lane] = logit;\n        __syncthreads();\n        for (int s = 64; s; s >>= 1) {\n            if (lane < s) reduction[lane] = fmaxf(reduction[lane], reduction[lane + s]);\n            __syncthreads();\n        }\n        if (lane == 0) {\n            float next = fmaxf(maximum, reduction[0]);\n            alpha = expf(maximum - next);\n            maximum = next;\n        }\n        __syncthreads();\n        float weight = cell < n ? expf(logit - maximum) : 0.0f;\n        weights[lane] = weight;\n        reduction[lane] = weight;\n        __syncthreads();\n        for (int s = 64; s; s >>= 1) {\n            if (lane < s) reduction[lane] += reduction[lane + s];\n            __syncthreads();\n        }\n        if (lane == 0) denominator = denominator * alpha + reduction[0];\n        for (int d = lane; d < dim; d += 128) {\n            float sum = 0.0f;\n            for (int j = 0; j < count; ++j) {\n                int token = base + j;\n                float value = token == n - 1 ? v[kh * v0 + d * v1]\n                    : values[token * vs0 + kh * vs1 + d * vs2];\n                sum += weights[j] * value;\n            }\n            out[h * dim + d] = out[h * dim + d] * alpha + sum;\n        }\n        // All readers must finish before the next tile overwrites shared data.\n        __syncthreads();\n    }\n    for (int d = lane; d < dim; d += 128) {\n        float gate = qg[h * gs0 + (dim + d) * gs1];\n        float z = expf(-fabsf(gate));\n        float sigmoid = gate >= 0.0f ? 1.0f / (1.0f + z) : z / (1.0f + z);\n        out[h * dim + d] = (out[h * dim + d] / denominator) * sigmoid;\n    }\n}\n"
+      }
+    },
+    "compiler_options": [
+      "--std=c++14",
+      "--fmad=false"
+    ]
+  },
+  "remainder_byte_identical": true,
+  "device": 0,
+  "device_name": "NVIDIA GeForce RTX 5080",
+  "cupy": "14.2.0",
+  "numpy": "2.5.3",
+  "cuda_runtime": 13020,
+  "cuda_driver": 13000,
+  "heads": 24,
+  "kv_heads": 2,
+  "dim": 256,
+  "scale": 0.0625,
+  "seed": 319,
+  "warmups": 10,
+  "repetitions": 100,
+  "trials": 7,
+  "timing": "CuPy events on nonblocking current stream; alternating A/B trial order; allocating API loops include host validation/launch gaps, not kernel-only latency",
+  "view_checks": [
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 141,
+      "layout": "plain",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 141,
+      "layout": "strided",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          4096,
+          8
+        ],
+        [
+          8192,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 141,
+      "layout": "reverse",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          -4096,
+          -8
+        ],
+        [
+          -8192,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 141,
+      "layout": "broadcast",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 141,
+      "layout": "current-k-dominates-nan-cache-tail",
+      "current_k_used": true,
+      "inputs_bitwise_unchanged": true
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 435,
+      "layout": "plain",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 435,
+      "layout": "strided",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          4096,
+          8
+        ],
+        [
+          8192,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 435,
+      "layout": "reverse",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          -4096,
+          -8
+        ],
+        [
+          -8192,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 435,
+      "layout": "broadcast",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 435,
+      "layout": "current-k-dominates-nan-cache-tail",
+      "current_k_used": true,
+      "inputs_bitwise_unchanged": true
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 1024,
+      "layout": "plain",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 1024,
+      "layout": "strided",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          4096,
+          8
+        ],
+        [
+          8192,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ],
+        [
+          16384,
+          4096,
+          8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 1024,
+      "layout": "reverse",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          -4096,
+          -8
+        ],
+        [
+          -8192,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ],
+        [
+          -16384,
+          -4096,
+          -8
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 1024,
+      "layout": "broadcast",
+      "inputs_bitwise_unchanged": true,
+      "strides_bytes": [
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ],
+        [
+          2048,
+          1024,
+          4
+        ]
+      ]
+    },
+    {
+      "finite": true,
+      "array_equal": true,
+      "bitwise_equal": true,
+      "differing_fp32_bits": 0,
+      "max_abs": 0.0,
+      "accepted": true,
+      "n": 1024,
+      "layout": "current-k-dominates-nan-cache-tail",
+      "current_k_used": true,
+      "inputs_bitwise_unchanged": true
+    }
+  ],
+  "cases": [
+    {
+      "n": 141,
+      "accepted": true,
+      "precheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "postcheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "inputs_bitwise_unchanged": true,
+      "current_stream_preserved": true,
+      "trial_orders": [
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ]
+      ],
+      "samples_ms": {
+        "serial": [
+          0.04445087909698486,
+          0.04610976219177246,
+          0.044692797660827635,
+          0.0481715202331543,
+          0.04690271854400635,
+          0.04449344158172607,
+          0.04462207794189453
+        ],
+        "staged": [
+          0.0720310401916504,
+          0.07795872211456299,
+          0.07208511829376221,
+          0.07201663970947265,
+          0.07318655967712402,
+          0.07060671806335449,
+          0.07398975849151611
+        ]
+      },
+      "median_ms": {
+        "serial": 0.044692797660827635,
+        "staged": 0.07208511829376221
+      },
+      "measured_serial_over_staged": 0.6200003373608262
+    },
+    {
+      "n": 435,
+      "accepted": true,
+      "precheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "postcheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "inputs_bitwise_unchanged": true,
+      "current_stream_preserved": true,
+      "trial_orders": [
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ]
+      ],
+      "samples_ms": {
+        "serial": [
+          0.1094649600982666,
+          0.11726688385009766,
+          0.1123142433166504,
+          0.12055392265319824,
+          0.11373344421386719,
+          0.11763199806213379,
+          0.11326272010803223
+        ],
+        "staged": [
+          0.20534591674804686,
+          0.19770048141479493,
+          0.1979952049255371,
+          0.22549312591552734,
+          0.23285312652587892,
+          0.2032143974304199,
+          0.19812063217163087
+        ]
+      },
+      "median_ms": {
+        "serial": 0.11373344421386719,
+        "staged": 0.2032143974304199
+      },
+      "measured_serial_over_staged": 0.5596721770307108
+    },
+    {
+      "n": 1024,
+      "accepted": true,
+      "precheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "postcheck": {
+        "finite": true,
+        "array_equal": true,
+        "bitwise_equal": true,
+        "differing_fp32_bits": 0,
+        "max_abs": 0.0,
+        "accepted": true
+      },
+      "inputs_bitwise_unchanged": true,
+      "current_stream_preserved": true,
+      "trial_orders": [
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ],
+        [
+          "staged",
+          "serial"
+        ],
+        [
+          "serial",
+          "staged"
+        ]
+      ],
+      "samples_ms": {
+        "serial": [
+          0.24747072219848631,
+          0.24643455505371092,
+          0.2365782356262207,
+          0.24770687103271485,
+          0.2471187210083008,
+          0.2475811195373535,
+          0.24806495666503905
+        ],
+        "staged": [
+          0.45619903564453124,
+          0.45381889343261717,
+          0.4998758316040039,
+          0.45257503509521485,
+          0.45400318145751956,
+          0.45085376739501953,
+          0.4517491149902344
+        ]
+      },
+      "median_ms": {
+        "serial": 0.24747072219848631,
+        "staged": 0.45381889343261717
+      },
+      "measured_serial_over_staged": 0.5453072266926909
+    }
+  ],
+  "stream_ptr": 186644912,
+  "accepted": true
+}

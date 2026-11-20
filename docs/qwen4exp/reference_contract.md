@@ -16,6 +16,12 @@ All three checkouts were clean when audited. Source roots are respectively `/hom
 
 **Checkpoint revision is unknown.** Embedded provenance names `ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF`, but neither shard embeds an immutable model revision. A `.done` sidecar claims shard-1 SHA256 `4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3`; payload hashing has not verified this. Header SHA256s identify only headers, not whole weights. Do not equate a source revision, filename or timestamp with a model revision. An official model-definition revision was not independently obtained; converter and checkpoint contracts are used explicitly, not labelled official provenance.
 
+## Runtime comparison follow-up — 0310–0317
+
+The currently installed Strata engine is a newer, separately pinned reference: source `712fec6b4297c9cfd32ab43daaa2979a9aa01edf`, engine SHA256 `0ba914b28df1c8e09c0b5209c2ca6040c75fb650a7408ff3d9ef3ad159a13eb9`. Its `generate.cpp` serve protocol/stage timings and pinned `include/strata/kernels/cpu/pool.hpp` were inspected. The latter documents a20ms bounded worker spin, physical-core affinity and participating host. This is not the older checkout listed in the original audit.
+
+`strata_launch_bench_capture.sh` remains the associated launcher/standard-workload reference. New direct-engine diagnostics deliberately use memory-bounded mmap experts, context1024, complete top10/no drafts and forced identical prompts/continuations; INT8 versus local FP32 KV and distinct cache placement remain explicit. Do not call these fully equivalent `standard-v1` runs. No source mathematics or checkpoint changed. Provenance, per-patch contracts and exact scope: `0310_0317_strata_comparison.md`, `0310_0317_results_v2.json`.
+
 ## Geometry and graph order
 
 Observed metadata: 48 blocks, width D=2560, four streams C=4, HC rank R=320, 512 experts with top-10 and routed/shared width 640. Full/QSA layers are zero-based `3,7,...,47`; the other 36 layers are recurrent. PLE is at layer 1. Vocabulary 248320; context metadata 262144. GGML axes are fastest-first; canonical Python axes reverse them. No HF Q/K row unpermutation is appropriate for this Qwen graph.

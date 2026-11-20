@@ -309,7 +309,17 @@ class Qwen4ExpGGUFModel:
             if BACKEND_NAME != 'cupy':
                 raise RuntimeError('HC graph decode requires CuPy')
             graph_reservation += (2 * len(h.recurrent) + 1) * 2 * 1024**2
+        qsa_block_graph = os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH','0') == '1'
+        if qsa_block_graph and (not qsa_fast_decode or not hc_native_read or not router_fast_decode or
+                not shared_graph_decode or not device_expert_plan or
+                os.environ.get('MINI_LLM_QSA_DEFER_VALIDATION','0') != '1' or
+                os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE','0') != '1'):
+            raise ValueError('QSA block capture requires native HC/router/service, shared capture and deferred validation')
         qsa_front_graph = qsa_fast_decode and os.environ.get('MINI_LLM_QSA_FRONTEND_GRAPH','0')=='1'
+        if qsa_block_graph and not qsa_front_graph:
+            raise ValueError('QSA block capture requires capture-ready frontend projections')
+        if qsa_block_graph:
+            graph_reservation += (len(h.recurrent)-sum(h.recurrent))*8*1024**2
         if qsa_front_graph:
             if BACKEND_NAME != 'cupy':
                 raise RuntimeError('QSA frontend graph requires CuPy')
@@ -365,6 +375,12 @@ class Qwen4ExpGGUFModel:
             dense, project = weights.dense, weights.projection
             def recurrent_project(name):
                 return weights.projection(name, capturable=gdn_graph_decode or pre_moe_graph)
+            def ple_project(name):
+                capture_ready = os.environ.get('MINI_LLM_TOKEN_GRAPH_PREP','0') == '1'
+                base = weights.projection(name, capturable=capture_ready)
+                if not capture_ready:
+                    return base
+                return lambda x: base(x.reshape(1,-1)).reshape(-1)
             def shared_project(name):
                 base=weights.projection(name,capturable=shared_graph_decode)
                 if not shared_graph_decode:
@@ -390,7 +406,7 @@ class Qwen4ExpGGUFModel:
                 ple = None
                 if i in h.ple_layers:
                     ple = Qwen4ExpPLE.from_store(weights.store,
-                        key=project(p+'ple_key.weight'), value=project(p+'ple_value.weight'),
+                        key=ple_project(p+'ple_key.weight'), value=ple_project(p+'ple_value.weight'),
                         gamma_key=dense(p+'ple_norm_key.weight').reshape(4,h.width),
                         gamma_query=dense(p+'ple_norm_query.weight').reshape(4,h.width),
                         gamma_conv=dense(p+'ple_norm_conv.weight').reshape(4,h.width),
@@ -407,7 +423,8 @@ class Qwen4ExpGGUFModel:
                 else:
                     mixer = Qwen4ExpAttention(h.attention,
                         query_gate=qsa_project(p+'attn_q.weight'),key=qsa_project(p+'attn_k.weight'),
-                        value=qsa_project(p+'attn_v.weight'),output=project(p+'attn_output.weight'),
+                        value=qsa_project(p+'attn_v.weight'),output=(qsa_project(p+'attn_output.weight')
+                                                    if qsa_block_graph else project(p+'attn_output.weight')),
                         index_query=project(p+'indexer.q_proj.weight'),index_key=qsa_project(p+'indexer.k_proj.weight'),
                         gamma_q=dense(p+'attn_q_norm.weight'),gamma_k=dense(p+'attn_k_norm.weight'),
                         gamma_index_q=dense(p+'indexer.q_norm.weight'),gamma_index_k=dense(p+'indexer.k_norm.weight'),
@@ -418,7 +435,7 @@ class Qwen4ExpGGUFModel:
                 router.b_router = xp.zeros(index.n_experts,dtype=xp.float32)
                 # Both paths retain full softmax; fusion is explicitly switchable.
                 router._decode_fastpath_enabled = router_fast_decode
-                router._capturable_logits = pre_moe_graph and rec
+                router._capturable_logits = (pre_moe_graph and rec) or (qsa_block_graph and not rec)
                 experts = ExpertsInference(h.width,index.d_ff,index.n_experts,
                     expert_executor=executor,layer_id=i)
                 moe = Qwen4ExpMoE(router,experts,shared_project(p+'ffn_gate_shexp.weight'),
@@ -440,6 +457,8 @@ class Qwen4ExpGGUFModel:
                     for i,b in enumerate(blocks) if b.recurrent}
             else:
                 result._pre_moe_segments = {}
+            result._qsa_block_segments = {}
+            result._token_graph = None
             result._shared_graph_owners=tuple(b.moe for b in blocks) if shared_graph_decode else ()
             result._qsa_frontend_owners=tuple(b.mixer for b in blocks if not b.recurrent) if qsa_front_graph else ()
             result._qsa_validation_status = None
@@ -498,12 +517,19 @@ class Qwen4ExpGGUFModel:
                 if recurrence is not None:
                     for array in (recurrence.conv.history,recurrence.delta.memory):
                         live.add((array.data.ptr,array.nbytes))
+            for qsa in state.qsa.values():
+                for array in (qsa.keys, qsa.values, qsa.raw_index, qsa.pooled):
+                    live.add((array.data.ptr,array.nbytes))
         retained=set()
-        for segment in getattr(self,'_pre_moe_segments',{}).values():
+        segments = tuple(getattr(self,'_pre_moe_segments',{}).values()) + tuple(
+            getattr(self,'_qsa_block_segments',{}).values()) + (
+                (self._token_graph,) if getattr(self, '_token_graph', None) is not None else ())
+        for segment in segments:
             graph=getattr(segment,'graph',None)
             if graph is not None:
                 for array in getattr(graph,'bound_arrays',lambda:())():
-                    retained.add((array.data.ptr,array.nbytes))
+                    if array.dtype == xp.float32:
+                        retained.add((array.data.ptr,array.nbytes))
         return sum(size for pointer,size in retained-live)
 
     def memory_plan(self, batch_size=1, max_length=None):
@@ -529,6 +555,10 @@ class Qwen4ExpGGUFModel:
                             for m in getattr(self, '_gdn_graph_owners', ())) +
                         sum(s.graph_statistics()['pool_reserved_bytes']
                             for s in getattr(self, '_pre_moe_segments', {}).values()) +
+                        sum(s.graph_statistics()['pool_reserved_bytes']
+                            for s in getattr(self, '_qsa_block_segments', {}).values()) +
+                        (self._token_graph.graph_statistics()['pool_reserved_bytes']
+                            if getattr(self, '_token_graph', None) is not None else 0) +
                         sum(s.graph_statistics()['pool_reserved_bytes']
                             for s in getattr(self,'_shared_graph_owners',())) +
                         sum(s._frontend_graph.statistics()['pool_reserved_bytes']
@@ -567,10 +597,36 @@ class Qwen4ExpGGUFModel:
         finally:
             self._call_lock.release()
 
+    def _retire_orphaned_state_graphs(self):
+        if BACKEND_NAME != 'cupy' or self._states:
+            return
+        if not self._call_lock.acquire(blocking=False):
+            raise RuntimeError('Cannot retire request graphs during forward')
+        try:
+            if self._states:
+                return
+            segments = tuple(getattr(self, '_pre_moe_segments', {}).values()) + tuple(
+                getattr(self, '_qsa_block_segments', {}).values()) + (
+                    (self._token_graph,) if getattr(self, '_token_graph', None) is not None else ())
+            retired = False
+            for segment in segments:
+                graph = getattr(segment, 'graph', None)
+                if graph is not None and graph.bound_arrays():
+                    graph.close()
+                    segment.graph = None
+                    retired = True
+            if retired:
+                # Only now can the default allocator return the old request's
+                # arrays, before the next physical-capacity admission check.
+                xp.get_default_memory_pool().free_all_blocks()
+        finally:
+            self._call_lock.release()
+
     def create_generation_state(self, batch_size=1, max_length=None):
         self._open()
         if max_length is None:
             raise ValueError('Explicit max_length is required; metadata context is not allocated by default')
+        self._retire_orphaned_state_graphs()
         plan = self.memory_plan(batch_size,max_length)
         # One approved aggregate state reservation. Multiple smaller independent
         # sessions can coexist, but cannot silently exceed that reservation.
@@ -636,12 +692,88 @@ class Qwen4ExpGGUFModel:
                                    if self.diagnostic_callback is None else None)
                 if deferred_status is not None:
                     deferred_status.fill(0)
+                if (project_logits and deferred_status is not None and
+                        os.environ.get('MINI_LLM_TOKEN_GRAPH','0') == '1'):
+                    from .qwen4exp_token_graph import Qwen4ExpTokenGraph
+                    token_graph = getattr(self, '_token_graph', None)
+                    if Qwen4ExpTokenGraph.is_eligible(self, state):
+                        if token_graph is None:
+                            token_graph = Qwen4ExpTokenGraph(self)
+                            self._token_graph = token_graph
+                        logits = token_graph.forward(token, state)
+                        invalid = np.flatnonzero(asnumpy(deferred_status))
+                        if invalid.size:
+                            raise ValueError(f'QSA hidden/projections must be finite (first layer {int(invalid[0])})')
+                        self.expert_executor.check_native_service()
+                        state.length += 1
+                        return logits
+                    if token_graph is not None:
+                        token_graph.close()
+                        self._token_graph = None
                 streams = self.final_hc.initialize(self.embedding(token))
+                chain_tails = set()
                 for i,b in enumerate(self.blocks):
+                    if i in chain_tails:
+                        continue
                     if b.ple is not None:
                         streams,state.ple[i] = b.ple.step(token,streams,state.ple[i])
+                    if (not b.recurrent and deferred_status is not None and
+                            os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH','0') == '1' and
+                            os.environ.get('MINI_LLM_QSA_BLOCK_REPLAY','1') == '1'):
+                        qsa = state.qsa[i]
+                        eligible = (state.length + 1 <= b.mixer.config.index_topk + b.mixer.config.block_size - 1 and
+                            sum(a.nbytes for a in (qsa.keys, qsa.values, qsa.raw_index, qsa.pooled)) <= 6*1024**2)
+                        qsa_segment = self._qsa_block_segments.get(i)
+                        if not eligible and qsa_segment is not None:
+                            qsa_segment.close()
+                            del self._qsa_block_segments[i]
+                            qsa_segment = None
+                        if eligible and qsa_segment is None:
+                            plan = b.moe.experts.expert_executor._device_expert_plans.get(i)
+                            handoff = getattr(plan, 'native_handoff', None)
+                            if (handoff is not None and handoff.capture_enabled and
+                                    handoff.service is not None and handoff.stage is None):
+                                from .qwen4exp_qsa_block_graph import Qwen4ExpQSABlockGraph
+                                qsa_segment = Qwen4ExpQSABlockGraph(b, plan, self._qsa_validation_views[i])
+                                self._qsa_block_segments[i] = qsa_segment
+                        if qsa_segment is not None:
+                            streams = qsa_segment.forward(streams, qsa, state.length)
+                            continue
                     segment = (getattr(self,'_pre_moe_segments',{}).get(i)
                                if self.diagnostic_callback is None else None)
+                    if (segment is not None and b.ple is None and
+                            os.environ.get('MINI_LLM_RECURRENT_BLOCK_GRAPH','0') == '1' and
+                            not getattr(segment, 'complete_block', False)):
+                        executor = b.moe.experts.expert_executor
+                        plan = getattr(executor, '_device_expert_plans', {}).get(i)
+                        handoff = getattr(plan, 'native_handoff', None)
+                        if (plan is not None and executor.cache._admission_limit == 0 and
+                                handoff is not None and handoff.capture_enabled and
+                                handoff.service is not None and handoff.stage is None):
+                            from .qwen4exp_recurrent_block_graph import Qwen4ExpRecurrentBlockGraph
+                            segment = Qwen4ExpRecurrentBlockGraph(segment, b, plan)
+                            self._pre_moe_segments[i] = segment
+                    if segment is not None and getattr(segment, 'complete_block', False):
+                        if (os.environ.get('MINI_LLM_RECURRENT_CHAIN_GRAPH','0') == '1' and
+                                not hasattr(segment, 'members')):
+                            members = [segment]
+                            for j in range(i+1, min(i+3, len(self.blocks))):
+                                following = self._pre_moe_segments.get(j)
+                                if (not getattr(following, 'complete_block', False) or
+                                        hasattr(following, 'members')):
+                                    break
+                                members.append(following)
+                            if len(members) > 1:
+                                from .qwen4exp_recurrent_chain_graph import Qwen4ExpRecurrentChainGraph
+                                segment = Qwen4ExpRecurrentChainGraph(members)
+                                self._pre_moe_segments[i] = segment
+                        if hasattr(segment, 'members'):
+                            layers = tuple(m.plan.layer for m in segment.members)
+                            streams = segment.forward(streams, tuple(state.recurrent[j] for j in layers))
+                            chain_tails.update(layers[1:])
+                        else:
+                            streams = segment.forward(streams, state.recurrent[i])
+                        continue
                     routing = None
                     if segment is not None:
                         streams,hidden,gains,rw,ri = segment.forward(streams,state.recurrent[i])
@@ -742,6 +874,14 @@ class Qwen4ExpGGUFModel:
         if not self._call_lock.acquire(blocking=False):
             raise RuntimeError('Cannot close during forward')
         try:
+            if getattr(self, '_token_graph', None) is not None:
+                self._token_graph.close()
+                self._token_graph = None
+            segments = tuple(getattr(self, '_pre_moe_segments', {}).values()) + tuple(
+                getattr(self, '_qsa_block_segments', {}).values())
+            for segment in segments:
+                if getattr(segment, 'complete_block', False):
+                    segment.close()
             if self._owns_executor:
                 self.expert_executor.close()
             if (getattr(self, '_hc_graph_owners', ()) or getattr(self, '_gdn_graph_owners', ()) or
@@ -750,10 +890,14 @@ class Qwen4ExpGGUFModel:
                                                             getattr(self,'_qsa_validation_status',None) is not None):
                 # Graphs can have run on their bound non-default streams.
                 xp.cuda.runtime.deviceSynchronize()
+            for block in self.blocks:
+                if block.ple is not None and hasattr(block.ple, 'close'):
+                    block.ple.close()
             self.blocks = ()
             self._hc_graph_owners = ()
             self._gdn_graph_owners = ()
             self._pre_moe_segments = {}
+            self._qsa_block_segments = {}
             self._shared_graph_owners = ()
             self._qsa_frontend_owners = ()
             self._qsa_validation_views = {}

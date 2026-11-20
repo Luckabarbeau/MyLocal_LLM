@@ -6,6 +6,14 @@
 
 Production model/kernel mathematics and the pinned reference's mathematical implementation remain unchanged. Identical-input DeltaNet/QSA replay and continuous-state replay now pass over 16 fixed text tokens; full-model incremental/prefill logits and all active-state hashes match at prefixes 1/2/4/8/16. **The requested short-text validation gate has passed, with no demonstrated mathematical defect.** Initial performance profiling has started. Full independent model equivalence and arbitrary long-context correctness remain unclaimed.
 
+## 0310–0317 — New execution parity, and a separately unaccepted arithmetic candidate
+
+No new production graph defect was demonstrated. Bounded parallel PLE reads preserve original packed IQ4_NL bytes and exact row/state values. Complete recurrent-block and chain capture preserve ten saved real-checkpoint logit boundaries and all persistent-state hashes across two16-token requests. Complete short-context QSA capture preserves these against **the same capture-ready projection arithmetic**, with all12layers captured, runtime token positions and owner-bound caches. The CPU-expert full-model fixture does not replace separate mixed/resident GPU expert tests or independent llama.cpp validation.
+
+Cooperative Triton FP32 QSA is a new, opt-in **rounding-order** candidate, not a mathematical correction. Operator FP64 comparisons show1.64–1.85e-7relativeL2 at n141/435/1024, but quantized full-model logits differ3.62–6.89% at later saved prefixes (prefix1exact). Earlier perturbation experiments make amplification plausible; they do not automatically establish quality acceptance or fully attribute this candidate's state differences. The serial FP32 path remains default, and0314 is explicitly **not quality accepted**.
+
+The fresh Strata49.26hot forwards/s measurement is not a numerical oracle or an overall sustained rate. Performance, CPU utilization and storage/page-fault discrepancies cannot justify omitting experts or silently accepting altered arithmetic. Exact captures/runtime/source hashes and numerical comparisons are in `0310_0317_results_v2.json`; per-patch boundaries and next critical-path experiment in `0310_0317_strata_comparison.md`. Final selected regressions407CPU/284CuPupassed with the separately recorded skips; target50/s remains unmet. Existing independent-reference uncertainties remain unchanged.
+
 ## 0293–0307 — Optimization parity and precision preservation
 
 No new mathematical defect was identified or corrected. CPU gather/pair/VNNI candidates retain pinned GGML Q8_K/Q8_0 and exact per-row accumulation; losing variants remain off. Shared GPU IQ codebooks retain original packed bytes and exact Strata Q8_1 integer/FP32 operations. Fused shared-branch capture and fenced kernel publication alter scheduling/storage, not model equations or complete top10 routing.

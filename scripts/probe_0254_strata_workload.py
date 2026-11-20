@@ -343,6 +343,13 @@ def child(args):
     results = []
     with Qwen4ExpGGUFModel.open(MODEL, **options) as model:
         # Initialize CUDA/native workers first, then pin only the submitting host.
+        # A later-created service would inherit the submitter's one-core mask.
+        if (os.environ.get('MINI_LLM_HOST_CPU') and
+                os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE', '0') == '1'):
+            row_pool = model.expert_executor._ggml_row_pool
+            if row_pool is not None and row_pool._native_service is None:
+                from mini_llm.ops.native_expert_service import NativeExpertService
+                row_pool._native_service = NativeExpertService(row_pool)
         if os.environ.get('MINI_LLM_HOST_CPU'):
             host_cpu = int(os.environ['MINI_LLM_HOST_CPU'])
             if host_cpu not in os.sched_getaffinity(0):
@@ -373,7 +380,9 @@ def child(args):
         xp.get_default_memory_pool().free_all_blocks()
         placement_profile=None
         resident_host_setup=None
-        for row, prompt in zip(rows, prompts):
+        repeated = [(row, prompt) for row, prompt in zip(rows, prompts)
+                    for _ in range(1 if row['request_id'] == 'warmup' else getattr(args, 'response_repeats', 1))]
+        for row, prompt in repeated:
             if (row['request_id']!='warmup' and placement_profile is None and
                     getattr(args,'warmup_frequency_placement',False)):
                 placement_profile=model.expert_executor.install_observed_profile()
@@ -400,6 +409,10 @@ def child(args):
             gdn_graph_statistics=[m.graph_statistics() for m in getattr(model, '_gdn_graph_owners', ())],
             pre_graph_statistics=[m.graph_statistics() for m in getattr(model, '_pre_moe_segments', {}).values()],
             shared_graph_statistics=[m.graph_statistics() for m in getattr(model,'_shared_graph_owners',())],
+            token_graph_statistics=(model._token_graph.graph_statistics()
+                if getattr(model, '_token_graph', None) is not None else None),
+            qsa_block_graph_statistics={i:g.graph_statistics() for i,g in
+                getattr(model, '_qsa_block_segments', {}).items()},
             qsa_frontend_graph_statistics=[b.mixer._frontend_graph.statistics() for b in model.blocks
                 if not b.recurrent and b.mixer._frontend_graph is not None],
             native_timelines=[p.native_handoff.timeline_snapshot() for p in
@@ -427,6 +440,8 @@ def child(args):
                 worker_cpus=getattr(model.expert_executor._ggml_row_pool, 'cpu_ids', None),
                 host_affinity=sorted(os.sched_getaffinity(0))),
             sampled_highwater_bytes=highwater, final_memory=guard(),
+            ple_row_io=[b.ple._row_reader.stats() for b in model.blocks
+                        if b.ple is not None and b.ple._row_reader is not None],
             packed_gpu_arithmetic=dict(experts_q8=os.environ.get('MINI_LLM_EXPERT_GPU_Q8','0')=='1',
                 linear_q8=os.environ.get('MINI_LLM_LINEAR_GPU_Q8','0')=='1',
                 hc_bf16_storage=os.environ.get('MINI_LLM_HC_BF16_WEIGHTS','0')=='1'),
@@ -443,7 +458,7 @@ def parent(args):
         '--mem-available-floor-gib', str(args.mem_available_floor_gib),
         '--rss-anon-limit-gib', str(args.rss_anon_limit_gib),
         '--victim-policy', args.victim_policy, '--cpu-backend', args.cpu_backend,
-        '--cpu-workers', str(args.cpu_workers),
+        '--cpu-workers', str(args.cpu_workers), '--response-repeats', str(getattr(args, 'response_repeats', 1)),
         '--expert-cache-gib',str(getattr(args,'expert_cache_gib',6)),
         '--host-budget-gib',str(getattr(args,'host_budget_gib',8)),
         '--resident-host-gib',str(getattr(args,'resident_host_gib',0))]
@@ -522,6 +537,7 @@ def main():
     parser.add_argument('--victim-policy', choices=('sort', 'heap'), default='sort')
     parser.add_argument('--cpu-backend', choices=('native', 'ggml', 'ggml_pool'), default='native')
     parser.add_argument('--cpu-workers', type=int, default=15)
+    parser.add_argument('--response-repeats', type=int, choices=range(1,5), default=1)
     parser.add_argument('--group-mixed-decode', action='store_true')
     parser.add_argument('--overlap-shared', action='store_true')
     parser.add_argument('--gdn-graph-decode', action='store_true')

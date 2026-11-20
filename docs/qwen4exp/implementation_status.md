@@ -1,6 +1,24 @@
 # Qwen4Exp implementation status
 
-## Current — 0293–0307 critical-path work; target 50/s not met
+## Current — 0310–0317 comparative profiling; target 50/s still not met
+
+Fresh installed Strata, full top10/no drafting/context1024, reaches **36.48283 / 49.25981 decode forwards/s** over two identical 359-token response repeats; the second response is hot, not the overall sustained rate. Its INT8 KV, 7.233GiB static profile cache and CPU placement differ from local FP32 KV/7GiB observed placement. `strata_launch_bench_capture.sh` remains the workload/launcher reference, not an unchanged newly completed launch.
+
+Implemented, opt-in, scope-numerically-validated: bounded parallel packed PLE row I/O (0312), complete native-service recurrent block capture (0313), adjacent recurrent-chain capture (0315), and complete short-context QSA-block capture with runtime positions and request-bound caches (0317). Real-checkpoint recurrent/chain captures preserve ten saved logits and all state hashes exactly; all12 QSA blocks preserve these against a **same capture-ready arithmetic** control. The full-model parity fixture uses CPU experts; mixed/resident arithmetic is separately tested. These are not new llama.cpp equivalence claims.
+
+Cooperative FP32 Triton QSA (0314) improves standalone operators 2.08–12.46x and agrees with FP64 at ~1.6–1.9e-7 relative L2, but the quantized full model changes 3.62–6.89% at saved prefixes. **Not quality accepted; remains opt-in.** No graph equation or checkpoint encoding was changed to force parity.
+
+No robust hot full-model gain is established: matched PLE control39.81/39.79 versus candidate39.44/40.19; recurrent38.24/41.04; cooperative39.51/41.70; chain39.18/39.95; completeQSA41.44/39.94 forwards/s. Higher CPU spin raises active-core use but regresses throughput; copied Strata affinity also regresses. Defaults stay unchanged. Cold PLE fault/latency reduction is real, not a hot-throughput claim.
+
+Final source selected regressions: **407 CPU passed/107 skipped/1 deselected; 284 actual CuPy passed/23 skipped/1 deselected**, including selected Qwen3-Next coverage (GPU modules also have collection skips). Prior evidence remains preserved. Numbered objectives/interfaces, numerical/performance/memory scopes, failed runs, source hashes and next dependency: `0310_0317_strata_comparison.md`, `0310_0317_results_v2.json`. Next: causal timeline attribution after complete-block capture; do not assume uncovered GPU gaps or higher CPU utilization are recoverable useful work.
+
+## Prior — 0308–0309 storage diagnosis; target 50/s still not met
+
+0308adds a payload-read-free Linuxmincorecensus over all1224checkpointtensors, with10passingtests. Latest canonical routed expert pages:50.292GBtotal/35.410GBresident/14.882GBnonresident; PLE28.866GBtotal/~0.697GBresident. This is file-page residency, not a CPU-complement or per-token attribution claim. 0309tests the existing4GiBanonymous CPUsource:2111bundles, no pinning/staging, identical371naturaloutputIDs,32.516forwards/s versus earlier35.159/s; **no demonstrated RAM-source gain**. No default/source-budget increase.
+
+Latest complete results/sourcehashes: `0295_0309_optimization_results_v1.json`; diagnostic contracts, memory limits, failed initial census and next per-source/decode-only I/O experiment: `0308_0309_storage_residency.md`. Production verified state remains471CPU/201GPUpassing selected regressions plus exact local checkpoint logits/state comparisons; no production edits after those regressions. Additional0308diagnostictests10passed. No50/scompletion claim.
+
+## Prior — 0293–0307 critical-path work; target 50/s not met
 
 The retained best controlled single observation is **42.64032 decode forwards/s** (0302 QSA frontend); latest adjacent control/shared-grid pair **40.05676 / 40.17001/s** shows no material model gain. Natural conversation runs with identical generated IDs measured **31.95859 / 35.15922/s**, with substantial remaining file I/O/major faults. Do not present forced-token replay as natural-generation throughput.
 

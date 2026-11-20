@@ -1,6 +1,16 @@
 # Qwen4Exp performance and memory history
 
-## Current — 0310–0317 fresh Strata comparison and bounded experiments
+## Current — 0318–0323; restart checkpoint, target unmet
+
+Best new completed warm controlled response **43.70105forwards/s** (0321); paired response41.99128/s. Complete top10/no drafts,19workers,50usspin,7GiBsizedcache, FP32KV, Q8GPU dense/experts, exactBF16HCstorage;128-output warmup plus two359-output/358-forward response repeats. **Not natural generation or a sustained50/s result.**
+
+0318 graph/publication combination40.69/43.36/s;0320 warp dots/value-tile32 improve exact standalone QSA~2x, while untiled/shared-stage variants lose and are not promoted. A0320long run stopped at second-request VRAM admission (partial, not complete).0321 retires orphaned bound graphs before new-state planning without reducing headroom; rerun completes41.99/43.70/s.0322 whole-token graph39.32/42.22/s, no gain; capture-ready PLE arithmetic has a separately unaccepted2.3–6.7%old-path logit difference.
+
+0323cProfile is diagnostic-only:11.498sinstrumented decode,716CuPy.get9.470sself/cumulative including queued device/native waits, not transfer-only time. Whole-tokenforward0.920scumulative and repeated eligibility/validation costs overlap. Do not add nested profile categories or remove safety readbacks based on their wait-inclusive durations.
+
+Final selected tests732CPU/586CuPupass; latest source/parity/guard ledger `0318_0323_execution_results_v1.json`, detailed report `0318_0323_execution_report.md`. Cold-cache post-reboot timings must be reported separately. Resume instructions: `RESTART_HANDOFF_0323.md`. Experimental modes remain off by default.
+
+## Prior — 0310–0317 fresh Strata comparison and bounded experiments
 
 **50 complete decode forwards/s remains unmet.** Fresh Strata full-top10/no-draft clean repeats measure36.48/49.26 forwards/s (profiled32.04/47.63); hot second response is not the two-response sustained rate. Effective context1024 and retained prompt/continuation IDs match the local diagnostic, but INT8 versus FP32 KV, cache7.233 versus7GiB and expert placement remain distinct. No unchanged full `standard-v1`/262144-context equivalence claim.
 

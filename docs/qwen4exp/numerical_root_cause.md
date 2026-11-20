@@ -6,6 +6,14 @@
 
 Production model/kernel mathematics and the pinned reference's mathematical implementation remain unchanged. Identical-input DeltaNet/QSA replay and continuous-state replay now pass over 16 fixed text tokens; full-model incremental/prefill logits and all active-state hashes match at prefixes 1/2/4/8/16. **The requested short-text validation gate has passed, with no demonstrated mathematical defect.** Initial performance profiling has started. Full independent model equivalence and arbitrary long-context correctness remain unclaimed.
 
+## 0318–0323 — Exact operator path and whole-token capture boundary
+
+User paused work for a PC restart; see `RESTART_HANDOFF_0323.md`. No new model-graph mathematical defect was demonstrated. Exact warp-dot/value-tile FP32 attention and the orphaned-request graph-retirement correction preserve saved actual-checkpoint logits/state hashes against local arithmetic. Latest selected regressions732CPU/586CuPupass, with skips/scopes recorded in `0318_0323_execution_results_v1.json`.
+
+Whole-token capture independently preserves ten saved logits and all state hashes against a prepared control. That control uses the existing capture-capable FP32 matmul for two PLE projections because CuPy's legacy cuBLAS wrapper refuses capture. **The prepared PLE arithmetic is not identical to the older cuBLAS path:** relativeL2logits2.309–6.735% over prefixes1/2/4/8/16. Quantization amplification remains a plausible explanation, not an automatic quality acceptance. Whole-token/PREP and the earlier cooperative reduction remain opt-in/unaccepted relative to the older path; do not merge their acceptance with exact capture parity.
+
+The CPU critical-path profile attributes9.47of11.50instrumentedseconds to wait-inclusive CuPy.get calls, not actual PCIe-copy time. This is an execution dependency, not numerical evidence or permission to remove validation. Current best completed warm controlled43.70forwards/s remains below50. Full comparison and remaining uncertainties: `0318_0323_execution_report.md`.
+
 ## 0310–0317 — New execution parity, and a separately unaccepted arithmetic candidate
 
 No new production graph defect was demonstrated. Bounded parallel PLE reads preserve original packed IQ4_NL bytes and exact row/state values. Complete recurrent-block and chain capture preserve ten saved real-checkpoint logit boundaries and all persistent-state hashes across two16-token requests. Complete short-context QSA capture preserves these against **the same capture-ready projection arithmetic**, with all12layers captured, runtime token positions and owner-bound caches. The CPU-expert full-model fixture does not replace separate mixed/resident GPU expert tests or independent llama.cpp validation.

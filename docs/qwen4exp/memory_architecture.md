@@ -1,6 +1,14 @@
 # Qwen4Exp memory and execution architecture
 
-## Current — 0310–0317 bounded I/O and complete-block graph ownership
+## Current — 0318–0323 request retirement and whole-token ownership
+
+0321 fixes a demonstrated replacement-state admission edge: finished-request graphs retained bound arrays until the next replay. Only when no weakly registered request states remain live, under the model execution lock, graph readers retire and unused allocator blocks are returned **before** new-state memory planning. Live-state buffers, admission headroom and failure checks are not bypassed. The previously failed partial run and successful two-response rerun are retained.
+
+Whole-token0322 optionally borrows frozen native plans and immutable packed sources, binds recurrent/QSA state/status, copies runtime positions/RoPE and read-only PLE history, and returns owned logits/newPLEhistory. Old subgraph pools retire before allocation; the private pool caps256MiB (latest long reserved179653120bytes). Bound orphaned allocations and token-pool reservations are included in planning and retired before native handles. No giant weight or PLE copy. Mode remains experimental/off and not quality accepted relative to older PLE arithmetic.
+
+RAM preflight refusals occurred as desktop/editor usage grew. Subsequent model runs used **stricter30/34 then28/32GiBhigh/hard caps**, with unchanged12GiBhostreserve, swap0 and7GiBGPUexpertcache. Cold/pressure differences must be retained in comparisons. No model/API/benchmark server should be running at the restart checkpoint; verify read-only after reboot. Authoritative guards, memory scopes and final source hashes: `0318_0323_execution_results_v1.json`; handoff: `RESTART_HANDOFF_0323.md`.
+
+## Prior — 0310–0317 bounded I/O and complete-block graph ownership
 
 - Optional `PackedRowReader` keeps a separate read-only descriptor, at most8I/O workers/16pending unique row reads per serialized batch, and an LRU of at most65536immutable90-byte PLE rows:5,898,240payloadbytes plus bounded Python overhead. `POSIX_FADV_RANDOM` reduces read-ahead; this is **not O_DIRECT** and OS page caching remains possible. No table-wide copy or full unquantized expert expansion. Reader workers/descriptors retire before model/store cleanup. Original mapped decoding remains available/default.
 - Complete recurrent block graphs borrow frozen native plans, canonical sources and protected GPU expert leases; warmup touches private state, request pointer changes recapture, and outside-capture retirement events protect graph teardown. Adjacent chains cap length3 and reserve16MiB/member. They do not silently change cache placement or expert arithmetic.

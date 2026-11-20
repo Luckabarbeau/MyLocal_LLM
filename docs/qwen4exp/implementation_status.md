@@ -1,6 +1,18 @@
 # Qwen4Exp implementation status
 
-## Current — 0310–0317 comparative profiling; target 50/s still not met
+## Current — 0323 restart checkpoint; optimization paused by user
+
+**User requested a PC restart and handoff. No further model work is running. Target50decode forwards/s remains unmet.** Resume from `RESTART_HANDOFF_0323.md`, not the older historical sections. Latest complete controlled pipeline0321 measures **41.99128 / 43.70105 forwards/s** over two359-output/358-forward repeats. This is forced-trajectory replay, not natural conversation throughput. Fresh Strata clean subset36.48/49.26/s is also separately warm-dependent, with distinct KV/cache/placement.
+
+0320 adds opt-in **bit-exact FP32** warp-dot/value-tile QSA (~2x standalone), including runtime-position graph dispatch. 0321 fixes orphaned request-graph retirement before replacement-state admission; all memory guards remain intact. 0322 whole-token capture covers all48layers/12QSA/PLE and passes same-prepared-arithmetic two-request parity, but39.32/42.22/s shows no gain. Preparing PLE with capture-capable FP32 matmul changes old cuBLAS-path logits2.3–6.7%; **whole-token/PREP are not quality accepted relative to the older path and remain off**. Cooperative0314 and slower exact0319 staging also remain off/unintegrated as documented.
+
+0323 decode-only CPU profile:9.47of11.50instrumentedseconds in716CuPy.get calls; this is queued GPU/native-work completion waiting, not physical transfer bandwidth or CPU utilization. Nested validation timings overlap and are much smaller. Removing validation would shift the wait, not demonstrate a gain. Do not restart blind spin/affinity tuning or assume every graph/host gap is removable latency.
+
+**Final source selected regressions:732CPU passed/116skipped/1deselected;586actualCuPy passed/24skipped/1deselected.** Includes selected Qwen3-Next coverage, with GPU collection skips explicitly recorded; no full training-suite claim. Latest all-state/logit parity is against the appropriate local-arithmetic controls, not a new independent llama.cpp equivalence proof.
+
+Source/artifact hashes, failed probes, exact numerics, memory scopes, commands and next dependency: `0318_0323_execution_report.md`, `0318_0323_execution_results_v1.json` (read-only reproducible check via `scripts/analyze_0318_0323_results.py --check`). Earlier0310–0317v2 snapshots are historical source states; do not overwrite/refresh them. All changes remain uncommitted; no checkpoint/reference mathematics was modified.
+
+## Prior — 0310–0317 comparative profiling; target 50/s still not met
 
 Fresh installed Strata, full top10/no drafting/context1024, reaches **36.48283 / 49.25981 decode forwards/s** over two identical 359-token response repeats; the second response is hot, not the overall sustained rate. Its INT8 KV, 7.233GiB static profile cache and CPU placement differ from local FP32 KV/7GiB observed placement. `strata_launch_bench_capture.sh` remains the workload/launcher reference, not an unchanged newly completed launch.
 

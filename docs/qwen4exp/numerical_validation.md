@@ -1,6 +1,16 @@
 # Qwen4Exp numerical validation record
 
-## Current follow-ups — 0310–0317
+## Current follow-ups — 0318–0323
+
+Final selected source tests: `0323_final_cpu_v1.xml` **732passed/116skipped/1deselected**, `0323_final_gpu_v1.xml` **586passed/24skipped/1deselected**. All latest relevant runs passed; earlier failed probes remain preserved and classified in `0318_0323_execution_results_v1.json`.
+
+Exact FP32 warp-dot/value-tile QSA preserves serial product/addition, softmax/value order and every tested uint32 output bit, including strided operands, runtime-position capture and uncommitted-cache sentinels. 0320/0321 real-checkpoint saved logits and all state hashes match the appropriate retained local controls over two16-token requests. 0321 retires only orphaned graph bindings before replacement-state admission; live states and checks remain protected.
+
+Whole-token0322 replays48layers/12QSA/PLE with exact ten saved logits/allstate hashes against **the same capture-ready PLE projection arithmetic**. Its PLE history outputs are owned and prior histories remain immutable. New FP32 projection reduction order differs from older cuBLAS PLE math, however: prefix1/2/4/8/16 relative logitL2 **2.309/3.124/3.130/6.702/6.735%**. This is distinct from capture correctness and is **not quality accepted**; TOKEN_GRAPH/PREP remain off. No new independent llama.cpp model-equivalence or arbitrary-long-context claim. Full-model parity fixtures freeze CPU expert placement; resident/mixed execution is separately operator-tested.
+
+Restart/next dependencies: `RESTART_HANDOFF_0323.md`, `0318_0323_execution_report.md`. No tolerance widening, expert omission, checkpoint change, or blanket FP16 conversion.
+
+## Prior follow-ups — 0310–0317
 
 Final selected source regressions: `0317_final_cpu_v1.xml` **407 passed/107 skipped/1 deselected**; `0317_final_gpu_v1.xml` **284 passed/23 skipped/1 deselected**. These are selected inference/diagnostic suites, not a full training-suite run. The CPU selection includes Qwen3-Next decoder/model passes; some GPU Qwen3-Next modules are collection-skipped, not newly passed.
 

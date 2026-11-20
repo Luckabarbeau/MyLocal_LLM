@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="8" time="7.105" timestamp="2026-11-19T22:44:27.724136-05:00" hostname="lucka-Z890-AORUS-ELITE-WIFI7"><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-0]" time="2.342"><failure message="RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor">selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7dde57930680&gt;, hits = 0, limit = 1, capture = True
+
+    @pytest.mark.parametrize('hits',[0,4,7,10])
+    @pytest.mark.parametrize('limit',[1,2])
+    @pytest.mark.parametrize('capture',[False,True])
+    def test_exact_same_site_complete_top10_dynamic_replay(selected_library,monkeypatch,hits,limit,capture):
+        from test_0268_device_expert_plan import managed
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_STAGE_LIMIT',str(limit))
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_GRAPH',str(int(capture)))
+        e=managed(selected_library)
+        ids=[19,0,511,4,7,11,3,1,13,9]
+        x=xp.asarray(np.random.default_rng(293).normal(0,.1,(1,256)).astype(np.float32))
+        try:
+            for i in ids[:hits]: e._prepare(0,i,x)
+            e.cache.set_admission_budget(0)
+            initial_requests=e.cache.counters['requests']
+            for repeat in range(4):
+                xx=x*(1+repeat*.1)
+                order=ids if repeat%2==0 else list(reversed(ids))
+                routes=np.linspace(.01+repeat*.01,.1,10,dtype=np.float32)
+                want=oracle(e,xx,order,routes,limit)
+                y=e.try_forward_device_plan(0,xx,xp.asarray(routes),xp.asarray(order,xp.int64),512)
+                actual=y.get()
+&gt;               e.check_native_service()
+
+tests/test_0293_native_expert_staging.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/expert_residency.py:633: in check_native_service
+    service.check()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;mini_llm.ops.native_expert_service.NativeExpertService object at 0x7dde56d3b0b0&gt;
+
+    def check(self):
+        # Readback is ordered after the model's GPU consumers, once per token.
+        # Accessing only a host scalar without this dependency would race.
+        error=int(self.device_failure.get()[0])
+        if error:
+            reason={1:'bounded GPU wait timed out',2:'native CPU batch failed',3:'epoch exhausted'}.get(error,str(error))
+&gt;           raise RuntimeError(f'Native expert service failed: {reason}; unload failed executor')
+E           RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor
+
+mini_llm/ops/native_expert_service.py:127: RuntimeError</failure></testcase><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-4]" time="2.071"><failure message="RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor">selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7dde571697f0&gt;, hits = 4, limit = 1, capture = True
+
+    @pytest.mark.parametrize('hits',[0,4,7,10])
+    @pytest.mark.parametrize('limit',[1,2])
+    @pytest.mark.parametrize('capture',[False,True])
+    def test_exact_same_site_complete_top10_dynamic_replay(selected_library,monkeypatch,hits,limit,capture):
+        from test_0268_device_expert_plan import managed
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_STAGE_LIMIT',str(limit))
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_GRAPH',str(int(capture)))
+        e=managed(selected_library)
+        ids=[19,0,511,4,7,11,3,1,13,9]
+        x=xp.asarray(np.random.default_rng(293).normal(0,.1,(1,256)).astype(np.float32))
+        try:
+            for i in ids[:hits]: e._prepare(0,i,x)
+            e.cache.set_admission_budget(0)
+            initial_requests=e.cache.counters['requests']
+            for repeat in range(4):
+                xx=x*(1+repeat*.1)
+                order=ids if repeat%2==0 else list(reversed(ids))
+                routes=np.linspace(.01+repeat*.01,.1,10,dtype=np.float32)
+                want=oracle(e,xx,order,routes,limit)
+                y=e.try_forward_device_plan(0,xx,xp.asarray(routes),xp.asarray(order,xp.int64),512)
+                actual=y.get()
+&gt;               e.check_native_service()
+
+tests/test_0293_native_expert_staging.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/expert_residency.py:633: in check_native_service
+    service.check()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;mini_llm.ops.native_expert_service.NativeExpertService object at 0x7dde569eb0b0&gt;
+
+    def check(self):
+        # Readback is ordered after the model's GPU consumers, once per token.
+        # Accessing only a host scalar without this dependency would race.
+        error=int(self.device_failure.get()[0])
+        if error:
+            reason={1:'bounded GPU wait timed out',2:'native CPU batch failed',3:'epoch exhausted'}.get(error,str(error))
+&gt;           raise RuntimeError(f'Native expert service failed: {reason}; unload failed executor')
+E           RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor
+
+mini_llm/ops/native_expert_service.py:127: RuntimeError</failure></testcase><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-7]" time="0.058" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-10]" time="0.076" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-0]" time="0.078" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-4]" time="2.062"><failure message="RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor">selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7dde5615ad20&gt;, hits = 4, limit = 2, capture = True
+
+    @pytest.mark.parametrize('hits',[0,4,7,10])
+    @pytest.mark.parametrize('limit',[1,2])
+    @pytest.mark.parametrize('capture',[False,True])
+    def test_exact_same_site_complete_top10_dynamic_replay(selected_library,monkeypatch,hits,limit,capture):
+        from test_0268_device_expert_plan import managed
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_STAGE_LIMIT',str(limit))
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_GRAPH',str(int(capture)))
+        e=managed(selected_library)
+        ids=[19,0,511,4,7,11,3,1,13,9]
+        x=xp.asarray(np.random.default_rng(293).normal(0,.1,(1,256)).astype(np.float32))
+        try:
+            for i in ids[:hits]: e._prepare(0,i,x)
+            e.cache.set_admission_budget(0)
+            initial_requests=e.cache.counters['requests']
+            for repeat in range(4):
+                xx=x*(1+repeat*.1)
+                order=ids if repeat%2==0 else list(reversed(ids))
+                routes=np.linspace(.01+repeat*.01,.1,10,dtype=np.float32)
+                want=oracle(e,xx,order,routes,limit)
+                y=e.try_forward_device_plan(0,xx,xp.asarray(routes),xp.asarray(order,xp.int64),512)
+                actual=y.get()
+&gt;               e.check_native_service()
+
+tests/test_0293_native_expert_staging.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+mini_llm/ops/expert_residency.py:633: in check_native_service
+    service.check()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;mini_llm.ops.native_expert_service.NativeExpertService object at 0x7dde569e30b0&gt;
+
+    def check(self):
+        # Readback is ordered after the model's GPU consumers, once per token.
+        # Accessing only a host scalar without this dependency would race.
+        error=int(self.device_failure.get()[0])
+        if error:
+            reason={1:'bounded GPU wait timed out',2:'native CPU batch failed',3:'epoch exhausted'}.get(error,str(error))
+&gt;           raise RuntimeError(f'Native expert service failed: {reason}; unload failed executor')
+E           RuntimeError: Native expert service failed: bounded GPU wait timed out; unload failed executor
+
+mini_llm/ops/native_expert_service.py:127: RuntimeError</failure></testcase><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-7]" time="0.073" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-10]" time="0.077" /></testsuite></testsuites>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="22" time="6.958" timestamp="2026-11-19T22:43:21.631876-05:00" hostname="lucka-Z890-AORUS-ELITE-WIFI7"><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-1-0]" time="1.529" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-1-4]" time="0.068" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-1-7]" time="0.055" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-1-10]" time="0.067" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-2-0]" time="0.070" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-2-4]" time="0.058" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-2-7]" time="0.062" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[False-2-10]" time="0.054" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-0]" time="0.070" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-4]" time="2.064"><failure message="AssertionError: &#10;Arrays are not equal&#10;&#10;nan location mismatch:&#10; ACTUAL: array([[nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,&#10;        nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,&#10;        nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,...&#10; DESIRED: array([[-4.791099e-03,  6.635265e-03, -2.039262e-03,  2.705859e-03,&#10;         1.255250e-03, -4.437110e-03,  3.900159e-03,  5.430893e-04,&#10;        -1.407601e-03,  6.964355e-03,  6.406535e-03, -9.400563e-04,...">selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7b9a9d186060&gt;, hits = 4, limit = 1, capture = True
+
+    @pytest.mark.parametrize('hits',[0,4,7,10])
+    @pytest.mark.parametrize('limit',[1,2])
+    @pytest.mark.parametrize('capture',[False,True])
+    def test_exact_same_site_complete_top10_dynamic_replay(selected_library,monkeypatch,hits,limit,capture):
+        from test_0268_device_expert_plan import managed
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_STAGE_LIMIT',str(limit))
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_GRAPH',str(int(capture)))
+        e=managed(selected_library)
+        ids=[19,0,511,4,7,11,3,1,13,9]
+        x=xp.asarray(np.random.default_rng(293).normal(0,.1,(1,256)).astype(np.float32))
+        try:
+            for i in ids[:hits]: e._prepare(0,i,x)
+            e.cache.set_admission_budget(0)
+            initial_requests=e.cache.counters['requests']
+            for repeat in range(4):
+                xx=x*(1+repeat*.1)
+                order=ids if repeat%2==0 else list(reversed(ids))
+                routes=np.linspace(.01+repeat*.01,.1,10,dtype=np.float32)
+                want=oracle(e,xx,order,routes,limit)
+                y=e.try_forward_device_plan(0,xx,xp.asarray(routes),xp.asarray(order,xp.int64),512)
+&gt;               np.testing.assert_array_equal(y.get(),want)
+E               AssertionError: 
+E               Arrays are not equal
+E               
+E               nan location mismatch:
+E                ACTUAL: array([[nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+E                       nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+E                       nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,...
+E                DESIRED: array([[-4.791099e-03,  6.635265e-03, -2.039262e-03,  2.705859e-03,
+E                        1.255250e-03, -4.437110e-03,  3.900159e-03,  5.430893e-04,
+E                       -1.407601e-03,  6.964355e-03,  6.406535e-03, -9.400563e-04,...
+
+tests/test_0293_native_expert_staging.py:71: AssertionError</failure></testcase><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-7]" time="0.053" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-1-10]" time="0.052" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-0]" time="2.051"><failure message="AssertionError: &#10;Arrays are not equal&#10;&#10;nan location mismatch:&#10; ACTUAL: array([[nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,&#10;        nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,&#10;        nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,...&#10; DESIRED: array([[-2.054106e-02,  1.065195e-02,  1.409987e-05,  1.293110e-02,&#10;         7.435824e-04, -1.913013e-03,  7.760846e-03,  1.403082e-03,&#10;        -5.439338e-03,  1.582476e-02,  2.697726e-03, -6.223010e-05,...">selected_library = '/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3'
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7b9a9d17e4b0&gt;, hits = 0, limit = 2, capture = True
+
+    @pytest.mark.parametrize('hits',[0,4,7,10])
+    @pytest.mark.parametrize('limit',[1,2])
+    @pytest.mark.parametrize('capture',[False,True])
+    def test_exact_same_site_complete_top10_dynamic_replay(selected_library,monkeypatch,hits,limit,capture):
+        from test_0268_device_expert_plan import managed
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_STAGE_LIMIT',str(limit))
+        monkeypatch.setenv('MINI_LLM_NATIVE_MOE_GRAPH',str(int(capture)))
+        e=managed(selected_library)
+        ids=[19,0,511,4,7,11,3,1,13,9]
+        x=xp.asarray(np.random.default_rng(293).normal(0,.1,(1,256)).astype(np.float32))
+        try:
+            for i in ids[:hits]: e._prepare(0,i,x)
+            e.cache.set_admission_budget(0)
+            initial_requests=e.cache.counters['requests']
+            for repeat in range(4):
+                xx=x*(1+repeat*.1)
+                order=ids if repeat%2==0 else list(reversed(ids))
+                routes=np.linspace(.01+repeat*.01,.1,10,dtype=np.float32)
+                want=oracle(e,xx,order,routes,limit)
+                y=e.try_forward_device_plan(0,xx,xp.asarray(routes),xp.asarray(order,xp.int64),512)
+&gt;               np.testing.assert_array_equal(y.get(),want)
+E               AssertionError: 
+E               Arrays are not equal
+E               
+E               nan location mismatch:
+E                ACTUAL: array([[nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+E                       nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+E                       nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,...
+E                DESIRED: array([[-2.054106e-02,  1.065195e-02,  1.409987e-05,  1.293110e-02,
+E                        7.435824e-04, -1.913013e-03,  7.760846e-03,  1.403082e-03,
+E                       -5.439338e-03,  1.582476e-02,  2.697726e-03, -6.223010e-05,...
+
+tests/test_0293_native_expert_staging.py:71: AssertionError</failure></testcase><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-4]" time="0.053" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-7]" time="0.052" /><testcase classname="tests.test_0293_native_expert_staging" name="test_exact_same_site_complete_top10_dynamic_replay[True-2-10]" time="0.052" /><testcase classname="tests.test_0293_native_expert_staging" name="test_shared_fixed_arena_across_layers_and_pending_close" time="0.061" /><testcase classname="tests.test_0293_native_expert_staging" name="test_invalid_epoch_poison_and_cleanup" time="0.062" /><testcase classname="tests.test_0287_native_expert_service" name="test_shared_service_dynamic_layers_replay_and_close" time="0.073" /><testcase classname="tests.test_0287_native_expert_service" name="test_bounded_wait_and_epoch_exhaustion[1]" time="0.002" /><testcase classname="tests.test_0287_native_expert_service" name="test_bounded_wait_and_epoch_exhaustion[3]" time="0.000" /><testcase classname="tests.test_0287_native_expert_service" name="test_model_rejects_failure_before_advancing_state" time="0.016" /></testsuite></testsuites>

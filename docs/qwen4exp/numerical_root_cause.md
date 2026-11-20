@@ -6,6 +6,14 @@
 
 Production model/kernel mathematics and the pinned reference's mathematical implementation remain unchanged. Identical-input DeltaNet/QSA replay and continuous-state replay now pass over 16 fixed text tokens; full-model incremental/prefill logits and all active-state hashes match at prefixes 1/2/4/8/16. **The requested short-text validation gate has passed, with no demonstrated mathematical defect.** Initial performance profiling has started. Full independent model equivalence and arbitrary long-context correctness remain unclaimed.
 
+## 0293–0307 — Optimization parity and precision preservation
+
+No new mathematical defect was identified or corrected. CPU gather/pair/VNNI candidates retain pinned GGML Q8_K/Q8_0 and exact per-row accumulation; losing variants remain off. Shared GPU IQ codebooks retain original packed bytes and exact Strata Q8_1 integer/FP32 operations. Fused shared-branch capture and fenced kernel publication alter scheduling/storage, not model equations or complete top10 routing.
+
+`0307_parity_comparison_v1.json` verifies ten actual-checkpoint logits boundaries at prefixes1/2/4/8/16 over two requests: maxabs0 and all persistent-state/reset hashes exact against the retained uncaptured local-arithmetic control. The full-model fixture freezes empty GPU expert placement; resident GPU math has separate pinned-Strata/real-checkpoint operator checks. These are not new independent llama.cpp full-model-equivalence results. Final selected regressions471CPU passed43skipped;201actualCuPy passed4skipped, including Qwen3-Next.
+
+Performance remains unresolved: latest adjacent hot controlled40.06/40.17forwards/s; natural identical-ID runs31.96/35.16/s have3.05/1.85GBresponse-intervalreads and39383/26760majorfaults. Those storage/scheduling effects are not numerical graph defects and do not justify changing precision or omitting experts. Detailed per-patch evidence, limits and next page-source attribution experiment: `0295_0307_critical_path_optimization.md`. Target50/s is not met.
+
 ## 0281–0288 — Scoped precision alignment, not forced reference agreement
 
 The performance path now optionally uses native GPU Q8_1 for all ten actual target packed formats. Extracted pinned Strata dot parts and rows match bit-for-bit; FP64 decoded-weight/decoded-Q8 baselines and explicit IQ2_S/IQ3_XXS integer-truncation bounds remain independent checks. CPU Q8_K/Q8_0 is distinct. Quantization scales use checkpoint/native half encodings; FP32 activation/reduction policy is not replaced by blanket FP16. Generic/warmup fused experts are not silently claimed converted by the frozen-plan flag.

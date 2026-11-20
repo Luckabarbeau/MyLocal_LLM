@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Original MyLocal_LLM bridge; no GGML quantization mathematics copied.
+// Original MyLocal_LLM scheduling bridge; optional arithmetic derivatives
+// reside in their separately attributed MIT-licensed headers.
 // Calls the separately supplied MIT-licensed GGML library through its public
 // ggml-cpu.h ABI (reference revision 171e8846b4af9766c354064cb776cb34a50f053f).
 #include <cmath>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <new>
 #include <vector>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -18,6 +20,10 @@
 #include <sched.h>
 #endif
 #include "q2_cpu_simd.h"
+#include "iq3_cpu_simd.h"
+#include "iq3xxs_cpu_simd.h"
+#include "iq3xxs_cpu_pair.h"
+#include "iq4_cpu_vnni.h"
 
 using Quantize = void (*)(const float *, void *, int64_t);
 using Dot = void (*)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
@@ -65,13 +71,21 @@ public:
     alignas(64) std::atomic<size_t> epoch{0};
     alignas(64) std::atomic<int> phase{0};
     std::atomic<int> spin_us{0};
+    int tasks_per_worker=3;
     std::atomic<bool> host_help{false}, task_mode{false}, fused_hidden{false};
     alignas(64) std::atomic<uint64_t> task_queue{0};
     alignas(64) std::atomic<uint32_t> task_remaining{0}, task_total{0}, task_chunk{1};
     static constexpr uint64_t task_mask = (uint64_t(1)<<22)-1;
     int arrived = 0, count = 0, assisting = 0;
     std::atomic<bool> busy{false}, stopping{false};
+    std::atomic<int> handoff_count{0};
     float *output = nullptr;
+    bool trace_phases=false;
+    uint64_t phase_clock[4]={0,0,0,0};
+    static uint64_t clock_ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
 
     RowPool(int dim, int width, int cap, int threads)
         : d(dim), f(width), capacity(cap), experts(cap), hidden(size_t(cap)*width),
@@ -168,11 +182,12 @@ public:
         barrier.notify_all();
     }
     void publish_task_phase(int p) {
+        if(trace_phases) phase_clock[p]=clock_ns();
         const uint64_t tag = (uint64_t(epoch.load())*4+p)<<22;
         // An exhausted sentinel closes the previous queue before counters change.
         task_queue.store(tag|task_mask, std::memory_order_release);
         const size_t rows = p==1 ? size_t(count) : size_t(count)*(p==0 ? f : d);
-        const size_t target = 3*(workers.size()+(host_help.load()?1:0));
+        const size_t target = size_t(tasks_per_worker)*(workers.size()+(host_help.load()?1:0));
         const size_t chunk = p==1 ? 1 : std::max<size_t>(16,(((rows+target-1)/target+15)/16)*16);
         task_chunk.store(uint32_t(chunk));
         const uint32_t tasks = uint32_t((rows+chunk-1)/chunk);
@@ -206,10 +221,14 @@ public:
                     // The final gate task acquires every gate write through the
                     // completion counter. Quantize the bounded hidden rows here,
                     // avoiding a mostly idle worker phase for <=capacity rows.
+                    if(trace_phases) phase_clock[1]=clock_ns();
                     compute_range(1,0,size_t(count));
                     publish_task_phase(2);
                 } else if (p<2) publish_task_phase(p+1);
-                else { phase=3; busy=false; done.notify_all(); barrier.notify_all(); }
+                else {
+                    if(trace_phases) phase_clock[3]=clock_ns();
+                    phase=3; busy=false; done.notify_all(); barrier.notify_all();
+                }
             }
         }
     }
@@ -254,10 +273,21 @@ public:
                 const auto &w = experts[e];
                 if (p == 0) {
                     float g, u;
-                    w.gate.dot(d, &g, 0, w.gate.weight+size_t(row)*w.gate.stride, 0,
-                               input(w.gate), 0, 1);
-                    w.up.dot(d, &u, 0, w.up.weight+size_t(row)*w.up.stride, 0,
-                             input(w.up), 0, 1);
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+                    if(w.gate.dot==mylocal_iq3xxs_pair_single && w.up.dot==mylocal_iq3xxs_pair_single &&
+                       w.gate.qtype==15 && w.up.qtype==15) {
+                        float gu[2];
+                        mylocal_iq3xxs_rows<2>(d,gu,w.gate.weight+size_t(row)*w.gate.stride,
+                            w.up.weight+size_t(row)*w.up.stride,static_cast<const uint8_t*>(input(w.gate)));
+                        g=gu[0]; u=gu[1];
+                    } else
+#endif
+                    {
+                        w.gate.dot(d, &g, 0, w.gate.weight+size_t(row)*w.gate.stride, 0,
+                                   input(w.gate), 0, 1);
+                        w.up.dot(d, &u, 0, w.up.weight+size_t(row)*w.up.stride, 0,
+                                 input(w.up), 0, 1);
+                    }
                     hidden[size_t(e)*f+row] = (g/(1.0f+std::exp(-g)))*u;
                 } else if (p == 1) {
                     w.down.quantize(hidden.data()+size_t(e)*f, qhidden[e].data(), f);
@@ -313,6 +343,14 @@ extern "C" int mylocal_ggml_pool_set_spin(void *pool, int microseconds) noexcept
     p.spin_us.store(microseconds, std::memory_order_relaxed);
     return 0;
 }
+extern "C" int mylocal_ggml_pool_set_task_factor(void *pool, int factor) noexcept {
+    if(!pool || factor<1 || factor>16) return 1;
+    auto &p=*static_cast<RowPool*>(pool);
+    std::lock_guard<std::mutex> lock(p.mutex);
+    if(p.busy) return 4;
+    p.tasks_per_worker=factor;
+    return 0;
+}
 extern "C" int mylocal_ggml_pool_set_task_mode(void *pool, int enabled) noexcept {
     if (!pool || (enabled!=0 && enabled!=1)) return 1;
     auto &p = *static_cast<RowPool *>(pool);
@@ -354,6 +392,14 @@ extern "C" int mylocal_ggml_pool_submit(void *pool, const PoolExpert *experts,
     try { return static_cast<RowPool *>(pool)->submit(experts, count, x, out); }
     catch (...) { return 3; }
 }
+extern "C" int mylocal_ggml_pool_clear_registered(void *pool) noexcept {
+    if(!pool) return 1;
+    auto &p=*static_cast<RowPool*>(pool);
+    std::lock_guard<std::mutex> lock(p.mutex);
+    if(p.busy || p.handoff_count.load()) return 4;
+    p.registered.clear();
+    return 0;
+}
 extern "C" int mylocal_ggml_pool_register(void *pool, const PoolExpert *expert, int *index) noexcept {
     if (!pool) return 1;
     try { return static_cast<RowPool *>(pool)->register_expert(expert,index); } catch (...) { return 3; }
@@ -380,10 +426,13 @@ struct NativeHandoff {
     float *output;
     int k;
     std::vector<int> registry;
+    std::vector<uint64_t> route_heat;
+    std::vector<std::array<uint64_t,9>> timeline;
     uint64_t runs = 0, misses = 0, hits = 0, errors = 0, elapsed_ns = 0, batches = 0;
     NativeHandoff(RowPool *p, const float *x, const int *m, float *y, int n,
                   const int *ids, int experts)
-        : pool(p), input(x), metadata(m), output(y), k(n), registry(ids,ids+experts) {}
+        : pool(p), input(x), metadata(m), output(y), k(n), registry(ids,ids+experts) { ++pool->handoff_count; }
+    ~NativeHandoff() { --pool->handoff_count; }
 };
 extern "C" void *mylocal_ggml_handoff_create(void *pool, const float *x, const int *meta,
         float *out, int k, const int *registry, int n) noexcept {
@@ -405,6 +454,8 @@ extern "C" void mylocal_ggml_handoff_run(void *handle) noexcept {
             previous=id;
             if (h.registry[id]>=0) indices[count++]=h.registry[id];
         }
+        if (!error && !h.route_heat.empty())
+            for(int i=0;i<h.k;++i) ++h.route_heat[h.metadata[i]];
         if (!error && count) {
             error=h.pool->submit_registered(indices,count,h.input,h.output);
             if (!error) h.pool->wait();
@@ -415,8 +466,16 @@ extern "C" void mylocal_ggml_handoff_run(void *handle) noexcept {
         // Poison, never silently reuse stale CPU rows on an invalid epoch.
         std::fill(h.output,h.output+size_t(h.k)*h.pool->d,NAN);
     } else { h.misses+=count; h.hits+=h.k-count; h.batches+=bool(count); }
-    h.elapsed_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now()-start).count();
+    const auto end=std::chrono::steady_clock::now();
+    h.elapsed_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count();
+    if(!h.timeline.empty()) h.timeline[(h.runs-1)%h.timeline.size()]={{h.runs,
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count()),
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(end.time_since_epoch()).count()),
+        uint64_t(count),uint64_t(error),
+        !error && count ? h.pool->phase_clock[0] : 0,
+        !error && count ? h.pool->phase_clock[1] : 0,
+        !error && count ? h.pool->phase_clock[2] : 0,
+        !error && count ? h.pool->phase_clock[3] : 0}};
 }
 extern "C" void mylocal_ggml_handoff_stats(void *handle, uint64_t *out) noexcept {
     if (!handle || !out) return;
@@ -424,10 +483,46 @@ extern "C" void mylocal_ggml_handoff_stats(void *handle, uint64_t *out) noexcept
     out[0]=h.runs; out[1]=h.misses; out[2]=h.hits; out[3]=h.errors;
     out[4]=h.elapsed_ns; out[5]=h.batches;
 }
+extern "C" uint64_t mylocal_ggml_clock_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+extern "C" int mylocal_ggml_handoff_timeline_enable(void *handle) noexcept {
+    if(!handle) return 1;
+    auto &h=*static_cast<NativeHandoff*>(handle);
+    std::lock_guard<std::mutex> lock(h.pool->mutex);
+    if(h.runs || h.pool->busy || !h.pool->task_mode) return 1;
+    try { h.timeline.resize(2048); h.pool->trace_phases=true; return 0; } catch(...) { return 2; }
+}
+extern "C" int mylocal_ggml_handoff_timeline(void *handle,uint64_t *out,int capacity) noexcept {
+    if(!handle || !out) return -1;
+    const auto &h=*static_cast<NativeHandoff*>(handle);
+    if(h.timeline.empty() || capacity<int(h.timeline.size())) return -1;
+    const uint64_t count=std::min<uint64_t>(h.runs,h.timeline.size());
+    for(uint64_t i=0;i<count;++i) {
+        const auto &row=h.timeline[(h.runs-count+i)%h.timeline.size()];
+        std::copy(row.begin(),row.end(),out+9*i);
+    }
+    return int(count);
+}
+extern "C" int mylocal_ggml_handoff_profile_enable(void *handle) noexcept {
+    if(!handle) return 1;
+    auto &h=*static_cast<NativeHandoff*>(handle);
+    if(h.runs) return 1; // Setup-only, before callbacks/service publication.
+    try { h.route_heat.assign(h.registry.size(),0); return 0; } catch(...) { return 2; }
+}
+extern "C" int mylocal_ggml_handoff_profile(void *handle,uint64_t *out,int n) noexcept {
+    if(!handle || !out) return 1;
+    const auto &h=*static_cast<NativeHandoff*>(handle);
+    if(size_t(n)!=h.route_heat.size()) return 1;
+    std::copy(h.route_heat.begin(),h.route_heat.end(),out);
+    return 0;
+}
 extern "C" void mylocal_ggml_handoff_destroy(void *handle) noexcept {
     delete static_cast<NativeHandoff *>(handle);
 }
 
+#include "native_expert_staging.h"
 #include "native_expert_service.h"
 
 extern "C" int mylocal_ggml_linear(

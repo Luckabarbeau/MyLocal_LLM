@@ -1,7 +1,9 @@
 """Bounded, serial Strata short-workload replay; no HTTP or configuration parity.
 
-The parent watches time, RssAnon and MemAvailable, NOT total RSS: expert mmap
-file residency can approach 46 GiB. No model is loaded by importing this module.
+CLI execution requires the separate memory-limited 0290 systemd launcher.
+The inner parent also watches time, RssAnon and MemAvailable, NOT total RSS:
+these sampled guards alone do not protect the desktop from memory pressure.
+No model is loaded by importing this module.
 """
 import argparse
 import gc
@@ -311,6 +313,8 @@ def child(args):
             row['_forced_output_token_ids']=tokens
     options = dict(MODEL_OPTIONS, expert_victim_policy=args.victim_policy,
                    cache_bytes=int(getattr(args,'expert_cache_gib',6)*GiB),
+                   host_budget_bytes=int(getattr(args,'host_budget_gib',8)*GiB),
+                   host_expert_bytes=int(getattr(args,'resident_host_gib',0)*GiB),
                    expert_cpu_backend=args.cpu_backend, cpu_workers=args.cpu_workers,
                    group_mixed_decode=args.group_mixed_decode,
                    overlap_shared=args.overlap_shared,
@@ -368,11 +372,17 @@ def child(args):
         xp.cuda.get_current_stream().synchronize()
         xp.get_default_memory_pool().free_all_blocks()
         placement_profile=None
+        resident_host_setup=None
         for row, prompt in zip(rows, prompts):
             if (row['request_id']!='warmup' and placement_profile is None and
                     getattr(args,'warmup_frequency_placement',False)):
                 placement_profile=model.expert_executor.install_observed_profile()
                 (args.output/'placement_profile.json').write_text(json.dumps(placement_profile,indent=2))
+            if (row['request_id']!='warmup' and resident_host_setup is None and
+                    getattr(args,'resident_host_gib',0)>0):
+                resident_host_setup=model.prepare_host_experts(pin=getattr(args,'resident_host_pin',False),
+                    reserve_bytes=int(args.mem_available_floor_gib*GiB),progress=lambda *unused:guard())
+                (args.output/'resident_host_setup.json').write_text(json.dumps(resident_host_setup,indent=2))
             if row['request_id'] != 'warmup' and args.promotion_limit is not None:
                 model.expert_executor.cache.set_admission_budget(
                     args.promotion_limit, window_requests=480)
@@ -384,6 +394,7 @@ def child(args):
         report = dict(cases=results, provenance=provenance, comparison=COMPARISON,
             options=options, placement=dict(after_warmup_promotions_per_480_requests=args.promotion_limit),
             host_warming=warming, initial_memory=baseline,placement_profile=placement_profile,
+                        resident_host_setup=resident_host_setup,
             forced_tokens_source=None if forced_path is None else str(Path(forced_path).resolve()),
             cpu_backend_provenance=getattr(model.expert_executor._ggml_cpu, 'provenance', None),
             gdn_graph_statistics=[m.graph_statistics() for m in getattr(model, '_gdn_graph_owners', ())],
@@ -391,6 +402,9 @@ def child(args):
             shared_graph_statistics=[m.graph_statistics() for m in getattr(model,'_shared_graph_owners',())],
             qsa_frontend_graph_statistics=[b.mixer._frontend_graph.statistics() for b in model.blocks
                 if not b.recurrent and b.mixer._frontend_graph is not None],
+            native_timelines=[p.native_handoff.timeline_snapshot() for p in
+                model.expert_executor._device_expert_plans.values() if p.native_handoff is not None and
+                p.native_handoff.timeline is not None],
             cpu_pool_spin_us=getattr(model.expert_executor._ggml_row_pool, 'spin_us', None),
             cpu_configuration=dict(workers=args.cpu_workers,
                 host_help=getattr(model.expert_executor._ggml_row_pool, 'host_help', False),
@@ -398,6 +412,11 @@ def child(args):
                 fused_hidden=getattr(model.expert_executor._ggml_row_pool,'fused_hidden',False),
                                 native_moe_handoff=os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')=='1',
                                                 native_moe_service=os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE','0')=='1',
+                                                native_stage_limit=int(os.environ.get('MINI_LLM_NATIVE_MOE_STAGE_LIMIT','0')),
+                                                native_stage_source=os.environ.get('MINI_LLM_NATIVE_MOE_STAGE_SOURCE','bounce'),
+                                                native_timeline=os.environ.get('MINI_LLM_NATIVE_MOE_TIMELINE','0')=='1',
+                                                bound_recurrent_state=os.environ.get('MINI_LLM_BOUND_RECURRENT_STATE','0')=='1',
+                                                graph_device_copy=os.environ.get('MINI_LLM_GRAPH_DEVICE_COPY','0')=='1',
                                                                 sized_expert_slots=os.environ.get('MINI_LLM_SIZED_EXPERT_SLOTS','0')=='1',
                                                 native_moe_graph=os.environ.get('MINI_LLM_NATIVE_MOE_GRAPH','0')=='1',
                                                                 device_plan_specialized=os.environ.get('MINI_LLM_DEVICE_PLAN_SPECIALIZED','0')=='1',
@@ -425,7 +444,11 @@ def parent(args):
         '--rss-anon-limit-gib', str(args.rss_anon_limit_gib),
         '--victim-policy', args.victim_policy, '--cpu-backend', args.cpu_backend,
         '--cpu-workers', str(args.cpu_workers),
-        '--expert-cache-gib',str(getattr(args,'expert_cache_gib',6))]
+        '--expert-cache-gib',str(getattr(args,'expert_cache_gib',6)),
+        '--host-budget-gib',str(getattr(args,'host_budget_gib',8)),
+        '--resident-host-gib',str(getattr(args,'resident_host_gib',0))]
+    if getattr(args,'resident_host_pin',False):
+        command.append('--resident-host-pin')
     if getattr(args,'force_tokens_from',None) is not None:
         command.extend(['--force-tokens-from',str(args.force_tokens_from.resolve())])
     if getattr(args,'warmup_frequency_placement',False):
@@ -491,6 +514,9 @@ def main():
     parser.add_argument('--cases', nargs='+', choices=CASES, default=list(CASES[:2]))
     parser.add_argument('--host-warm-gib', type=float, default=0)
     parser.add_argument('--expert-cache-gib',type=float,default=6)
+    parser.add_argument('--host-budget-gib',type=float,default=8)
+    parser.add_argument('--resident-host-gib',type=float,default=0)
+    parser.add_argument('--resident-host-pin',action='store_true')
     parser.add_argument('--warmup-frequency-placement',action='store_true')
     parser.add_argument('--force-tokens-from',type=Path,help='Controlled trajectory from retained result.json; full logits/sampler still execute')
     parser.add_argument('--victim-policy', choices=('sort', 'heap'), default='sort')
@@ -510,7 +536,8 @@ def main():
     parser.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if any(not math.isfinite(v) or v < 0 for v in
-           (args.host_warm_gib, args.mem_available_floor_gib, args.rss_anon_limit_gib,args.expert_cache_gib)):
+           (args.host_warm_gib, args.mem_available_floor_gib, args.rss_anon_limit_gib,args.expert_cache_gib,
+                       args.host_budget_gib,args.resident_host_gib)):
         parser.error('Memory budgets must be finite and nonnegative')
     if args.cpu_workers < 1:
         parser.error('CPU workers must be positive')
@@ -518,6 +545,8 @@ def main():
         parser.error('Promotion limit must be nonnegative and requires a leading warmup case')
     if len(set(args.cases)) != len(args.cases):
         parser.error('Cases must be unique')
+    from run_0290_isolated_benchmark import require_isolation
+    require_isolation()  # Before headers, CUDA initialization, warmup or payloads.
     if args.child:
         child(args)
     else:

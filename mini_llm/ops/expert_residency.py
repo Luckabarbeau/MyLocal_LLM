@@ -486,6 +486,7 @@ class HeterogeneousExpertExecutor:
             raise ValueError('Invalid bounded expert slot sizes')
         self.slot_staging_budget_bytes = slot_staging_budget_bytes
         self._slot_arena = None
+        self._resident_source = None
         if routing_profiler is not None and routing_profiler.identity["model_id"] != model_id:
             raise ValueError("Routing trace model identity does not match executor")
         self.routing_profiler = routing_profiler
@@ -585,12 +586,45 @@ class HeterogeneousExpertExecutor:
         if self._ggml_row_pool is not None:
             self._ggml_row_pool.close()
             self._ggml_row_pool = None
+        if self._resident_source is not None:
+            self._resident_source.close()
+            self._resident_source=None
         if error is not None:
             raise error
         if self._slot_arena is not None:
             # Arena backing cannot retire before consumers on other streams.
             for event, _ in self.cache._inflight_groups:
                 event.synchronize()
+
+    def prepare_resident_host_source(self,keys,*,budget_bytes,pin=False,reserve_bytes=4*1024**3,progress=None):
+        """Copy only the GPU-cache complement at an idle, pre-plan setup seam."""
+        if self._resident_source is not None or self._dispatch_depth or self._device_expert_plans:
+            raise ValueError('Resident source setup requires idle executor before device plans')
+        if self._ggml_row_pool is not None and self._ggml_row_pool._pending is not None:
+            raise RuntimeError('Resident source setup cannot race a CPU batch')
+        if BACKEND_NAME=='cupy': xp.cuda.get_current_stream().synchronize()
+        if self.cache._busy_keys():
+            raise RuntimeError('Resident source setup cannot replace in-flight weights')
+        from .resident_expert_source import ResidentPackedExpertSource
+        complement=tuple(k for k in keys if k not in self.cache.resident)
+        candidate=ResidentPackedExpertSource(self._host_weights,complement,
+            budget_bytes=budget_bytes,pin=pin,reserve_bytes=reserve_bytes,progress=progress)
+        try:
+            # Warmup IDs referenced the canonical mmap. No active job/plan may
+            # retain those IDs while the next registry uses the RAM copies.
+            if self._ggml_row_pool is not None:
+                self._ggml_row_pool.clear_registrations()
+        except Exception:
+            candidate.close()
+            raise
+        self._resident_source=candidate
+        return candidate.statistics()
+
+    def cpu_source_weights(self,key,weights=None):
+        source=self._resident_source
+        if source is not None and key in source.bundles:
+            return source.weights(key)
+        return self._host_weights(key) if weights is None else weights
 
     def check_native_service(self):
         """Once-per-model-step failure seam; never expose a timed-out token."""
@@ -646,7 +680,10 @@ class HeterogeneousExpertExecutor:
     def statistics(self):
         for plan in self._device_expert_plans.values():
             plan.flush_statistics()
+        arena=getattr(getattr(self._ggml_row_pool,'_native_service',None),'stage_arena',None)
         return {
+            'native_staging_buffers': None if arena is None else dict(
+                shared=True,host_bytes=arena.host.nbytes,device_bytes=arena.device.nbytes),
             "device": self.cache.statistics(),
             "host_dequant": self.host_cache.statistics(),
             "execution": dict(self.counters),
@@ -655,6 +692,7 @@ class HeterogeneousExpertExecutor:
             "native_handoffs": [p.native_handoff.statistics() for p in self._device_expert_plans.values()
                                 if p.native_handoff is not None],
             "slots": None if self._slot_arena is None else self._slot_arena.statistics(),
+            "host_source": None if self._resident_source is None else self._resident_source.statistics(),
         }
 
     def _host_weights(self, key):
@@ -726,6 +764,7 @@ class HeterogeneousExpertExecutor:
 
     def _cpu_forward_numpy(self, key, weights, x_host):
         """Execute a selected expert entirely on host; never call CuPy here."""
+        weights=self.cpu_source_weights(key,weights)
         dtype = np.float64 if x_host.dtype == np.float64 else np.float32
         x_cpu = np.asarray(x_host, dtype=dtype)
         gate, up, down = weights
@@ -908,12 +947,12 @@ class HeterogeneousExpertExecutor:
                                      x, ready, device_id, gpu_y, trace)
         return self._pool.submit(self._run_cpu, key, weights, x, trace)
 
-    def try_forward_device_plan(self, layer_id, x, weights, indices, n_experts, *, on_cpu_submitted=None):
+    def try_forward_device_plan(self, layer_id, x, weights, indices, n_experts, *, on_cpu_submitted=None, gpu_branch=None):
         if not self.device_expert_plan:
             return None
         from .device_expert_plan import try_forward
         return try_forward(self, layer_id, x, weights, indices, n_experts,
-                                   on_cpu_submitted=on_cpu_submitted)
+                           on_cpu_submitted=on_cpu_submitted, gpu_branch=gpu_branch)
 
     def try_forward_decode_batch(self, layer_id, expert_ids, x, routing_weights, slots, *,
                                      on_cpu_submitted=None):
@@ -984,7 +1023,7 @@ class HeterogeneousExpertExecutor:
             row_pool = self._ggml_row_pool
             if cpu and row_pool is not None and len(cpu) <= row_pool.capacity and all(
                     isinstance(w, PackedGGUFWeight) for i in cpu for w in prepared[i][2]):
-                jobs.append(row_pool.submit(host_x, [prepared[i][2] for i in cpu], out=host_out))
+                jobs.append(row_pool.submit(host_x, [self.cpu_source_weights(prepared[i][0],prepared[i][2]) for i in cpu], out=host_out))
                 self.counters['cpu_submitted'] += len(cpu)
                 self.counters['ggml_cpu_experts'] += len(cpu)
                 self.counters['ggml_row_batches'] += 1

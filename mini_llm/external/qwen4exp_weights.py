@@ -231,7 +231,7 @@ class Qwen4ExpWeights:
                     static_device_budget_bytes=4*GiB, device_budget_bytes=8*GiB,
                     cache_bytes=0, headroom_bytes=512*1024**2, staging_bytes=64*1024**2,
                     activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0,
-                    graph_workspace_bytes=0):
+                    graph_workspace_bytes=0,host_expert_bytes=0):
         h = self.headers
         auto_cache = cache_bytes == 'auto'
         if auto_cache:
@@ -249,7 +249,7 @@ class Qwen4ExpWeights:
         budgets = dict(host_budget_bytes=host_budget_bytes, static_device_budget_bytes=static_device_budget_bytes,
             device_budget_bytes=device_budget_bytes, cache_bytes=cache_bytes, headroom_bytes=headroom_bytes,
             staging_bytes=staging_bytes, activation_bytes=activation_bytes,
-            graph_workspace_bytes=graph_workspace_bytes)
+            graph_workspace_bytes=graph_workspace_bytes,host_expert_bytes=host_expert_bytes)
         for k,v in budgets.items():
             integer(v,k)
         r, a = h.mixer, h.attention
@@ -279,7 +279,7 @@ class Qwen4ExpWeights:
                 if supports_packed_gpu_type(desc.quant_type) and device_static+desc.nbytes <= static_device_budget_bytes:
                     names.append(name); device_static += desc.nbytes
         host_static = h.dense_bytes if BACKEND_NAME == 'numpy' else 0
-        host_total = host_static+h.constructor_bytes+staging+headroom_bytes
+        host_total = host_static+h.constructor_bytes+staging+headroom_bytes+host_expert_bytes
         device_total = device_static+cache_bytes+headroom_bytes
         if BACKEND_NAME == 'numpy':
             host_total += state+activation

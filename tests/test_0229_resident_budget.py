@@ -154,3 +154,34 @@ def test_numpy_model_does_not_credit_host_residency(capacity, monkeypatch):
     assert model.memory_plan(1, 1)['state_bytes'] == state.reserved_bytes
     assert credits == [0]
     assert memory.calls == 0
+
+
+def test_orphaned_bound_state_credit_is_owned_deduplicated_and_not_live(capacity,monkeypatch):
+    weights,memory,budgets=capacity
+    model=built_model(weights,budgets)
+    first=model.create_generation_state(1,16)
+    history=SimpleNamespace(data=SimpleNamespace(ptr=1000),nbytes=96)
+    delta=SimpleNamespace(data=SimpleNamespace(ptr=2000),nbytes=128)
+    first.recurrent[0]=SimpleNamespace(conv=SimpleNamespace(history=history),
+        delta=SimpleNamespace(memory=delta))
+    graph=SimpleNamespace(bound_arrays=lambda:(history,delta))
+    segment=SimpleNamespace(graph=graph,graph_statistics=lambda:dict(pool_reserved_bytes=0))
+    model._pre_moe_segments={0:segment,1:segment}
+    assert model._orphaned_bound_state_bytes()==0
+    original=weights.memory_plan; credits=[]
+    def tracked(*args,**kwargs):
+        credits.append(kwargs['resident_device_bytes'])
+        return original(*args,**kwargs)
+    monkeypatch.setattr(weights,'memory_plan',tracked)
+    assert model.memory_plan(1,16)==model.plan
+    assert credits[-1]==model.plan['device_static_bytes']+first.reserved_bytes
+    del first
+    assert not model._states
+    assert model._orphaned_bound_state_bytes()==224
+    remaining=model.plan['device_reserved_bytes']-model.plan['device_static_bytes']-224
+    memory.free=remaining-1
+    with pytest.raises(MemoryError,match=f'need {remaining}, free {remaining-1}'):
+        model.memory_plan(1,16)
+    memory.free+=1
+    assert model.memory_plan(1,16)==model.plan
+    assert credits[-1]==model.plan['device_static_bytes']+224

@@ -153,16 +153,20 @@ class DeviceExpertPlan:
             self.retired.synchronize()
             self.pending = False
 
-    def forward(self, x, routes, ids, *, on_cpu_submitted=None):
+    def forward(self, x, routes, ids, *, on_cpu_submitted=None, gpu_branch=None):
         from .expert_residency import ExpertKey
         stream = xp.cuda.get_current_stream()
         if stream.ptr != self.stream_ptr or x.device.id != self.device:
             return None
         if stream.is_capturing():
             raise RuntimeError('Device expert CPU handoff is an uncaptured dispatch seam')
+        if gpu_branch is not None and (on_cpu_submitted is not None or
+                self.native_handoff is None or not self.native_handoff.capture_enabled or
+                self.native_handoff.service is None):
+            return None
         if self.native_handoff is not None:
             try:
-                return self.native_handoff.forward(x, routes, ids, on_cpu_submitted)
+                return self.native_handoff.forward(x, routes, ids, on_cpu_submitted, gpu_branch=gpu_branch)
             finally:
                 self.retired.record(stream)
                 self.pending = True
@@ -193,7 +197,7 @@ class DeviceExpertPlan:
                     for row,expert in enumerate(misses):
                         if expert not in self.sources:
                             key = ExpertKey(executor.model_id, self.layer, expert)
-                            self.sources[expert] = executor._ggml_row_pool.register(key,executor._host_weights(key))
+                            self.sources[expert] = executor._ggml_row_pool.register(key,executor.cpu_source_weights(key))
                         self.registered_ids[row] = self.sources[expert]
                     job = executor._ggml_row_pool._submit_registered(self.host_input,
                         self.registered_ids[:len(misses)],self.host_output[:len(misses)])
@@ -224,7 +228,7 @@ class DeviceExpertPlan:
             self.pending = True
 
 
-def try_forward(executor, layer, x, routes, ids, n_experts, *, on_cpu_submitted=None):
+def try_forward(executor, layer, x, routes, ids, n_experts, *, on_cpu_submitted=None, gpu_branch=None):
     """Return None without changing routing for unsupported/flexible placement."""
     if (executor.cache._admission_limit != 0 or executor.cache.idle_eviction_requests):
         for plan in executor._device_expert_plans.values():
@@ -259,4 +263,4 @@ def try_forward(executor, layer, x, routes, ids, n_experts, *, on_cpu_submitted=
         except NotImplementedError:
             return None
         plans[layer] = plan
-    return plan.forward(x, routes, ids, on_cpu_submitted=on_cpu_submitted)
+    return plan.forward(x, routes, ids, on_cpu_submitted=on_cpu_submitted, gpu_branch=gpu_branch)

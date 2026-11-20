@@ -53,6 +53,7 @@ class Qwen4ExpMoE:
         self.shared_graph_decode = shared_graph_decode
         self._shared_graph_enabled = shared_graph_decode
         self._shared_graph = None
+        self._fused_moe_graph = os.environ.get('MINI_LLM_NATIVE_MOE_FUSED_SHARED','0')=='1'
         self.fast_elementwise = fast_elementwise
         self._shared_stream = xp.cuda.Stream(non_blocking=True) if overlap_shared else None
         self.router, self.experts = router, experts
@@ -85,8 +86,32 @@ class Qwen4ExpMoE:
         return (self._shared_graph.statistics() if self._shared_graph is not None else
                 dict(calls=0,pool_reserved_bytes=0,pool_used_bytes=0))
 
+    def enqueue_gpu_branch(self, hidden):
+        """Pure GPU shared branch for the frozen native service graph."""
+        return self._compute_shared(hidden.reshape(-1))
+
+    def combine_gpu_branch(self, routed, shared_values):
+        shared,score=shared_values
+        routed=routed.reshape(-1)
+        if self.fast_elementwise:
+            from mini_llm.ops.qwen4exp_elementwise_gpu import combine_shared
+            output=combine_shared(routed,shared,score)
+        else:
+            output=routed+_sigmoid(score)*shared
+        return output.reshape(1,-1)
+
     def __call__(self, hidden, *, routing=None):
         x = hidden.reshape(1,1,-1)
+        if self._fused_moe_graph and BACKEND_NAME=='cupy':
+            device_plan=getattr(self.experts.expert_executor,'try_forward_device_plan',None)
+            if device_plan is not None:
+                routing=self.router.forward(x) if routing is None else routing
+                weights,ids=routing
+                output=device_plan(self.experts.layer_id,x.reshape(1,-1),
+                    (weights*self.scale).reshape(-1),ids.reshape(-1),self.experts.n_experts,
+                    gpu_branch=self)
+                if output is not None:
+                    return output.reshape(-1)
         if self._shared_stream is not None:
             caller = xp.cuda.get_current_stream()
             if caller.is_capturing():
@@ -222,6 +247,30 @@ class Qwen4ExpGGUFModel:
                 'activation_bytes') + len(h.recurrent)*2*per_device
             budgets['staging_bytes'] = integer(budgets.get('staging_bytes', 64*1024**2),
                 'staging_bytes') + len(h.recurrent)*2*per_host
+        if os.environ.get('MINI_LLM_BOUND_RECURRENT_STATE','0')=='1':
+            if not pre_moe_graph:
+                raise ValueError('Bound recurrent state requires the pre-MoE graph')
+            r=h.mixer
+            retained=4*sum(h.recurrent)*((r.conv_kernel_size-1)*r.qkv_channels+r.n_value_heads*r.head_dim**2)
+            # Old bound buffers can survive until the next request's first
+            # recapture. Reserve this bounded overlap before allocating state.
+            budgets['activation_bytes']=integer(budgets.get('activation_bytes',64*1024**2),'activation_bytes')+retained
+        if os.environ.get('MINI_LLM_NATIVE_MOE_TIMELINE','0')=='1':
+            if not device_expert_plan or os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')!='1':
+                raise ValueError('Native timeline requires native device handoffs')
+            trace_bytes=len(h.recurrent)*2048*9*8*2+64*1024
+            budgets['staging_bytes']=integer(budgets.get('staging_bytes',64*1024**2),'staging_bytes')+trace_bytes
+        from mini_llm.ops.native_expert_staging import stage_limit
+        if stage_limit():
+            if (not device_expert_plan or os.environ.get('MINI_LLM_NATIVE_MOE_SERVICE','0')!='1' or
+                    os.environ.get('MINI_LLM_NATIVE_MOE_HANDOFF','0')!='1' or
+                    os.environ.get('MINI_LLM_EXPERT_GPU_Q8','0')!='1'):
+                raise ValueError('Native staging requires device plans, native service/handoff and GPU Q8')
+            # Shared16MiB device + pinned arena, conservatively charged to each
+            # memory budget; per-layer Q8/term scratch has its own reservation.
+            budgets['staging_bytes']=integer(budgets.get('staging_bytes',64*1024**2),'staging_bytes')+32*1024**2
+            per_stage=index.top_k*(4*(h.width+index.d_ff)+24+index.d_ff//32*36)+h.width//32*36+256
+            budgets['activation_bytes']=integer(budgets.get('activation_bytes',64*1024**2),'activation_bytes')+len(h.recurrent)*per_stage
         if expert_executor is not None:
             if (expert_executor.d_model,expert_executor.d_ff,expert_executor.compute_dtype,
                     expert_executor.cpu_packed_backend,expert_executor.model_id) != (
@@ -440,6 +489,23 @@ class Qwen4ExpGGUFModel:
         if self._closed:
             raise RuntimeError('Model is closed')
 
+    def _orphaned_bound_state_bytes(self):
+        # A graph can outlive the request object while retaining its GPU arrays.
+        # Credit those actual allocations once, not a second time for live state.
+        live=set()
+        for state in self._states:
+            for recurrence in state.recurrent.values():
+                if recurrence is not None:
+                    for array in (recurrence.conv.history,recurrence.delta.memory):
+                        live.add((array.data.ptr,array.nbytes))
+        retained=set()
+        for segment in getattr(self,'_pre_moe_segments',{}).values():
+            graph=getattr(segment,'graph',None)
+            if graph is not None:
+                for array in getattr(graph,'bound_arrays',lambda:())():
+                    retained.add((array.data.ptr,array.nbytes))
+        return sum(size for pointer,size in retained-live)
+
     def memory_plan(self, batch_size=1, max_length=None):
         self._open()
         if integer(batch_size,'batch_size',1) != 1:
@@ -470,10 +536,36 @@ class Qwen4ExpGGUFModel:
                         sum(p.native_handoff.graph.statistics()['pool_reserved_bytes']
                             for p in getattr(self.expert_executor,'_device_expert_plans',{}).values()
                             if p.native_handoff is not None and p.native_handoff.graph is not None))
-        return self.weights.memory_plan(length, resident_device_bytes=resident, **{key:p[key] for key in (
+            resident+=self._orphaned_bound_state_bytes()
+        return self.weights.memory_plan(length, resident_device_bytes=resident,
+                    host_expert_bytes=p.get('host_expert_bytes',0), **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
             'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers',
             'graph_workspace_bytes')})
+
+    def prepare_host_experts(self,*,pin=False,reserve_bytes=4*1024**3,progress=None):
+        """Commit the approved packed RAM complement between serialized requests."""
+        self._open()
+        if self.weights is None or not self.plan.get('host_expert_bytes',0):
+            raise ValueError('Host expert source requires an approved host_expert_bytes budget')
+        if not self._call_lock.acquire(blocking=False):
+            raise RuntimeError('Host source setup cannot race model execution')
+        try:
+            from mini_llm.ops.expert_residency import ExpertKey
+            index=self.weights.index
+            e=self.expert_executor
+            keys=[ExpertKey(index.model_id,l,x) for l in range(index.n_layers)
+                  for x in range(index.n_experts) if ExpertKey(index.model_id,l,x) not in e.cache.resident]
+            budget=self.plan['host_expert_bytes']
+            page=os.sysconf('SC_PAGE_SIZE')
+            sizes={l:sum(index.descriptors[f'blk.{l}.ffn_{p}_exps.weight'].nbytes//index.n_experts
+                    for p in ('gate','up','down')) for l in range(index.n_layers)}
+            if sum((sizes[k.layer_id]+page-1)//page*page for k in keys)>budget:
+                keys.sort(key=lambda k:(-getattr(e.cache._usage.get(k),'hits',0),k.layer_id,k.expert_id))
+            return e.prepare_resident_host_source(keys,budget_bytes=budget,pin=pin,
+                reserve_bytes=reserve_bytes,progress=progress)
+        finally:
+            self._call_lock.release()
 
     def create_generation_state(self, batch_size=1, max_length=None):
         self._open()

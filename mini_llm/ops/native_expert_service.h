@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Original mapped-doorbell service. Included after NativeHandoff's definition.
-// The service never enters CUDA or Python. Arithmetic stays in the existing pool.
+// The service enters neither CUDA nor Python, including optional packed staging.
+// Arithmetic stays in the existing pool; GPU kernels pull published host bytes.
 struct alignas(64) ExpertDoorbell {
     alignas(64) std::atomic<uint32_t> request{0};
     alignas(64) std::atomic<uint32_t> done{0};
@@ -8,7 +9,7 @@ struct alignas(64) ExpertDoorbell {
 static_assert(offsetof(ExpertDoorbell,done)==64 && sizeof(ExpertDoorbell)==128,"doorbell ABI");
 
 class NativeExpertService {
-    struct Entry { NativeHandoff *handoff; ExpertDoorbell *flags; };
+    struct Entry { NativeHandoff *handoff; ExpertDoorbell *flags; NativeExpertStage *stage=nullptr; };
     RowPool *pool;
     std::atomic<uint32_t> *failure;
     std::mutex mutex;
@@ -34,6 +35,12 @@ public:
         entries.push_back({h,f});
         return 0;
     }
+    int set_stage(NativeHandoff *h,NativeExpertStage *stage) {
+        if(!stage || stage->h!=h) return 1;
+        std::lock_guard<std::mutex> lock(mutex);
+        for(auto &e:entries) if(e.handoff==h && !e.stage) { e.stage=stage; return 0; }
+        return 1;
+    }
     int remove(NativeHandoff *h) {
         std::lock_guard<std::mutex> lock(mutex);
         for (auto it=entries.begin();it!=entries.end();++it) {
@@ -52,7 +59,8 @@ public:
                         const uint32_t request=e.flags->request.load(std::memory_order_acquire);
                         if (request==e.flags->done.load(std::memory_order_relaxed)) continue;
                         const auto errors=e.handoff->errors;
-                        mylocal_ggml_handoff_run(e.handoff);
+                        if(e.stage) e.stage->run(request,failure);
+                        else mylocal_ggml_handoff_run(e.handoff);
                         if(e.handoff->errors!=errors) failure->store(2,std::memory_order_release);
                         e.flags->done.store(request,std::memory_order_release);
                         break; // The model's serial residual chain publishes one ready batch.
@@ -80,6 +88,12 @@ extern "C" int mylocal_ggml_service_add(void *service,void *handoff,void *flags)
 extern "C" int mylocal_ggml_service_remove(void *service,void *handoff) noexcept {
     if(!service) return 1;
     return static_cast<NativeExpertService*>(service)->remove(static_cast<NativeHandoff*>(handoff));
+}
+extern "C" int mylocal_ggml_service_set_stage(void *service,void *handoff,void *stage) noexcept {
+    if(!service || !handoff) return 1;
+    try { return static_cast<NativeExpertService*>(service)->set_stage(
+        static_cast<NativeHandoff*>(handoff),static_cast<NativeExpertStage*>(stage)); }
+    catch(...) { return 3; }
 }
 extern "C" void mylocal_ggml_service_destroy(void *service) noexcept {
     delete static_cast<NativeExpertService*>(service);

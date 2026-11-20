@@ -1,7 +1,7 @@
 """Nsight diagnostic: 16 sampled decode tokens after 64 response decode steps.
 
-Run with nsys --capture-range=cudaProfilerApi. Uses0254 child memory/time guards;
-this direct diagnostic does not use the0254 parent supervisor. No throughput claim.
+Run inside0290 isolation with nsys --capture-range=cudaProfilerApi. Uses0254
+child guards too; defaults to no large mmap warmup. No throughput claim.
 """
 import argparse
 import json
@@ -24,7 +24,13 @@ def main():
     parser.add_argument('--shared-graph-decode', action='store_true')
     parser.add_argument('--defer-shared', action='store_true')
     parser.add_argument('--cpu-workers', type=int, default=15)
+    parser.add_argument('--expert-cache-gib', type=float, default=6)
+    parser.add_argument('--host-warm-gib', type=float, default=0)
+    parser.add_argument('--mem-available-floor-gib', type=float, default=12)
+    parser.add_argument('--force-tokens-from', type=Path)
     args = parser.parse_args()
+    from run_0290_isolated_benchmark import require_isolation
+    require_isolation()
     args.output.mkdir(parents=True, exist_ok=False)
     os.environ['MINI_LLM_BACKEND'] = 'cupy'
     from mini_llm.backend import xp
@@ -32,11 +38,18 @@ def main():
     import probe_0254_strata_workload as runner
     active = [False]
     boundaries = []
+    clock_anchors=[]
     def marked(call, name):
         def wrapped(*values, **kwargs):
             if not active[0]:
                 return call(*values, **kwargs)
-            xp.cuda.nvtx.RangePush(name)
+            if name.startswith('token/'):
+                before=time.perf_counter_ns()
+                xp.cuda.nvtx.RangePush(name)
+                after=time.perf_counter_ns()
+                clock_anchors.append(dict(name=name,before_ns=before,after_ns=after))
+            else:
+                xp.cuda.nvtx.RangePush(name)
             try:
                 return call(*values, **kwargs)
             finally:
@@ -81,9 +94,12 @@ def main():
                 active[0] = False
                 xp.cuda.profiler.stop()
             (args.output/'capture_window.json').write_text(json.dumps(boundaries, indent=2))
+            (args.output/'clock_anchors.json').write_text(json.dumps(clock_anchors,indent=2))
     runner.replay_case = replay
     runner.child(SimpleNamespace(output=args.output, cases=['warmup', 'performance-short-r1'],
-        host_warm_gib=50, mem_available_floor_gib=4, rss_anon_limit_gib=8,
+        host_warm_gib=args.host_warm_gib, mem_available_floor_gib=args.mem_available_floor_gib,
+        expert_cache_gib=args.expert_cache_gib, force_tokens_from=args.force_tokens_from,
+        rss_anon_limit_gib=8,
         victim_policy='heap', cpu_backend='ggml_pool', cpu_workers=args.cpu_workers,
         group_mixed_decode=False, promotion_limit=0, overlap_shared=True,
         gdn_graph_decode=not args.pre_moe_graph, pre_moe_graph=args.pre_moe_graph,

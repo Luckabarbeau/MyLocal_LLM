@@ -1,0 +1,68 @@
+{
+  "candidate": "docs/qwen4exp/diagnostics_0307_parity_v1",
+  "reference": "docs/qwen4exp/diagnostics_0296_parity_uncaptured_v1",
+  "comparisons": [
+    {
+      "request": 0,
+      "prefix": 1,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 2,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 4,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 8,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 0,
+      "prefix": 16,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 1,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 2,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 4,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 8,
+      "bit_exact": true,
+      "maxabs": 0.0
+    },
+    {
+      "request": 1,
+      "prefix": 16,
+      "bit_exact": true,
+      "maxabs": 0.0
+    }
+  ],
+  "all_state_hashes_exact": true,
+  "scope": "Same local arithmetic, complete CPU experts, not independent llama.cpp full-model parity or real GPU expert routing parity"
+}

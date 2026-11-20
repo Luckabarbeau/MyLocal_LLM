@@ -1,0 +1,1521 @@
+{
+  "target_decode_forwards_per_second": 50,
+  "target_met": false,
+  "reference_revisions": {
+    "strata": "712fec6b4297c9cfd32ab43daaa2979a9aa01edf",
+    "ggml": "171e8846b4af9766c354064cb776cb34a50f053f"
+  },
+  "comparison_limit": "Full top10, no suffix drafting, context1024 FP32 KV; historical Strata emitted-token rates are not equivalent.",
+  "results": [
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0293_service_control_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.708453369140625,
+        "ttft_seconds": 2.7097342030028813,
+        "sampling_call_wall_seconds": 0.18382031004875898,
+        "decode_wall_seconds_after_first_token": 10.387895722000394,
+        "total_wall_seconds": 13.097629925003275,
+        "decode_forward_rate_N_minus_1_per_decode_second": 34.46318769274862,
+        "emitted_N_per_total_second": 27.409539134608753,
+        "emitted_N_per_decode_second": 34.55945358015853
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7516192768,
+      "cpu_elapsed_ns": 4915871978,
+      "cpu_experts": 101428,
+      "gpu_experts": 107372,
+      "sampled_highwater_bytes": {
+        "RssAnon": 863981568,
+        "RssFile": 38782881792
+      },
+      "gpu_pool_used_bytes": 11954256384,
+      "gpu_pool_reserved_bytes": 11958617600,
+      "memory": {
+        "VmHWM": 40414359552,
+        "VmRSS": 40414359552,
+        "RssAnon": 863920128,
+        "RssFile": 38782881792,
+        "VmSwap": 0,
+        "MemAvailable": 54349299712,
+        "minor_faults": 1459827,
+        "major_faults": 55088,
+        "io": {
+          "rchar": 562771959,
+          "wchar": 959111,
+          "syscr": 12826,
+          "syscw": 221,
+          "read_bytes": 3603451904,
+          "write_bytes": 335872,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0294_readonly_control_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.343934814453125,
+        "ttft_seconds": 2.345210854022298,
+        "sampling_call_wall_seconds": 0.18001171498326585,
+        "decode_wall_seconds_after_first_token": 9.459184941020794,
+        "total_wall_seconds": 11.804395795043092,
+        "decode_forward_rate_N_minus_1_per_decode_second": 37.8468126199218,
+        "emitted_N_per_total_second": 30.412399434348977,
+        "emitted_N_per_decode_second": 37.952529973608726
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7516192768,
+      "cpu_elapsed_ns": 4216800146,
+      "cpu_experts": 101428,
+      "gpu_experts": 107372,
+      "sampled_highwater_bytes": {
+        "RssAnon": 1937801216,
+        "RssFile": 38854946816
+      },
+      "gpu_pool_used_bytes": 11954256384,
+      "gpu_pool_reserved_bytes": 11958615552,
+      "memory": {
+        "VmHWM": 41560305664,
+        "VmRSS": 41560305664,
+        "RssAnon": 1937801216,
+        "RssFile": 38854946816,
+        "VmSwap": 0,
+        "MemAvailable": 53011943424,
+        "minor_faults": 1669492,
+        "major_faults": 1264,
+        "io": {
+          "rchar": 563028498,
+          "wchar": 981601,
+          "syscr": 14103,
+          "syscw": 222,
+          "read_bytes": 443252736,
+          "write_bytes": 360448,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0296_bound_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.71165185546875,
+        "ttft_seconds": 2.7126003809971735,
+        "sampling_call_wall_seconds": 0.1830999978701584,
+        "decode_wall_seconds_after_first_token": 9.283173952950165,
+        "total_wall_seconds": 11.995774333947338,
+        "decode_forward_rate_N_minus_1_per_decode_second": 38.56439638150147,
+        "emitted_N_per_total_second": 29.927205197921324,
+        "emitted_N_per_decode_second": 38.67211815910343
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7516192768,
+      "cpu_elapsed_ns": 4126890932,
+      "cpu_experts": 101428,
+      "gpu_experts": 107372,
+      "sampled_highwater_bytes": {
+        "RssAnon": 865193984,
+        "RssFile": 38856032256
+      },
+      "gpu_pool_used_bytes": 12071926272,
+      "gpu_pool_reserved_bytes": 12074460672,
+      "memory": {
+        "VmHWM": 40488734720,
+        "VmRSS": 40488734720,
+        "RssAnon": 865144832,
+        "RssFile": 38856032256,
+        "VmSwap": 0,
+        "MemAvailable": 53848084480,
+        "minor_faults": 1407802,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562769797,
+          "wchar": 1045553,
+          "syscr": 12752,
+          "syscw": 221,
+          "read_bytes": 0,
+          "write_bytes": 421888,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0297_sized725_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.608676025390625,
+        "ttft_seconds": 2.609564298996702,
+        "sampling_call_wall_seconds": 0.17799522780114785,
+        "decode_wall_seconds_after_first_token": 8.935684152005706,
+        "total_wall_seconds": 11.545248451002408,
+        "decode_forward_rate_N_minus_1_per_decode_second": 40.06408394813767,
+        "emitted_N_per_total_second": 31.09504325728305,
+        "emitted_N_per_decode_second": 40.175994797154814
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3659873217,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 863260672,
+        "RssFile": 38846488576
+      },
+      "gpu_pool_used_bytes": 12340393472,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40477306880,
+        "VmRSS": 40477306880,
+        "RssAnon": 863260672,
+        "RssFile": 38846488576,
+        "VmSwap": 0,
+        "MemAvailable": 53434384384,
+        "minor_faults": 1308389,
+        "major_faults": 896,
+        "io": {
+          "rchar": 562863428,
+          "wchar": 1079388,
+          "syscr": 12801,
+          "syscw": 222,
+          "read_bytes": 108109824,
+          "write_bytes": 458752,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0297_deferred_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.54270263671875,
+        "ttft_seconds": 2.5436284560128115,
+        "sampling_call_wall_seconds": 0.17127597914077342,
+        "decode_wall_seconds_after_first_token": 8.457664367975667,
+        "total_wall_seconds": 11.001292823988479,
+        "decode_forward_rate_N_minus_1_per_decode_second": 42.328470890325356,
+        "emitted_N_per_total_second": 32.63252835314003,
+        "emitted_N_per_decode_second": 42.44670684253297
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3593486469,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 865398784,
+        "RssFile": 38846636032
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40479592448,
+        "VmRSS": 40479592448,
+        "RssAnon": 865398784,
+        "RssFile": 38846636032,
+        "VmSwap": 0,
+        "MemAvailable": 53380763648,
+        "minor_faults": 1286341,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562863111,
+          "wchar": 1062526,
+          "syscr": 12764,
+          "syscw": 221,
+          "read_bytes": 19218432,
+          "write_bytes": 438272,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0298_phases_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.5399462890625,
+        "ttft_seconds": 2.5408390159718692,
+        "sampling_call_wall_seconds": 0.1830742688034661,
+        "decode_wall_seconds_after_first_token": 8.550914546009153,
+        "total_wall_seconds": 11.091753561981022,
+        "decode_forward_rate_N_minus_1_per_decode_second": 41.86686676305101,
+        "emitted_N_per_total_second": 32.366388055224824,
+        "emitted_N_per_decode_second": 41.98381331825506
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3654795539,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 874094592,
+        "RssFile": 38851719168
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40492064768,
+        "VmRSS": 40492064768,
+        "RssAnon": 872787968,
+        "RssFile": 38851719168,
+        "VmSwap": 0,
+        "MemAvailable": 53182582784,
+        "minor_faults": 1288030,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562916348,
+          "wchar": 1121117,
+          "syscr": 12822,
+          "syscw": 222,
+          "read_bytes": 148987904,
+          "write_bytes": 499712,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0299_workers23_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.532810546875,
+        "ttft_seconds": 2.533712108968757,
+        "sampling_call_wall_seconds": 0.17925083386944607,
+        "decode_wall_seconds_after_first_token": 8.563000351015944,
+        "total_wall_seconds": 11.096712459984701,
+        "decode_forward_rate_N_minus_1_per_decode_second": 41.807775934229134,
+        "emitted_N_per_total_second": 32.3519241662404,
+        "emitted_N_per_decode_second": 41.92455743125212
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 23,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3677809545,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 866516992,
+        "RssFile": 38851788800
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40485863424,
+        "VmRSS": 40485863424,
+        "RssAnon": 866516992,
+        "RssFile": 38851788800,
+        "VmSwap": 0,
+        "MemAvailable": 53266309120,
+        "minor_faults": 1292943,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562867569,
+          "wchar": 1062228,
+          "syscr": 12787,
+          "syscw": 221,
+          "read_bytes": 0,
+          "write_bytes": 438272,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_workers15_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.544695556640625,
+        "ttft_seconds": 2.5455990019836463,
+        "sampling_call_wall_seconds": 0.17809086514171213,
+        "decode_wall_seconds_after_first_token": 8.61414155503735,
+        "total_wall_seconds": 11.159740557020996,
+        "decode_forward_rate_N_minus_1_per_decode_second": 41.55956780053724,
+        "emitted_N_per_total_second": 32.16920663752708,
+        "emitted_N_per_decode_second": 41.67565597875103
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 15,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3770963867,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 864423936,
+        "RssFile": 38851870720
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40483852288,
+        "VmRSS": 40483852288,
+        "RssAnon": 864423936,
+        "RssFile": 38851870720,
+        "VmSwap": 0,
+        "MemAvailable": 52876722176,
+        "minor_faults": 1273660,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562872018,
+          "wchar": 1062137,
+          "syscr": 12798,
+          "syscw": 221,
+          "read_bytes": 0,
+          "write_bytes": 442368,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0302_qsa_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.4750908203125,
+        "ttft_seconds": 2.476023735012859,
+        "sampling_call_wall_seconds": 0.18682661978527904,
+        "decode_wall_seconds_after_first_token": 8.39580953301629,
+        "total_wall_seconds": 10.87183326802915,
+        "decode_forward_rate_N_minus_1_per_decode_second": 42.64031938697214,
+        "emitted_N_per_total_second": 33.021109793480086,
+        "emitted_N_per_decode_second": 42.75942642436591
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3618156804,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 867934208,
+        "RssFile": 38851112960
+      },
+      "gpu_pool_used_bytes": 12340655104,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40486604800,
+        "VmRSS": 40486604800,
+        "RssAnon": 867934208,
+        "RssFile": 38851112960,
+        "VmSwap": 0,
+        "MemAvailable": 52709543936,
+        "minor_faults": 1303771,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562974643,
+          "wchar": 1062550,
+          "syscr": 12849,
+          "syscw": 221,
+          "read_bytes": 46682112,
+          "write_bytes": 438272,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0304_factor8_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.659615478515625,
+        "ttft_seconds": 2.660877717018593,
+        "sampling_call_wall_seconds": 0.2798909470438957,
+        "decode_wall_seconds_after_first_token": 9.414560673001688,
+        "total_wall_seconds": 12.075438390020281,
+        "decode_forward_rate_N_minus_1_per_decode_second": 38.02620349844293,
+        "emitted_N_per_total_second": 29.729769504409443,
+        "emitted_N_per_decode_second": 38.132421943969305
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3680920517,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 864497664,
+        "RssFile": 38851055616
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40483110912,
+        "VmRSS": 40483110912,
+        "RssAnon": 864497664,
+        "RssFile": 38851055616,
+        "VmSwap": 0,
+        "MemAvailable": 52401672192,
+        "minor_faults": 1410598,
+        "major_faults": 5,
+        "io": {
+          "rchar": 562892192,
+          "wchar": 1062498,
+          "syscr": 12837,
+          "syscw": 221,
+          "read_bytes": 55746560,
+          "write_bytes": 442368,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_fused_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.80101416015625,
+        "ttft_seconds": 2.802076916967053,
+        "sampling_call_wall_seconds": 0.24845843116054311,
+        "decode_wall_seconds_after_first_token": 9.568446904013399,
+        "total_wall_seconds": 12.370523820980452,
+        "decode_forward_rate_N_minus_1_per_decode_second": 37.41464038953282,
+        "emitted_N_per_total_second": 29.020598092308326,
+        "emitted_N_per_decode_second": 37.51915055821867
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3700048395,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 866828288,
+        "RssFile": 38851076096
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40485408768,
+        "VmRSS": 40485408768,
+        "RssAnon": 866775040,
+        "RssFile": 38851076096,
+        "VmSwap": 0,
+        "MemAvailable": 52114878464,
+        "minor_faults": 1286321,
+        "major_faults": 14,
+        "io": {
+          "rchar": 562897243,
+          "wchar": 1062489,
+          "syscr": 12829,
+          "syscw": 221,
+          "read_bytes": 122699776,
+          "write_bytes": 442368,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_control_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.77756689453125,
+        "ttft_seconds": 2.7785561850178055,
+        "sampling_call_wall_seconds": 0.24937751732068136,
+        "decode_wall_seconds_after_first_token": 9.599678291007876,
+        "total_wall_seconds": 12.378234476025682,
+        "decode_forward_rate_N_minus_1_per_decode_second": 37.29291640276555,
+        "emitted_N_per_total_second": 29.00252056909373,
+        "emitted_N_per_decode_second": 37.397086560315174
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3985940825,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 864407552,
+        "RssFile": 38850420736
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40482385920,
+        "VmRSS": 40482385920,
+        "RssAnon": 864407552,
+        "RssFile": 38850420736,
+        "VmSwap": 0,
+        "MemAvailable": 52157796352,
+        "minor_faults": 1287710,
+        "major_faults": 3991,
+        "io": {
+          "rchar": 562899707,
+          "wchar": 1062777,
+          "syscr": 12815,
+          "syscw": 221,
+          "read_bytes": 340623360,
+          "write_bytes": 442368,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_publish_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 3.013300537109375,
+        "ttft_seconds": 3.0144134470028803,
+        "sampling_call_wall_seconds": 0.31860079400939867,
+        "decode_wall_seconds_after_first_token": 9.810358511982486,
+        "total_wall_seconds": 12.824771958985366,
+        "decode_forward_rate_N_minus_1_per_decode_second": 36.49204048585326,
+        "emitted_N_per_total_second": 27.992700466574405,
+        "emitted_N_per_decode_second": 36.59397355983609
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3944828471,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 863891456,
+        "RssFile": 38850691072
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40482140160,
+        "VmRSS": 40482140160,
+        "RssAnon": 863891456,
+        "RssFile": 38850691072,
+        "VmSwap": 0,
+        "MemAvailable": 51485872128,
+        "minor_faults": 1286130,
+        "major_faults": 257,
+        "io": {
+          "rchar": 562904698,
+          "wchar": 1099442,
+          "syscr": 12779,
+          "syscw": 221,
+          "read_bytes": 18640896,
+          "write_bytes": 479232,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_combined_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.769184326171875,
+        "ttft_seconds": 2.77072401199257,
+        "sampling_call_wall_seconds": 0.2897503168787807,
+        "decode_wall_seconds_after_first_token": 9.55428161501186,
+        "total_wall_seconds": 12.32500562700443,
+        "decode_forward_rate_N_minus_1_per_decode_second": 37.470111770361044,
+        "emitted_N_per_total_second": 29.127775748306437,
+        "emitted_N_per_decode_second": 37.57477688703803
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3787339202,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 865161216,
+        "RssFile": 38848413696
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40481132544,
+        "VmRSS": 40481132544,
+        "RssAnon": 865161216,
+        "RssFile": 38848413696,
+        "VmSwap": 0,
+        "MemAvailable": 51721314304,
+        "minor_faults": 1287441,
+        "major_faults": 484,
+        "io": {
+          "rchar": 562907648,
+          "wchar": 1099054,
+          "syscr": 12823,
+          "syscw": 221,
+          "read_bytes": 209956864,
+          "write_bytes": 479232,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_control_v2/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.642726318359375,
+        "ttft_seconds": 2.6436322489753366,
+        "sampling_call_wall_seconds": 0.22854377038311213,
+        "decode_wall_seconds_after_first_token": 8.937317832023837,
+        "total_wall_seconds": 11.580950080999173,
+        "decode_forward_rate_N_minus_1_per_decode_second": 40.056760510097206,
+        "emitted_N_per_total_second": 30.99918378795278,
+        "emitted_N_per_decode_second": 40.168650902583515
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3703265517,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 864403456,
+        "RssFile": 38848618496
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40480579584,
+        "VmRSS": 40480579584,
+        "RssAnon": 864403456,
+        "RssFile": 38848618496,
+        "VmSwap": 0,
+        "MemAvailable": 51506470912,
+        "minor_faults": 1286285,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562911573,
+          "wchar": 1099789,
+          "syscr": 12794,
+          "syscw": 221,
+          "read_bytes": 122880,
+          "write_bytes": 475136,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_long_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.694306884765625,
+        "ttft_seconds": 2.695271019998472,
+        "sampling_call_wall_seconds": 0.23196028044912964,
+        "decode_wall_seconds_after_first_token": 8.968576539016794,
+        "total_wall_seconds": 11.663847559015267,
+        "decode_forward_rate_N_minus_1_per_decode_second": 39.9171483281166,
+        "emitted_N_per_total_second": 30.778865908833,
+        "emitted_N_per_decode_second": 40.02864874244095
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3733242151,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 869679104,
+        "RssFile": 38883655680
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40520839168,
+        "VmRSS": 40520839168,
+        "RssAnon": 869625856,
+        "RssFile": 38883655680,
+        "VmSwap": 0,
+        "MemAvailable": 51610935296,
+        "minor_faults": 1288659,
+        "major_faults": 0,
+        "io": {
+          "rchar": 565802631,
+          "wchar": 4583591,
+          "syscr": 13225,
+          "syscw": 334,
+          "read_bytes": 188416,
+          "write_bytes": 3186688,
+          "cancelled_write_bytes": 319488
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_long_v2/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.644332763671875,
+        "ttft_seconds": 2.6453347030328587,
+        "sampling_call_wall_seconds": 0.2315182396559976,
+        "decode_wall_seconds_after_first_token": 8.912121986970305,
+        "total_wall_seconds": 11.557456690003164,
+        "decode_forward_rate_N_minus_1_per_decode_second": 40.1700067080997,
+        "emitted_N_per_total_second": 31.06219730077152,
+        "emitted_N_per_decode_second": 40.28221343074802
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3710343127,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 865009664,
+        "RssFile": 38848573440
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40481083392,
+        "VmRSS": 40481083392,
+        "RssAnon": 864952320,
+        "RssFile": 38848573440,
+        "VmSwap": 0,
+        "MemAvailable": 51539640320,
+        "minor_faults": 1285990,
+        "major_faults": 0,
+        "io": {
+          "rchar": 562915790,
+          "wchar": 1099787,
+          "syscr": 12797,
+          "syscw": 221,
+          "read_bytes": 253952,
+          "write_bytes": 475136,
+          "cancelled_write_bytes": 0
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_combined_v1/result.json",
+      "forced": true,
+      "timing": {
+        "emitted_tokens_including_eos": 359,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 358,
+        "prefill_seconds": 2.597608642578125,
+        "ttft_seconds": 2.599443704006262,
+        "sampling_call_wall_seconds": 0.281246640777681,
+        "decode_wall_seconds_after_first_token": 8.966342475963756,
+        "total_wall_seconds": 11.565786179970019,
+        "decode_forward_rate_N_minus_1_per_decode_second": 39.927094125581014,
+        "emitted_N_per_total_second": 31.039826814516694,
+        "emitted_N_per_decode_second": 40.03862232146252
+      },
+      "output_ids_sha256": "e471f6475c1d2e34e18098266d37d6b1b65d11f2f30e5f559f9987573832dd25",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 3776190383,
+      "cpu_experts": 85277,
+      "gpu_experts": 123523,
+      "sampled_highwater_bytes": {
+        "RssAnon": 879239168,
+        "RssFile": 38877708288
+      },
+      "gpu_pool_used_bytes": 12340655104,
+      "gpu_pool_reserved_bytes": 12342927872,
+      "memory": {
+        "VmHWM": 40524505088,
+        "VmRSS": 40524505088,
+        "RssAnon": 879239168,
+        "RssFile": 38877708288,
+        "VmSwap": 0,
+        "MemAvailable": 50960334848,
+        "minor_faults": 1290965,
+        "major_faults": 480,
+        "io": {
+          "rchar": 565949841,
+          "wchar": 4600447,
+          "syscr": 13290,
+          "syscw": 333,
+          "read_bytes": 350478336,
+          "write_bytes": 3149824,
+          "cancelled_write_bytes": 348160
+        }
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_natural_v1/result.json",
+      "forced": false,
+      "timing": {
+        "emitted_tokens_including_eos": 371,
+        "first_token_from_prefill": 1,
+        "decode_forwards": 370,
+        "prefill_seconds": 2.886510986328125,
+        "ttft_seconds": 2.8880484469700605,
+        "sampling_call_wall_seconds": 0.2750542492722161,
+        "decode_wall_seconds_after_first_token": 11.577480759005994,
+        "total_wall_seconds": 14.465529205976054,
+        "decode_forward_rate_N_minus_1_per_decode_second": 31.958593385023,
+        "emitted_N_per_total_second": 25.647177833406268,
+        "emitted_N_per_decode_second": 32.044967961739275
+      },
+      "output_ids_sha256": "8449f904fca1ca954271310653c4729f8490cb91451f83aa1982253f5828b27c",
+      "cpu_workers": 19,
+      "cache_bytes": 7784628224,
+      "cpu_elapsed_ns": 5220772754,
+      "cpu_experts": 93008,
+      "gpu_experts": 121552,
+      "sampled_highwater_bytes": {
+        "RssAnon": 865984512,
+        "RssFile": 39881043968
+      },
+      "gpu_pool_used_bytes": 12340393984,
+      "gpu_pool_reserved_bytes": 12342928384,
+      "memory": {
+        "VmHWM": 41514532864,
+        "VmRSS": 41514532864,
+        "RssAnon": 865931264,
+        "RssFile": 39881043968,
+        "VmSwap": 0,
+        "MemAvailable": 50844934144,
+        "minor_faults": 1309630,
+        "major_faults": 43582,
+        "io": {
+          "rchar": 562923194,
+          "wchar": 1100748,
+          "syscr": 13026,
+          "syscw": 222,
+          "read_bytes": 4317011968,
+          "write_bytes": 483328,
+          "cancelled_write_bytes": 0
+        }
+      }
+    }
+  ],
+  "guards": [
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_cpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 58380288,
+      "minimum_host_available_bytes": 54844600320,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 2,
+        "seconds": 0.5022576139890589
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_cpu_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 57196544,
+      "minimum_host_available_bytes": 54832840704,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 2,
+        "seconds": 0.501606413978152
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_cpu_guard_v3/guard.jsonl",
+      "peak_charged_bytes": 287535104,
+      "minimum_host_available_bytes": 54542966784,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 1.5032648159540258
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_operator_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1044951040,
+      "minimum_host_available_bytes": 53873414144,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 6.01166977500543
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_operator_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 1045262336,
+      "minimum_host_available_bytes": 53830750208,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 7.019654215022456
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0300_workers15_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1791164416,
+      "minimum_host_available_bytes": 52863733760,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 45.59884847496869
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0301_gpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 322392064,
+      "minimum_host_available_bytes": 54333710336,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 1.5030576389981434
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0301_operator_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 281583616,
+      "minimum_host_available_bytes": 54291435520,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 1.0036236220039427
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0302_profile_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1756631040,
+      "minimum_host_available_bytes": 52732624896,
+      "max_psi_some_avg10": 1.08,
+      "max_psi_full_avg10": 1.08,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 1,
+        "seconds": 34.582239479001146
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0302_qsa_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1847390208,
+      "minimum_host_available_bytes": 52709543936,
+      "max_psi_some_avg10": 0.36,
+      "max_psi_full_avg10": 0.36,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 45.068532721023075
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0303_cpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 299208704,
+      "minimum_host_available_bytes": 54253137920,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 1.503876535978634
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0303_operator_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1045721088,
+      "minimum_host_available_bytes": 53524328448,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 6.010066816001199
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0304_cpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 290156544,
+      "minimum_host_available_bytes": 53879595008,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 2.0051373659516685
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0304_factor8_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1854537728,
+      "minimum_host_available_bytes": 52398084096,
+      "max_psi_some_avg10": 0.36,
+      "max_psi_full_avg10": 0.36,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 50.577400770038366
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0304_operator_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1044692992,
+      "minimum_host_available_bytes": 53047889920,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 11.020435095997527
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_control_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 2138779648,
+      "minimum_host_available_bytes": 52152885248,
+      "max_psi_some_avg10": 1.08,
+      "max_psi_full_avg10": 1.08,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 52.09006669197697
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_fused_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1924411392,
+      "minimum_host_available_bytes": 52112130048,
+      "max_psi_some_avg10": 0.36,
+      "max_psi_full_avg10": 0.36,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 52.075913551962
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_gpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1256960000,
+      "minimum_host_available_bytes": 52924669952,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 4.507470127020497
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_trace_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 2952921088,
+      "minimum_host_available_bytes": 50893148160,
+      "max_psi_some_avg10": 0.54,
+      "max_psi_full_avg10": 0.54,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 1,
+        "seconds": 40.56248655298259
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0305_trace_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 3481985024,
+      "minimum_host_available_bytes": 50773528576,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 143,
+        "seconds": 46.56499403901398
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_combined_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 2009063424,
+      "minimum_host_available_bytes": 51510972416,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 52.071125528018456
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_gpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1248591872,
+      "minimum_host_available_bytes": 52491653120,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 4.506939778977539
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_publish_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1832206336,
+      "minimum_host_available_bytes": 51385466880,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 50.570138773997314
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0306_trace_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 4362293248,
+      "minimum_host_available_bytes": 50461020160,
+      "max_psi_some_avg10": 0.36,
+      "max_psi_full_avg10": 0.36,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 55.077528819965664
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_combined_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 2167291904,
+      "minimum_host_available_bytes": 50801840128,
+      "max_psi_some_avg10": 0.36,
+      "max_psi_full_avg10": 0.36,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 50.57409114902839
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_control_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 1797443584,
+      "minimum_host_available_bytes": 51296694272,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 48.07703694299562
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_cpu_regression_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 217444352,
+      "minimum_host_available_bytes": 52722237440,
+      "max_psi_some_avg10": 0.01,
+      "max_psi_full_avg10": 0.01,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 5.008064096036833
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_gpu_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 371212288,
+      "minimum_host_available_bytes": 53204668416,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 8.5140552429948
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_gpu_regression_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1468112896,
+      "minimum_host_available_bytes": 51438739456,
+      "max_psi_some_avg10": 0.18,
+      "max_psi_full_avg10": 0.18,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 14.020904678036459
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_long_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1806356480,
+      "minimum_host_available_bytes": 51513110528,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 51.077074542990886
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_long_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 1799442432,
+      "minimum_host_available_bytes": 51539570688,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 48.07998475100612
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_natural_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 5814718464,
+      "minimum_host_available_bytes": 50839846912,
+      "max_psi_some_avg10": 1.38,
+      "max_psi_full_avg10": 1.38,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 53.58233789500082
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_operator_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1044467712,
+      "minimum_host_available_bytes": 52648747008,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 7.511269840004388
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_operator_guard_v2/guard.jsonl",
+      "peak_charged_bytes": 1056440320,
+      "minimum_host_available_bytes": 51773992960,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 7.512184930965304
+      }
+    },
+    {
+      "artifact": "docs/qwen4exp/diagnostics_0307_parity_guard_v1/guard.jsonl",
+      "peak_charged_bytes": 1904062464,
+      "minimum_host_available_bytes": 51887071232,
+      "max_psi_some_avg10": 0.0,
+      "max_psi_full_avg10": 0.0,
+      "oom_kill": 0,
+      "last_event": {
+        "event": "exit",
+        "returncode": 0,
+        "seconds": 10.016559392039198
+      }
+    }
+  ],
+  "tests": [
+    {
+      "artifact": "docs/qwen4exp/0307_cpu_regression_v1.xml",
+      "tests": 514,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 43
+    },
+    {
+      "artifact": "docs/qwen4exp/0307_gpu_regression_v1.xml",
+      "tests": 205,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 4
+    }
+  ],
+  "source_sha256": {
+    "mini_llm/external/qwen4exp_model.py": "7d0a4da444f4a9e248fcf2d463fc6de1e15f766e81d5e10411d3f012539222ac",
+    "mini_llm/external/qwen4exp_pre_moe_graph.py": "596fd9797c7ab06fae9456a7879c650e2a877cf25355e490687bdb332d7827c9",
+    "mini_llm/external/qwen4exp_weights.py": "f55d84b3c55768e775464f70ec0431e36e4acedec879e8fb9f7d8f35654beb80",
+    "mini_llm/ops/device_expert_plan.py": "5a826ed0a30fa59135f96b6fc0536e584bac0d74b78a026dff7c3c1b6b075b6e",
+    "mini_llm/ops/expert_heat_policy.py": "735897b4781f39fac20862223d419055ff468fea6e2b2b462cb90f74f5411bb1",
+    "mini_llm/ops/expert_residency.py": "4d0438f004ac1cd7e6e935e72eef85ccb313f49f093f3dde7b7403c2e797aa39",
+    "mini_llm/ops/ggml_packed_cpu.cpp": "7dba88fe8a72b3b43c80de6b0af9f75517a121134abfe901dba525f90bdb39aa",
+    "mini_llm/ops/ggml_packed_cpu.py": "ea2ec91b13e8701c8e3df4f1d7470cf23404ad3815b7f31ccbe6a5f4f5eb9d6f",
+    "mini_llm/ops/hyperconnection_read_gpu.py": "b1c41fe05eef54d620a4e915dd766a28f125ef441a21d63037ce4a4bb8fe6f1d",
+    "mini_llm/ops/inference_graph.py": "250738dd93e812a4b6b00f80a4d975fdc44a00d1cf8ab04e4576b02d23fc9977",
+    "mini_llm/ops/iq3_cpu_simd.h": "748fee163595ed15e1db833445bdc91c58c796dabc877a6445d8e472c7a8a4d1",
+    "mini_llm/ops/iq3xxs_cpu_pair.h": "de90b531f5b05db9dab82de9919325215beef09628811904ebde11f379580431",
+    "mini_llm/ops/iq3xxs_cpu_simd.h": "3e6cd063413acc0e29bde0e7c5c37d105ccbef50ad034fb6223e92aac9150da3",
+    "mini_llm/ops/iq4_cpu_vnni.h": "32e1c47dfcb6bcececc91da2977f1ebd0e76fbacf13aaa76b7f756a59d05c9d8",
+    "mini_llm/ops/mixed_q8_gpu.py": "83f0b858ce5308c1682bd9c09d365fee95c45700fe0b2f24dc959cd18c63938c",
+    "mini_llm/ops/native_expert_handoff.py": "44bd79e975063ab14ee2424f08bc704ccd804c4757326d28f1880ede1e48d525",
+    "mini_llm/ops/native_expert_service.h": "f414a0efe6891dad61948e86831f47230a494828333da4ac5d2626fe4ae5e82e",
+    "mini_llm/ops/native_expert_service.py": "3aeab80d1736b9f65ebe34d1b3cdc9cfc1dd493baaffce92c03fd48c6f9282ff",
+    "mini_llm/ops/native_expert_staging.h": "aad553bf6085ce10cc0eb306c289cd9290b83cc3afb270f955b919595dd64929",
+    "mini_llm/ops/native_expert_staging.py": "d749a18bbdb8fdda465ed237bbc92275a0e6e84d79313ef6d1f827b75a569fd8",
+    "mini_llm/ops/resident_expert_source.py": "af216c254db5b6a2d1db6190ca0edcd9cf32c288ce357cb8f12ffdb0448d3d1e",
+    "scripts/analyze_0285_critical_path.py": "fa5271e540d4e9d84c6b28e730f21b5124c5e502725a1d0e9d4033854aaea12c",
+    "scripts/analyze_0295_route_heat.py": "1a40d099db2ec133c03513ad7154172f66c18d226b474720b5a9ee28e35db851",
+    "scripts/analyze_0307_optimization_results.py": "391f874a528c265a414114791e79dc08909dd1d763282e0cfaf1fabc7d395115",
+    "scripts/probe_0254_strata_workload.py": "1aca3823badbfcb15ee2e994c923e56a91074175dbf4ed8ad6b6c3c42fb45e25",
+    "scripts/probe_0265_gdn_graph_parity.py": "8ae5ad9af41d1f180c177970f4c688b20145f8d1355fb751471ae2405e9045f9",
+    "scripts/probe_0266_critical_path.py": "2e189e8b0ffc68e39a91e9a2e7ceafa69e72e22ee94ad74b78c136800b192be4",
+    "scripts/probe_0291_resident_host.py": "5037e5319321f462e635a473f775e7cb657024f7c8ec4e90415f33417258b471",
+    "scripts/probe_0292_miss_split.py": "16ef13b786ed0ed3edccb60a167db155ec716dbe8ae94807b31662d33f43e047",
+    "scripts/probe_0297_iq3_gather.py": "db7b5e4f82c2bf4eeddb6429616fc8c9bbde0faee631740750e682989d3a84fc",
+    "scripts/probe_0301_hc_parallel.py": "1798630340a972ed5dc81c4126e6f4a689d5b30be1324bea490e37cc94330340",
+    "scripts/probe_0302_decode_configuration.py": "120e6036b1575903dcbe2605e52eb47353dcbb9127bd0fce6383ef647d05df74",
+    "scripts/probe_0304_task_grain.py": "687cdbc04acb76bb298d099121e48068dd46ce4e654f76367a73d0188856077f",
+    "scripts/probe_0307_shared_iq_grid.py": "ff5fb2d81522c93d2d07a494b8bad1d11899798523ef1fbaf809c9c80027b8e6",
+    "scripts/run_0290_isolated_benchmark.py": "08a9a5f3d5d4f69662c06bd325a0ed835a48984a6c6d138a74a4b235e2e26d42",
+    "tests/test_0229_resident_budget.py": "abfdbd0dda3673fa866971dc7c110cea132844e9687c51412217e00f88d6f581",
+    "tests/test_0289_resident_expert_source.py": "7b15ff42bcce1d807692d25a4f022810eac2b079ecd958e71b2a695d017ffbf6",
+    "tests/test_0290_isolated_benchmark.py": "0e7f476eb8cb70e7e0541beaeb49ee27051198906e0d0d7169b1143de4e6e418",
+    "tests/test_0291_residency_benchmarks.py": "95857e5de33e000b058ad7c32dafcf08a5e0685d85bc1ac1bcdc5f8514aba8ad",
+    "tests/test_0293_native_expert_staging.py": "129649c81bffa1d3c5da41959703b8e936d9211a0683992d6f56f28e61b361b3",
+    "tests/test_0295_expert_heat_policy.py": "1d84148b590f945b47201e14dc281c7b3ba8b3587a5a02ae24bac52c92e9c9d4",
+    "tests/test_0296_bound_recurrent_state.py": "a901d509cf264a0d86ca526b7335071749cbcb5b5f0f7600d7e69cd35e97fd4c",
+    "tests/test_0297_iq3_cpu_gather.py": "991724abf32267adfac2e30d42de915272cae01fd2284f9c4fc959b4f59ea824",
+    "tests/test_0298_critical_path_accounting.py": "6043736c9da377a37f0b1d57600bc02d3f044e888403c4f80344f3f0731b6a75",
+    "tests/test_0299_iq4_cpu_vnni.py": "2164dd3d9033b71e1f752642f0c3c01920e7f642eeb4f27220342d118b7d22c4",
+    "tests/test_0300_iq3xxs_cpu_gather.py": "ee59e82a3233417a413714043e146fc935af7db5c3dca8992625797a05413d62",
+    "tests/test_0301_hc_parallel.py": "28fdcd00e71578b2a67ea062fa16777162ff4a08e10e3d1c63a24bce8519aaad",
+    "tests/test_0304_task_grain.py": "a24bf1408ff57166285635c79d294ebc4e91303a03c04525c88fa0cd62dfb532",
+    "tests/test_0305_fused_shared_graph.py": "be01458afd2926aa4392ccd840229878e60bb11477d5b3f73b417d9d48619b78",
+    "tests/test_0306_kernel_publication.py": "67a1338d5982c06782955a96d04108632a3f29df112a2ddb6feaa3dcffd0f1f7",
+    "tests/test_0307_shared_iq_grid.py": "b8e517fb29542a7c941f7281551f4bceb5d4eaf65a721bc51860d51b2ae307f3"
+  },
+  "latest_gpu_operator_speedup_range": [
+    1.085174701702794,
+    1.8571312000279578
+  ],
+  "local_parity": {
+    "candidate": "docs/qwen4exp/diagnostics_0307_parity_v1",
+    "reference": "docs/qwen4exp/diagnostics_0296_parity_uncaptured_v1",
+    "comparisons": [
+      {
+        "request": 0,
+        "prefix": 1,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 0,
+        "prefix": 2,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 0,
+        "prefix": 4,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 0,
+        "prefix": 8,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 0,
+        "prefix": 16,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 1,
+        "prefix": 1,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 1,
+        "prefix": 2,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 1,
+        "prefix": 4,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 1,
+        "prefix": 8,
+        "bit_exact": true,
+        "maxabs": 0.0
+      },
+      {
+        "request": 1,
+        "prefix": 16,
+        "bit_exact": true,
+        "maxabs": 0.0
+      }
+    ],
+    "all_state_hashes_exact": true,
+    "scope": "Same local arithmetic, complete CPU experts, not independent llama.cpp full-model parity or real GPU expert routing parity"
+  }
+}

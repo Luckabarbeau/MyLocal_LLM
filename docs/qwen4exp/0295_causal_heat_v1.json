@@ -1,0 +1,660 @@
+{
+  "source": "docs/qwen4exp/diagnostics_0295_heat_v1",
+  "scope": "Causal route-count estimate only",
+  "policies": [
+    {
+      "limit_per_window": 0,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 101428,
+      "miss_reduction_fraction": 0.0,
+      "proposed_moves": 0,
+      "proposed_transfer_bytes": 0,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5478,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6459,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 8169,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 3735,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 6898,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 6858,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 8315,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 8341,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7515,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 8103,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1847,
+          "next_window_moves": 0,
+          "next_window_transfer_bytes": 0
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    },
+    {
+      "limit_per_window": 8,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 101257,
+      "miss_reduction_fraction": 0.0016859249911267415,
+      "proposed_moves": 96,
+      "proposed_transfer_bytes": 194227200,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 17075200
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5476,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 15155200
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6464,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16691200
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 8121,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16614400
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 3767,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 15308800
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 6927,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16051200
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 6893,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16793600
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 8302,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 15411200
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 8301,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16384000
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7394,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16793600
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 8081,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 16281600
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1821,
+          "next_window_moves": 8,
+          "next_window_transfer_bytes": 15667200
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    },
+    {
+      "limit_per_window": 16,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 101155,
+      "miss_reduction_fraction": 0.0026915644595181254,
+      "proposed_moves": 192,
+      "proposed_transfer_bytes": 390220800,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32844800
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5464,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 31897600
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6505,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32947200
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 8087,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32640000
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 3815,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 33228800
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 6995,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 33612800
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 6921,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32819200
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 8269,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 31590400
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 8267,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32665600
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7308,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 30310400
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 8023,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32896000
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1791,
+          "next_window_moves": 16,
+          "next_window_transfer_bytes": 32768000
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    },
+    {
+      "limit_per_window": 32,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 100860,
+      "miss_reduction_fraction": 0.0056000315494735275,
+      "proposed_moves": 384,
+      "proposed_transfer_bytes": 790451200,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 65024000
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5465,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 64768000
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6520,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 67328000
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 8034,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 69529600
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 3917,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 65280000
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 7087,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 64972800
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 6930,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 63846400
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 8161,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 64921600
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 8105,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 66252800
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7206,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 65356800
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 7959,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 66713600
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1766,
+          "next_window_moves": 32,
+          "next_window_transfer_bytes": 66457600
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    },
+    {
+      "limit_per_window": 64,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 100795,
+      "miss_reduction_fraction": 0.006240880230311108,
+      "proposed_moves": 768,
+      "proposed_transfer_bytes": 1568921600,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 130508800
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5493,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 133145600
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6586,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 131763200
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 7940,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 132864000
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 4094,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 130150400
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 7256,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 129664000
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 7060,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 126515200
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 8017,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 130611200
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 7947,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 134374400
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7150,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 124825600
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 7826,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 131891200
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1716,
+          "next_window_moves": 64,
+          "next_window_transfer_bytes": 132608000
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    },
+    {
+      "limit_per_window": 128,
+      "decay": 0.9,
+      "steps": 435,
+      "baseline_cpu_experts": 101428,
+      "causal_placement_cpu_experts": 100781,
+      "miss_reduction_fraction": 0.0063789091769531625,
+      "proposed_moves": 1491,
+      "proposed_transfer_bytes": 3032422400,
+      "windows": [
+        {
+          "from_step": 0,
+          "to_step": 108,
+          "baseline_misses": 29710,
+          "proposed_placement_misses": 29710,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 264115200
+        },
+        {
+          "from_step": 108,
+          "to_step": 140,
+          "baseline_misses": 5478,
+          "proposed_placement_misses": 5537,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 264064000
+        },
+        {
+          "from_step": 140,
+          "to_step": 172,
+          "baseline_misses": 6459,
+          "proposed_placement_misses": 6722,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 258150400
+        },
+        {
+          "from_step": 172,
+          "to_step": 204,
+          "baseline_misses": 8169,
+          "proposed_placement_misses": 7714,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 258892800
+        },
+        {
+          "from_step": 204,
+          "to_step": 236,
+          "baseline_misses": 3735,
+          "proposed_placement_misses": 4509,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 256025600
+        },
+        {
+          "from_step": 236,
+          "to_step": 268,
+          "baseline_misses": 6898,
+          "proposed_placement_misses": 7477,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 256153600
+        },
+        {
+          "from_step": 268,
+          "to_step": 300,
+          "baseline_misses": 6858,
+          "proposed_placement_misses": 7277,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 259251200
+        },
+        {
+          "from_step": 300,
+          "to_step": 332,
+          "baseline_misses": 8315,
+          "proposed_placement_misses": 7799,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 263884800
+        },
+        {
+          "from_step": 332,
+          "to_step": 364,
+          "baseline_misses": 8341,
+          "proposed_placement_misses": 7726,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 262425600
+        },
+        {
+          "from_step": 364,
+          "to_step": 396,
+          "baseline_misses": 7515,
+          "proposed_placement_misses": 7017,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 260147200
+        },
+        {
+          "from_step": 396,
+          "to_step": 428,
+          "baseline_misses": 8103,
+          "proposed_placement_misses": 7616,
+          "next_window_moves": 128,
+          "next_window_transfer_bytes": 261811200
+        },
+        {
+          "from_step": 428,
+          "to_step": 435,
+          "baseline_misses": 1847,
+          "proposed_placement_misses": 1677,
+          "next_window_moves": 83,
+          "next_window_transfer_bytes": 167500800
+        }
+      ],
+      "caveat": "Counts only; excludes transfer/graph rebuild cost and changed execution-site rounding. Last proposals have no measured following window."
+    }
+  ]
+}

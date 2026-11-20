@@ -1,6 +1,30 @@
 # Qwen4Exp performance and memory history
 
-## Current — 0281–0288 mixed Q8 and bounded execution
+## Current — 0293–0307; gains scoped to measured critical paths
+
+**50/s remains unmet.** Earlier best controlled observation42.64032/s; latest adjacent control/shared-grid40.05676/40.17001forwards/s (358forwards, same359response IDs), not a robust gain. Real packed GPU shared-grid operators improve1.085–1.857x bit-exactly, but CPU completion hides much of that benefit. 15/23workers, larger task factors, IQ3_XXS gather/pair, IQ4VNNI and parallel HC did not establish full-model gains; none was silently promoted.
+
+Native shared-branch capture and system-fenced kernel input publication reduce launch/copy-node structure. A16token traced span546.31 ->413.32ms at7GiBcache is **not** an uninstrumented throughput gain: longer fused/publication37.47/s remained neutral versus recent37.29/scontrol; the combined shared-grid/QSA/fused/publication trial39.93/s is not50/s. Failed/partial traces and VRAM admission rejections remain preserved.
+
+Natural sampling emits exactly the same371IDs in two new runs: **31.95859 /35.15922forwards/s**, versus the largely hot forced replay. Response+prefill disk reads3.048/1.854GB and majorfaults39383/26760 show a storage-residency contributor still present on the second run. Different natural versus replay routes/token counts are not an identical-input speed ratio. Existing Strata suffix/tail/KV/context differences remain explicit.
+
+Verification:471CPU passed43skipped;201GPU passed4skipped. New actual-model local-arithmetic two-request logits/state hashes remain exact. Detailed per-patch ledger, critical-path attribution, command and memory scopes: `0295_0307_critical_path_optimization.md`; structured observations/sourceSHA256s: `0295_0307_optimization_results_v2.json`. No full training-suite or new independent llama.cpp model-equivalence claim.
+
+## Current — 0291–0292 bounded post-incident measurements
+
+Warm fixed-token decode **33.87091/s**;512MiB partial CPU-source **33.90548/s** (0.10%, no material gain). Same128warmup/359response tokens,358decodeforwards,19nativeworkers+participatingwaiter,7GiBfrozenGPUcache, testedQ8/BF16HC, no bulk mmap warming. Cold baseline21.29501/s incurred12.70GBresponse+prefilldiskreads and must not be used to advertise source-copy acceleration. DeferredQSAcheck34.01985/s is only0.44% above control; no demonstrated improvement/default change.
+
+New16tokennode-leveltimeline:GPUspan514.771ms/operationunion210.120ms;177.496msgaps precede CPU-result uploads totaling2.885ms. Standalone complete-top10split across56configurations shows selective1–2miss staging~5–20% operator gains but cheap/low-miss and blanket staging often lose; no integrated model speedup inferred. Native mover remains next dependency, not a50/s guarantee.
+
+All runs isolated under0290hard/highlimits and12GiBreserve. CPU copy/storage exact outputs;56mixedCPU/GPUsame-siteoraclecases exact. Focused96CPU passed4skipped1deselected;20GPU passed1skipped. Report/artifacts: `0291_0292_residency_and_miss_split.md`, `0291_0292_benchmark_summary_v1.json`. **50/s unmet; no production mathematical changes.**
+
+## Prior — 0290 safety pause; no new throughput result
+
+A desktop OOM kill was confirmed on2026-11-19: systemd-oomd selected the50.6G GNOME Shell cgroup. The exact offending process is unresolved. Large-memory copies/pinning/GPU/full-model experiments are paused;0289's resident complement is only small-fixture validated, with no measured performance benefit.
+
+0290 adds fail-closed app.slice service execution, verified hard/high/swap/group-OOM limits,12GiB reserve, PSI/ancestor monitoring and cleanup. Final CPU/no-model regression89passed4skipped1deselected; kernel cgroup peak643858432bytes, sampled PSI0. Safe timeout test aborted as expected. No inference speed or numerical result is inferred from these tests. **Target50/s remains unmet.** Report: `0290_memory_incident_and_isolation.md`.
+
+## Prior — 0281–0288 mixed Q8 and bounded execution
 
 **Best retained safe callback observation31.42545 decode forwards/s;50/s unmet.** Final callback/service reproductions29.29/29.56/s. Full report: `0281_0288_execution_optimization.md`; retained measurements/source hashes/parity: `0281_0288_performance_v3.json`.
 

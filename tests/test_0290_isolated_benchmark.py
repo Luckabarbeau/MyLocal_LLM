@@ -1,0 +1,175 @@
+"""CPU-only fail-closed guard tests; no model, CUDA or systemd service required."""
+import importlib.util
+from pathlib import Path
+import pytest
+
+spec = importlib.util.spec_from_file_location('isolated_benchmark',
+    Path(__file__).resolve().parents[1] / 'scripts/run_0290_isolated_benchmark.py')
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+
+
+def fixture_limits(tmp_path):
+    unit = 'mylocal-bench-test.service'
+    relative = Path('/user.slice/user-1000.slice/user@1000.service/app.slice') / unit
+    directory = tmp_path.joinpath(*relative.parts[1:])
+    directory.mkdir(parents=True)
+    for key, value in [('memory.high', 128), ('memory.max', 256),
+                       ('memory.swap.max', 0), ('memory.oom.group', 1)]:
+        (directory / key).write_text(str(value))
+    return unit, relative, directory
+
+
+def test_membership_requires_unified_absolute_non_escaping_path():
+    assert guard.membership('0::/user.slice/test.service\n') == Path('/user.slice/test.service')
+    for text in ('1:memory:/old', '0::relative', '0::/../escape', '0::/a\n0::/b'):
+        with pytest.raises(RuntimeError):
+            guard.membership(text)
+
+
+def test_verified_before_exec_limits(tmp_path):
+    unit, relative, directory = fixture_limits(tmp_path)
+    guard.verify_limits(directory, relative, unit, 128, 256)
+    (directory / 'memory.max').write_text('max')
+    with pytest.raises(RuntimeError, match='memory.max'):
+        guard.verify_limits(directory, relative, unit, 128, 256)
+
+
+@pytest.mark.parametrize('name,value', [('memory.high', 'max'), ('memory.swap.max', 'max'),
+                                        ('memory.oom.group', '0')])
+def test_reject_missing_safety_properties(tmp_path, name, value):
+    unit, relative, directory = fixture_limits(tmp_path)
+    (directory / name).write_text(value)
+    with pytest.raises(RuntimeError, match=name):
+        guard.verify_limits(directory, relative, unit, 128, 256)
+
+
+def test_reject_desktop_membership(tmp_path):
+    unit, relative, directory = fixture_limits(tmp_path)
+    desktop = Path('/user.slice/user-1000.slice/user@1000.service/session.slice/org.gnome.Shell@x11.service')
+    with pytest.raises(RuntimeError, match='outside the desktop'):
+        guard.verify_limits(directory, desktop, unit, 128, 256)
+
+
+def test_pressure_and_reserve_abort():
+    row = dict(host_available=20*guard.GIB, ancestor_headroom=None,
+               psi_some_avg10=0, psi_full_avg10=0, memory_events={})
+    assert guard.stop_reason(row, 12*guard.GIB) is None
+    for key, value, expected in [('host_available', 11*guard.GIB, 'host RAM'),
+                                  ('ancestor_headroom', 11*guard.GIB, 'ancestor'),
+                                  ('psi_full_avg10', 10, 'pressure'),
+                                  ('psi_some_avg10', 30, 'pressure'),
+                                  ('memory_events', {'oom_kill': 1}, 'OOM')]:
+        assert expected in guard.stop_reason(dict(row, **{key: value}), 12*guard.GIB)
+
+
+def test_invalid_psi_not_silently_zero(tmp_path):
+    path = tmp_path / 'psi'
+    path.write_text('some avg10=0.12 total=10\nfull avg10=0.03 total=1\n')
+    assert guard.pressure(path) == {'some': .12, 'full': .03}
+    path.write_text('some avg10=0.12\n')
+    with pytest.raises(KeyError):
+        guard.pressure(path)
+
+
+def test_launcher_is_service_not_scope_and_propagates_thread_choices(tmp_path, monkeypatch):
+    monkeypatch.setenv('OMP_NUM_THREADS', '1')
+    monkeypatch.setenv('PRIVATE_API_KEY', 'do-not-export')
+    args = guard.parse_args(['--output', str(tmp_path / 'new'), '--', '/usr/bin/true'])
+    command = guard.command_line(args, 'mylocal-bench-test.service')
+    assert '--slice=app.slice' in command
+    assert '--scope' not in command
+    assert '--property=OOMPolicy=kill' in command
+    assert '--property=KillMode=control-group' in command
+    assert '--property=MemorySwapMax=0' in command
+    assert '--setenv=OMP_NUM_THREADS=1' in command
+    assert not any('PRIVATE_API_KEY' in arg for arg in command)
+    assert '--gate-unit' in command
+
+
+@pytest.mark.parametrize('options', [
+    ['--reserve-gib', '0'], ['--reserve-gib', 'nan'], ['--reserve-gib', 'inf'],
+    ['--memory-high-mib', '1024'], ['--timeout', '0'], ['--timeout', '1801']])
+def test_unsafe_cli_rejected(tmp_path, options):
+    with pytest.raises(SystemExit):
+        guard.parse_args(['--output', str(tmp_path / 'new'), *options, '--', '/usr/bin/true'])
+
+
+def test_no_payload_if_gate_not_isolated(tmp_path, monkeypatch):
+    args = guard.parse_args(['--output', str(tmp_path / 'new'), '--gate-unit',
+                             'mylocal-bench-test.service', '--', '/usr/bin/true'])
+    monkeypatch.setattr(guard, 'membership', lambda text: Path('/session.slice/desktop.service'))
+    monkeypatch.setattr(guard.subprocess, 'Popen', lambda *a, **k: pytest.fail('Payload must not execute'))
+    with pytest.raises(RuntimeError, match='outside the desktop'):
+        guard.gate(args)
+    assert not args.output.exists()
+
+
+def test_probe_precondition_rejects_desktop(monkeypatch):
+    monkeypatch.setattr(guard, 'membership', lambda text: Path('/session.slice/desktop.service'))
+    with pytest.raises(RuntimeError, match='direct model probes are disabled'):
+        guard.require_isolation()
+
+
+def test_probe_precondition_accepts_only_verified_limits(tmp_path, monkeypatch):
+    unit, relative, directory = fixture_limits(tmp_path)
+    monkeypatch.setattr(guard, 'CGROUP_ROOT', tmp_path)
+    monkeypatch.setattr(guard, 'membership', lambda text: relative)
+    guard.require_isolation()
+    (directory / 'memory.swap.max').write_text('1')
+    with pytest.raises(RuntimeError, match='memory.swap.max'):
+        guard.require_isolation()
+
+
+def test_gate_records_child_failure_without_inference(tmp_path, monkeypatch):
+    unit, relative, directory = fixture_limits(tmp_path)
+    monkeypatch.setattr(guard, 'CGROUP_ROOT', tmp_path)
+    monkeypatch.setattr(guard, 'membership', lambda text: relative)
+    args = guard.parse_args(['--output', str(tmp_path / 'new'), '--gate-unit', unit,
+                             '--', '/usr/bin/false'])
+    monkeypatch.setattr(guard, 'verify_limits', lambda *a: None)
+    row = dict(memory_current=0, memory_peak=0, memory_events={},
+               host_available=100*guard.GIB, ancestor_headroom=None,
+               psi_some_avg10=0, psi_full_avg10=0)
+    monkeypatch.setattr(guard, 'snapshot', lambda *a: row)
+    assert guard.gate(args) == 1
+    assert '"returncode": 1' in (args.output / 'guard.jsonl').read_text()
+
+
+def test_snapshot_accounts_ancestor_limits_and_pressure(tmp_path, monkeypatch):
+    root = tmp_path / 'cg'
+    directory = root / 'parent' / 'child'
+    directory.mkdir(parents=True)
+    for node in (root, root / 'parent', directory):
+        (node / 'memory.pressure').write_text('some avg10=0\nfull avg10=0\n')
+    # Root has no memory.max/high: Linux does not expose these on the root.
+    (root / 'parent' / 'memory.high').write_text('500')
+    (root / 'parent' / 'memory.max').write_text('1000')
+    (root / 'parent' / 'memory.current').write_text('200')
+    for name, value in [('memory.current', '100'), ('memory.peak', '150'),
+                        ('memory.events', 'oom 0\noom_kill 0\n')]:
+        (directory / name).write_text(value)
+    monkeypatch.setattr(guard, 'memory_available', lambda: 2000)
+    row = guard.snapshot(directory, root=root)
+    assert row['ancestor_headroom'] == 300
+    assert row['memory_current'] == 100 and row['memory_peak'] == 150
+
+
+def test_workload_cli_checks_isolation_before_parent(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location('workload_guard_test',
+        Path(__file__).resolve().parents[1] / 'scripts/probe_0254_strata_workload.py')
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    import run_0290_isolated_benchmark as imported_guard
+    def refuse():
+        raise RuntimeError('test unisolated')
+    monkeypatch.setattr(imported_guard, 'require_isolation', refuse)
+    monkeypatch.setattr(probe, 'parent', lambda *a: pytest.fail('No parent before guard'))
+    monkeypatch.setattr(probe.sys, 'argv', ['probe', '--output', str(tmp_path / 'new')])
+    with pytest.raises(RuntimeError, match='test unisolated'):
+        probe.main()
+
+
+def test_preserve_existing_results(tmp_path):
+    with pytest.raises(SystemExit):
+        guard.parse_args(['--output', str(tmp_path), '--', '/usr/bin/true'])

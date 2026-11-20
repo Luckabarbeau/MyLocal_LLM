@@ -1,5 +1,34 @@
 # Qwen4Exp memory and execution architecture
 
+## Current — 0293–0307 ownership and bounded execution additions
+
+- Canonical mmap bytes remain immutable and independent of optional staged/registered copies. Integrated staging owns one bounded16MiBhost+16MiBVRAM arena with two complete8MiBslots; service-thread CUDA DMA was rejected after a captured scheduling deadlock. GPU kernels pull complete published bundles instead. Source-pinned staging never silently stages an unregistered expert; CPU fallback remains complete. Staging remains experimental/off.
+- Request-bound recurrent graph operands retain exact buffer owners and recapture on pointer changes. Warmup stays private. Explicit retirement fences capture/replay readers; the planner credits actually orphaned bound allocations without weakening reservations or headroom. Stable state binding removes repeated recurrence copies, not state updates.
+- Optional native GPU shared branch lives inside the handoff graph. Branch identity is latched; graph and owner retire before service/native source handles. CPU publication precedes shared GPU work. No CUDA/Python enters the native service thread, and no per-token weight allocation is introduced.
+- Optional kernel input publication aliases the **existing** pinned activation/metadata owners. Every GPU writer system-fences before a CTA barrier and system-release epoch publication. CPU acquire/completion/failure contracts are unchanged. Failure suppresses new publication and incomplete-output reads. Mapped aliases do not copy expert banks.
+- Shared IQ GPU codebooks add at most8KiB/CTA shared memory, not persistent model weights; module-cache keys distinguish modes. Original packed bytes, Q8_1, integer truncation and FP32 reduction remain unchanged. Inactive complete expert blocks skip unused uploads. CPU Q8_K/Q8_0 remains a separate contract.
+- 7.25GiB sized cache admits3804experts versus2823in earlier7GiBuniform slots. 7.5/8GiB/profiler admission failures are retained; no safety margin was reduced. Current CuPy pool used~11.49GiB is a pool snapshot, not total device peak.
+
+All actual experiments remain sequential inside0290 app.slice services (typically32/36GiBhigh/hard, swap0,12GiBhostreserve), without bulk50GiBwarming/full-complement pinning. Warm shared-page process fileRSS~36–38GiB is **not** charged service memory; source report preserves both scopes. New natural runs still fault/read1.85–3.05GB per response interval despite abundant host-available memory; the exact page sources/cgroup/cache dynamics are unresolved, so a blind large RAM copy is not a justified correction.
+
+Contracts, measured limits, tests, source hashes and next attribution experiment: `0295_0307_critical_path_optimization.md`, `0295_0307_optimization_results_v2.json`.
+
+## 0291–0292 bounded residency measurement after the safety gate
+
+User-authorized sequential isolated benchmarks resumed after0290. A128MiB-capped actual expert copy passes byte/CPUoutput parity and releases its anonymous source. A512MiB partial source (536436736bytes/263bundles) successfully runs the actual model; CPU registry uses all263copies while canonical mmap remains authoritative. No material warm throughput gain (~33.91 versus33.87/s), so do not increase residency merely assuming more anonymous RAM speeds arithmetic. Full44GiB complement remains unvalidated.
+
+Standalone0292stage-split probe owns at most32MiBpinned complete expert data per format group, one reusable GPUarena, dedicated transferstream/event; CPUmisses use the existing19workerpool concurrently.56same-siteoraclecases pass. This is not yet an integrated model mover. Small bounded pinning has resumed; unbounded/full-source pinning has not.
+
+Longer model runs use32GiBhigh/36GiBhard/swap0/12GiBhostreserve and no50GiBbulk warmup. Cold peak32.003GiBincurred reclaim; no OOM events or guard abort. Shared cached pages can yield~40GiBprocessfileRSS yet~1.67GiBchargedservicepeak on later warm runs: report these scopes separately, not as a bypass of the kernel limits. GPU pool snapshots remain~11.95GBused/~11.96GBreserved, not device-wide peaks. See `0291_0292_residency_and_miss_split.md` for full safety/measurement limits.
+
+## 0290 incident and mandatory diagnostic isolation
+
+Large-memory/GPU/pinning experiments were initially paused after the2026-11-19 desktop-session OOM kill; subsequent bounded resumption is recorded above. systemd-oomd reported the GNOME Shell cgroup at50.6G; the responsible individual process is unknown. Process groups and sampled RssAnon are not memory containment.
+
+`scripts/run_0290_isolated_benchmark.py` creates a separate app.slice user service with verified MemoryHigh/MemoryMax, swap0, group OOM killing and whole-service cleanup before workload execution. Default high/max768MiB/1GiB, minimum12GiB host reserve; PSI, finite ancestor headroom, charged file cache/current/peak and OOM events are monitored. The0254 workload CLI refuses unisolated execution. These limits protect against uncontrolled workload growth, not arbitrary sibling pressure or GPU-driver failures; there is no VRAM governor in this launcher. See `0290_memory_incident_and_isolation.md` for exact limits, small-test measurements and remaining risks.
+
+0289's optional compact anonymous host source is small-fixture validated only. Canonical GGUF mappings remain immutable; complete RAM copies shadow CPU reads and are retired after native plans. PLE is not copied. Copying a large complement may transiently coexist with source file-cache pages and is **not approved by a logical host budget alone**. No44GiB model/pinning experiment or0289speedup has been measured. Resume only with a small isolated CPU source, not a full complement.
+
 ## Invariants
 
 Canonical weights live in independent read-only shard mappings. Storage tier (`mmap`/host) and execution mode (`cpu`/mixed/strict `gpu`) are distinct. `ExpertBundle` contains complete gate/up/down views plus source owner; it survives GPU cache eviction. A model block requests selected expert outputs and never chooses where the weights live. Native packed bytes remain authoritative, including mixed-format projections.

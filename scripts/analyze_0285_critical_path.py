@@ -27,6 +27,13 @@ def summarize(path):
         if a>end:
             gaps[name][0]+=a-end; gaps[name][1]+=1; gaps[name][2]=max(gaps[name][2],a-end)
         union+=max(0,b-max(end,a)); end=max(end,b)
+    # Doorbell waits occupy a small GPU kernel while the CPU works. Counting
+    # them as useful GPU arithmetic would hide precisely the dependency gaps.
+    non_wait=[(a,b,name) for a,b,name in intervals if not name.startswith('kernel:await_')]
+    useful_union=0; useful_end=non_wait[0][0] if non_wait else 0
+    for a,b,name in non_wait:
+        useful_union+=max(0,b-max(useful_end,a)); useful_end=max(useful_end,b)
+    wait_ns=sum(v[0] for name,v in kernels.items() if name.startswith('await_'))
     runtime=defaultdict(lambda:[0,0])
     for row in connection.execute('select start,end,nameId from CUPTI_ACTIVITY_KIND_RUNTIME'):
         name=strings[row['nameId']]
@@ -41,6 +48,8 @@ def summarize(path):
     result=dict(source=str(path),gpu_operation_union_ms=union/1e6,
         gpu_span_ms=(end-intervals[0][0])/1e6,
         summed_kernel_ms=sum(v[0] for v in kernels.values())/1e6,
+        non_wait_gpu_operation_union_ms=useful_union/1e6,
+        summed_wait_kernel_ms=wait_ns/1e6,
         kernels=records(kernels),copies=records(copies,('bytes',)),runtime_api=records(runtime),
         nvtx_wall=records(nvtx),gaps_by_next_operation=records(gaps,('maximum_gap_ns',)),
         caveat='GPU gaps include CPU dependencies, graph scheduling and host submission; these categories overlap CPU/API spans.')

@@ -2,8 +2,10 @@
 
 Outputs are internal borrowed buffers, valid until this segment's next replay.
 The model's serialized main-stream dependency chain orders all consumers before
-reuse. PLE and QSA stay outside; state copies preserve request isolation.
+reuse. PLE and QSA stay outside. Default state copies preserve request isolation;
+opt-in stable bindings recapture and retire on request-buffer identity changes.
 """
+import os
 from mini_llm.backend import BACKEND_NAME, xp
 from mini_llm.ops.causal_conv_inference import CausalConvState
 from mini_llm.ops.gated_delta_inference import DeltaMixerState, DeltaRuleState
@@ -22,6 +24,9 @@ class Qwen4ExpPreMoEGraph:
             raise ValueError('Pre-MoE graph requires native HC, capture-ready router and unnested mixer')
         self.attention_hc, self.mixer, self.ffn_hc, self.router = attention_hc, mixer, ffn_hc, router
         self.graph = None
+        self.calls=0
+        self.captures=0
+        self.bind_state=os.environ.get('MINI_LLM_BOUND_RECURRENT_STATE','0')=='1'
 
     def _enqueue(self, streams, arrays):
         state = DeltaMixerState(CausalConvState(arrays[0]), DeltaRuleState(arrays[1]))
@@ -42,14 +47,23 @@ class Qwen4ExpPreMoEGraph:
         arrays = (state.conv.history, state.delta.memory)
         if any(a.dtype != xp.float32 or not a.flags.c_contiguous for a in arrays):
             raise ValueError('Pre-MoE state must be contiguous FP32')
+        if self.graph is not None and self.bind_state and not self.graph.matches(streams,arrays):
+            # Different requests may own same-shaped buffers. Fence the prior
+            # residual chain and recapture; never replay into the old request.
+            self.graph.close()
+            self.graph=None
         if self.graph is None:
             self.graph = CapturedArrayInference(self._enqueue, streams, arrays,
-                                               pool_limit_bytes=self.pool_limit_bytes)
+                pool_limit_bytes=self.pool_limit_bytes,
+                bound_mutable=(0,1) if self.bind_state else ())
+            self.captures+=1
         result = self.graph.forward(streams, arrays, borrow_output=True)
+        self.calls+=1
         state.conv.length = int(state.conv.length)+1
         state.delta.length = int(state.delta.length)+1
         return result
 
     def graph_statistics(self):
-        return (self.graph.statistics() if self.graph is not None else
-                dict(calls=0,pool_reserved_bytes=0,pool_used_bytes=0))
+        statistics=(self.graph.statistics() if self.graph is not None else
+                    dict(pool_reserved_bytes=0,pool_used_bytes=0))
+        return dict(statistics,calls=self.calls,captures=self.captures,bound_state=self.bind_state)

@@ -7,6 +7,7 @@ readback or synchronization. No activation or weight precision conversion occurs
 
 from functools import lru_cache
 import math
+import os
 
 import numpy as np
 
@@ -34,12 +35,25 @@ extern "C" __global__ void hc_read_down_inject(
     __shared__ float sums[256];
     sums[lane] = sum;
     __syncthreads();
+#ifdef HC_PARALLEL
+    for (int step = 128; step >= 32; step >>= 1) {
+        if (lane < step) sums[lane] += sums[lane + step];
+        __syncthreads();
+    }
+    float total = sums[lane];
+    if (lane < 32) {
+        for (int step = 16; step; step >>= 1)
+            total += __shfl_down_sync(0xffffffffu, total, step);
+    }
+#else
     for (int step = 128; step; step >>= 1) {
         if (lane < step) sums[lane] += sums[lane + step];
         __syncthreads();
     }
+    float total = sums[0];
+#endif
     if (!lane) {
-        float a = sums[0] * 0.25f;
+        float a = total * 0.25f;
         if (gain) gains[row - rank] = 2.0f * hc_sigmoid(a);
         else low[row] = a * hc_sigmoid(a);
     }
@@ -55,6 +69,30 @@ extern "C" __global__ void hc_read_up_mix(
     const float* n, const float* low, const HC_W* up,
     float* mixed, int d, int rank) {
     int lane = threadIdx.x & 31;
+#ifdef HC_PARALLEL
+    // Four stream warps cooperate on each feature; stream sum order unchanged.
+    int warp = threadIdx.x / 32;
+    int feature = blockIdx.x * 2 + warp / 4;
+    int c = warp % 4;
+    __shared__ float products[8];
+    float product = 0.0f;
+    if (feature < d) {
+        int k = c * d + feature;
+        const HC_W* w = up + (long long)k * rank;
+        float dot = 0.0f;
+        for (int r = lane; r < rank; r += 32)
+            dot += low[r] * hc_weight(w,r);
+        dot = row_sum(dot);
+        if (!lane) product = n[k] * hc_sigmoid(dot);
+    }
+    if (!lane) products[warp] = product;
+    __syncthreads();
+    if (!lane && !c && feature < d) {
+        float mix = 0.0f;
+        for (int s = 0; s < 4; ++s) mix += products[warp+s];
+        mixed[feature] = mix * 0.25f;
+    }
+#else
     int feature = blockIdx.x * 8 + threadIdx.x / 32;
     if (feature >= d) return;
     float mix = 0.0f;
@@ -73,6 +111,7 @@ extern "C" __global__ void hc_read_up_mix(
         }
     }
     if (!lane) mixed[feature] = mix * 0.25f;
+#endif
 }
 '''
 
@@ -142,6 +181,14 @@ def _bf16_kernels(device):
             xp.RawKernel(source,'hc_read_up_mix',options=_OPTIONS))
 
 
+@lru_cache(maxsize=None)
+def _parallel_kernels(device, bf16):
+    source='#define HC_PARALLEL\n#define HC_W '+('unsigned short' if bf16 else 'float')+'\n'+_SOURCE
+    return (_decode_kernels(device)[0],
+            xp.RawKernel(source,'hc_read_down_inject',options=_OPTIONS),
+            xp.RawKernel(source,'hc_read_up_mix',options=_OPTIONS))
+
+
 def read_gpu(streams, gamma, down, up, inject, epsilon):
     """Return fresh ``(mixed [..., D], gains [..., 4] or None)``.
 
@@ -150,7 +197,9 @@ def read_gpu(streams, gamma, down, up, inject, epsilon):
     Unsupported inputs raise rather than silently selecting another graph.
     """
     d, rank, epsilon, device = _validate(streams, gamma, down, up, inject, epsilon)
-    norm, project, mix = (_bf16_kernels(device) if down.dtype==xp.uint16 else _kernels(device))
+    parallel=os.environ.get('MINI_LLM_HC_PARALLEL_READ','0')=='1'
+    norm, project, mix = (_parallel_kernels(device,down.dtype==xp.uint16) if parallel else
+                          _bf16_kernels(device) if down.dtype==xp.uint16 else _kernels(device))
     leading = streams.shape[:-2]
     normalized = xp.empty((4 * d,), dtype=xp.float32)
     low = xp.empty((rank,), dtype=xp.float32)
@@ -161,6 +210,7 @@ def read_gpu(streams, gamma, down, up, inject, epsilon):
     project((rank + (4 if inject is not None else 0),), (256,),
             (normalized, down, down if inject is None else inject, low,
              low if gains is None else gains, np.int32(4 * d), np.int32(rank)))
-    mix(((d + 7) // 8,), (256,),
+    features=2 if parallel else 8
+    mix(((d + features - 1) // features,), (256,),
         (normalized, low, up, mixed, np.int32(d), np.int32(rank)))
     return mixed, gains

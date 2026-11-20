@@ -1,5 +1,17 @@
 # Qwen4Exp numerical validation record
 
+## Current follow-ups — 0293–0307 (local arithmetic/state, not new reference equivalence)
+
+New CPU IQ3_S gather, IQ3_XXS gather/pair and IQ4_NL VNNI retain the pinned GGML activation producer, integer sums, FMA/reduction order and final scale placement. Exact uint32 tests cover widths, scale extremes, readonly/unaligned sources and concurrent mixed-expert ownership; losing kernels stay opt-in/off. Task-factor changes preserve exact outputs.
+
+Native GPU shared-branch capture and kernel publication preserve complete top10, once-only routing weights and existing shared equations. Tests exercise mixed/allCPU/allGPU routes, changing inputs/weights/IDs, fresh output lifetime, captured replay, sticky failure, epoch exhaustion and safe retirement. Kernel publication copies arbitrary FP32 bit patterns without conversion and fences every writer before release publication; no runtime input DMA is allowed in its focused capture test.
+
+Shared-memory IQ2_S/IQ3_S/IQ3_XXS codebooks retain packed bytes and exact Strata Q8_1 integer/FP32 arithmetic. Extracted pinned Strata row oracles and actual six mixed checkpoint triples remain bit-exact; active/inactive expert blocks and final partial row blocks are tested. No activation precision or broad tolerance was changed for performance.
+
+`0307_parity_comparison_v1.json`: actual checkpoint fixed IDs1..16, two requests, ten logits at prefixes1/2/4/8/16; all maxabs0 and every persistent-state/reset hash identical to `diagnostics_0296_parity_uncaptured_v1`. Candidate enables bound state, GPU copies, fused shared, kernel publication and shared grids. **The full-model fixture has frozen empty GPU expert placement**; dense GPU/state/nativeCPU behavior is validated there, while resident GPU arithmetic is tested separately. Do not conflate this with new independent llama.cpp model equivalence or exhaustive long-context validation.
+
+Final selected regressions: `0307_cpu_regression_v1.xml`471passed43skipped; `0307_gpu_regression_v1.xml`201passed4skipped, including Qwen3-Next. Detailed patch scopes and artifacts: `0295_0307_critical_path_optimization.md`, `0295_0307_optimization_results_v2.json`. Existing reference discrepancies are not hidden by generated-token agreement or forced-token replay.
+
 ## Current follow-ups — 0281–0288
 
 Mixed-format GPU Q8_1 is now opt-in for IQ2_S,IQ3_S,IQ3_XXS,IQ4_NL,IQ4_XS,Q2_0,Q4_K,Q5_K,Q6_K,Q8_0. Tests compare extracted pinned Strata parts/rows exactly, independent FP64 decoded-Q8 products with explicit integer-truncation bounds, real bounded checkpoint slices, all seven expert triples, captured/native/mixed dispatch and output lifetime. CPU GGML Q8_K/Q8_0 is a separate contract. Flags do not convert generic warmup fused experts or prove whole-engine Strata parity.

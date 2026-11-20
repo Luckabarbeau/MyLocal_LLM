@@ -30,6 +30,7 @@ attribution is embedded by iq_packed_gpu. No whole-engine API/code is ported.
 # SOFTWARE.
 from functools import lru_cache
 from types import SimpleNamespace
+import os
 import numpy as np
 from . import iq_packed_gpu as iq
 from . import q8_1_gpu as q8
@@ -42,22 +43,30 @@ __device__ __forceinline__ unsigned int signed_word(unsigned int v, unsigned int
     const unsigned int mask=__vcmpne4(((signs&3)<<7)|((signs&12)<<21),0);
     return __vsub4(v^mask,mask);
 }
-template<int F> __device__ __forceinline__ int codes4(const unsigned char* b,int g,int j) {
+template<int F> __device__ __forceinline__ unsigned int grid_word(const unsigned char* shared,int offset) {
+#ifdef SHARED_IQ_GRID
+    if(shared) return *(const unsigned int*)(shared+offset);
+#endif
+    if constexpr(F==0) return u32(iq2s_grid+offset);
+    if constexpr(F==1) return u32(iq3s_grid+offset);
+    return u32(iq3xxs_grid+offset);
+}
+template<int F> __device__ __forceinline__ int codes4(const unsigned char* b,int g,int j,const unsigned char* grid=nullptr) {
     if constexpr(F==0) {
         int l=j/2;
         int idx=b[2+4*g+l]|(((b[66+g]>>(2*l))&3)<<8);
-        return signed_word(u32(iq2s_grid+8*idx+4*(j%2)),b[34+4*g+l]>>(4*(j%2)));
+        return signed_word(grid_word<F>(grid,8*idx+4*(j%2)),b[34+4*g+l]>>(4*(j%2)));
     } else if constexpr(F==1 || F==2) {
         int idx=b[2+8*g+j];
         unsigned int signs;
         if constexpr(F==1) {
             idx|=((b[66+g]>>j)&1)<<8;
             signs=b[74+4*g+j/2]>>(4*(j%2));
-            return signed_word(u32(iq3s_grid+4*idx),signs);
+            return signed_word(grid_word<F>(grid,4*idx),signs);
         } else {
             unsigned int aux=u32(b+66+4*g);
             signs=ksigns_iq2xs[(aux>>(7*(j/2)))&127]>>(4*(j%2));
-            return signed_word(u32(iq3xxs_grid+4*idx),signs);
+            return signed_word(grid_word<F>(grid,4*idx),signs);
         }
     } else {
         unsigned int result=0;
@@ -131,7 +140,7 @@ template<int F> __device__ __forceinline__ float k_part(const unsigned char* w,c
 template<int F> __device__ __forceinline__ int n_parts(int k) {
     return k/((F==3 || F==6 || F==7)?16:F>=8?8:32);
 }
-template<int F> __device__ __forceinline__ float part(const unsigned char* w,const unsigned char* q,int p) {
+template<int F> __device__ __forceinline__ float part(const unsigned char* w,const unsigned char* q,int p,const unsigned char* grid=nullptr) {
     if constexpr(F>=6) return k_part<F>(w,q,p);
     const int wb=F==3 ? p/2 : F==5 ? p/2 : p/8;
     const int bytes=F==0?82:F==1?110:F==2?98:F==3?18:F==4?136:18;
@@ -158,7 +167,7 @@ template<int F> __device__ __forceinline__ float part(const unsigned char* w,con
                     v|=(unsigned int)(unsigned char)code<<(8*t);
                 }
                 word=(int)v;
-            } else word=codes4<F>(b,g,j);
+            } else word=codes4<F>(b,g,j,grid);
             if constexpr(F==0) {
                 if(j<4) s0=__dp4a(word,(int)u32(a+4+4*j),s0);
                 else s1=__dp4a(word,(int)u32(a+4+4*j),s1);
@@ -173,17 +182,34 @@ template<int F> __device__ __forceinline__ float part(const unsigned char* w,con
     float xd=__half2float(__ushort_as_half((unsigned short)u16(a)));
     return __fmul_rn(__fmul_rn(wd,xd),(float)s0);
 }
-template<int F> __device__ __forceinline__ float row_dot(const unsigned char* w,const unsigned char* q,int k,int lane) {
+template<int F> __device__ __forceinline__ float row_dot(const unsigned char* w,const unsigned char* q,int k,int lane,const unsigned char* grid=nullptr) {
     float sum=0.f;
-    for(int p=lane;p<n_parts<F>(k);p+=32) sum=__fadd_rn(sum,part<F>(w,q,p));
+    for(int p=lane;p<n_parts<F>(k);p+=32) sum=__fadd_rn(sum,part<F>(w,q,p,grid));
     #pragma unroll
     for(int off=16;off;off>>=1) sum=__fadd_rn(sum,__shfl_xor_sync(0xffffffffu,sum,off));
     return sum;
 }
+template<int F> __device__ __forceinline__ void init_grid(unsigned char* grid) {
+#ifdef SHARED_IQ_GRID
+    if constexpr(F<=2) {
+        constexpr int size=F==0?8192:F==1?2048:1024;
+        const unsigned char* src=F==0?iq2s_grid:F==1?iq3s_grid:iq3xxs_grid;
+        for(int i=threadIdx.x;i<size/4;i+=blockDim.x)
+            ((unsigned int*)grid)[i]=((const unsigned int*)src)[i];
+        __syncthreads();
+    }
+#endif
+}
 template<int F> __global__ void q8_linear(const unsigned char* w,const unsigned char* q,float* out,int n,int k,int rowbytes) {
+#ifdef SHARED_IQ_GRID
+    __shared__ __align__(16) unsigned char grid[F==0?8192:F==1?2048:F==2?1024:1];
+    init_grid<F>(grid);
+#else
+    const unsigned char* grid=nullptr;
+#endif
     int row=blockIdx.x*4+threadIdx.x/32,lane=threadIdx.x%32;
     if(row>=n) return;
-    float sum=row_dot<F>(w+(long long)row*rowbytes,q+(long long)blockIdx.y*(k/32)*36,k,lane);
+    float sum=row_dot<F>(w+(long long)row*rowbytes,q+(long long)blockIdx.y*(k/32)*36,k,lane,grid);
     if(!lane) out[(long long)blockIdx.y*n+row]=sum;
 }
 template<int F> __global__ void q8_partials(const unsigned char* w,const unsigned char* q,float* out,int n,int k,int rowbytes) {
@@ -192,12 +218,26 @@ template<int F> __global__ void q8_partials(const unsigned char* w,const unsigne
 }
 template<int G,int U> __global__ void q8_gate_up(const unsigned char* x,const unsigned long long* table,float* h,
         int d,int f,int grb,int urb,int experts) {
+#ifdef SHARED_IQ_GRID
+    // Whole inactive expert blocks need no codebook upload. All threads take
+    // this branch together; non-four-row-aligned geometries keep the safe path.
+    int base=blockIdx.x*4;
+    if(f%4==0 && base<experts*f && !table[(base/f)*3]) {
+        int pair=base+threadIdx.x/32;
+        if(!(threadIdx.x%32) && pair<experts*f) h[pair]=0.f;
+        return;
+    }
+    __shared__ __align__(16) unsigned char grid[G==0?8192:G==1?2048:G==2?1024:1];
+    init_grid<G>(grid);
+#else
+    const unsigned char* grid=nullptr;
+#endif
     int pair=blockIdx.x*4+threadIdx.x/32,lane=threadIdx.x%32;
     if(pair>=experts*f) return;
     int e=pair/f,r=pair%f;
     if(!table[e*3]) { if(!lane) h[pair]=0.f; return; }
-    float g=row_dot<G>((const unsigned char*)table[e*3]+(long long)r*grb,x,d,lane);
-    float u=row_dot<U>((const unsigned char*)table[e*3+1]+(long long)r*urb,x,d,lane);
+    float g=row_dot<G>((const unsigned char*)table[e*3]+(long long)r*grb,x,d,lane,grid);
+    float u=row_dot<U>((const unsigned char*)table[e*3+1]+(long long)r*urb,x,d,lane,G==U?grid:nullptr);
     if(!lane) h[pair]=(g/(1.f+expf(-g)))*u;
 }
 template<int F> __global__ void q8_down(const unsigned char* h,const unsigned long long* table,const float* routes,
@@ -213,7 +253,7 @@ template<int F> __global__ void q8_down(const unsigned char* h,const unsigned lo
 
 
 @lru_cache(maxsize=32)
-def module(device, formats):
+def module(device, formats, shared_grid=False):
     names=[]
     for fmt in set(formats):
         i=FORMAT_ID[fmt]
@@ -221,7 +261,10 @@ def module(device, formats):
     if len(formats)==3:
         names.append(f'q8_gate_up<{FORMAT_ID[formats[0]]},{FORMAT_ID[formats[1]]}>')
     with cp.cuda.Device(device):
-        return cp.RawModule(code=iq._cuda_source('global').replace('INPUT_T','float')+_SOURCE,
+        prefix='#define SHARED_IQ_GRID\n' if shared_grid else ''
+        base=iq._cuda_source('global').replace('INPUT_T','float')
+        if shared_grid: base=base.replace('__device__ const','__device__ __align__(16) const')
+        return cp.RawModule(code=prefix+base+_SOURCE,
                             options=('--std=c++17','--fmad=false'),name_expressions=tuple(names))
 
 
@@ -251,7 +294,7 @@ def linear_packed(packed,weight,*,out=None):
         m=packed.size//packed.shape[-1]
         if m>65535: raise ValueError('Too many Q8 rows')
         i=FORMAT_ID[weight.quant_type]
-        module(device,(weight.quant_type,)).get_function(f'q8_linear<{i}>')(((n+3)//4,m),(128,),
+        module(device,(weight.quant_type,),os.environ.get('MINI_LLM_Q8_SHARED_GRID','0')=='1').get_function(f'q8_linear<{i}>')(((n+3)//4,m),(128,),
             (weight.data,packed,result,np.int32(n),np.int32(k),np.int32(weight.data.nbytes//n)))
     return result
 
@@ -269,7 +312,7 @@ class GroupedQ8Plan:
         self.input=cp.empty(plan.d//32*36,cp.uint8)
         self.hidden=cp.empty((plan.k,plan.f//32*36),cp.uint8)
         formats=plan.formats
-        mod=module(plan.device,formats)
+        mod=module(plan.device,formats,os.environ.get('MINI_LLM_Q8_SHARED_GRID','0')=='1')
         self.gate_up=mod.get_function(f'q8_gate_up<{FORMAT_ID[formats[0]]},{FORMAT_ID[formats[1]]}>')
         self.down=mod.get_function(f'q8_down<{FORMAT_ID[formats[2]]}>')
         self.gu_args=tuple(np.int32(v) for v in (plan.d,plan.f,

@@ -30,6 +30,24 @@ extern "C" __global__ void publish(unsigned int* flags,unsigned int* failure) {
     __threadfence_system();
     release(flags,request+1);
 }
+extern "C" __global__ void publish_inputs(const unsigned int* x,const int* metadata,
+    unsigned int* host_x,int* host_metadata,unsigned int* flags,unsigned int* failure,int d,int k) {
+    __shared__ unsigned int bad;
+    if(!threadIdx.x) bad=acquire(failure);
+    __syncthreads();
+    if(bad) return;
+    for(int i=threadIdx.x;i<d;i+=blockDim.x) host_x[i]=x[i];
+    for(int i=threadIdx.x;i<=k;i+=blockDim.x) host_metadata[i]=metadata[i];
+    // Every writer must finish its system-scope stores before lane zero
+    // publishes readiness. A block barrier alone does not order host visibility.
+    __threadfence_system();
+    __syncthreads();
+    if(!threadIdx.x && !acquire(failure)) {
+        unsigned int request=acquire(flags);
+        if(request==0xffffffffu) release(failure,3);
+        else release(flags,request+1);
+    }
+}
 extern "C" __global__ void await_cpu(const unsigned int* flags,unsigned int* failure,
                                      unsigned long long timeout_ns,unsigned int* device_status) {
     if(threadIdx.x || blockIdx.x) return;
@@ -61,7 +79,7 @@ extern "C" __global__ void poison_failed(float* out,const unsigned int* failure,
 def _kernels(device):
     with xp.cuda.Device(device):
         module=xp.RawModule(code=_SOURCE,options=('--std=c++17',))
-        return tuple(module.get_function(n) for n in ('publish','await_cpu','poison_failed','copy_complete_rows'))
+        return tuple(module.get_function(n) for n in ('publish','await_cpu','poison_failed','copy_complete_rows','publish_inputs'))
 
 
 def _mapped(size):
@@ -82,7 +100,7 @@ def mapped_output(host,owner):
     error=_runtime().cudaHostGetDevicePointer(C.byref(pointer),host.ctypes.data,0)
     if error: raise RuntimeError(f'Native service output mapping unavailable: {error}')
     memory=xp.cuda.UnownedMemory(pointer.value,host.nbytes,owner,device_id=xp.cuda.runtime.getDevice())
-    return xp.ndarray(host.shape,xp.float32,memptr=xp.cuda.MemoryPointer(memory,0))
+    return xp.ndarray(host.shape,host.dtype,memptr=xp.cuda.MemoryPointer(memory,0))
 
 
 class NativeExpertService:
@@ -98,8 +116,9 @@ class NativeExpertService:
         b.mylocal_ggml_service_remove.restype=C.c_int
         b.mylocal_ggml_service_destroy.argtypes=[C.c_void_p]
         b.mylocal_ggml_service_destroy.restype=None
-        self.publish,self.wait,self.poison,self.copy_rows=_kernels(xp.cuda.runtime.getDevice())
+        self.publish,self.wait,self.poison,self.copy_rows,self.publish_inputs=_kernels(xp.cuda.runtime.getDevice())
         self.clients={}
+        self.stage_arena=None
         self.failure=_mapped(64)
         self.device_failure=xp.zeros(1,xp.uint32)
         self.handle=b.mylocal_ggml_service_create(pool._handle,self.failure.host.ctypes.data)
@@ -130,3 +149,5 @@ class NativeExpertService:
             if self.clients: raise RuntimeError('Retire native handoffs before closing their service')
             self.bridge.mylocal_ggml_service_destroy(self.handle)
             self.handle=None
+            # Every client has fenced its GPU readers before unregistering.
+            self.stage_arena=None

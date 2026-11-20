@@ -1,6 +1,36 @@
 # Qwen4Exp implementation status
 
-## Current — through 0288; safe callback observation 31.43/s, target 50/s unmet
+## Current — 0293–0307 critical-path work; target 50/s not met
+
+The retained best controlled single observation is **42.64032 decode forwards/s** (0302 QSA frontend); latest adjacent control/shared-grid pair **40.05676 / 40.17001/s** shows no material model gain. Natural conversation runs with identical generated IDs measured **31.95859 / 35.15922/s**, with substantial remaining file I/O/major faults. Do not present forced-token replay as natural-generation throughput.
+
+Implemented and scope-numerically-validated: bounded native staged execution (0293–0294, experimental/off), causal heat proposals (0295, no integrated mover), request-bound recurrence and exact GPU graph copies (0296), CPU IQ3_S gather (0297), aligned CPU/GPU/phase instrumentation (0298), experimental IQ4 VNNI/IQ3_XXS gather/pair/HC/task-grain variants (0299–0304), native-graph shared branch (0305), fenced GPU publication of pinned input slabs (0306), and exact shared-memory IQ GPU codebooks (0307). **0307 is operator-performance-optimized (1.085–1.857x real operators), not model-performance-optimized.** Losing/neutral switches remain off and task factor remains 3.
+
+Final selected regressions: **471 NumPy passed/43 skipped; 201 actual CuPy passed/4 skipped**, including Qwen3-Next components. Actual checkpoint two-request prefixes 1/2/4/8/16 preserve all 10 logit boundaries and persistent-state hashes exactly against retained uncaptured local arithmetic; the fixture uses CPU experts, while resident GPU arithmetic has independent Strata-source/real-slice tests. No new independent llama.cpp full-model equivalence or complete training-suite claim.
+
+Every experiment used verified isolated services and unchanged memory/headroom guards. No complete host-pinned complement, discarded expert tail or checkpoint change. Full per-patch interfaces, status, tests, numerical/memory scopes and failed experiments: `0295_0307_critical_path_optimization.md`; results/source hashes: `0295_0307_optimization_results_v2.json`. Safe reproducible runner: `scripts/probe_0302_decode_configuration.py` under0290 isolation. Next dependency: attribute natural-trajectory page faults to expert/PLE sources before changing host residency; retain hot replay for CPU compute/overlap diagnosis.
+
+The older sections below are historical, not current completion/default claims.
+
+## Current — 0291–0292 isolated benchmarks; warm controlled decode ~33.9/s
+
+After0290's safety gate, user authorized resumed benchmarking. All new experiments ran sequentially in verified isolated services; no50GiB bulk warming or44GiB source. **0291 actual-checkpoint partial-source validated:** 60-expert CPU copy test exact,128MiB cap; full model with512MiB anonymous source/263registered bundles33.90548forwards/s versus warm mmap control33.87091/s, same128warmup/359response IDs and CPU/GPUexpert counts. No material source-copy gain; cold21.295/s was disk-confounded. Full/pinned complement still unvalidated.
+
+**0292 standalone split operator validated:**56actual mixed-format CPU/GPU configurations preserve complete top10 and exact same-site outputs. Staging1–2misses helps selected high-miss cases~5–20%; cheap/low-miss groups and blanket staging often lose. Not integrated into model decode. Fresh16tokenNsight:210.12msGPUoperationunion/514.77msspan,177.50msgaps preceding CPU-resultH2D versus2.88mscopies; waits/CPUcompletion remain the priority. DeferredQSAcheck trial34.01985/s is only0.44% above warm baseline, not a demonstrated gain; default remains unchanged.
+
+Final focused tests **96CPU passed/4skipped/1deselected;20actualGPU passed/1skipped**. No production mathematics/kernel/default edits in0291–0292, no new independent model-parity claim. Full report/sourcehashes/results: `0291_0292_residency_and_miss_split.md`, `0291_0292_benchmark_summary_v1.json`. Next dependency: bounded native asynchronous service/mover with format/miss-count-aware staging, failure/lease/combination tests, then same-prefix/state and longer-workload comparison. **50/s remains unmet.**
+
+## Prior — 0290 safety gate; experiments initially paused
+
+**2026-11-19 desktop OOM incident confirmed:** systemd-oomd killed the GNOME Shell cgroup at50.6G; individual-process attribution remains unresolved. Earlier process-group/sample guards were not cgroup isolation. No44GiB resident-source model benchmark was launched. Do not resume full-model/pinning work based on previous successful small tests.
+
+**0289 implemented/small-fixture validated, large-memory unvalidated:** optional complete packed anonymous CPU-source copies, canonical mmap ownership preserved, setup-only native registry replacement, explicit host budget and optional paced registration. No new throughput result. GPU-staged miss splitting is still not integrated.
+
+**0290 implemented and CPU/no-model validated:** fail-closed separate systemd service, verified kernel memory/swap/group-OOM limits,12GiB reserve, PSI/ancestor monitoring, bounded runtime/cleanup and exclusive telemetry. Longer workload CLI now requires verified isolation. Final bounded regression **89passed,4skipped,1deselected**, cgroup peak643858432bytes (~614MiB), sampled PSI0. Timeout cleanup test returned expected125; no benchmark units remained. No CUDA initialized, model payload run, pinning or large allocation in0290. This is not proof against all system/GPU-driver OOM risks.
+
+See `0290_memory_incident_and_isolation.md` and versioned journal/guard artifacts. Next dependency: small isolated CPU source memory/lifetime measurement before any increase in budget or GPU work. **50/s remains unmet; no mathematical/precision changes.**
+
+## Prior — through 0288; safe callback observation 31.43/s, target 50/s unmet
 
 Integrated opt-in mixed-format GPU Q8 covers IQ2_S/IQ3_S/IQ3_XXS/IQ4_NL/IQ4_XS/Q2_0 and Q4_K/Q5_K/Q6_K/Q8_0. Extracted pinned-Strata parts/rows are bit-exact; independent FP64 decoded-Q8 baselines/truncation bounds are tested. CPU retains GGML per-format Q8_K/Q8_0. This is scoped arithmetic alignment, not whole-engine Strata equivalence.
 

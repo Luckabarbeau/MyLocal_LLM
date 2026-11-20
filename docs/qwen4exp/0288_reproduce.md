@@ -1,6 +1,10 @@
 # Reproduce the current Q8/BF16 sparse decode measurements
 
-Run from the repository with no other large model server using RAM/VRAM. Preserve the checkpoint and use a **new output directory**. This launches the existing bounded benchmark, not an HTTP server.
+**Current safe recipe:** see `0307_reproduce.md` and `scripts/probe_0302_decode_configuration.py` under0290isolation. The command below is retained historical provenance, not the current launch command. Latest scoped results and limitations: `0295_0307_critical_path_optimization.md`.
+
+**Historical command below is no longer runnable directly after0290.** Use the verified isolated service launcher, keep at least12GiBhost reserve, and do not repeat the old50GiBbulk warmup after the desktop OOM incident. Current bounded measurements/configuration are in `0291_0292_residency_and_miss_split.md`; the0254CLI now refuses unisolated execution. The historical numbers and command are preserved for provenance, not as a safe current launch recipe.
+
+Run from the repository with no other large model server using RAM/VRAM. Preserve the checkpoint and use a **new output directory**. This launches the benchmark, not an HTTP server.
 
 ## Recommended measured configuration
 

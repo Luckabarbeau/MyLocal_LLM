@@ -19,7 +19,8 @@ weighting remains outside CPU arithmetic; no dense expert copy is created.
 ABI verified against ggml/include/{ggml.h,ggml-cpu.h}, src/ggml-common.h and
 src/ggml-cpu/quants.h at the supplied reference revision below. GGML is a
 separately selected MIT-licensed dependency (Copyright (c) 2022 Georgi Gerganov);
-no GGML source or mathematics is included in this original LGPL project bridge.
+optional arithmetic derivatives live in separately attributed MIT headers;
+the scheduling bridge remains original LGPL project code.
 Arbitrary incompatible GGML forks cannot be made safe by ctypes: use the pinned
 build. Traits checks detect type mismatches, not arbitrary ABI changes.
 """
@@ -67,7 +68,13 @@ def _load_bridge():
     flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-pthread', '-ffp-contract=off']
     header = source.with_name('q2_cpu_simd.h')
     service_header=source.with_name('native_expert_service.h')
-    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + service_header.read_bytes() + repr(
+    stage_header=source.with_name('native_expert_staging.h')
+    iq3_header=source.with_name('iq3_cpu_simd.h')
+    codebooks=source.with_name('gguf_codebooks.h')
+    iq4_header=source.with_name('iq4_cpu_vnni.h')
+    iq3xxs_header=source.with_name('iq3xxs_cpu_simd.h')
+    pair_header=source.with_name('iq3xxs_cpu_pair.h')
+    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + service_header.read_bytes() + stage_header.read_bytes() + iq3_header.read_bytes() + codebooks.read_bytes() + iq4_header.read_bytes() + iq3xxs_header.read_bytes() + pair_header.read_bytes() + repr(
         (compiler, flags, platform.machine(), sys.platform)).encode()).hexdigest()[:20]
     cache = Path(os.environ.get('MINI_LLM_NATIVE_BUILD_DIR',
                               str(Path.home() / '.cache/mylocal_llm/native')))
@@ -101,10 +108,14 @@ def _load_bridge():
     lib.mylocal_ggml_pool_set_spin.restype = C.c_int
     lib.mylocal_ggml_pool_configure.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_int]
     lib.mylocal_ggml_pool_configure.restype = C.c_int
+    lib.mylocal_ggml_pool_set_task_factor.argtypes=[C.c_void_p,C.c_int]
+    lib.mylocal_ggml_pool_set_task_factor.restype=C.c_int
     lib.mylocal_ggml_pool_set_task_mode.argtypes = [C.c_void_p,C.c_int]
     lib.mylocal_ggml_pool_set_task_mode.restype = C.c_int
     lib.mylocal_ggml_pool_set_fused_hidden.argtypes = [C.c_void_p,C.c_int]
     lib.mylocal_ggml_pool_set_fused_hidden.restype = C.c_int
+    lib.mylocal_ggml_pool_clear_registered.argtypes=[C.c_void_p]
+    lib.mylocal_ggml_pool_clear_registered.restype=C.c_int
     lib.mylocal_ggml_pool_register.argtypes = [C.c_void_p,C.c_void_p,C.c_void_p]
     lib.mylocal_ggml_pool_register.restype = C.c_int
     lib.mylocal_ggml_pool_submit_registered.argtypes = [C.c_void_p,C.c_void_p,C.c_int,C.c_void_p,C.c_void_p]
@@ -116,6 +127,12 @@ def _load_bridge():
     lib.mylocal_ggml_pool_wait.restype = None
     lib.mylocal_ggml_pool_destroy.argtypes = [C.c_void_p]
     lib.mylocal_ggml_pool_destroy.restype = None
+    lib.mylocal_iq4_vnni_available.argtypes=[]
+    lib.mylocal_iq4_vnni_available.restype=C.c_int
+    lib.mylocal_iq3xxs_gather_available.argtypes=[]
+    lib.mylocal_iq3xxs_gather_available.restype=C.c_int
+    lib.mylocal_iq3_gather_available.argtypes=[]
+    lib.mylocal_iq3_gather_available.restype=C.c_int
     lib.mylocal_q2_avx2_available.argtypes = []
     lib.mylocal_q2_avx2_available.restype = C.c_int
     return lib
@@ -129,7 +146,7 @@ class GGMLPackedCPUExecutor:
     commit. Keep this object alive for the duration of all worker calls.
     """
 
-    def __init__(self, library_path=None, *, q2_simd=None):
+    def __init__(self, library_path=None, *, q2_simd=None, iq3_gather=None, iq4_vnni=None, iq3xxs_gather=None, iq3xxs_pair=None):
         selected = library_path if library_path is not None else os.environ.get('MINI_LLM_GGML_CPU_LIBRARY')
         if not selected:
             raise RuntimeError('Explicitly set MINI_LLM_GGML_CPU_LIBRARY or pass library_path '
@@ -170,7 +187,48 @@ class GGMLPackedCPUExecutor:
             activation, quant, _ = self._functions['Q2_0']
             self._functions['Q2_0'] = (activation, quant,
                 C.cast(self._bridge.mylocal_q2_avx2_dot, C.c_void_p).value)
-        self.provenance = {'library_path': str(path), 'library_sha256': sha.hexdigest(),
+        if iq3_gather is None:
+            iq3_gather=os.environ.get('MINI_LLM_GGML_IQ3_GATHER','0')=='1'
+        if not isinstance(iq3_gather,bool): raise TypeError('iq3_gather must be bool')
+        if iq3_gather:
+            if not self._bridge.mylocal_iq3_gather_available():
+                raise RuntimeError('IQ3_S gather requires x86 AVX2/F16C/FMA')
+            activation,quant,_=self._functions['IQ3_S']
+            self._functions['IQ3_S']=(activation,quant,
+                C.cast(self._bridge.mylocal_iq3_gather_dot,C.c_void_p).value)
+        if iq3xxs_gather is None:
+            iq3xxs_gather=os.environ.get('MINI_LLM_GGML_IQ3XXS_GATHER','0')=='1'
+        if not isinstance(iq3xxs_gather,bool): raise TypeError('iq3xxs_gather must be bool')
+        if iq3xxs_gather:
+            if not self._bridge.mylocal_iq3xxs_gather_available():
+                raise RuntimeError('IQ3_XXS gather requires x86 AVX2/F16C/FMA')
+            activation,quant,_=self._functions['IQ3_XXS']
+            self._functions['IQ3_XXS']=(activation,quant,
+                C.cast(self._bridge.mylocal_iq3xxs_gather_dot,C.c_void_p).value)
+        if iq3xxs_pair is None:
+            iq3xxs_pair=os.environ.get('MINI_LLM_GGML_IQ3XXS_PAIR','0')=='1'
+        if not isinstance(iq3xxs_pair,bool): raise TypeError('iq3xxs_pair must be bool')
+        if iq3xxs_pair:
+            if iq3xxs_gather: raise ValueError('Select IQ3_XXS pair or gather, not both')
+            if not self._bridge.mylocal_iq3xxs_gather_available():
+                raise RuntimeError('IQ3_XXS pair requires x86 AVX2/F16C/FMA')
+            activation,quant,_=self._functions['IQ3_XXS']
+            self._functions['IQ3_XXS']=(activation,quant,
+                C.cast(self._bridge.mylocal_iq3xxs_pair_single,C.c_void_p).value)
+        if iq4_vnni is None:
+            iq4_vnni=os.environ.get('MINI_LLM_GGML_IQ4_VNNI','0')=='1'
+        if not isinstance(iq4_vnni,bool): raise TypeError('iq4_vnni must be bool')
+        if iq4_vnni:
+            if not self._bridge.mylocal_iq4_vnni_available():
+                raise RuntimeError('IQ4_NL VNNI requires GCC11+ and x86 AVX2/F16C/FMA/AVX-VNNI')
+            activation,quant,_=self._functions['IQ4_NL']
+            self._functions['IQ4_NL']=(activation,quant,
+                C.cast(self._bridge.mylocal_iq4_vnni_dot,C.c_void_p).value)
+        self.provenance = {'library_path': str(path),
+                           'iq3_xxs_dot':('avx2_pair_q8_k_same_fma_order' if iq3xxs_pair else
+                                          'avx2_gather_q8_k_same_fma_order' if iq3xxs_gather else 'ggml'),
+                           'iq4_nl_dot':'avx_vnni_q8_0_same_pair_fma_order' if iq4_vnni else 'ggml',
+                           'iq3_s_dot':'avx2_gather_q8_k_same_fma_order' if iq3_gather else 'ggml', 'library_sha256': sha.hexdigest(),
                            'reference_revision': REFERENCE_REVISION,
                            'library_revision_verified': False,
                            'bridge_path': self._bridge._name,
@@ -270,7 +328,7 @@ class GGMLPackedCPURowPool:
     for wake latency; sleeping remains the default. No affinity policy is imposed.
     """
     def __init__(self, executor, d_model, d_ff, workers, capacity=10, *, spin_us=None,
-                 host_help=None, cpu_ids=None, scheduler=None, fused_hidden=None):
+                 host_help=None, cpu_ids=None, scheduler=None, fused_hidden=None, tasks_per_worker=None):
         for name, value, maximum in (('d_model', d_model, 65536), ('d_ff', d_ff, 65536),
                                       ('workers', workers, 256), ('capacity', capacity, 512)):
             if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= maximum:
@@ -305,6 +363,11 @@ class GGMLPackedCPURowPool:
             fused_hidden=text=='1'
         if not isinstance(fused_hidden,bool):
             raise TypeError('fused_hidden must be bool')
+        if tasks_per_worker is None:
+            tasks_per_worker=int(os.environ.get('MINI_LLM_GGML_POOL_TASK_FACTOR','3'))
+        if isinstance(tasks_per_worker,bool) or not isinstance(tasks_per_worker,int) or not 1<=tasks_per_worker<=16:
+            raise ValueError('tasks_per_worker must be an integer in1..16')
+        self.tasks_per_worker=tasks_per_worker
         self.fused_hidden=fused_hidden
         self.scheduler = scheduler
         self.host_help, self.cpu_ids = host_help, cpu_ids
@@ -324,6 +387,15 @@ class GGMLPackedCPURowPool:
             len(cpus) if cpus is not None else 0))
         executor._check(executor._bridge.mylocal_ggml_pool_set_task_mode(self._handle,int(scheduler=='tasks')))
         executor._check(executor._bridge.mylocal_ggml_pool_set_fused_hidden(self._handle,int(fused_hidden)))
+        executor._check(executor._bridge.mylocal_ggml_pool_set_task_factor(self._handle,tasks_per_worker))
+
+    def clear_registrations(self):
+        """Idle setup seam; native handoff registries must not exist."""
+        with self._lock:
+            if not self._handle or self._pending is not None:
+                raise RuntimeError('Registry reset requires idle open row pool')
+            self.executor._check(self.executor._bridge.mylocal_ggml_pool_clear_registered(self._handle))
+            self._registered.clear()
 
     def register(self, key, weights):
         """Retain one immutable source bundle and its validated native metadata."""

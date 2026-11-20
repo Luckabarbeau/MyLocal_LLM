@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--native-handoff',action='store_true')
     parser.add_argument('--qsa-frontend-graph',action='store_true')
     args = parser.parse_args()
+    from run_0290_isolated_benchmark import require_isolation
+    require_isolation()
     args.output.mkdir(parents=True, exist_ok=False)
     os.environ.update(MINI_LLM_BACKEND='cupy', MINI_LLM_IQ_GPU_CODEBOOK_STORAGE='global',
                       MINI_LLM_IQ_GPU_GROUPED_KERNEL='warp')
@@ -42,7 +44,7 @@ def main():
     deadline = time.monotonic()+150
     def guard():
         m = memory_snapshot()
-        enforce_limits(m, 4*GiB, 8*GiB, deadline)
+        enforce_limits(m, 12*GiB, 8*GiB, deadline)
         return m
     guard()
     options = dict(MODEL_OPTIONS, max_length=32, cpu_workers=15, expert_cpu_backend='ggml_pool',
@@ -85,7 +87,12 @@ def main():
             pre_graph_statistics=[m.graph_statistics() for m in model._pre_moe_segments.values()],
             shared_graph_statistics=[m.graph_statistics() for m in model._shared_graph_owners],
             final_memory=guard(), plan=model.plan,
-            same_arithmetic=True, routing='all complete CPU Q8 experts, no GPU admissions')
+            same_arithmetic=True, routing='no GPU admissions; complete CPU/Q8 staged expert split',
+            native_stage_limit=int(os.environ.get('MINI_LLM_NATIVE_MOE_STAGE_LIMIT','0')),
+            optimization_environment={name:os.environ.get(name,'0') for name in (
+                'MINI_LLM_NATIVE_MOE_FUSED_SHARED','MINI_LLM_NATIVE_MOE_KERNEL_PUBLISH',
+                'MINI_LLM_Q8_SHARED_GRID','MINI_LLM_BOUND_RECURRENT_STATE','MINI_LLM_GRAPH_DEVICE_COPY')},
+            expert_statistics=model.expert_executor.statistics())
         (args.output/'result.json').write_text(json.dumps(report, indent=2))
     print(f'Completed {args.mode}: {args.output}')
 

@@ -412,8 +412,12 @@ class Qwen4ExpGGUFModel:
                         gamma_conv=dense(p+'ple_norm_conv.weight').reshape(4,h.width),
                         conv=dense(p+'ple_conv1d.weight'))
                 if rec:
+                    qkv_projection = recurrent_project(p+'attn_qkv.weight')
+                    z_projection = recurrent_project(p+'attn_gate.weight')
+                    paired = (weights.paired_projection(qkv_projection,z_projection)
+                              if os.environ.get('MINI_LLM_Q8_RECURRENT_PAIR','0') == '1' else None)
                     mixer = Qwen4ExpRecurrentMixerInference(h.mixer,
-                        qkv=recurrent_project(p+'attn_qkv.weight'), z=recurrent_project(p+'attn_gate.weight'),
+                        qkv=qkv_projection, z=z_projection, qkv_z_projection=paired,
                         beta=recurrent_project(p+'ssm_beta.weight'),alpha=recurrent_project(p+'ssm_alpha.weight'),
                         out=recurrent_project(p+'ssm_out.weight'),conv_weight=dense(p+'ssm_conv1d.weight'),
                         norm_weight=dense(p+'ssm_norm.weight'),ssm_a=dense(p+'ssm_a'),

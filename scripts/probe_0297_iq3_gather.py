@@ -15,7 +15,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--workers',type=int,default=19)
-    parser.add_argument('--kernel',choices=('iq3_gather','iq4_vnni','iq3xxs_gather','iq3xxs_pair'),default='iq3_gather')
+    parser.add_argument('--kernel',choices=('iq3_gather','iq2_gather','iq4_vnni','iq3xxs_gather','iq3xxs_pair','q2_rows','q2_rows_exact'),default='iq3_gather')
     args=parser.parse_args()
     from run_0290_isolated_benchmark import require_isolation
     require_isolation()
@@ -27,12 +27,12 @@ def main():
     from mini_llm.external.qwen4exp_gguf import Qwen4ExpGGUFIndex
     from probe_0218_hc_identity import MODEL
     index=Qwen4ExpGGUFIndex.open(MODEL,model_id='0297')
-    base=GGMLPackedCPUExecutor(q2_simd=True,iq3_gather=False,iq4_vnni=False,iq3xxs_gather=False,iq3xxs_pair=False)
-    fast=GGMLPackedCPUExecutor(q2_simd=True,iq3_gather=args.kernel=='iq3_gather',
+    base=GGMLPackedCPUExecutor(q2_simd=True,iq2_gather=False,iq3_gather=False,iq4_vnni=False,iq3xxs_gather=False,iq3xxs_pair=False)
+    fast=GGMLPackedCPUExecutor(q2_simd=True,iq2_gather=args.kernel=='iq2_gather',iq3_gather=args.kernel=='iq3_gather',
                               iq4_vnni=args.kernel=='iq4_vnni',iq3xxs_gather=args.kernel=='iq3xxs_gather',
-                              iq3xxs_pair=args.kernel=='iq3xxs_pair')
-    target_format={'iq3_gather':'IQ3_S','iq4_vnni':'IQ4_NL','iq3xxs_gather':'IQ3_XXS','iq3xxs_pair':'IQ3_XXS'}[args.kernel]
-    label='pair' if args.kernel=='iq3xxs_pair' else 'vnni' if args.kernel=='iq4_vnni' else 'gather'
+                              iq3xxs_pair=args.kernel=='iq3xxs_pair',q2_rows=args.kernel=='q2_rows',q2_rows_exact=args.kernel=='q2_rows_exact')
+    target_format={'iq2_gather':'IQ2_S','iq3_gather':'IQ3_S','iq4_vnni':'IQ4_NL','iq3xxs_gather':'IQ3_XXS','iq3xxs_pair':'IQ3_XXS','q2_rows':'Q2_0','q2_rows_exact':'Q2_0'}[args.kernel]
+    label='rows_exact' if args.kernel=='q2_rows_exact' else 'rows' if args.kernel=='q2_rows' else 'pair' if args.kernel=='iq3xxs_pair' else 'vnni' if args.kernel=='iq4_vnni' else 'gather'
     x=np.random.default_rng(297).normal(0,.1,(1,index.d_model)).astype(np.float32)
     rows=[]; seen=set(); inventory=[]
     try:
@@ -42,7 +42,7 @@ def main():
                 formats=tuple(index.descriptors[f'blk.{layer}.ffn_{p}_exps.weight'].quant_type
                               for p in ('gate','up','down'))
                 inventory.append(dict(layer=layer,formats=formats))
-                eligible=(formats[2]=='IQ4_NL' if args.kernel=='iq4_vnni' else formats[:2]==(target_format,target_format))
+                eligible=(formats[2]==target_format if args.kernel in ('iq4_vnni','q2_rows','q2_rows_exact') else formats[:2]==(target_format,target_format))
                 if not eligible or formats in seen: continue
                 seen.add(formats)
                 experts=[index.provider(ExpertKey(index.model_id,layer,int(e)))
@@ -63,7 +63,10 @@ def main():
                     def execute(kind):
                         pool._submit_registered(x,ids[kind][:count],output[kind]).result()
                     for _ in range(5): execute('ggml'); execute(label)
-                    np.testing.assert_array_equal(output['ggml'].view(np.uint32),output[label].view(np.uint32))
+                    if args.kernel=='q2_rows':
+                        np.testing.assert_allclose(output[label],output['ggml'],rtol=3e-5,atol=2e-6)
+                    else:
+                        np.testing.assert_array_equal(output['ggml'].view(np.uint32),output[label].view(np.uint32))
                     samples={kind:[] for kind in ids}
                     for trial in range(10):
                         order=('ggml',label) if trial%2==0 else (label,'ggml')
@@ -71,9 +74,16 @@ def main():
                             started=time.perf_counter_ns()
                             for _ in range(40): execute(kind)
                             samples[kind].append((time.perf_counter_ns()-started)/40/1e6)
-                    np.testing.assert_array_equal(output['ggml'].view(np.uint32),output[label].view(np.uint32))
+                    if args.kernel=='q2_rows':
+                        np.testing.assert_allclose(output[label],output['ggml'],rtol=3e-5,atol=2e-6)
+                    else:
+                        np.testing.assert_array_equal(output['ggml'].view(np.uint32),output[label].view(np.uint32))
                     medians={kind:float(np.median(v)) for kind,v in samples.items()}
-                    row=dict(layer=layer,formats=formats,experts=count,bit_exact=True,
+                    delta=output[label].astype(np.float64)-output['ggml'].astype(np.float64)
+                    row=dict(layer=layer,formats=formats,experts=count,
+                             bit_exact=bool(np.array_equal(output[label].view(np.uint32),output['ggml'].view(np.uint32))),
+                             max_abs=float(np.max(np.abs(delta))),
+                             relative_l2=float(np.linalg.norm(delta)/max(np.linalg.norm(output['ggml'].astype(np.float64)),1e-30)),
                              median_ms=medians,samples_ms=samples,speedup=medians['ggml']/medians[label])
                     rows.append(row)
                     print(json.dumps({k:v for k,v in row.items() if k!='samples_ms'}),flush=True)

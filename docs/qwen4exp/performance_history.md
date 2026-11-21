@@ -1,6 +1,30 @@
 # Qwen4Exp performance and memory history
 
-## Current — 0318–0323; restart checkpoint, target unmet
+## Current experiment — 0335 same-input CPU operators; no new model rate
+
+Pinned StrataQ2_0 AVX2/VNNI rows, same neutral native scheduler:1.32–1.55x faster using **unchanged localQ8_0 activation values/scales**; relativeL2~2e-7/maxabs3.35e-8.20participants/3experts:0.031624->0.023881ms;6experts0.050600->0.033626ms;10experts0.078478->0.051366ms. Quantization/import excluded; warm actual down matrices, teacher-forced identical hidden vector. LegacyActQ output differs~0.018%relative, not needed for the kernel gain.24whole-expert local/pinnedGGML traits cases bit-exact; local IQ-specializations not generally slower. No production integration, full-model gain or50/sclaim.77CPUtests passed/4skipped; boundedCPU-only processpeakRSS1165.875MiB. Details: `0335_identical_input_cpu_experts.md`; versioned results `diagnostics_0335_cpu_ab_v1/result.json`, `diagnostics_0335_cpu_ab_v2/result.json`. Next: opt-in Q2row integration with owned preallocated scratch, whole-expert parity, then long critical-path model A/B under unchanged guards.
+
+## Prior — 0326–0333; profile placement helps, latest hot controlled replay47.17/s
+
+Same7GiB/3673-slot arena: causal full static frequency profile reduces actual CPU experts75864->56114/request, earlier matched hot pair45.02055->48.30164forwards/s. Setup0.51367s/1278complete replacements/2.5865GBincoming bytes is outside decode. Profile trained on an earlier occurrence of the repeated prompt: no arbitrary-conversation generalization or cross-placement logit equivalence claim.
+
+Latest four294-output/293-forward repeats after128warmup, fixed trajectory: exact router+profile44.63786/47.12285/47.19762/47.19923/s; original-router+profile control45.68824/46.55048/46.52938/46.16071/s. Aggregates46.51275vs46.22953/s; hot last3aggregates47.17321vs46.41283/s. First-request I/O differed; sequential observations are not confidence intervals. **50/sremains unmet; neither replay is natural conversation or the full Strata workload.**
+
+Exact router kernels~1.26xstandalone, full-model fixed-prefix10logits/allstatehashes bit-exact over2requests. Native IQ2gather exact but slower0.728–0.940old/newratios: stays off. Isolated existing HCdown kernel~1.031xwith variation/~0.033ms/tokenpotential: not integrated. No expert tail omitted or checkpoint precision changed.
+
+Fresh hot0330tracev2:343.892ms/16tokens,220.367msnon-waitGPUunion,82.060mssummedwaitkernels. Dense packed q8linear~4.99ms/token/301calls; HC~2.40ms; native gate/up3.60ms/down1.64ms (wall phases overlap GPU). This is diagnostic, not an uninstrumented rate. After user-reported interference removal, previously memory-blocked identical0330/0332launches completed under unchanged28/32GiBlimits/12GiBreserve/swap0.
+
+Final selected463CPU/411CuPytests pass with scoped skips/deselections. Full evidence, commands/failures, current-source hashes and next shared-input projection experiment: `0326_0333_optimization_report.md`, `0326_0333_results_v1.json`. Defaults remain unchanged; no optimized50/sclaim.
+
+## Prior — 0324–0325; historical Strata75.2/s corroborated, fresh runs memory-blocked
+
+Retained2026-11-20 20:40:37Strata session reports12261generated/163053ms=75.2emittedtokens/s; full46.84GiBpinnedarena,2792profileGPUslots/5.35GiB,16CPUthreads, adaptiveasyncswaps, INT8KV, suffixdrafting and default rank7route-tail skipping. This is historical cancelled-request evidence, not a new exact fulltop10benchmark. Server counts12260tokens; preserve that accounting distinction. Async2999rounds/235515swaps/14.4msround duration is overlapped and cannot be summed as serialized token delay.
+
+Fresh unchangedCLI:40GiBhardlimit rejected50.84GiBfullarena requirement, selected mmap and began32.82GiBpinnedcomplement, stopped at38GiBMemoryHigh before ready. Local0325natural route-profile attempt used unchanged28/32GiBlimits; safely stopped after57s/32responseoutputs atMemoryHigh (mostly mapped file pages in retained RSS, hostavailable~50.95GiB, OOM0/swap0). **Neither supplies completed response throughput or speedup.** No cap increase, new download, production arithmetic/residency/default change or actual placement move.
+
+New diagnostic contracts pass74tests/61subtests; partial real-route invariant check passes48layers/512experts/top10. No completedA->Bplacement-benefit estimate. Latest complete local control remains41.99/43.70forwards/s forced replay, **not50/sor naturalgeneration**. Details: `0324_0325_strata_residency_report.md`; reproducible session evidence: `0324_strata_sessions_v1.json`. Next: bounded file-working-set attribution before another model run, then causal placement measurement.
+
+## Prior — 0318–0323; restart checkpoint, target unmet
 
 Best new completed warm controlled response **43.70105forwards/s** (0321); paired response41.99128/s. Complete top10/no drafts,19workers,50usspin,7GiBsizedcache, FP32KV, Q8GPU dense/experts, exactBF16HCstorage;128-output warmup plus two359-output/358-forward response repeats. **Not natural generation or a sustained50/s result.**
 

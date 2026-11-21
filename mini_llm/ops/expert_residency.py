@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import math
 import threading
 from typing import Callable
+from weakref import WeakSet
 
 from mini_llm.ops.native_packed_cpu import packed_cpu_expert
 from mini_llm.ops.expert_victim_index import ExpertVictimIndex
@@ -532,6 +533,7 @@ class HeterogeneousExpertExecutor:
             self._ggml_row_pool = GGMLPackedCPURowPool(
                 self._ggml_cpu, self.d_model, self.d_ff, self.cpu_workers)
         self._worker_local = threading.local()
+        self._cpu_futures = WeakSet()
         self.counters = Counter()
 
     @contextmanager
@@ -632,45 +634,112 @@ class HeterogeneousExpertExecutor:
         if service is not None:
             service.check()
 
-    def install_observed_profile(self):
-        """Warmup-only cumulative-frequency placement; no future route oracle.
+    def install_observed_profile(self,*,counts=None):
+        """Opt-in setup placement, before plans, host substitution or freezes.
 
-        Call at a serialized, request-free seam before freezing device plans.
-        Canonical sources and bounded slots remain unchanged. Setup may block
-        for copies; model equations/routing and CPU fallback never change.
+        None uses warmup usage; supplied counts are a validated snapshot, not a
+        future-route oracle or a performance claim. Only metadata and canonical
+        packed views are retained during preflight, never copies of weight banks.
+        Every selected source is checked before eviction. Copies use the arena's
+        synchronous complete-bundle publication and existing leases. A copy or
+        lease failure raises explicitly: completed residents remain usable, but
+        installation is incomplete (missing experts retain the normal CPU path).
+        No admission policy or canonical host storage is changed. Positive runtime
+        heat is preserved; new/zero-score keys get a unit admission score, not route hits.
         """
-        if (BACKEND_NAME!='cupy' or not self.expert_slot_stride_bytes or self.expert_slot_sizes is not None or
+        if (BACKEND_NAME!='cupy' or not self.expert_slot_stride_bytes or
                 self._dispatch_depth or self._device_expert_plans or
-                self.cache._admission_limit is not None):
-            raise ValueError('Observed profile requires idle fixed slots before admission freezes')
-        xp.cuda.get_current_stream().synchronize()
-        self.cache._busy_keys()
-        if self.cache._protected or self.cache._inflight_groups:
-            raise RuntimeError('Observed profile requires all expert consumers to retire')
-        from .expert_profile import frequency_placement
-        counts={key:usage.hits for key,usage in self.cache._usage.items()}
-        selected=frequency_placement(counts,self.cache.device_budget_bytes,self.expert_slot_stride_bytes)
+                self.cache._admission_limit is not None or self._resident_source is not None):
+            raise ValueError('Observed profile requires idle fixed slots before admission freezes, device plans and host source substitution')
+        row_pool=self._ggml_row_pool
+        if row_pool is not None and getattr(row_pool,'_native_service',None) is not None:
+            raise ValueError('Observed profile requires setup before native service plans')
+        if ((row_pool is not None and row_pool._pending is not None) or
+                any(not future.done() for future in self._cpu_futures)):
+            raise RuntimeError('Observed profile cannot race pending CPU work')
+        if self.cache._busy_keys():
+            raise RuntimeError('Observed profile requires all protected/in-flight expert consumers to retire')
+        from .expert_profile import _validated_counts,frequency_placement,sized_frequency_placement
+        count_source='warmup_usage' if counts is None else 'supplied'
+        counts=_validated_counts(
+            {key:usage.hits for key,usage in self.cache._usage.items()} if counts is None else counts,
+            model_id=self.model_id)
+        slots=(self.expert_slot_sizes if self.expert_slot_sizes is not None else
+               (self.expert_slot_stride_bytes,)*(self.cache.device_budget_bytes//self.expert_slot_stride_bytes))
+        capacities=Counter(slots)
+        sources={}
+        if self.expert_slot_sizes is None:
+            selected=frequency_placement(counts,self.cache.device_budget_bytes,self.expert_slot_stride_bytes)
+        else:
+            # _host_weights returns complete zero-copy expert views for mmap
+            # providers. No whole-bank conversion or dense expansion is needed.
+            sources={k:self._host_weights(k) for k,v in counts.items() if v>0}
+            selected=sized_frequency_placement(counts,
+                {k:sum(w.nbytes for w in ws) for k,ws in sources.items()},slots,
+                resident=self.cache.resident)
+        sizes,payloads={},{}
+        for key in selected:
+            weights=sources[key] if key in sources else self._host_weights(key)
+            if not all(isinstance(w,PackedGGUFWeight) for w in weights):
+                raise TypeError('Profile slots require complete packed gate/up/down bundles')
+            for weight in weights:
+                if not supports_packed_gpu_type(weight.quant_type):
+                    raise NotImplementedError(f'{key}: unsupported packed GPU source format {weight.quant_type}')
+                # Revalidate byte length/alignment even if a caller has changed
+                # an array since constructing its immutable packed descriptor.
+                PackedGGUFWeight(weight.data,weight.shape,weight.quant_type)
+            total=sum(w.nbytes for w in weights)
+            size=next((s for s in sorted(capacities) if total<=s),None)
+            if size is None:
+                raise ValueError('Profile expert exceeds approved slot stride/classes')
+            sources[key]=weights
+            sizes[key],payloads[key]=size,total
         kept=set(self.cache.resident)&set(selected)
-        before=self.cache.counters['promotions']
+        if any(self.cache.resident[k][1]!=sizes[k] for k in kept):
+            raise ValueError('Profile resident reservation does not match approved slot class')
+        incoming=tuple(k for k in selected if k not in kept)
+        removed=set(self.cache.resident)-set(selected)
+        evicted_slot_bytes=sum(self.cache.resident[k][1] for k in removed)
+        # Allocate/check staging before evicting any handles. Existing arena
+        # storage and externally held projection leases are never replaced.
+        if incoming:
+            self.reserve_device_slots()
+            if self._slot_arena is None:
+                raise MemoryError('Profile budget cannot fit one complete slot')
         evicted=self.cache.retain_only(selected)
-        promote_after=self.cache.promote_after
+        promoted=0
         try:
-            self.cache.promote_after=1
-            for key in selected:
-                if key not in self.cache.resident:
-                    weights=self._host_weights(key)
-                    if sum(w.nbytes for w in weights)>self.expert_slot_stride_bytes:
-                        raise ValueError('Profile expert exceeds approved slot stride')
-                    self.cache.request(key,self.expert_slot_stride_bytes,
-                        lambda weights=weights:self._device_expert(weights))
-        finally:
-            self.cache.promote_after=promote_after
-        return dict(policy='warmup_cumulative_frequency',observed_keys=len(counts),
-            selected=len(selected),retained=len(kept),evicted=evicted,
-            promotions=self.cache.counters['promotions']-before,
-            observed_requests=sum(counts.values()),
-            selected_observed_requests=sum(counts[k] for k in selected),
-            resident=len(self.cache.resident))
+            for key in incoming:
+                handle=self._device_expert(sources[key])
+                if handle is None:
+                    raise RuntimeError('Profile materializer returned no complete expert')
+                self.cache.resident[key]=(handle,sizes[key])
+                self.cache.used_bytes+=sizes[key]
+                usage=self.cache._usage.setdefault(key,_Usage(score=1.0,last_step=self.cache._step))
+                if usage.score == 0:
+                    usage.score=1.0
+                    usage.last_step=self.cache._step
+                if self.cache._victim_index is not None:
+                    self.cache._victim_index.update(key,usage.score,sizes[key],usage.last_step)
+                self.cache.counters['promotions']+=1
+                promoted+=1
+                del handle
+        except Exception as exc:
+            self.cache.counters['profile_failures']+=1
+            raise RuntimeError(f'Observed profile installation incomplete ({promoted}/{len(incoming)} promotions); only complete residents are published') from exc
+        occupancy={str(s):dict(capacity=n,resident=sum(sizes[k]==s for k in selected),
+            retained=sum(sizes[k]==s for k in kept),
+            bundle_bytes=sum(payloads[k] for k in selected if sizes[k]==s))
+            for s,n in sorted(capacities.items())}
+        return dict(policy=('warmup_cumulative_frequency' if self.expert_slot_sizes is None else
+                            'size_class_cumulative_frequency'),count_source=count_source,
+            observed_keys=len(counts),selected=len(selected),retained=len(kept),evicted=evicted,
+            promotions=promoted,observed_requests=sum(counts.values()),
+            selected_observed_requests=sum(counts[k] for k in selected),resident=len(self.cache.resident),
+            selected_bytes=sum(payloads.values()),retained_bytes=sum(payloads[k] for k in kept),
+            replaced_bytes=sum(payloads[k] for k in incoming),
+            selected_slot_bytes=sum(sizes.values()),retained_slot_bytes=sum(sizes[k] for k in kept),
+            evicted_slot_bytes=evicted_slot_bytes,class_occupancy=occupancy)
 
     @property
     def resident_device_bytes(self):
@@ -917,6 +986,12 @@ class HeterogeneousExpertExecutor:
             weights = self._host_weights(key)
         return key, None, weights
 
+    def _submit_cpu(self,*args):
+        # Weak tracking adds no ownership of completed outputs or activations.
+        future=self._pool.submit(*args)
+        self._cpu_futures.add(future)
+        return future
+
     def submit(self, layer_id: int, expert_id: int, x):
         """Start expert work without waiting for nonresident CPU execution.
 
@@ -943,9 +1018,9 @@ class HeterogeneousExpertExecutor:
             gpu_y = xp.empty(x.shape, dtype=x.dtype)
             ready = xp.cuda.Event(disable_timing=True)
             ready.record(xp.cuda.get_current_stream())
-            return self._pool.submit(self._copy_compute_copy, key, weights,
+            return self._submit_cpu(self._copy_compute_copy, key, weights,
                                      x, ready, device_id, gpu_y, trace)
-        return self._pool.submit(self._run_cpu, key, weights, x, trace)
+        return self._submit_cpu(self._run_cpu, key, weights, x, trace)
 
     def try_forward_device_plan(self, layer_id, x, weights, indices, n_experts, *, on_cpu_submitted=None, gpu_branch=None):
         if not self.device_expert_plan:
@@ -1030,7 +1105,7 @@ class HeterogeneousExpertExecutor:
             else:
                 for row, i in enumerate(cpu):
                     key, _, weights, _ = prepared[i]
-                    jobs.append(self._pool.submit(
+                    jobs.append(self._submit_cpu(
                         self._run_cpu_decode_row, key, weights, host_x, host_out[row:row + 1]))
                     self.counters["cpu_submitted"] += 1
             # Launch independent shared/resident work only after CPU inputs are published.

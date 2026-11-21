@@ -348,6 +348,26 @@ class Qwen4ExpWeights:
             host = raw.view('<f4' if t.quant_type == 'F32' else '<f2').astype(np.float32, copy=True)
         return xp.asarray(host.reshape(t.shape), dtype=xp.float32)
 
+    @staticmethod
+    def paired_projection(first, second):
+        """Build an explicit same-input callback; never cache activations by address.
+
+        Return None when either projection is not a compatible packed GPU Q8
+        operation. The callback retains the existing canonical device handles.
+        """
+        if BACKEND_NAME != 'cupy' or os.environ.get('MINI_LLM_LINEAR_GPU_Q8','0') != '1':
+            return None
+        from mini_llm.ops.mixed_q8_gpu import FORMATS
+        from mini_llm.ops.q8_projection_bundle import linear_pair
+        weights = tuple(getattr(p, 'packed_device_weight', None) for p in (first, second))
+        if any(w is None or w.quant_type not in FORMATS for w in weights):
+            return None
+        if weights[0].shape[-1] != weights[1].shape[-1]:
+            raise ValueError('Paired projections must share input width')
+        def project_pair(x):
+            return linear_pair(xp.ascontiguousarray(x), *weights)
+        return project_pair
+
     def projection(self, name, *, capturable=False):
         self._ready()
         desc = self.store.tensors[name]
@@ -364,6 +384,7 @@ class Qwen4ExpWeights:
             def project(x):
                 shape = x.shape[:-1]+(weight.shape[0],)
                 return quantized_linear(xp.ascontiguousarray(x.reshape(-1,x.shape[-1])), device).reshape(shape)
+            project.packed_device_weight = device
             return project
         def project(x):
             shape = x.shape[:-1]+(weight.shape[0],)

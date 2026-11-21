@@ -205,6 +205,20 @@ def append_json(path, record):
         stream.write(json.dumps(record, allow_nan=False) + '\n')
 
 
+def record_memory_census(model, output, phase):
+    """Untimed, opt-in file-page attribution; never warm or discard payload pages."""
+    if os.environ.get('MINI_LLM_MEMORY_CENSUS', '0') != '1':
+        return
+    from scripts.qwen4exp_memory_census import checkpoint_census
+    from scripts import run_0290_isolated_benchmark as isolation
+    relative = isolation.membership(Path('/proc/self/cgroup').read_text())
+    directory = isolation.CGROUP_ROOT.joinpath(*relative.parts[1:])
+    record = dict(phase=phase, monotonic=time.monotonic(),
+                  cgroup=isolation.snapshot(directory), process=memory_snapshot(),
+                  checkpoint=checkpoint_census(model.weights.store))
+    append_json(output/'checkpoint_memory.jsonl', record)
+
+
 def timing_summary(n, prefill_seconds, ttft, decode_seconds, total_seconds, sampling_seconds):
     if n < 1 or min(prefill_seconds, ttft, decode_seconds, total_seconds, sampling_seconds) < 0:
         raise ValueError('Invalid timing/count')
@@ -378,14 +392,26 @@ def child(args):
         # the same untimed setup seam, before the first physical capacity check.
         xp.cuda.get_current_stream().synchronize()
         xp.get_default_memory_pool().free_all_blocks()
+        record_memory_census(model, args.output, 'model-ready')
         placement_profile=None
+        profile_counts=None
+        if getattr(args,'expert_profile_from',None) is not None:
+            from scripts.qwen4exp_profile_input import load_profile_counts
+            profile_counts, profile_source = load_profile_counts(args.expert_profile_from,
+                case_index=args.profile_case_index,
+                checkpoint_sources=provenance['checkpoint_sources'],
+                model_id=model.expert_executor.model_id,
+                layers=model.weights.index.n_layers, experts=model.weights.index.n_experts)
+            (args.output/'placement_profile_source.json').write_text(json.dumps(profile_source,indent=2))
         resident_host_setup=None
         repeated = [(row, prompt) for row, prompt in zip(rows, prompts)
                     for _ in range(1 if row['request_id'] == 'warmup' else getattr(args, 'response_repeats', 1))]
         for row, prompt in repeated:
             if (row['request_id']!='warmup' and placement_profile is None and
-                    getattr(args,'warmup_frequency_placement',False)):
-                placement_profile=model.expert_executor.install_observed_profile()
+                    (getattr(args,'warmup_frequency_placement',False) or profile_counts is not None)):
+                placement_started=time.perf_counter()
+                placement_profile=model.expert_executor.install_observed_profile(counts=profile_counts)
+                placement_profile['setup_wall_seconds']=time.perf_counter()-placement_started
                 (args.output/'placement_profile.json').write_text(json.dumps(placement_profile,indent=2))
             if (row['request_id']!='warmup' and resident_host_setup is None and
                     getattr(args,'resident_host_gib',0)>0):
@@ -399,6 +425,7 @@ def child(args):
                 lambda record: append_json(args.output/'progress.jsonl', record))
             results.append(result)
             append_json(args.output/'cases.jsonl', result)
+            record_memory_census(model, args.output, f'after:{row["request_id"]}:{len(results)}')
         pool = xp.get_default_memory_pool()
         report = dict(cases=results, provenance=provenance, comparison=COMPARISON,
             options=options, placement=dict(after_warmup_promotions_per_480_requests=args.promotion_limit),
@@ -468,6 +495,9 @@ def parent(args):
         command.extend(['--force-tokens-from',str(args.force_tokens_from.resolve())])
     if getattr(args,'warmup_frequency_placement',False):
         command.append('--warmup-frequency-placement')
+    if getattr(args,'expert_profile_from',None) is not None:
+        command.extend(['--expert-profile-from',str(args.expert_profile_from.resolve()),
+                        '--profile-case-index',str(args.profile_case_index)])
     if args.group_mixed_decode:
         command.append('--group-mixed-decode')
     if getattr(args,'shared_graph_decode',False):
@@ -533,6 +563,8 @@ def main():
     parser.add_argument('--resident-host-gib',type=float,default=0)
     parser.add_argument('--resident-host-pin',action='store_true')
     parser.add_argument('--warmup-frequency-placement',action='store_true')
+    parser.add_argument('--expert-profile-from',type=Path,help='Setup-only frequency placement from an earlier completed request')
+    parser.add_argument('--profile-case-index',type=int,default=1)
     parser.add_argument('--force-tokens-from',type=Path,help='Controlled trajectory from retained result.json; full logits/sampler still execute')
     parser.add_argument('--victim-policy', choices=('sort', 'heap'), default='sort')
     parser.add_argument('--cpu-backend', choices=('native', 'ggml', 'ggml_pool'), default='native')
@@ -557,6 +589,8 @@ def main():
         parser.error('Memory budgets must be finite and nonnegative')
     if args.cpu_workers < 1:
         parser.error('CPU workers must be positive')
+    if args.profile_case_index < 0 or (args.expert_profile_from is not None and args.warmup_frequency_placement):
+        parser.error('Require nonnegative profile case index and only one profile count source')
     if args.promotion_limit is not None and (args.promotion_limit < 0 or args.cases[0] != 'warmup'):
         parser.error('Promotion limit must be nonnegative and requires a leading warmup case')
     if len(set(args.cases)) != len(args.cases):

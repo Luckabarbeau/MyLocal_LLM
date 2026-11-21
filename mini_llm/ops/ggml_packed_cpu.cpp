@@ -20,7 +20,9 @@
 #include <sched.h>
 #endif
 #include "q2_cpu_simd.h"
+#include "q2_cpu_rows.h"
 #include "iq3_cpu_simd.h"
+#include "iq2_cpu_simd.h"
 #include "iq3xxs_cpu_simd.h"
 #include "iq3xxs_cpu_pair.h"
 #include "iq4_cpu_vnni.h"
@@ -63,6 +65,7 @@ public:
     std::vector<PoolExpert> registered;
     std::vector<float> hidden;
     std::vector<std::vector<uint64_t>> qhidden;
+    std::vector<MyLocalQ2RowsActivation> q2_hidden;
     std::vector<uint64_t> input_k, input_0;
     std::vector<std::thread> workers;
     std::mutex mutex;
@@ -89,7 +92,8 @@ public:
 
     RowPool(int dim, int width, int cap, int threads)
         : d(dim), f(width), capacity(cap), experts(cap), hidden(size_t(cap)*width),
-          qhidden(cap), input_k(scratch(dim, 15)), input_0(scratch(dim, 8)) {
+          qhidden(cap), q2_hidden(cap), input_k(scratch(dim, 15)), input_0(scratch(dim, 8)) {
+        for (auto &q : q2_hidden) q.resize((width+63)/64*64);
         for (auto &q : qhidden) q = scratch(width, 15);
         // Q8_0 can require more bytes than Q8_K for short, non-256 widths.
         const size_t words = std::max(scratch(width, 15).size(), scratch(width, 8).size());
@@ -291,6 +295,15 @@ public:
                     hidden[size_t(e)*f+row] = (g/(1.0f+std::exp(-g)))*u;
                 } else if (p == 1) {
                     w.down.quantize(hidden.data()+size_t(e)*f, qhidden[e].data(), f);
+                    if (w.down.dot == mylocal_q2_rows_marker || w.down.dot == mylocal_q2_rows_exact_marker)
+                        q2_hidden[e].prepare(qhidden[e].data(), f);
+                } else if (w.down.dot == mylocal_q2_rows_marker || w.down.dot == mylocal_q2_rows_exact_marker) {
+                    const size_t last = std::min(end, size_t(e+1)*d);
+                    const auto kernel = w.down.dot == mylocal_q2_rows_exact_marker ?
+                        mylocal_q2_rows_exact : mylocal_q2_rows;
+                    kernel(w.down.weight, w.down.stride, f, &q2_hidden[e],
+                           row, int(last-size_t(e)*d), output+size_t(e)*d);
+                    task = last-1;
                 } else {
                     w.down.dot(f, output+size_t(e)*d+row, 0,
                                w.down.weight+size_t(row)*w.down.stride, 0,

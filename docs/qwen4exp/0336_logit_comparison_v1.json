@@ -1,0 +1,62 @@
+[
+  {
+    "file": "logits_0_1.npy",
+    "max_abs": 0.5109971761703491,
+    "relative_l2": 0.03291272345498126,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_0_16.npy",
+    "max_abs": 0.7280961275100708,
+    "relative_l2": 0.05169371494840692,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_0_2.npy",
+    "max_abs": 0.6411457061767578,
+    "relative_l2": 0.03573232719825279,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_0_4.npy",
+    "max_abs": 0.5688538551330566,
+    "relative_l2": 0.032386322254934576,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_0_8.npy",
+    "max_abs": 1.0528494119644165,
+    "relative_l2": 0.08388297149449125,
+    "same_argmax": false
+  },
+  {
+    "file": "logits_1_1.npy",
+    "max_abs": 0.5109971761703491,
+    "relative_l2": 0.03291272345498126,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_1_16.npy",
+    "max_abs": 0.7280961275100708,
+    "relative_l2": 0.05169371494840692,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_1_2.npy",
+    "max_abs": 0.6411457061767578,
+    "relative_l2": 0.03573232719825279,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_1_4.npy",
+    "max_abs": 0.5688538551330566,
+    "relative_l2": 0.032386322254934576,
+    "same_argmax": true
+  },
+  {
+    "file": "logits_1_8.npy",
+    "max_abs": 1.0528494119644165,
+    "relative_l2": 0.08388297149449125,
+    "same_argmax": false
+  }
+]

@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="41" time="0.649" timestamp="2026-11-20T22:34:01.525899-05:00" hostname="lucka-Z890-AORUS-ELITE-WIFI7"><testcase classname="tests.test_0328_sized_profile" name="test_cpu_exact_class_budgets_alignment_and_resident_ties" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_selection_maximizes_frequency_separately_per_class" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[-1]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[True]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[count2]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[nan]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[inf]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[-inf]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[1j]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_frequencies[1]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes0-slots0]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes1-slots1]" time="0.001" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes2-slots2]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes3-slots3]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes4-slots4]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes5-slots5]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes6-slots6]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes7-slots7]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes8-slots8]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes9-slots9]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_invalid_complete_sizes_and_slot_layout[sizes10-slots10]" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_count_snapshot_and_identity_validation" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_setup_guards_before_any_source_read" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_cpu_submitted_work_is_tracked_until_completion" time="0.000" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_mixed_profile_exact_bytes_same_forward_site_and_immutable_mmap" time="0.219" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_sized_default_uses_warmup_usage" time="0.002"><failure message="RuntimeError: Observed profile installation incomplete (0/2 promotions); only complete residents are published">self = &lt;mini_llm.ops.expert_residency.HeterogeneousExpertExecutor object at 0x7cce0cbe1f40&gt;
+counts = {ExpertKey(model_id='0328', layer_id=0, expert_id=0): 100, ExpertKey(model_id='0328', layer_id=0, expert_id=2): 1, ExpertKey(model_id='0328', layer_id=0, expert_id=1): 1, ExpertKey(model_id='0328', layer_id=0, expert_id=4): 100, ...}
+
+    def install_observed_profile(self,*,counts=None):
+        """Opt-in setup placement, before plans, host substitution or freezes.
+    
+        None uses warmup usage; supplied counts are a validated snapshot, not a
+        future-route oracle or a performance claim. Only metadata and canonical
+        packed views are retained during preflight, never copies of weight banks.
+        Every selected source is checked before eviction. Copies use the arena's
+        synchronous complete-bundle publication and existing leases. A copy or
+        lease failure raises explicitly: completed residents remain usable, but
+        installation is incomplete (missing experts retain the normal CPU path).
+        No admission policy, existing runtime heat or canonical host storage is changed.
+                New keys receive the ordinary unit admission score, not fabricated route hits.
+        """
+        if (BACKEND_NAME!='cupy' or not self.expert_slot_stride_bytes or
+                self._dispatch_depth or self._device_expert_plans or
+                self.cache._admission_limit is not None or self._resident_source is not None):
+            raise ValueError('Observed profile requires idle fixed slots before admission freezes, device plans and host source substitution')
+        row_pool=self._ggml_row_pool
+        if row_pool is not None and getattr(row_pool,'_native_service',None) is not None:
+            raise ValueError('Observed profile requires setup before native service plans')
+        if ((row_pool is not None and row_pool._pending is not None) or
+                any(not future.done() for future in self._cpu_futures)):
+            raise RuntimeError('Observed profile cannot race pending CPU work')
+        if self.cache._busy_keys():
+            raise RuntimeError('Observed profile requires all protected/in-flight expert consumers to retire')
+        from .expert_profile import _validated_counts,frequency_placement,sized_frequency_placement
+        count_source='warmup_usage' if counts is None else 'supplied'
+        counts=_validated_counts(
+            {key:usage.hits for key,usage in self.cache._usage.items()} if counts is None else counts,
+            model_id=self.model_id)
+        slots=(self.expert_slot_sizes if self.expert_slot_sizes is not None else
+               (self.expert_slot_stride_bytes,)*(self.cache.device_budget_bytes//self.expert_slot_stride_bytes))
+        capacities=Counter(slots)
+        sources={}
+        if self.expert_slot_sizes is None:
+            selected=frequency_placement(counts,self.cache.device_budget_bytes,self.expert_slot_stride_bytes)
+        else:
+            # _host_weights returns complete zero-copy expert views for mmap
+            # providers. No whole-bank conversion or dense expansion is needed.
+            sources={k:self._host_weights(k) for k,v in counts.items() if v&gt;0}
+            selected=sized_frequency_placement(counts,
+                {k:sum(w.nbytes for w in ws) for k,ws in sources.items()},slots,
+                resident=self.cache.resident)
+        sizes,payloads={},{}
+        for key in selected:
+            weights=sources[key] if key in sources else self._host_weights(key)
+            if not all(isinstance(w,PackedGGUFWeight) for w in weights):
+                raise TypeError('Profile slots require complete packed gate/up/down bundles')
+            for weight in weights:
+                if not supports_packed_gpu_type(weight.quant_type):
+                    raise NotImplementedError(f'{key}: unsupported packed GPU source format {weight.quant_type}')
+                # Revalidate byte length/alignment even if a caller has changed
+                # an array since constructing its immutable packed descriptor.
+                PackedGGUFWeight(weight.data,weight.shape,weight.quant_type)
+            total=sum(w.nbytes for w in weights)
+            size=next((s for s in sorted(capacities) if total&lt;=s),None)
+            if size is None:
+                raise ValueError('Profile expert exceeds approved slot stride/classes')
+            sources[key]=weights
+            sizes[key],payloads[key]=size,total
+        kept=set(self.cache.resident)&amp;set(selected)
+        if any(self.cache.resident[k][1]!=sizes[k] for k in kept):
+            raise ValueError('Profile resident reservation does not match approved slot class')
+        incoming=tuple(k for k in selected if k not in kept)
+        removed=set(self.cache.resident)-set(selected)
+        evicted_slot_bytes=sum(self.cache.resident[k][1] for k in removed)
+        # Allocate/check staging before evicting any handles. Existing arena
+        # storage and externally held projection leases are never replaced.
+        if incoming:
+            self.reserve_device_slots()
+            if self._slot_arena is None:
+                raise MemoryError('Profile budget cannot fit one complete slot')
+        evicted=self.cache.retain_only(selected)
+        promoted=0
+        try:
+            for key in incoming:
+                handle=self._device_expert(sources[key])
+                if handle is None:
+                    raise RuntimeError('Profile materializer returned no complete expert')
+                self.cache.resident[key]=(handle,sizes[key])
+                self.cache.used_bytes+=sizes[key]
+                usage=self.cache._usage.setdefault(key,_Usage(score=1.0,last_step=self.cache._step))
+                if self.cache._victim_index is not None:
+&gt;                   self.cache._victim_index.update(key,usage.score,sizes[key],usage.last_step)
+
+mini_llm/ops/expert_residency.py:720: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;mini_llm.ops.expert_victim_index.ExpertVictimIndex object at 0x7cce0cbe3c50&gt;
+key = ExpertKey(model_id='0328', layer_id=0, expert_id=4), score = 0.0, size_bytes = 60416, last_step = 0
+
+    def update(self, key, score, size_bytes, last_step):
+        previous = self._live.get(key)
+        if previous is None:
+            self._order += 1
+            order = self._order
+        else:
+            order = previous[2]
+        self._generation += 1
+&gt;       priority = math.log2(score) - math.log2(size_bytes) + last_step / self.half_life
+                   ^^^^^^^^^^^^^^^^
+E       ValueError: math domain error
+
+mini_llm/ops/expert_victim_index.py:41: ValueError
+
+The above exception was the direct cause of the following exception:
+
+sources = ({ExpertKey(model_id='0328', layer_id=0, expert_id=0): (PackedGGUFWeight(data=array([ 25,  24, 108, ...,  94, 241,  25...pe='IQ4_NL')), ...}, memmap([ 25,  24, 108, ...,  44,  77, 141], shape=(667648,), dtype=uint8), (60416, 60416, 106496))
+
+    @GPU
+    def test_gpu_sized_default_uses_warmup_usage(sources):
+        bank,_,slots=sources
+        e=executor(bank,slots)
+        try:
+            e.install_observed_profile(counts={key(i):1 for i in (0,2,1)})
+            for i in (0,2,1,4,3):
+                e.cache._usage.setdefault(key(i),residency._Usage()).hits=100 if i in (0,4,3) else 1
+&gt;           report=e.install_observed_profile()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_0328_sized_profile.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;mini_llm.ops.expert_residency.HeterogeneousExpertExecutor object at 0x7cce0cbe1f40&gt;
+counts = {ExpertKey(model_id='0328', layer_id=0, expert_id=0): 100, ExpertKey(model_id='0328', layer_id=0, expert_id=2): 1, ExpertKey(model_id='0328', layer_id=0, expert_id=1): 1, ExpertKey(model_id='0328', layer_id=0, expert_id=4): 100, ...}
+
+    def install_observed_profile(self,*,counts=None):
+        """Opt-in setup placement, before plans, host substitution or freezes.
+    
+        None uses warmup usage; supplied counts are a validated snapshot, not a
+        future-route oracle or a performance claim. Only metadata and canonical
+        packed views are retained during preflight, never copies of weight banks.
+        Every selected source is checked before eviction. Copies use the arena's
+        synchronous complete-bundle publication and existing leases. A copy or
+        lease failure raises explicitly: completed residents remain usable, but
+        installation is incomplete (missing experts retain the normal CPU path).
+        No admission policy, existing runtime heat or canonical host storage is changed.
+                New keys receive the ordinary unit admission score, not fabricated route hits.
+        """
+        if (BACKEND_NAME!='cupy' or not self.expert_slot_stride_bytes or
+                self._dispatch_depth or self._device_expert_plans or
+                self.cache._admission_limit is not None or self._resident_source is not None):
+            raise ValueError('Observed profile requires idle fixed slots before admission freezes, device plans and host source substitution')
+        row_pool=self._ggml_row_pool
+        if row_pool is not None and getattr(row_pool,'_native_service',None) is not None:
+            raise ValueError('Observed profile requires setup before native service plans')
+        if ((row_pool is not None and row_pool._pending is not None) or
+                any(not future.done() for future in self._cpu_futures)):
+            raise RuntimeError('Observed profile cannot race pending CPU work')
+        if self.cache._busy_keys():
+            raise RuntimeError('Observed profile requires all protected/in-flight expert consumers to retire')
+        from .expert_profile import _validated_counts,frequency_placement,sized_frequency_placement
+        count_source='warmup_usage' if counts is None else 'supplied'
+        counts=_validated_counts(
+            {key:usage.hits for key,usage in self.cache._usage.items()} if counts is None else counts,
+            model_id=self.model_id)
+        slots=(self.expert_slot_sizes if self.expert_slot_sizes is not None else
+               (self.expert_slot_stride_bytes,)*(self.cache.device_budget_bytes//self.expert_slot_stride_bytes))
+        capacities=Counter(slots)
+        sources={}
+        if self.expert_slot_sizes is None:
+            selected=frequency_placement(counts,self.cache.device_budget_bytes,self.expert_slot_stride_bytes)
+        else:
+            # _host_weights returns complete zero-copy expert views for mmap
+            # providers. No whole-bank conversion or dense expansion is needed.
+            sources={k:self._host_weights(k) for k,v in counts.items() if v&gt;0}
+            selected=sized_frequency_placement(counts,
+                {k:sum(w.nbytes for w in ws) for k,ws in sources.items()},slots,
+                resident=self.cache.resident)
+        sizes,payloads={},{}
+        for key in selected:
+            weights=sources[key] if key in sources else self._host_weights(key)
+            if not all(isinstance(w,PackedGGUFWeight) for w in weights):
+                raise TypeError('Profile slots require complete packed gate/up/down bundles')
+            for weight in weights:
+                if not supports_packed_gpu_type(weight.quant_type):
+                    raise NotImplementedError(f'{key}: unsupported packed GPU source format {weight.quant_type}')
+                # Revalidate byte length/alignment even if a caller has changed
+                # an array since constructing its immutable packed descriptor.
+                PackedGGUFWeight(weight.data,weight.shape,weight.quant_type)
+            total=sum(w.nbytes for w in weights)
+            size=next((s for s in sorted(capacities) if total&lt;=s),None)
+            if size is None:
+                raise ValueError('Profile expert exceeds approved slot stride/classes')
+            sources[key]=weights
+            sizes[key],payloads[key]=size,total
+        kept=set(self.cache.resident)&amp;set(selected)
+        if any(self.cache.resident[k][1]!=sizes[k] for k in kept):
+            raise ValueError('Profile resident reservation does not match approved slot class')
+        incoming=tuple(k for k in selected if k not in kept)
+        removed=set(self.cache.resident)-set(selected)
+        evicted_slot_bytes=sum(self.cache.resident[k][1] for k in removed)
+        # Allocate/check staging before evicting any handles. Existing arena
+        # storage and externally held projection leases are never replaced.
+        if incoming:
+            self.reserve_device_slots()
+            if self._slot_arena is None:
+                raise MemoryError('Profile budget cannot fit one complete slot')
+        evicted=self.cache.retain_only(selected)
+        promoted=0
+        try:
+            for key in incoming:
+                handle=self._device_expert(sources[key])
+                if handle is None:
+                    raise RuntimeError('Profile materializer returned no complete expert')
+                self.cache.resident[key]=(handle,sizes[key])
+                self.cache.used_bytes+=sizes[key]
+                usage=self.cache._usage.setdefault(key,_Usage(score=1.0,last_step=self.cache._step))
+                if self.cache._victim_index is not None:
+                    self.cache._victim_index.update(key,usage.score,sizes[key],usage.last_step)
+                self.cache.counters['promotions']+=1
+                promoted+=1
+                del handle
+        except Exception as exc:
+            self.cache.counters['profile_failures']+=1
+&gt;           raise RuntimeError(f'Observed profile installation incomplete ({promoted}/{len(incoming)} promotions); only complete residents are published') from exc
+E           RuntimeError: Observed profile installation incomplete (0/2 promotions); only complete residents are published
+
+mini_llm/ops/expert_residency.py:726: RuntimeError</failure></testcase><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[geometry]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[format]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[oversize]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[dense]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[provider]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_bad_source_rejected_before_eviction[byte_length]" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_busy_plans_and_host_substitution_reject_without_mutation" time="0.002" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_held_projection_lease_causes_explicit_incomplete_install" time="0.070" /><testcase classname="tests.test_0328_sized_profile" name="test_gpu_late_copy_failure_is_not_silent_partial_success" time="0.002" /><testcase classname="tests.test_0285_expert_profile" name="test_frequency_budget_order_and_invalid" time="0.000" /><testcase classname="tests.test_0285_expert_profile" name="test_retain_only_preserves_consumers_and_heat" time="0.000" /><testcase classname="tests.test_0285_expert_profile" name="test_profile_replaces_complete_slots_then_freezes" time="0.013" /><testcase classname="tests.test_0288_sized_expert_slots" name="test_layout_bounded_deterministic_fractions" time="0.000" /><testcase classname="tests.test_0288_sized_expert_slots" name="test_compatible_eviction_with_spare_global_bytes" time="0.000" /><testcase classname="tests.test_0288_sized_expert_slots" name="test_mixed_size_cache_bytes_replacement_and_protected_view" time="0.011" /></testsuite></testsuites>

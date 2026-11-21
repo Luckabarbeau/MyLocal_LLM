@@ -163,6 +163,39 @@ def test_memory_guards_use_anon_not_mmap_rss():
         probe.enforce_limits(memory, 0, 0, 0)
 
 
+def test_memory_census_disabled_has_no_model_or_proc_access(tmp_path, monkeypatch):
+    monkeypatch.delenv('MINI_LLM_MEMORY_CENSUS', raising=False)
+    monkeypatch.setattr(probe, 'memory_snapshot', lambda: pytest.fail('disabled census touched procfs'))
+    probe.record_memory_census(None, tmp_path, 'disabled')
+    assert not (tmp_path/'checkpoint_memory.jsonl').exists()
+
+
+def test_memory_census_opt_in_records_separate_scopes(tmp_path, monkeypatch):
+    from scripts import qwen4exp_memory_census as census
+    from scripts import run_0290_isolated_benchmark as isolation
+    monkeypatch.setenv('MINI_LLM_MEMORY_CENSUS', '1')
+    store = object()
+    model = SimpleNamespace(weights=SimpleNamespace(store=store))
+    calls = []
+
+    def snapshot(value):
+        assert value is store
+        calls.append('census')
+        return dict(payload_reads=False, groups={'routed_experts': {'resident_bytes': 4096}})
+
+    monkeypatch.setattr(census, 'checkpoint_census', snapshot)
+    monkeypatch.setattr(probe, 'memory_snapshot', lambda: {'RssFile': 1024})
+    monkeypatch.setattr(isolation, 'membership', lambda text: Path('/test.service'))
+    monkeypatch.setattr(isolation, 'snapshot', lambda path: {'memory_current': 2048})
+    for phase in ('model-ready', 'after:warmup:1'):
+        probe.record_memory_census(model, tmp_path, phase)
+    rows = [json.loads(s) for s in (tmp_path/'checkpoint_memory.jsonl').read_text().splitlines()]
+    assert [r['phase'] for r in rows] == ['model-ready', 'after:warmup:1']
+    assert calls == ['census', 'census']
+    assert all(r['process']['RssFile'] == 1024 and r['cgroup']['memory_current'] == 2048 for r in rows)
+    assert all(not r['checkpoint']['payload_reads'] for r in rows)
+
+
 def test_capacity_fast_options_and_caveats():
     assert probe.MODEL_OPTIONS['max_length'] == 1024
     assert probe.MODEL_OPTIONS['cache_bytes'] == 6*probe.GiB

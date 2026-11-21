@@ -67,14 +67,16 @@ def _load_bridge():
         raise RuntimeError('GGML CPU bridge needs g++ or clang++; set CXX to a compiler executable')
     flags = ['-O3', '-std=c++17', '-shared', '-fPIC', '-pthread', '-ffp-contract=off']
     header = source.with_name('q2_cpu_simd.h')
+    rows_header = source.with_name('q2_cpu_rows.h')
     service_header=source.with_name('native_expert_service.h')
     stage_header=source.with_name('native_expert_staging.h')
     iq3_header=source.with_name('iq3_cpu_simd.h')
+    iq2_header=source.with_name('iq2_cpu_simd.h')
     codebooks=source.with_name('gguf_codebooks.h')
     iq4_header=source.with_name('iq4_cpu_vnni.h')
     iq3xxs_header=source.with_name('iq3xxs_cpu_simd.h')
     pair_header=source.with_name('iq3xxs_cpu_pair.h')
-    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + service_header.read_bytes() + stage_header.read_bytes() + iq3_header.read_bytes() + codebooks.read_bytes() + iq4_header.read_bytes() + iq3xxs_header.read_bytes() + pair_header.read_bytes() + repr(
+    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + rows_header.read_bytes() + service_header.read_bytes() + stage_header.read_bytes() + iq3_header.read_bytes() + iq2_header.read_bytes() + codebooks.read_bytes() + iq4_header.read_bytes() + iq3xxs_header.read_bytes() + pair_header.read_bytes() + repr(
         (compiler, flags, platform.machine(), sys.platform)).encode()).hexdigest()[:20]
     cache = Path(os.environ.get('MINI_LLM_NATIVE_BUILD_DIR',
                               str(Path.home() / '.cache/mylocal_llm/native')))
@@ -131,8 +133,12 @@ def _load_bridge():
     lib.mylocal_iq4_vnni_available.restype=C.c_int
     lib.mylocal_iq3xxs_gather_available.argtypes=[]
     lib.mylocal_iq3xxs_gather_available.restype=C.c_int
+    lib.mylocal_iq2_gather_available.argtypes=[]
+    lib.mylocal_iq2_gather_available.restype=C.c_int
     lib.mylocal_iq3_gather_available.argtypes=[]
     lib.mylocal_iq3_gather_available.restype=C.c_int
+    lib.mylocal_q2_rows_available.argtypes = []
+    lib.mylocal_q2_rows_available.restype = C.c_int
     lib.mylocal_q2_avx2_available.argtypes = []
     lib.mylocal_q2_avx2_available.restype = C.c_int
     return lib
@@ -146,7 +152,7 @@ class GGMLPackedCPUExecutor:
     commit. Keep this object alive for the duration of all worker calls.
     """
 
-    def __init__(self, library_path=None, *, q2_simd=None, iq3_gather=None, iq4_vnni=None, iq3xxs_gather=None, iq3xxs_pair=None):
+    def __init__(self, library_path=None, *, q2_simd=None, iq3_gather=None, iq4_vnni=None, iq3xxs_gather=None, iq3xxs_pair=None, iq2_gather=None, q2_rows=None, q2_rows_exact=None):
         selected = library_path if library_path is not None else os.environ.get('MINI_LLM_GGML_CPU_LIBRARY')
         if not selected:
             raise RuntimeError('Explicitly set MINI_LLM_GGML_CPU_LIBRARY or pass library_path '
@@ -187,6 +193,38 @@ class GGMLPackedCPUExecutor:
             activation, quant, _ = self._functions['Q2_0']
             self._functions['Q2_0'] = (activation, quant,
                 C.cast(self._bridge.mylocal_q2_avx2_dot, C.c_void_p).value)
+        if q2_rows is None:
+            setting = os.environ.get('MINI_LLM_GGML_Q2_ROWS', '0')
+            if setting not in ('0', '1'):
+                raise ValueError('MINI_LLM_GGML_Q2_ROWS must be 0 or 1')
+            q2_rows = setting == '1'
+        if not isinstance(q2_rows, bool):
+            raise TypeError('q2_rows must be bool')
+        if q2_rows_exact is None:
+            setting = os.environ.get('MINI_LLM_GGML_Q2_ROWS_EXACT', '0')
+            if setting not in ('0', '1'):
+                raise ValueError('MINI_LLM_GGML_Q2_ROWS_EXACT must be 0 or 1')
+            q2_rows_exact = setting == '1'
+        if not isinstance(q2_rows_exact, bool):
+            raise TypeError('q2_rows_exact must be bool')
+        if q2_rows and q2_rows_exact:
+            raise ValueError('Select Q2 rows or exact Q2 rows, not both')
+        if q2_rows or q2_rows_exact:
+            if not self._bridge.mylocal_q2_rows_available():
+                raise RuntimeError('Q2_0 rows require x86 AVX2/F16C/FMA')
+            activation, quant, _ = self._functions['Q2_0']
+            self._functions['Q2_0'] = (activation, quant,
+                C.cast(self._bridge.mylocal_q2_rows_exact_marker if q2_rows_exact else
+                       self._bridge.mylocal_q2_rows_marker, C.c_void_p).value)
+        if iq2_gather is None:
+            iq2_gather=os.environ.get('MINI_LLM_GGML_IQ2_GATHER','0')=='1'
+        if not isinstance(iq2_gather,bool): raise TypeError('iq2_gather must be bool')
+        if iq2_gather:
+            if not self._bridge.mylocal_iq2_gather_available():
+                raise RuntimeError('IQ2_S gather requires x86 AVX2/F16C/FMA')
+            activation,quant,_=self._functions['IQ2_S']
+            self._functions['IQ2_S']=(activation,quant,
+                C.cast(self._bridge.mylocal_iq2_gather_dot,C.c_void_p).value)
         if iq3_gather is None:
             iq3_gather=os.environ.get('MINI_LLM_GGML_IQ3_GATHER','0')=='1'
         if not isinstance(iq3_gather,bool): raise TypeError('iq3_gather must be bool')
@@ -225,6 +263,7 @@ class GGMLPackedCPUExecutor:
             self._functions['IQ4_NL']=(activation,quant,
                 C.cast(self._bridge.mylocal_iq4_vnni_dot,C.c_void_p).value)
         self.provenance = {'library_path': str(path),
+                                   'iq2_s_dot':'avx2_gather_q8_k_same_fma_order' if iq2_gather else 'ggml',
                            'iq3_xxs_dot':('avx2_pair_q8_k_same_fma_order' if iq3xxs_pair else
                                           'avx2_gather_q8_k_same_fma_order' if iq3xxs_gather else 'ggml'),
                            'iq4_nl_dot':'avx_vnni_q8_0_same_pair_fma_order' if iq4_vnni else 'ggml',
@@ -232,7 +271,10 @@ class GGMLPackedCPUExecutor:
                            'reference_revision': REFERENCE_REVISION,
                            'library_revision_verified': False,
                            'bridge_path': self._bridge._name,
-                           'q2_dot': 'avx2_q8_0_scalar_float_order' if q2_simd else 'ggml',
+                           'q2_rows': bool(q2_rows), 'q2_rows_exact': bool(q2_rows_exact),
+                           'q2_row_arithmetic': ('existing_q8_0_exact_scalar_order' if q2_rows_exact else
+                               'strata_singleton_fma_existing_q8_0' if q2_rows else 'off'),
+                           'q2_dot': ('avx2_q8_0_scalar_float_order' if q2_simd or q2_rows or q2_rows_exact else 'ggml'),
                            'activation_quantizers': ['quantize_row_q8_K', 'quantize_row_q8_0']}
 
     def _projection(self, weight):

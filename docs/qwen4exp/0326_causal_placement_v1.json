@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "diagnostic_only": true,
+  "model_movement": false,
+  "scope": "Independent causal request-boundary count estimates on unchanged recorded trajectories",
+  "geometry": {
+    "layers": 48,
+    "experts_per_layer": 512,
+    "top_k": 10
+  },
+  "policy": {
+    "max_swaps": 8,
+    "max_transfer_bytes": 33554432,
+    "starting_placement": "Recorded residents at each boundary; not rolling simulated placement",
+    "slot_class_rule": "256-byte alignment, then smallest recorded fitting sized-slot class"
+  },
+  "skipped_cases": [
+    {
+      "case_index": 0,
+      "request_id": "warmup",
+      "reason": "unprofiled adaptive warmup"
+    }
+  ],
+  "inferred_initial_zero_cases": [
+    1
+  ],
+  "boundaries": [
+    {
+      "training_case_index": 1,
+      "training_request_id": "performance-short-r1",
+      "evaluated_case_index": 2,
+      "evaluated_request_id": "performance-short-r1",
+      "training_calls_per_layer": 370,
+      "evaluated_calls_per_layer": 370,
+      "swaps": [
+        {
+          "incoming": [
+            32,
+            65
+          ],
+          "victim": [
+            2,
+            153
+          ],
+          "slot_class_bytes": 1971200,
+          "incoming_packed_bytes": 1971200,
+          "previous_request_gain": 121
+        },
+        {
+          "incoming": [
+            16,
+            65
+          ],
+          "victim": [
+            14,
+            257
+          ],
+          "slot_class_bytes": 2176000,
+          "incoming_packed_bytes": 2176000,
+          "previous_request_gain": 81
+        },
+        {
+          "incoming": [
+            35,
+            130
+          ],
+          "victim": [
+            25,
+            124
+          ],
+          "slot_class_bytes": 2329600,
+          "incoming_packed_bytes": 2329600,
+          "previous_request_gain": 81
+        },
+        {
+          "incoming": [
+            40,
+            205
+          ],
+          "victim": [
+            25,
+            348
+          ],
+          "slot_class_bytes": 2329600,
+          "incoming_packed_bytes": 2329600,
+          "previous_request_gain": 77
+        },
+        {
+          "incoming": [
+            17,
+            0
+          ],
+          "victim": [
+            27,
+            244
+          ],
+          "slot_class_bytes": 2329600,
+          "incoming_packed_bytes": 2329600,
+          "previous_request_gain": 69
+        },
+        {
+          "incoming": [
+            31,
+            297
+          ],
+          "victim": [
+            14,
+            366
+          ],
+          "slot_class_bytes": 2176000,
+          "incoming_packed_bytes": 2176000,
+          "previous_request_gain": 66
+        },
+        {
+          "incoming": [
+            39,
+            356
+          ],
+          "victim": [
+            3,
+            117
+          ],
+          "slot_class_bytes": 1971200,
+          "incoming_packed_bytes": 1971200,
+          "previous_request_gain": 66
+        },
+        {
+          "incoming": [
+            40,
+            179
+          ],
+          "victim": [
+            27,
+            305
+          ],
+          "slot_class_bytes": 2329600,
+          "incoming_packed_bytes": 2329600,
+          "previous_request_gain": 66
+        }
+      ],
+      "swap_count": 8,
+      "incoming_transfer_bytes": 17612800,
+      "evaluation": {
+        "total": {
+          "routes": 177600,
+          "baseline_misses": 75864,
+          "proposed_misses": 75237,
+          "saved_misses": 627,
+          "displaced_hits": 0,
+          "net_saved_misses": 627
+        },
+        "by_class": [
+          {
+            "slot_class_bytes": 1510400,
+            "routes": 18500,
+            "baseline_misses": 9516,
+            "proposed_misses": 9516,
+            "saved_misses": 0,
+            "displaced_hits": 0,
+            "net_saved_misses": 0
+          },
+          {
+            "slot_class_bytes": 1715200,
+            "routes": 11100,
+            "baseline_misses": 5174,
+            "proposed_misses": 5174,
+            "saved_misses": 0,
+            "displaced_hits": 0,
+            "net_saved_misses": 0
+          },
+          {
+            "slot_class_bytes": 1868800,
+            "routes": 3700,
+            "baseline_misses": 1914,
+            "proposed_misses": 1914,
+            "saved_misses": 0,
+            "displaced_hits": 0,
+            "net_saved_misses": 0
+          },
+          {
+            "slot_class_bytes": 1971200,
+            "routes": 55500,
+            "baseline_misses": 22159,
+            "proposed_misses": 21972,
+            "saved_misses": 187,
+            "displaced_hits": 0,
+            "net_saved_misses": 187
+          },
+          {
+            "slot_class_bytes": 2176000,
+            "routes": 51800,
+            "baseline_misses": 22382,
+            "proposed_misses": 22235,
+            "saved_misses": 147,
+            "displaced_hits": 0,
+            "net_saved_misses": 147
+          },
+          {
+            "slot_class_bytes": 2329600,
+            "routes": 33300,
+            "baseline_misses": 13267,
+            "proposed_misses": 12974,
+            "saved_misses": 293,
+            "displaced_hits": 0,
+            "net_saved_misses": 293
+          },
+          {
+            "slot_class_bytes": 2662400,
+            "routes": 3700,
+            "baseline_misses": 1452,
+            "proposed_misses": 1452,
+            "saved_misses": 0,
+            "displaced_hits": 0,
+            "net_saved_misses": 0
+          }
+        ],
+        "by_format": [],
+        "format_attribution": {
+          "complete": false,
+          "missing_layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47
+          ],
+          "caveat": "Only explicitly supplied gate/up/down formats are attributed; none inferred from size."
+        }
+      }
+    }
+  ],
+  "caveats": [
+    "Whole-request native counts include prefill; not decode-only attribution.",
+    "No trajectory changes, cross-site rounding, transfer cost or graph rebuild is simulated.",
+    "No throughput, latency, quality or realized speedup estimate is made.",
+    "Last completed request has no following request to evaluate.",
+    "Same-class exchanges preserve recorded class occupancy; actual lease retirement is not tested."
+  ],
+  "source": {
+    "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/qwen4exp/diagnostics_0326_memory_v1/result.json",
+    "size_bytes": 1722849,
+    "sha256": "e8fe5f632e41f13217b7f0e6a60dd358d1b16a11f7770968de175089ea572cf7"
+  }
+}

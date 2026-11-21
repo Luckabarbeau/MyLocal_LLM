@@ -1,6 +1,34 @@
 # Qwen4Exp implementation status
 
-## Current — 0323 restart checkpoint; optimization paused by user
+## Current — 0335 identical-input CPU expert experiment
+
+Diagnostic-only native comparison implemented and run twice on actual checkpoint slices/retained reference activations, 16/20participants, 3/6/10experts. All24whole-expert local-versus-pinned-Strata-GGML configurations bit-exact; no general IQ-backend upgrade established. Dedicated unchanged Strata Q2_0 rows are1.32–1.55x faster under the same neutral native scheduler even with exact local Q8_0 values/scales imported; relativeL2~2e-7/maxabs~3.35e-8, versus~1.8e-4relative for legacy FP32-scaleActQ. **Not a full-model gain; production unchanged;50/sremains unmet.** 77selectedCPUtests passed/4skipped; adapter synthetic checks pass. ProcesspeakRSS1165.875MiB, sampledcgrouppeak~0.976GiB,swap0; no full model/GPU run. Source provenance, artifacts, numeric baselines and next opt-in Q2row integration gate: `0335_identical_input_cpu_experts.md`.
+
+## Prior audit — 0334 GPU expert capacity and native CPU backend
+
+User-requested pre-optimization audit: local has 3673 complete GPU experts versus historical Strata75.2/s 2792 and controlled fulltop10 Strata3786; capacity is not the main shortfall. Current local backend is native `ggml_pool`, 19workers+participating service thread, SIMD/Q8 arithmetic—not the old Python expert executor. Fresh isolated feature query confirms AVX2/FMA/AVX-VNNI availability in the loaded GGML library; no model run. CPU MoE exposes ~5.13ms/token GPUwait, but current captures differ in CPU work (~2.99 versus6.02experts/layer), so backend superiority is unresolved. Higher Strata utilization is partly consistent with its20ms spin policy and more CPU-routed work; increasing local spin previously regressed performance. No production changes or fresh throughput/regression claim. Evidence and normalized same-input CPU A/B next dependency: `0334_gpu_cache_cpu_backend_audit.md`. Target50/s remains unmet.
+
+## Prior — 0326–0333 measured placement gain; 50/s still unmet
+
+**Latest completed four-response controlled replay:** static sized-slot profile + exact router **44.64/47.12/47.20/47.20forwards/s**, aggregate46.51275/s over1172decode forwards. Matched original-router/profile control45.69/46.55/46.53/46.16/s, aggregate46.22953/s. Hot last3:47.17321vs46.41283/s (~1.64%observed gain, no confidence claim). All responses have294forced outputs after128warmup; **not natural conversation or Strata configuration parity**. Earlier profile pair improved45.02->48.30hot/s with same7GiBarena; differing warm states/trajectories are not interchangeable baselines.
+
+Implemented opt-in setup-only sized-slot frequency placement and prior-request profile input, cgroup/file-page attribution, exact warp router variants, and warmed-second-response tracing. Profile reduces observed CPU experts75864->56114/request; installation0.51s/1278replacements, no runtime mover or added GPU/host capacity. Router real-checkpoint two-request IDs1..16 comparisons preserve all10saved FP32logits and all saved persistent-state records **bit-exactly**. This is same-site local parity, not new independent llama.cpp or cross-placement equivalence.
+
+**Final selected regressions:463CPU passed/12skipped/1deselected/166subtests passed;411actualCuPy passed/4collection-skipped/1deselected.** Qwen3-Next CPU coverage passes; GPU Qwen3-Next modules are collection-skipped. Existing NumPy-route-ID GPU fixture failure remains explicitly scoped/unmodified. No full training-suite claim.
+
+Successful0330tracev2records16hotdecode steps:~4.99ms/token packed dense projections,~2.40msHC,~5.13msGPUdependency waits. Native-only phases total5.79ms/token,3.60msgate/up/1.64msdown; these overlap GPU work. IQ2_S AVX2gather is bit-exact but slower, **defaultoff/performance rejected**. Isolated HCdown~3%nominal/~0.033ms/token is not worth integrating. Original math/quantization encoding, fulltop10, CPUfallback and guards remain intact. No checkpoint downloads/writes or complete host-pinned arena.
+
+0330tracev1and0332combinedv1VRAM-admission failures are preserved. After user-reported interference was removed, identical guarded relaunches completed; no budget/headroom relaxation. Next: measured shared-input packed dense projection reuse/fusion, guided by the new hot trace; natural conversation/profile-generalization validation remains open. Full contracts, tests, memory/performance scopes, failures and next dependency: `0326_0333_optimization_report.md`, `0326_0333_results_v1.json`, `0332_router_model_parity_v1.json`.
+
+## Prior — 0324–0325 exact-launch audit and placement diagnostics
+
+**50decode forwards/s remains unmet.** Historical installed-Strata logs corroborate75.2emittedtokens/s (12261tokens/163053ms), with46.84GiBpinnedexpertarena, profileGPUcache, adaptiveasyncplacement, INT8KV, route-tail skipping and suffixdrafting. This is not a new fulltop10benchmark. The fresh unchangedCLI selected a different mmap/32.82GiBcomplement path under40GiBhardlimit, then stopped at38GiBMemoryHigh before serving. No download was needed. Session-aware offline analysis separates23sessions/22historical/1current; no current generation summary.
+
+0324adds bounded exact-launch capture/session analysis and pre-cleanup execution-outcome persistence.0325exposes opt-in native route counters and implements causal, size-class-compatible request-boundary placement analysis (max8bundles/32MiB; no actual movement). **74diagnostictests passed,61subtests passed.** New natural two-response profile attempt safely stopped at28GiBMemoryHigh after57s, last response progress32tokens; no completed response or placement-benefit/speedup claim. Partial actual counters validate48layers×512experts,108calls/layer and51840routes, with correct top10and slot occupancy.
+
+Production mathematics, kernels, defaults, checkpoints and pinned references remain unchanged. No new logit/state parity claim. Latest completed local control remains0321**41.99128/43.70105forwards/s** forced replay. Next: cold file-page/cgroup working-set attribution under unchanged limits before another model run; complete causal placement measurement before implementing a mover. Do not increase caps, pin the full complement or import Strata tail skipping silently. Evidence, commands, memory scopes, limitations and next dependency: `0324_0325_strata_residency_report.md`, `0324_strata_sessions_v1.json`.
+
+## Prior — 0323 restart checkpoint; optimization paused by user
 
 **User requested a PC restart and handoff. No further model work is running. Target50decode forwards/s remains unmet.** Resume from `RESTART_HANDOFF_0323.md`, not the older historical sections. Latest complete controlled pipeline0321 measures **41.99128 / 43.70105 forwards/s** over two359-output/358-forward repeats. This is forced-trajectory replay, not natural conversation throughput. Fresh Strata clean subset36.48/49.26/s is also separately warm-dependent, with distinct KV/cache/placement.
 

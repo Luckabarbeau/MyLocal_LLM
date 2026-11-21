@@ -63,7 +63,11 @@ class ChatSession:
         self.messages = [dict(role='system', content=self.system)] if self.system else []
         self.last_stats = {}
 
-    def generate(self, text, max_new_tokens):
+    def generate(self, text, max_new_tokens, *, sampler=None):
+        """Yield streamed text pieces. ``sampler(logits_row)->int`` overrides greedy argmax.
+
+        Passing None (the terminal default) keeps the argmax path bit-identical.
+        """
         from mini_llm.backend import xp, asnumpy, synchronize
         if not isinstance(text, str) or not text.strip():
             raise ValueError('Please enter a nonempty text prompt')
@@ -99,7 +103,8 @@ class ChatSession:
         start = time.perf_counter()
         stop = False
         for index in range(max_new_tokens):
-            token = int(asnumpy(xp.argmax(logits[0])))
+            token = int(sampler(logits[0])) if sampler is not None \
+                else int(asnumpy(xp.argmax(logits[0])))
             if token in self.model.stop_token_ids:
                 stop = True
                 break

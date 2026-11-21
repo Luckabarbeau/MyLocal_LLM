@@ -1,0 +1,49 @@
+{
+  "library": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/qwen4exp/reference_0335/build/libstrata0335_q2_caa0950a1d7312e394d7e0772ab75025d87e3849290ab34c654d43c304071a48.so",
+  "provenance": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/qwen4exp/reference_0335/build/libstrata0335_q2_caa0950a1d7312e394d7e0772ab75025d87e3849290ab34c654d43c304071a48.json",
+  "cached": true,
+  "self_tests": [
+    {
+      "bitplane_requested": "0",
+      "no_vnni": false,
+      "result": {
+        "checked_rows": 70,
+        "max_absolute_error": 8.292309939861298e-05,
+        "imported_rows": 35,
+        "imported_max_absolute_error": 2.288818359375e-05,
+        "vnni": 1,
+        "bitplane": 0,
+        "max_n": 2560,
+        "passed": true
+      }
+    },
+    {
+      "bitplane_requested": "0",
+      "no_vnni": true,
+      "result": {
+        "checked_rows": 70,
+        "max_absolute_error": 8.292309939861298e-05,
+        "imported_rows": 35,
+        "imported_max_absolute_error": 2.288818359375e-05,
+        "vnni": 0,
+        "bitplane": 0,
+        "max_n": 2560,
+        "passed": true
+      }
+    },
+    {
+      "bitplane_requested": "1",
+      "no_vnni": false,
+      "result": {
+        "checked_rows": 70,
+        "max_absolute_error": 1.9803643226623535e-05,
+        "imported_rows": 0,
+        "imported_max_absolute_error": 0.0,
+        "vnni": 1,
+        "bitplane": 1,
+        "max_n": 2560,
+        "passed": true
+      }
+    }
+  ]
+}

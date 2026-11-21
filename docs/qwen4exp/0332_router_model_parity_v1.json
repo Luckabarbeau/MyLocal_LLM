@@ -1,0 +1,124 @@
+{
+  "scope": "Real checkpoint, two requests with fixed IDs1..16; identical empty GPU expert placement and CPU Q8 arithmetic; router only differs; not cross-placement or independent llama.cpp equivalence",
+  "control": "docs/qwen4exp/diagnostics_0332_parity_control_v1",
+  "candidate": "docs/qwen4exp/diagnostics_0332_parity_candidate_v1",
+  "logits": [
+    {
+      "file": "logits_0_1.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_0_16.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_0_2.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_0_4.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_0_8.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_1_1.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_1_16.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_1_2.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_1_4.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "file": "logits_1_8.npy",
+      "shape": [
+        1,
+        248320
+      ],
+      "dtype": "float32",
+      "finite": true,
+      "bit_exact": true,
+      "max_abs": 0.0
+    }
+  ],
+  "persistent_state_records_equal": true,
+  "same_token_ids": true,
+  "all_exact": true,
+  "result_sha256": {
+    "docs/qwen4exp/diagnostics_0332_parity_control_v1/result.json": "1540aa7f1497c34296f5828aa520db5f3de06e19f38497a44eb7086592cdbceb",
+    "docs/qwen4exp/diagnostics_0332_parity_candidate_v1/result.json": "5fc8d2ec481e3290677d78db4fa6541a6adaa032768557de4b23b1c9657f6079"
+  }
+}

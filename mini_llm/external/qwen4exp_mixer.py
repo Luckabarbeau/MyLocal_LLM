@@ -80,7 +80,8 @@ class Qwen4ExpRecurrentMixerInference:
     """
 
     def __init__(self, spec, *, qkv, z, beta, alpha, out, conv_weight,
-                 norm_weight, ssm_a, dt_bias, fast_coefficients=False, graph_decode=False):
+                 norm_weight, ssm_a, dt_bias, fast_coefficients=False, graph_decode=False,
+                                  qkv_z_projection=None):
         if not isinstance(spec, Qwen4ExpMixerSpec):
             raise TypeError("spec must be Qwen4ExpMixerSpec")
         if not isinstance(fast_coefficients, bool):
@@ -89,6 +90,9 @@ class Qwen4ExpRecurrentMixerInference:
             raise TypeError('graph_decode must be bool')
         if graph_decode and BACKEND_NAME != 'cupy':
             raise RuntimeError('GDN graph decode requires CuPy')
+        if qkv_z_projection is not None and not callable(qkv_z_projection):
+            raise TypeError('qkv_z_projection must be a callable or None')
+        self.qkv_z_projection = qkv_z_projection
         self.fast_coefficients = fast_coefficients
         self.graph_decode = graph_decode
         self._decode_graph = None
@@ -170,8 +174,15 @@ class Qwen4ExpRecurrentMixerInference:
     def _forward_uncaptured(self, hidden, state, *, capture_owned=False):
         batch, time = hidden.shape[:2]
         spec = self.spec
-        qkv = xp.ascontiguousarray(self._project(hidden, "qkv"))
-        gate = self._project(hidden, "z").reshape(batch, time, spec.n_value_heads, spec.head_dim)
+        if self.qkv_z_projection is None:
+            qkv = self._project(hidden, "qkv")
+            gate = self._project(hidden, "z")
+        else:
+            qkv, gate = self.qkv_z_projection(hidden)
+            _fp32(qkv, 'paired qkv output', (batch, time, spec.qkv_channels))
+            _fp32(gate, 'paired z output', (batch, time, spec.inner_size))
+        qkv = xp.ascontiguousarray(qkv)
+        gate = gate.reshape(batch, time, spec.n_value_heads, spec.head_dim)
         beta_logits = self._project(hidden, "beta")
         alpha = self._project(hidden, "alpha")
         if self.fast_coefficients and BACKEND_NAME == 'cupy':

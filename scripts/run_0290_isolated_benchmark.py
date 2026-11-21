@@ -71,6 +71,41 @@ def pressure(path):
     return {name: float(rows[name]['avg10']) for name in ('some', 'full')}
 
 
+def _memory_diagnostic(path, *, key_values=False):
+    """Optional telemetry only; never use this reader for safety checks."""
+    try:
+        with path.open('rb') as stream:
+            data = stream.read(64 * 1024)
+        # Reject a full buffer rather than read beyond the cap to check EOF.
+        if len(data) == 64 * 1024:
+            raise ValueError('Telemetry reaches the 64 KiB read limit')
+        text = data.decode('ascii')
+
+        def count(value):
+            if not value or not value.isascii() or not value.isdecimal():
+                raise ValueError('Expected a nonnegative decimal count')
+            return int(value)
+
+        if not key_values:
+            return count(text.strip()), None
+        values = {}
+        for line in text.splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                raise ValueError('Expected one key and count per line')
+            key, value = fields
+            if not key.isascii() or not key.isidentifier():
+                raise ValueError('Invalid memory.stat key')
+            if key in values:
+                raise ValueError(f'Duplicate memory.stat key: {key}')
+            values[key] = count(value)
+        if not values:
+            raise ValueError('Empty memory.stat')
+        return values, None
+    except (OSError, ValueError) as exc:
+        return None, f'{type(exc).__name__}: {exc}'
+
+
 def snapshot(directory, *, root=CGROUP_ROOT):
     readings = []
     current = directory
@@ -87,13 +122,20 @@ def snapshot(directory, *, root=CGROUP_ROOT):
             break
         current = current.parent
     readings.append(pressure(Path('/proc/pressure/memory')))
-    return dict(memory_current=int((directory / 'memory.current').read_text()),
+    row = dict(memory_current=int((directory / 'memory.current').read_text()),
                 memory_peak=int((directory / 'memory.peak').read_text()),
                 memory_events=dict((key, int(value)) for key, value in
                                    (line.split() for line in (directory / 'memory.events').read_text().splitlines())),
                 host_available=memory_available(), ancestor_headroom=headroom,
                 psi_some_avg10=max(row['some'] for row in readings),
                 psi_full_avg10=max(row['full'] for row in readings))
+    # Raw memory.stat keys mix byte quantities and event/page counters, not all bytes.
+    for name, filename, key_values in [('memory_stat', 'memory.stat', True),
+                                      ('memory_swap_current', 'memory.swap.current', False)]:
+        row[name], error = _memory_diagnostic(directory / filename, key_values=key_values)
+        if error is not None:
+            row[f'{name}_error'] = error
+    return row
 
 
 def stop_reason(row, reserve):

@@ -173,3 +173,175 @@ def test_workload_cli_checks_isolation_before_parent(tmp_path, monkeypatch):
 def test_preserve_existing_results(tmp_path):
     with pytest.raises(SystemExit):
         guard.parse_args(['--output', str(tmp_path), '--', '/usr/bin/true'])
+
+
+@pytest.fixture
+def snapshot_cgroup(tmp_path, monkeypatch):
+    root = tmp_path / 'cg'
+    directory = root / 'parent' / 'child'
+    directory.mkdir(parents=True)
+    for node in (root, directory.parent, directory):
+        (node / 'memory.pressure').write_text('some avg10=0\nfull avg10=0\n')
+    for name, value in [('memory.high', '500'), ('memory.max', '1000'),
+                        ('memory.current', '200')]:
+        (directory.parent / name).write_text(value)
+    for name, value in [('memory.current', '100'), ('memory.peak', '150'),
+                        ('memory.events', 'oom 0\noom_kill 0\n'),
+                        ('memory.stat', 'anon 4096\n'), ('memory.swap.current', '0\n')]:
+        (directory / name).write_text(value)
+    read_pressure = guard.pressure
+    monkeypatch.setattr(guard, 'pressure', lambda path:
+        {'some': 0, 'full': 0} if path == Path('/proc/pressure/memory') else read_pressure(path))
+    monkeypatch.setattr(guard, 'memory_available', lambda: 2000)
+    return root, directory
+
+
+def test_snapshot_records_raw_memory_stat_bytes_and_counters(snapshot_cgroup):
+    root, directory = snapshot_cgroup
+    values = dict(anon=4096, file=8192, kernel=1024, shmem=512, file_mapped=2048,
+                  file_dirty=0, file_writeback=0, inactive_file=4096, active_file=2048,
+                  pgfault=123, pgmajfault=4, workingset_refault_file=7,
+                  future_kernel_counter_v42=19)
+    (directory / 'memory.stat').write_text(''.join(f'{key} {value}\n' for key, value in values.items()))
+    row = guard.snapshot(directory, root=root)
+    assert row['memory_stat'] == values
+    assert 'memory_stat_error' not in row
+    assert row['memory_swap_current'] == 0
+    assert 'memory_swap_current_error' not in row
+    assert row['memory_current'] == 100 and row['memory_peak'] == 150
+    assert row['memory_events'] == {'oom': 0, 'oom_kill': 0}
+    assert row['ancestor_headroom'] == 300 and row['host_available'] == 2000
+    assert row['psi_some_avg10'] == row['psi_full_avg10'] == 0
+
+
+@pytest.mark.parametrize('filename,field', [('memory.stat', 'memory_stat'),
+                                           ('memory.swap.current', 'memory_swap_current')])
+def test_snapshot_missing_optional_telemetry(snapshot_cgroup, filename, field):
+    root, directory = snapshot_cgroup
+    (directory / filename).unlink()
+    row = guard.snapshot(directory, root=root)
+    assert row[field] is None
+    assert 'FileNotFoundError' in row[f'{field}_error']
+    assert guard.stop_reason(row, 100) is None
+
+
+@pytest.mark.parametrize('text', ['', '\n', 'anon', 'anon 1 extra\n', 'anon -1\n',
+                                  'anon +1\n', 'anon 1.5\n', 'anon 1_000\n',
+                                  'anon nope\n', 'anon 1\nanon 2\n',
+                                  'anon 1\nfile -2\n', 'bad-key 1\n', 'anon ١\n'])
+def test_snapshot_rejects_malformed_memory_stat(snapshot_cgroup, text):
+    root, directory = snapshot_cgroup
+    (directory / 'memory.stat').write_text(text)
+    row = guard.snapshot(directory, root=root)
+    assert row['memory_stat'] is None
+    assert row['memory_stat_error']
+    assert row['memory_swap_current'] == 0
+    assert guard.stop_reason(row, 100) is None
+
+
+@pytest.mark.parametrize('size', [64 * 1024, 64 * 1024 + 1])
+@pytest.mark.parametrize('filename,field', [('memory.stat', 'memory_stat'),
+                                           ('memory.swap.current', 'memory_swap_current')])
+def test_snapshot_diagnostic_reads_are_bounded(snapshot_cgroup, monkeypatch, size, filename, field):
+    import io
+
+    root, directory = snapshot_cgroup
+    reads = []
+
+    class BoundedStream(io.BytesIO):
+        def read(self, size=-1):
+            assert 0 <= size <= 64 * 1024
+            data = super().read(size)
+            reads.append(len(data))
+            return data
+
+    original_open = Path.open
+    def open_fixture(path, *args, **kwargs):
+        if path == directory / filename:
+            return BoundedStream(b'anon 1\n'.ljust(size, b' '))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', open_fixture)
+    row = guard.snapshot(directory, root=root)
+    assert reads == [64 * 1024]
+    assert row[field] is None
+    assert '64 KiB' in row[f'{field}_error']
+
+
+@pytest.mark.parametrize('filename,field', [('memory.stat', 'memory_stat'),
+                                           ('memory.swap.current', 'memory_swap_current')])
+def test_snapshot_unreadable_optional_telemetry(snapshot_cgroup, monkeypatch, filename, field):
+    root, directory = snapshot_cgroup
+    original_open = Path.open
+    def open_fixture(path, *args, **kwargs):
+        if path == directory / filename:
+            raise PermissionError('fixture telemetry denied')
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', open_fixture)
+    row = guard.snapshot(directory, root=root)
+    assert row[field] is None
+    assert 'PermissionError' in row[f'{field}_error']
+    assert guard.stop_reason(row, 100) is None
+
+
+@pytest.mark.parametrize('value', [0, 4096])
+def test_snapshot_swap_current_bytes(snapshot_cgroup, value):
+    root, directory = snapshot_cgroup
+    (directory / 'memory.swap.current').write_text(f'{value}\n')
+    row = guard.snapshot(directory, root=root)
+    assert row['memory_swap_current'] == value
+    assert 'memory_swap_current_error' not in row
+
+
+@pytest.mark.parametrize('text', ['', '-1', '+1', '1.5', '1_000', 'max', '1\n2', '١'])
+def test_snapshot_rejects_malformed_swap_current(snapshot_cgroup, text):
+    root, directory = snapshot_cgroup
+    (directory / 'memory.swap.current').write_text(text)
+    row = guard.snapshot(directory, root=root)
+    assert row['memory_swap_current'] is None
+    assert row['memory_swap_current_error']
+    assert row['memory_stat'] == {'anon': 4096}
+
+
+@pytest.mark.parametrize('case,expected', [
+    ('safe', None), ('host', 'host RAM reserve reached'),
+    ('ancestor', 'ancestor cgroup reserve reached'),
+    ('some', 'memory pressure threshold reached'), ('full', 'memory pressure threshold reached'),
+    ('oom', 'cgroup OOM event'), ('oom_kill', 'cgroup OOM event')])
+def test_snapshot_optional_failures_preserve_stop_behavior(snapshot_cgroup, monkeypatch, case, expected):
+    root, directory = snapshot_cgroup
+    if case == 'host':
+        monkeypatch.setattr(guard, 'memory_available', lambda: 99)
+    elif case == 'ancestor':
+        (directory.parent / 'memory.high').write_text('299')
+    elif case in ('some', 'full'):
+        (directory / 'memory.pressure').write_text(
+            f'some avg10={30 if case == "some" else 0}\nfull avg10={10 if case == "full" else 0}\n')
+    elif case in ('oom', 'oom_kill'):
+        (directory / 'memory.events').write_text(f'{case} 1\n')
+    before = guard.snapshot(directory, root=root)
+    assert guard.stop_reason(before, 100) == expected
+    (directory / 'memory.stat').write_text('anon -1\n')
+    (directory / 'memory.swap.current').unlink()
+    after = guard.snapshot(directory, root=root)
+    for key in ('memory_current', 'memory_peak', 'memory_events', 'host_available',
+                'ancestor_headroom', 'psi_some_avg10', 'psi_full_avg10'):
+        assert after[key] == before[key]
+    assert guard.stop_reason(after, 100) == expected
+
+
+@pytest.mark.parametrize('filename,text,error', [
+    ('memory.current', 'bad', ValueError), ('memory.peak', 'bad', ValueError),
+    ('memory.events', 'oom bad\n', ValueError), ('memory.pressure', 'some avg10=0\n', KeyError),
+    ('../memory.high', 'bad', ValueError), ('memory.current', None, FileNotFoundError)])
+def test_snapshot_optional_errors_do_not_mask_safety_errors(snapshot_cgroup, filename, text, error):
+    root, directory = snapshot_cgroup
+    (directory / 'memory.stat').write_text('anon -1\n')
+    (directory / 'memory.swap.current').unlink()
+    if text is None:
+        (directory / filename).unlink()
+    else:
+        (directory / filename).write_text(text)
+    with pytest.raises(error):
+        guard.snapshot(directory, root=root)

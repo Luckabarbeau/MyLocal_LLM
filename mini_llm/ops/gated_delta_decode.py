@@ -142,6 +142,16 @@ extern "C" __global__ void gated_rms(
 """
 
 
+def retire_completed_scratch():
+    """Release finished launch owners before admitting a replacement request."""
+    retired = 0
+    for pending in tuple(_PENDING.values()):
+        while pending and pending[0][0].done:
+            pending.popleft()
+            retired += 1
+    return retired
+
+
 def decode_enabled():
     """CPU-safe escape hatch, captured by each mixer at construction."""
     return BACKEND_NAME == "cupy" and os.environ.get(

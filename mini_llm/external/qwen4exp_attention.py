@@ -6,6 +6,7 @@ axes interleaved, but rotates HALF-prefix lane pairs (not adjacent lanes).
 
 from dataclasses import dataclass
 import math
+import os
 from numbers import Integral
 
 import numpy as np
@@ -15,6 +16,7 @@ from ..ops.qsa_decode_gpu import qsa_decode_gpu
 from ..ops.rmsnorm_inference import RMSNormInference
 from ..ops.rotary_inference import RotaryEmbeddingInference
 from .qwen4exp_hyperconnection import _fp32, _sigmoid
+from . import qwen4exp_hoststate as hoststate
 
 
 def _integer(value, name, minimum=1):
@@ -79,6 +81,9 @@ def select_cells(scores, width, policy="ggml_cpu"):
     if width > scores.size:
         raise ValueError("width exceeds score count")
     values = asnumpy(scores)
+    if policy == 'ggml_cpu' and os.environ.get('MINI_LLM_QSA_NATIVE_SELECT', '0') == '1':
+        from ..ops.native_packed_cpu import qsa_select_native
+        return xp.asarray(qsa_select_native(values, width), dtype=xp.int64)
     if policy == "strata":
         ids = np.lexsort((np.arange(values.size), -values))[:width]
     elif policy == "ggml_cpu":
@@ -108,9 +113,15 @@ def select_cells(scores, width, policy="ggml_cpu"):
 
         for parent in range((width - 2) // 2, -1, -1):
             adjust(parent, ids[parent])
-        for candidate in range(width, values.size):
-            if values[candidate] > values[ids[0]]:
-                adjust(0, candidate)
+        # The heap minimum can only increase. Filter against its value at
+        # each chunk's start, then recheck survivors in original order. This
+        # skips the long Python scan without changing comparisons or ties.
+        for start in range(width, values.size, 4096):
+            candidates = np.flatnonzero(values[start:start+4096] > values[ids[0]]) + start
+            for candidate in candidates:
+                candidate = int(candidate)
+                if values[candidate] > values[ids[0]]:
+                    adjust(0, candidate)
     else:
         raise ValueError("unknown tie policy")
     return xp.asarray(np.sort(ids), dtype=xp.int64)
@@ -126,6 +137,11 @@ class QSAState:
     raw_index: object
     pooled: object
     length: int = 0
+    qsa_state_storage: str = 'device'
+    staged_keys: object = None
+    staged_values: object = None
+    dead_index: object = None
+    staged_prefix_length: int = 0
 
 
 class Qwen4ExpAttention:
@@ -140,11 +156,12 @@ class Qwen4ExpAttention:
 
     def __init__(self, config, *, query_gate, key, value, output, index_query,
                  index_key, gamma_q, gamma_k, gamma_index_q, gamma_index_k,
-                                  fast_decode=False):
+                 fast_decode=False, qsa_state_storage='device'):
         if not isinstance(config, QSAConfig):
             raise TypeError("config must be QSAConfig")
         self.config = c = config
         self.fast_decode = bool(fast_decode)
+        self.qsa_state_storage = hoststate.state_storage(qsa_state_storage)
         self._owner = object()
         self.projections = {}
         sizes = {"query_gate": (2*c.n_q_heads*c.head_dim, c.d_model),
@@ -199,6 +216,15 @@ class Qwen4ExpAttention:
         c = self.config
         capacity = _integer(max_length, "max_length")
         shape = (capacity, c.n_kv_heads, c.head_dim)
+        if self.qsa_state_storage == 'host':
+            stage_shape = (min(capacity, c.index_topk + c.block_size - 1),
+                           c.n_kv_heads, c.head_dim)
+            return QSAState(self._owner, capacity, np.zeros(shape, dtype=np.float32),
+                np.zeros(shape, dtype=np.float32),
+                np.zeros((capacity, c.index_dim), dtype=np.float32),
+                xp.zeros((capacity // c.block_size + 1, c.index_dim), dtype=xp.float32),
+                qsa_state_storage='host', staged_keys=xp.zeros(stage_shape, dtype=xp.float32),
+                staged_values=xp.zeros(stage_shape, dtype=xp.float32))
         return QSAState(self._owner, capacity, xp.zeros(shape, dtype=xp.float32),
                         xp.zeros(shape, dtype=xp.float32),
                         xp.zeros((capacity, c.index_dim), dtype=xp.float32),
@@ -212,11 +238,27 @@ class Qwen4ExpAttention:
         length = _integer(state.length, "state length", 0)
         if length > cap:
             raise ValueError("invalid state length")
+        if state.qsa_state_storage != self.qsa_state_storage:
+            raise ValueError('state storage mismatch')
+        host = state.qsa_state_storage == 'host'
+        if host:
+            stage_shape = (min(cap, c.index_topk + c.block_size - 1), c.n_kv_heads, c.head_dim)
+            prefix = _integer(state.staged_prefix_length, 'staged_prefix_length', 0)
+            if prefix > min(length, stage_shape[0]):
+                raise ValueError('invalid staged prefix length')
+            for array in (state.staged_keys, state.staged_values):
+                _fp32('staging', array)
+                if array.shape != stage_shape:
+                    raise ValueError('invalid staging shape')
         for array, shape in ((state.keys, (cap, c.n_kv_heads, c.head_dim)),
                              (state.values, (cap, c.n_kv_heads, c.head_dim)),
                              (state.raw_index, (cap, c.index_dim)),
                              (state.pooled, (cap // c.block_size + 1, c.index_dim))):
-            _fp32("cache", array)
+            if host and array is not state.pooled:
+                if not isinstance(array, np.ndarray) or array.dtype != np.float32:
+                    raise TypeError('host cache must be NumPy FP32')
+            else:
+                _fp32("cache", array)
             if array.shape != shape:
                 raise ValueError("invalid cache shape")
 
@@ -225,6 +267,8 @@ class Qwen4ExpAttention:
         for array in (state.keys, state.values, state.raw_index, state.pooled):
             array.fill(0)
         state.length = 0
+        state.dead_index = None
+        state.staged_prefix_length = 0
 
     def step(self, hidden, state, *, position, diagnostics=False, validation_status=None):
         """Return output, or (output, diagnostic dict) with copied scores/IDs.
@@ -243,6 +287,7 @@ class Qwen4ExpAttention:
             raise ValueError("position must equal state.length (zero-origin contiguous text)")
         if t >= state.max_length:
             raise ValueError("QSA cache capacity exceeded")
+        host = state.qsa_state_storage == 'host'
         batch_validation = self.fast_decode and BACKEND_NAME == 'cupy'
         if validation_status is not None and (not batch_validation or diagnostics):
             raise ValueError('Deferred QSA validation requires fast CuPy execution without diagnostics')
@@ -273,10 +318,11 @@ class Qwen4ExpAttention:
         new_pool = None
         if not tail:
             start = n - c.block_size
-            pooled = raw.copy() if c.block_size == 1 else state.raw_index[start].copy()
+            raw_block = (hoststate.upload(state.raw_index[start:t]) if host else state.raw_index[start:t])
+            pooled = raw.copy() if c.block_size == 1 else raw_block[0].copy()
             # Preserve the source's left-to-right block summation.
             for j in range(start + 1, t):
-                pooled += state.raw_index[j]
+                pooled += raw_block[j - start]
             if c.block_size != 1:
                 pooled += raw
             pooled *= xp.float32(1 / c.block_size)
@@ -286,11 +332,21 @@ class Qwen4ExpAttention:
         # every causal cell, independently of scores/ties. Pooling above must
         # still run so later sparse steps see the identical index history.
         if all_cells:
-            gated = qsa_decode_gpu(q, qg, k, v, state.keys, state.values, n, scale)
+            if host:
+                hoststate.stage_prefix(state, t)
+                cache_k, cache_v = state.staged_keys, state.staged_values
+            else:
+                cache_k, cache_v = state.keys, state.values
+            gated = qsa_decode_gpu(q, qg, k, v, cache_k, cache_v, n, scale)
         else:
-            dead = self.norms[3].forward(raw if t == 0 else state.raw_index[0])
+            if host and t > 0:
+                if state.dead_index is None:
+                    state.dead_index = self.norms[3].forward(hoststate.upload(state.raw_index[0]))
+                dead = state.dead_index
+            else:
+                dead = self.norms[3].forward(raw if t == 0 else state.raw_index[0])
             block_scores = xp.empty((completed + bool(tail),), dtype=xp.float32)
-            for b in range(block_scores.size):
+            for b in range(0 if host else block_scores.size):
                 bk = (new_pool if new_pool is not None and b == completed - 1
                       else state.pooled[b]) if b < completed else dead
                 dots = xp.maximum(iq @ bk, xp.float32(0))
@@ -298,6 +354,8 @@ class Qwen4ExpAttention:
                 for h in range(1, c.index_heads):
                     score += dots[h]
                 block_scores[b] = score
+            if host:
+                block_scores = hoststate.block_scores(iq, state.pooled, completed, tail, dead, new_pool)
             scores = xp.repeat(block_scores, c.block_size)[:n]
             scores[completed*c.block_size:] += xp.float32(1e9)
             # Only [0,t] exists in sequential prefill: the original causal mask is
@@ -306,22 +364,46 @@ class Qwen4ExpAttention:
             contexts = xp.empty((c.n_q_heads, c.head_dim), dtype=xp.float32)
             old_ids = ids[ids < t]
             has_current = bool(xp.any(ids == t))
+            if host:
+                selected_k, selected_v = hoststate.gather(state, old_ids)
+            # Query heads share KV groups. Materialize each selected contiguous
+            # matrix once, retaining the identical per-head GEMV/softmax graph.
+            selected_keys = xp.empty((c.n_kv_heads, ids.size, c.head_dim), dtype=xp.float32)
+            selected_values = xp.empty_like(selected_keys)
+            for kh in range(c.n_kv_heads):
+                selected_keys[kh, :old_ids.size] = selected_k[:, kh] if host else state.keys[old_ids, kh]
+                selected_values[kh, :old_ids.size] = selected_v[:, kh] if host else state.values[old_ids, kh]
+                if has_current:
+                    selected_keys[kh, -1], selected_values[kh, -1] = k[kh], v[kh]
             for h in range(c.n_q_heads):
                 kh = h // (c.n_q_heads // c.n_kv_heads)
-                # Bounded selected scratch, never concatenate/grow the persistent KV.
-                keys = xp.empty((ids.size, c.head_dim), dtype=xp.float32)
-                vals = xp.empty_like(keys)
-                keys[:old_ids.size] = state.keys[old_ids, kh]
-                vals[:old_ids.size] = state.values[old_ids, kh]
-                if has_current:
-                    keys[-1], vals[-1] = k[kh], v[kh]
+                keys, vals = selected_keys[kh], selected_values[kh]
                 logits = (keys @ q[h]) * scale
                 probability = xp.exp(logits - xp.max(logits))
                 probability /= xp.sum(probability, dtype=xp.float32)
                 contexts[h] = probability @ vals
             gated = contexts * _sigmoid(qg[:, c.head_dim:])
         result = self._project("output", gated.reshape(-1), check_finite=not batch_validation)
-        if validation_status is not None:
+        if host:
+            # Host mode deliberately fences validation, even when the model has
+            # deferred validation enabled. A poisoned request is never committed.
+            checked = [hidden, qg, k, v, raw, q, result]
+            if not all_cells:
+                checked.append(iq)
+            if new_pool is not None:
+                checked.append(new_pool)
+            if batch_validation:
+                from ..ops.finite_checks_gpu import finite_status_gpu
+                checked.extend(a for a in projected if all(a is not b for b in checked))
+                status = finite_status_gpu(*checked[:8], out=validation_status)
+                for start in range(8, len(checked), 8):
+                    status |= finite_status_gpu(*checked[start:start+8])
+                if int(status.item()):
+                    raise ValueError('QSA hidden and projections must be finite')
+            elif not all(bool(xp.all(xp.isfinite(a))) for a in checked):
+                raise ValueError('QSA hidden and projections must be finite')
+            hoststate.commit(state, k, v, raw, new_pool, t, completed, cache_prefix=all_cells)
+        elif validation_status is not None:
             from ..ops.finite_checks_gpu import finite_status_gpu
             from ..ops.qsa_commit_gpu import commit_qsa
             finite_status_gpu(*projected,result,out=validation_status)

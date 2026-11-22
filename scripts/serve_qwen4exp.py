@@ -18,6 +18,7 @@ execution) stays off. Each MINI_LLM_* name below is applied with setdefault, so
 an explicit value in the parent environment still wins.
 """
 import argparse
+import cProfile
 import json
 import math
 import os
@@ -81,6 +82,7 @@ BEST_ENV = {
     'MINI_LLM_RECURRENT_BLOCK_GRAPH': '1',
     'MINI_LLM_RECURRENT_CHAIN_GRAPH': '1',
     'MINI_LLM_QSA_WARP_DOTS': '1',
+    'MINI_LLM_QSA_NATIVE_SELECT': '1',
     'MINI_LLM_Q8_SHARED_GRID': '1',
     'MINI_LLM_TOKEN_GRAPH': '0',
     'MINI_LLM_TOKEN_GRAPH_PREP': '0',
@@ -246,6 +248,34 @@ def byte_budget(value, name):
     return int(number * GiB)
 
 
+class Service:
+    """Serial serving state; importing this helper never loads a model."""
+    def __init__(self, session, config=None):
+        self.session = session
+        self.config = config or {}
+        self.lock = threading.Lock()
+        self.last_request = {}
+
+    def prepare(self, messages):
+        self.session.prepare(messages)
+
+    def record(self, request_id, started):
+        stats = dict(self.session.last_stats)
+        stats.update(request_id=request_id, total_seconds=time.perf_counter() - started)
+        stats['cache'] = dict(total_tokens=stats['prompt_tokens'],
+                              new_tokens=stats['new_prompt_tokens'], reused_tokens=stats['reused_tokens'],
+                              prefix_match=stats['prefix_match'], state_reset=stats['state_reset'],
+                              reset_reason=stats['reset_reason'], state_tokens=stats['state_tokens'])
+        self.last_request = stats
+        return stats
+
+    def metrics(self):
+        # Only sampled on an explicit metrics request, never in the token loop.
+        with self.lock:
+            return {'config': self.config, 'mylocal_stats': dict(self.last_request),
+                    'experts': self.session.model.expert_executor.statistics()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', default=MODEL, help='Original GGUF shard or shard directory')
@@ -254,9 +284,17 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--api-key', default=os.environ.get('MYLOCAL_LLM_API_KEY'))
     parser.add_argument('--context', type=int, default=16384,
-                        help='Conversation capacity; QSA state costs ~57KB/token on-device '
-                             '(262144 is impossible on a 16GiB card; ~32768 is the ceiling '
-                             'with a reduced expert cache)')
+                        help='Conversation capacity; use --qsa-state-storage host for 262144 '
+                             'on a 16GiB GPU (full FP32 history is retained in system RAM)')
+    parser.add_argument('--qsa-state-storage', choices=('device', 'host'), default='device')
+    parser.add_argument('--host-state-budget-gib', type=float, default=24,
+                        help='Aggregate host memory budget in host-state mode (GiB)')
+    parser.add_argument('--prefill-experts', choices=('decode', 'grouped', 'stream', 'strata'), default='decode',
+                        help='grouped retains mixed CPU/GPU arithmetic; stream uploads packed misses '
+                             'for GPU Q8 execution (a distinct prefill arithmetic policy)')
+    parser.add_argument('--strata-prefill-library', help='Explicit fused-kernel library from build_strata_prefill.py')
+    parser.add_argument('--prefill-chunk-size', type=int, default=0,
+                        help='Reference prefill when 0; otherwise forward chunk size to model')
     parser.add_argument('--max-new-tokens', type=int, default=512)
     parser.add_argument('--cpu-workers', type=int, default=19)
     parser.add_argument('--cache-gib', default='6',
@@ -266,20 +304,44 @@ def main():
                         help='Startup packed-expert page warmup GiB, auto, or 0 to disable')
     parser.add_argument('--ram-reserve-gib', type=float, default=8,
                         help='Leave this much system RAM available during warmup (minimum 2GiB)')
+    parser.add_argument('--profile-directory', type=Path,
+                        help='Dump one cProfile .pstats file per POST from its handler thread')
     parser.add_argument('--no-thinking', action='store_true')
     parser.add_argument('--reasoning-effort', choices=('low', 'medium', 'xhigh'))
+    parser.add_argument('--expert-placement', choices=('adaptive', 'warm-frozen'),
+                        default='warm-frozen',
+                        help='Freeze complete expert placement after warmup to activate native device plans; '
+                             'adaptive retains synchronous admissions and disables those plans')
     parser.add_argument('--no-warmup', action='store_true',
                         help='Skip the bounded decode warmup turn (cold first responses are slow)')
     args = parser.parse_args()
     if args.context < 2 or args.max_new_tokens < 1 or args.cpu_workers < 1:
         parser.error('context, max-new-tokens and cpu-workers must be positive')
+    if not math.isfinite(args.host_state_budget_gib) or args.host_state_budget_gib < 0:
+        parser.error('--host-state-budget-gib must be finite and nonnegative')
+    if args.prefill_chunk_size < 0:
+        parser.error('--prefill-chunk-size must be nonnegative')
     if not math.isfinite(args.ram_reserve_gib) or args.ram_reserve_gib < 2:
         parser.error('--ram-reserve-gib must be finite and at least 2GiB')
     if args.host not in ('127.0.0.1', 'localhost', '::1') and not args.api_key:
         parser.error('Binding beyond localhost requires --api-key')
     cache_bytes = byte_budget(args.cache_gib, '--cache-gib')
     host_bytes = byte_budget(args.host_moe_gib, '--host-moe-gib')
+    profile_directory = None
+    if args.profile_directory is not None:
+        try:
+            profile_directory = args.profile_directory.expanduser().resolve()
+            profile_directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            parser.error(f'Cannot create --profile-directory: {exc}')
 
+    if args.prefill_experts != 'decode' and not args.prefill_chunk_size:
+        parser.error('Grouped/streamed experts require --prefill-chunk-size > 0')
+    if args.prefill_experts == 'strata':
+        if not args.strata_prefill_library or not Path(args.strata_prefill_library).is_file():
+            parser.error('strata prefill requires --strata-prefill-library pointing to a built kernel library')
+        os.environ['MINI_LLM_STRATA_PREFILL_LIBRARY'] = str(Path(args.strata_prefill_library).resolve())
+    os.environ['MINI_LLM_PREFILL_EXPERTS'] = args.prefill_experts
     for key, value in BEST_ENV.items():
         os.environ.setdefault(key, value)
 
@@ -293,6 +355,7 @@ def main():
           'full top-10, FP32, best measured decode config)...', file=sys.stderr, flush=True)
     options = dict(
         max_length=args.context,
+        activation_bytes=max(64 * 1024**2, args.prefill_chunk_size * 2560 * 4 * 64),
         cpu_workers=args.cpu_workers,
         static_device_budget_bytes=6 * GiB,
         device_budget_bytes=14 * GiB,
@@ -308,7 +371,9 @@ def main():
         hc_native_read=True,
         elementwise_fast_decode=True,
         expert_victim_policy='heap',
-        host_budget_bytes=8 * GiB,
+        qsa_state_storage=args.qsa_state_storage,
+        host_budget_bytes=(int(args.host_state_budget_gib * GiB)
+                           if args.qsa_state_storage == 'host' else 8 * GiB),
         host_expert_bytes=0,
         expert_cpu_backend='ggml_pool',
         group_mixed_decode=False,
@@ -337,7 +402,7 @@ def main():
                           end='', file=sys.stderr, flush=True)
                     last[0] = now
             warmup = warm_expert_pages(model.weights.store, budget_bytes=host_bytes,
-                                       reserve_bytes=int(args.ram_reserve_gib * GiB),
+                                       reserve_bytes=int(args.ram_reserve_gib * GiB) + model.plan.get('host_state_bytes', 0),
                                        progress=progress)
             print(f"\nHost MoE warmup: {warmup['touched_bytes'] / GiB:.2f}GiB touched, "
                   f"~{warmup['resident_bytes_estimate'] / GiB:.2f}GiB resident; "
@@ -345,7 +410,8 @@ def main():
                   file=sys.stderr, flush=True)
 
         session = ChatSession(model, tokenizer, args.context, thinking=not args.no_thinking,
-                              reasoning_effort=args.reasoning_effort)
+                              reasoning_effort=args.reasoning_effort,
+                              prefill_chunk_size=args.prefill_chunk_size)
         if not args.no_warmup:
             print('Warming decode graphs and expert placement...', file=sys.stderr, flush=True)
             warm_start = time.perf_counter()
@@ -362,29 +428,22 @@ def main():
                   file=sys.stderr, flush=True)
             session.reset()
 
-        class Service:
-            def __init__(self):
-                self.session = session
-                self.lock = threading.Lock()
+        if args.expert_placement == 'warm-frozen':
+            model.expert_executor.cache.set_admission_budget(0)
+            print('Expert placement frozen: native device plans enabled; all CPU misses still execute.',
+                  file=sys.stderr, flush=True)
 
-            @staticmethod
-            def normalized(messages):
-                return tuple((m['role'], m['content']) for m in messages
-                             if m['role'] in ('system', 'user', 'assistant'))
-
-            def prepare(self, messages):
-                # Reuse conversation state when the request history extends the
-                # conversation the server actually holds; otherwise re-prefill.
-                conversation = self.session
-                if self.normalized(messages[:-1]) != self.normalized(conversation.messages):
-                    conversation.reset()
-                    system = next((m['content'] for m in messages if m['role'] == 'system'), None)
-                    if system is not None:
-                        conversation.system = system
-                    conversation.messages = [dict(role=m['role'], content=m['content'])
-                                             for m in messages[:-1]]
-
-        service = Service()
+        effective_config = dict(options, prefill_chunk_size=args.prefill_chunk_size,
+                                        prefill_experts=args.prefill_experts,
+                                                                        strata_prefill_library=os.environ.get('MINI_LLM_STRATA_PREFILL_LIBRARY') if args.prefill_experts == 'strata' else None,
+                                        expert_placement=args.expert_placement,
+                                profile_directory=str(profile_directory) if profile_directory is not None else None,
+                                thinking=not args.no_thinking, reasoning_effort=args.reasoning_effort,
+                                environment={key: os.environ[key] for key in BEST_ENV})
+        # The model disables QSA block graphs for host state regardless of the env request.
+        effective_config['qsa_block_graph'] = (args.qsa_state_storage == 'device' and
+                                               os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH') == '1')
+        service = Service(session, effective_config)
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -476,7 +535,10 @@ def main():
                     return
                 if self.path == '/health':
                     self._json({'status': 'ok', 'model': model_id, 'loaded': True,
-                                'max_context': args.context, 'service': 'mylocal_llm_qwen4exp'})
+                                'max_context': args.context, 'service': 'mylocal_llm_qwen4exp',
+                                'config': service.config})
+                elif self.path == '/metrics':
+                    self._json(service.metrics())
                 elif self.path in ('/v1/models', '/v1/models/'):
                     self._json({'object': 'list', 'data': [{
                         'id': model_id, 'object': 'model', 'owned_by': 'mylocal_llm',
@@ -485,6 +547,15 @@ def main():
                     self._error('Unknown endpoint', 404, 'not_found_error')
 
             def do_POST(self):
+                if profile_directory is None:
+                    return self._do_POST()
+                profiler = cProfile.Profile()
+                try:
+                    return profiler.runcall(self._do_POST)
+                finally:
+                    profiler.dump_stats(str(profile_directory / f'request-{uuid.uuid4().hex}.pstats'))
+
+            def _do_POST(self):
                 if not self._authenticated():
                     self._error('Invalid API key', 401, 'authentication_error')
                     return
@@ -506,7 +577,9 @@ def main():
                 roles = {'system', 'user', 'assistant'}
                 for message in messages:
                     if (not isinstance(message, dict) or message.get('role') not in roles
-                            or not isinstance(message.get('content'), str)):
+                            or not isinstance(message.get('content'), str)
+                            or ('reasoning_content' in message and
+                                not isinstance(message['reasoning_content'], str))):
                         self._error('Only string-content system/user/assistant messages are supported')
                         return
                 if messages[-1]['role'] != 'user':
@@ -531,7 +604,8 @@ def main():
                 except (TypeError, ValueError):
                     self._error('Invalid sampling parameters')
                     return
-                if temperature < 0 or not 0 < top_p <= 1 or (top_k is not None and top_k < 1):
+                if (not math.isfinite(temperature) or not math.isfinite(top_p) or
+                        temperature < 0 or not 0 < top_p <= 1 or (top_k is not None and top_k < 1)):
                     self._error('Invalid sampling parameters')
                     return
 
@@ -550,7 +624,8 @@ def main():
                     service.prepare(messages)
                     first = True
                     for piece in service.session.generate(messages[-1]['content'], value,
-                                                          sampler=sampler):
+                                                          sampler=sampler,
+                                                          raw_response=request.get('stream') is True):
                         if first:
                             first = False
                             waited = time.perf_counter() - t0
@@ -563,7 +638,7 @@ def main():
                         with service.lock:
                             for _ in turn():
                                 pass
-                            stats = dict(service.session.last_stats)
+                            stats = service.record(completion, t0)
                             assistant = (service.session.messages[-1]
                                          if service.session.messages
                                          and service.session.messages[-1]['role'] == 'assistant'
@@ -573,7 +648,7 @@ def main():
                         return
                     except Exception as exc:
                         with service.lock:
-                            service.session.reset()
+                            service.session.reset(reason='generation_error')
                         self._error(f'Generation failed: {exc}', 500, 'server_error')
                         return
                     answer = assistant.get('content', '')
@@ -583,7 +658,7 @@ def main():
                         message['reasoning_content'] = reasoning
                     self._json({
                         'id': completion, 'object': 'chat.completion', 'created': created,
-                        'model': model_id,
+                        'model': model_id, 'request_id': completion, 'mylocal_stats': stats,
                         'choices': [{'index': 0, 'message': message,
                                      'finish_reason': 'stop' if stats.get('stopped') else 'length'}],
                         'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
@@ -624,12 +699,13 @@ def main():
                                     chunk({'content': piece})
                                 except (BrokenPipeError, ConnectionResetError):
                                     broken = True
-                        stats = dict(service.session.last_stats)
+                        stats = service.record(completion, t0)
                         if not broken:
                             chunk({}, 'stop' if stats.get('stopped') else 'length')
                             self._write(b'data: ' + json.dumps({
                                 'id': completion, 'object': 'chat.completion.chunk',
                                 'created': created, 'model': model_id, 'choices': [],
+                                'request_id': completion, 'mylocal_stats': stats,
                                 'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
                                           'completion_tokens': stats.get('generated_tokens', 0),
                                           'total_tokens': stats.get('prompt_tokens', 0)
@@ -649,7 +725,7 @@ def main():
                     broken = True
                 except Exception as exc:
                     with service.lock:
-                        service.session.reset()
+                        service.session.reset(reason='generation_error')
                     if not stats:
                         self._write(b'data: ' + json.dumps(
                             {'error': {'message': f'Generation failed: {exc}',

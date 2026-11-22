@@ -1,0 +1,20 @@
+{
+  "python": ".venv/bin/python",
+  "backend": "cupy",
+  "expected_runtime": "cuda",
+  "device": 0,
+  "batch_size": 1,
+  "context_length": 8192,
+  "max_microbatches": 2048,
+  "warmup_microbatches": 2,
+  "timeout_s": 7200,
+  "seed": 104729,
+  "work_dir": "/dev/shm",
+  "log_file": "logs/model_b_5080_5070ti.peer.log",
+  "env": {
+    "CUDA_VISIBLE_DEVICES": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1"
+  }
+}
+

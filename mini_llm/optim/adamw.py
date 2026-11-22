@@ -39,6 +39,8 @@ class AdamW:
     accumulated gradients and BF16 model weights remain on GPU.
     """
 
+    kind = "adamw"
+
     def __init__(
         self, parameters, lr=3e-4, beta1=DEFAULT_ADAM_BETA1,
         beta2=DEFAULT_ADAM_BETA2, eps=DEFAULT_ADAM_EPS,

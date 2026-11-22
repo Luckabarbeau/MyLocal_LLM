@@ -50,7 +50,7 @@ def native(tmp_path, monkeypatch):
     return model_config, shards, config_path
 
 
-def _trainer(native, tmp_path, *, peer=False):
+def _trainer(native, tmp_path, *, peer=False, optimizer_kind="hybrid-muon"):
     from mini_llm.model.decoder_lm import DecoderLanguageModel
     from mini_llm.train_extended import ExtendedTrainer
 
@@ -61,7 +61,7 @@ def _trainer(native, tmp_path, *, peer=False):
         batch_size=2 if peer else 1, seq_length=5 if peer else 9,
         grad_accum_steps=1 if peer else 2,
         gradient_accumulation_weighting="supervised_tokens",
-        optimizer_kind="hybrid-muon", optimizer_enabled=not peer,
+        optimizer_kind=optimizer_kind, optimizer_enabled=not peer,
         rng_seed=104729 if peer else 42, eos_token_id=63,
         total_steps=2000, warmup_steps=0, grad_clip=0.1,
         checkpoint_dir=str(tmp_path / "checkpoint"),
@@ -140,10 +140,13 @@ def _serial_update(owner, peer):
     return loss, float(norm), total
 
 
-def test_shared_update_matches_serial_native_global_token_mean(native, tmp_path):
-    owner = _trainer(native, tmp_path)
-    serial = _trainer(native, tmp_path / "serial")
-    peer_sampler = _trainer(native, tmp_path / "serial-peer", peer=True)
+@pytest.mark.parametrize("optimizer_kind", ["hybrid-muon", "adamw"])
+def test_shared_update_matches_serial_native_global_token_mean(native, tmp_path, optimizer_kind):
+    owner = _trainer(native, tmp_path, optimizer_kind=optimizer_kind)
+    serial = _trainer(native, tmp_path / "serial", optimizer_kind=optimizer_kind)
+    peer_sampler = _trainer(native, tmp_path / "serial-peer", peer=True,
+                            optimizer_kind=optimizer_kind)
+    assert owner.optimizer.kind == optimizer_kind
     expected_loss, expected_norm, total = _serial_update(serial, peer_sampler)
 
     with _session(owner, native) as session:

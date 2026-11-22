@@ -170,6 +170,8 @@ class Qwen4ExpGenerationState:
     failed: bool = False
     batch_size: int = 1
     _busy: object = field(default_factory=threading.Lock, repr=False)
+    host_reserved_bytes: int = 0
+    device_reserved_bytes: int = 0
 
     def remaining_capacity(self):
         return self.max_length-self.length
@@ -202,7 +204,7 @@ class Qwen4ExpGGUFModel:
 
     @classmethod
     def _build(cls, weights, *, max_length, diagnostic_callback, expert_executor,
-               expert_promote_after=3, qsa_fast_decode=False,
+               expert_promote_after=3, qsa_fast_decode=False, qsa_state_storage='device',
                hc_fast_decode=False, router_fast_decode=False, gdn_fast_decode=False,
                hc_graph_decode=False, hc_native_read=False, group_after_admission=False,
                elementwise_fast_decode=False, expert_victim_policy='sort',
@@ -210,6 +212,8 @@ class Qwen4ExpGGUFModel:
                expert_cache_slots=False, overlap_shared=False, gdn_graph_decode=False,
                device_expert_plan=False, pre_moe_graph=False, shared_graph_decode=False,
                               defer_shared=False, **budgets):
+        from .qwen4exp_hoststate import state_storage
+        qsa_state_storage = state_storage(qsa_state_storage)
         expert_promote_after = integer(expert_promote_after, 'expert_promote_after', 1)
         if expert_cpu_backend not in ('native', 'ggml', 'ggml_pool'):
             raise ValueError('expert_cpu_backend must be native, ggml or ggml_pool')
@@ -309,7 +313,8 @@ class Qwen4ExpGGUFModel:
             if BACKEND_NAME != 'cupy':
                 raise RuntimeError('HC graph decode requires CuPy')
             graph_reservation += (2 * len(h.recurrent) + 1) * 2 * 1024**2
-        qsa_block_graph = os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH','0') == '1'
+        qsa_block_graph = (qsa_state_storage == 'device' and
+                           os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH','0') == '1')
         if qsa_block_graph and (not qsa_fast_decode or not hc_native_read or not router_fast_decode or
                 not shared_graph_decode or not device_expert_plan or
                 os.environ.get('MINI_LLM_QSA_DEFER_VALIDATION','0') != '1' or
@@ -335,7 +340,7 @@ class Qwen4ExpGGUFModel:
             if not hc_native_read or not hc_fast_decode or hc_graph_decode:
                 raise ValueError('BF16 HC storage requires native HC read')
             weights.configure_hc_bf16()
-        plan = weights.memory_plan(max_length, **budgets)
+        plan = weights.memory_plan(max_length, qsa_state_storage=qsa_state_storage, **budgets)
         weights.approve(plan)
         slot_sizes=None
         if os.environ.get('MINI_LLM_SIZED_EXPERT_SLOTS','0')=='1':
@@ -390,7 +395,10 @@ class Qwen4ExpGGUFModel:
                 base=weights.projection(name,capturable=qsa_front_graph)
                 if not qsa_front_graph:
                     return base
-                return lambda x:base(x.reshape(1,-1)).reshape(-1)
+                def project(x):
+                    return base(x.reshape(1,-1)).reshape(-1)
+                project.batch_projection = base
+                return project
             def hc(stem, inject=True):
                 # HC copies these small matrices. No host dictionary retains
                 # the constructor inputs after this call returns.
@@ -432,7 +440,7 @@ class Qwen4ExpGGUFModel:
                         index_query=project(p+'indexer.q_proj.weight'),index_key=qsa_project(p+'indexer.k_proj.weight'),
                         gamma_q=dense(p+'attn_q_norm.weight'),gamma_k=dense(p+'attn_k_norm.weight'),
                         gamma_index_q=dense(p+'indexer.q_norm.weight'),gamma_index_k=dense(p+'indexer.k_norm.weight'),
-                        fast_decode=qsa_fast_decode)
+                        fast_decode=qsa_fast_decode, qsa_state_storage=qsa_state_storage)
                 router = RouterInference(h.width,index.n_experts,index.top_k,
                     renormalize_selected=True,normalization_floor=2.0**-14)
                 router.W_router = dense(p+'ffn_gate_inp.weight').T
@@ -522,8 +530,12 @@ class Qwen4ExpGGUFModel:
                     for array in (recurrence.conv.history,recurrence.delta.memory):
                         live.add((array.data.ptr,array.nbytes))
             for qsa in state.qsa.values():
-                for array in (qsa.keys, qsa.values, qsa.raw_index, qsa.pooled):
-                    live.add((array.data.ptr,array.nbytes))
+                if qsa is None:
+                    continue
+                for array in (qsa.keys, qsa.values, qsa.raw_index, qsa.pooled,
+                              getattr(qsa, 'staged_keys', None), getattr(qsa, 'staged_values', None)):
+                    if array is not None and not isinstance(array, np.ndarray):
+                        live.add((array.data.ptr,array.nbytes))
         retained=set()
         segments = tuple(getattr(self,'_pre_moe_segments',{}).values()) + tuple(
             getattr(self,'_qsa_block_segments',{}).values()) + (
@@ -532,7 +544,7 @@ class Qwen4ExpGGUFModel:
             graph=getattr(segment,'graph',None)
             if graph is not None:
                 for array in getattr(graph,'bound_arrays',lambda:())():
-                    if array.dtype == xp.float32:
+                    if not isinstance(array, np.ndarray) and getattr(array, 'dtype', xp.float32) == xp.float32:
                         retained.add((array.data.ptr,array.nbytes))
         return sum(size for pointer,size in retained-live)
 
@@ -552,7 +564,7 @@ class Qwen4ExpGGUFModel:
             # resident until admitted, and only live sessions own state storage.
             resident = (p['device_static_bytes'] + getattr(self.expert_executor,
                             'resident_device_bytes', self.expert_executor.cache.used_bytes) +
-                        sum(s.reserved_bytes for s in self._states) +
+                        sum(s.device_reserved_bytes for s in self._states) +
                         sum(hc.graph_statistics()['pool_reserved_bytes']
                             for hc in getattr(self, '_hc_graph_owners', ())) +
                         sum(m.graph_statistics()['pool_reserved_bytes']
@@ -572,6 +584,7 @@ class Qwen4ExpGGUFModel:
                             if p.native_handoff is not None and p.native_handoff.graph is not None))
             resident+=self._orphaned_bound_state_bytes()
         return self.weights.memory_plan(length, resident_device_bytes=resident,
+                    qsa_state_storage=p.get('qsa_state_storage', 'device'),
                     host_expert_bytes=p.get('host_expert_bytes',0), **{key:p[key] for key in (
             'host_budget_bytes','static_device_budget_bytes','device_budget_bytes',
             'cache_bytes','headroom_bytes','staging_bytes','activation_bytes','cpu_workers',
@@ -612,7 +625,8 @@ class Qwen4ExpGGUFModel:
             segments = tuple(getattr(self, '_pre_moe_segments', {}).values()) + tuple(
                 getattr(self, '_qsa_block_segments', {}).values()) + (
                     (self._token_graph,) if getattr(self, '_token_graph', None) is not None else ())
-            retired = False
+            from ..ops.gated_delta_decode import retire_completed_scratch
+            retired = bool(retire_completed_scratch())
             for segment in segments:
                 graph = getattr(segment, 'graph', None)
                 if graph is not None and graph.bound_arrays():
@@ -635,7 +649,9 @@ class Qwen4ExpGGUFModel:
         # One approved aggregate state reservation. Multiple smaller independent
         # sessions can coexist, but cannot silently exceed that reservation.
         live = sum(s.reserved_bytes for s in self._states)
-        if self.plan is not None and live+plan['state_bytes'] > self.plan['state_bytes']:
+        if self.plan is not None and (live+plan['state_bytes'] > self.plan['state_bytes'] or
+                sum(s.host_reserved_bytes for s in self._states)+plan['host_state_bytes'] > self.plan['host_state_bytes'] or
+                sum(s.device_reserved_bytes for s in self._states)+plan['device_state_bytes'] > self.plan['device_state_bytes']):
             raise MemoryError('Live generation states exceed approved aggregate state reservation')
         rec, qsa, ple = {}, {}, {}
         for i,b in enumerate(self.blocks):
@@ -646,7 +662,9 @@ class Qwen4ExpGGUFModel:
             if b.ple is not None:
                 ple[i] = b.ple.fresh_state()
         state = Qwen4ExpGenerationState(self._owner,int(max_length),rec,qsa,ple,
-                                        plan['state_bytes'])
+                                        plan['state_bytes'],
+                                        host_reserved_bytes=plan.get('host_state_bytes', 0),
+                                        device_reserved_bytes=plan.get('device_state_bytes', 0))
         self._states.add(state)
         return state
 
@@ -696,7 +714,9 @@ class Qwen4ExpGGUFModel:
                                    if self.diagnostic_callback is None else None)
                 if deferred_status is not None:
                     deferred_status.fill(0)
-                if (project_logits and deferred_status is not None and
+                mixed_hoststate = any(getattr(q, 'qsa_state_storage', 'device') == 'host'
+                                      for q in state.qsa.values())
+                if (not mixed_hoststate and project_logits and deferred_status is not None and
                         os.environ.get('MINI_LLM_TOKEN_GRAPH','0') == '1'):
                     from .qwen4exp_token_graph import Qwen4ExpTokenGraph
                     token_graph = getattr(self, '_token_graph', None)
@@ -721,7 +741,7 @@ class Qwen4ExpGGUFModel:
                         continue
                     if b.ple is not None:
                         streams,state.ple[i] = b.ple.step(token,streams,state.ple[i])
-                    if (not b.recurrent and deferred_status is not None and
+                    if (not b.recurrent and not mixed_hoststate and deferred_status is not None and
                             os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH','0') == '1' and
                             os.environ.get('MINI_LLM_QSA_BLOCK_REPLAY','1') == '1'):
                         qsa = state.qsa[i]
@@ -835,7 +855,11 @@ class Qwen4ExpGGUFModel:
             raise ValueError('Token ID out of range')
         return tokens
 
-    def prefill(self, sequence, state):
+    def prefill(self, sequence, state, *, chunk_size=0):
+        size = integer(chunk_size, 'chunk_size')
+        if size:
+            from .qwen4exp_prefill import prefill_chunked
+            return prefill_chunked(self, sequence, state, size)
         self._validate(state)
         tokens = self._tokens(sequence)
         if not state.has_capacity(tokens.size):

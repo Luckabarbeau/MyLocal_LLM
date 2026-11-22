@@ -8,6 +8,42 @@
 #include <vector>
 #include "gguf_codebooks.h"  // Pinned GGML tables and MIT notice from Patch0202.
 
+// Identical value-only heap selection to the QSA reference. In particular,
+// equal scores must not acquire an index tie-breaker.
+extern "C" int mylocal_qsa_select(const float* scores, int count, int width, int64_t* ids) {
+    if (!scores || !ids || width < 1 || width > count) return 1;
+    for (int i = 0; i < width; ++i) ids[i] = i;
+    auto adjust = [&](int hole, int64_t value) {
+        const int top = hole;
+        int child = hole;
+        while (child < (width - 1) / 2) {
+            child = 2 * (child + 1);
+            if (scores[ids[child]] > scores[ids[child - 1]]) --child;
+            ids[hole] = ids[child];
+            hole = child;
+        }
+        if (width % 2 == 0 && child == (width - 2) / 2) {
+            child = 2 * (child + 1);
+            ids[hole] = ids[child - 1];
+            hole = child - 1;
+        }
+        int parent = (hole - 1) / 2;
+        while (hole > top && scores[ids[parent]] > scores[value]) {
+            ids[hole] = ids[parent];
+            hole = parent;
+            parent = (hole - 1) / 2;
+        }
+        ids[hole] = value;
+    };
+    if (width > 1) {
+        for (int parent = (width - 2) / 2; parent >= 0; --parent) adjust(parent, ids[parent]);
+    }
+    for (int i = width; i < count; ++i) {
+        if (scores[i] > scores[ids[0]]) adjust(0, i);
+    }
+    return 0;
+}
+
 namespace {
 constexpr int Q8_0 = 0, Q4_0 = 1, Q4_K = 2, Q3_K = 3, Q5_K = 4, Q6_K = 5;
 constexpr int IQ2_S = 6, IQ3_S = 7, IQ3_XXS = 8, IQ4_NL = 9, IQ4_XS = 10, Q2_0 = 11;

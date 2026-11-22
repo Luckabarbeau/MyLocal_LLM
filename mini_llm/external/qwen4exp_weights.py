@@ -231,7 +231,9 @@ class Qwen4ExpWeights:
                     static_device_budget_bytes=4*GiB, device_budget_bytes=8*GiB,
                     cache_bytes=0, headroom_bytes=512*1024**2, staging_bytes=64*1024**2,
                     activation_bytes=64*1024**2, cpu_workers=2, resident_device_bytes=0,
-                    graph_workspace_bytes=0,host_expert_bytes=0):
+                    graph_workspace_bytes=0,host_expert_bytes=0, qsa_state_storage='device'):
+        from .qwen4exp_hoststate import state_storage
+        qsa_state_storage = state_storage(qsa_state_storage)
         h = self.headers
         auto_cache = cache_bytes == 'auto'
         if auto_cache:
@@ -258,7 +260,14 @@ class Qwen4ExpWeights:
         qsa = 4*na*(length*(2*a.n_kv_heads*a.head_dim+a.index_dim) +
                       (length//a.block_size+1)*a.index_dim)
         ple = 4*len(h.ple_layers)*9*4*h.width
-        state = recurrent+qsa+ple
+        qsa_host = (4*na*length*(2*a.n_kv_heads*a.head_dim+a.index_dim)
+                    if qsa_state_storage == 'host' else 0)
+        # Per-layer early all-cell / selected staging, never full-capacity KV.
+        qsa_staging = (4*na*(2*min(length,a.index_topk+a.block_size-1)*a.n_kv_heads*a.head_dim + a.index_dim)
+                       if qsa_state_storage == 'host' else 0)
+        state = recurrent+qsa+ple+qsa_staging
+        host_state = state if BACKEND_NAME == 'numpy' else qsa_host
+        device_state = state-qsa_host if BACKEND_NAME == 'cupy' else 0
         # Sequential QSA has O(length) selection scratch and bounded K/V scratch.
         scratch = 4*(32*max(r.qkv_channels,2*a.n_q_heads*a.head_dim,4*h.width)+
             h.vocab + 8*length + 4*min(length,a.index_topk+a.block_size-1)*a.head_dim)
@@ -282,13 +291,14 @@ class Qwen4ExpWeights:
         host_total = host_static+h.constructor_bytes+staging+headroom_bytes+host_expert_bytes
         device_total = device_static+cache_bytes+headroom_bytes
         if BACKEND_NAME == 'numpy':
-            host_total += state+activation
+            host_total += host_state+activation
             if cache_bytes:
                 raise ValueError('NumPy runtime has no device expert cache')
             if graph_workspace_bytes:
                 raise ValueError('NumPy runtime has no device graph workspace')
         else:
-            device_total += state+activation+staging+h.constructor_bytes+graph_workspace_bytes
+            host_total += host_state
+            device_total += device_state+activation+staging+h.constructor_bytes+graph_workspace_bytes
         if not auto_cache and resident_device_bytes > device_total:
             raise ValueError('resident_device_bytes exceeds planned device total')
         if host_total > host_budget_bytes:
@@ -300,7 +310,7 @@ class Qwen4ExpWeights:
             if auto_cache:
                 # Raw free bytes do not include future runtime/context growth or
                 # state blocks retained by CuPy's pool after request reset.
-                slack = headroom_bytes + state
+                slack = headroom_bytes + device_state
                 cache_bytes = max(0, min(device_budget_bytes, free+resident_device_bytes)-device_total-slack)
                 device_total += cache_bytes
                 budgets['cache_bytes'] = cache_bytes
@@ -319,7 +329,10 @@ class Qwen4ExpWeights:
             device_static_bytes=device_static,
             hc_bf16_saved_bytes=sum(self.store.tensors[n].nbytes for n in self.hc_bf16_names),
             recurrent_bytes=recurrent, qsa_bytes=qsa, ple_bytes=ple,
-            state_bytes=state,
+            state_bytes=state, host_state_bytes=host_state, device_state_bytes=device_state,
+            qsa_state_storage=qsa_state_storage, qsa_host_bytes=qsa_host,
+            qsa_device_bytes=(qsa-qsa_host+qsa_staging if BACKEND_NAME == 'cupy' else 0),
+            qsa_staging_bytes=qsa_staging,
             host_reserved_bytes=host_total, device_reserved_bytes=device_total,
             canonical_mmap_bytes=sum(t.nbytes for t in self.store.tensors.values()),
             device_names=tuple(names), **budgets)
@@ -375,7 +388,10 @@ class Qwen4ExpWeights:
             weight = self.dense(name)
             if capturable:
                 from mini_llm.ops.inference_matmul import matmul_inference
-                return lambda x: matmul_inference(x, weight.T)
+                def project(x):
+                    return matmul_inference(x, weight.T)
+                project.native_gemv = True
+                return project
             return lambda x: x @ weight.T
         weight = self.store.packed_weight(name)
         if name in self.device_names:

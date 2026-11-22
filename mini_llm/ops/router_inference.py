@@ -37,6 +37,11 @@ class RouterInference:
 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
+        if batch_size * seq_len > 1 and getattr(self, '_capturable_logits', False):
+            from .router_prefill_gpu import try_router_chunk
+            chunk = try_router_chunk(self, x)
+            if chunk is not None:
+                return chunk
         x2 = x.reshape(batch_size * seq_len, self.d_model)
         if getattr(self, '_capturable_logits', False):
             from .inference_matmul import matmul_inference

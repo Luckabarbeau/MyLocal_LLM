@@ -74,6 +74,8 @@ def _load_native():
                                                       ptr, integer, integer, integer,
                                                       ptr, integer, ptr]
             loaded.mylocal_packed_expert.restype = integer
+            loaded.mylocal_qsa_select.argtypes = [ptr, integer, integer, ptr]
+            loaded.mylocal_qsa_select.restype = integer
             _LIB = loaded
             return loaded
         except Exception as exc:
@@ -97,6 +99,24 @@ def _backend(mode):
                           f"{exc}", RuntimeWarning, stacklevel=3)
             _WARNED = True
         return None
+
+
+def qsa_select_native(scores, width):
+    """Return ascending QSA cell IDs with the reference's exact heap membership."""
+    if not isinstance(scores, np.ndarray) or scores.dtype != np.float32 or scores.ndim != 1:
+        raise TypeError('QSA scores must be a NumPy FP32 vector')
+    if isinstance(width, (bool, np.bool_)) or not isinstance(width, (int, np.integer)):
+        raise ValueError('QSA width must be an integer')
+    if not 1 <= width <= scores.size <= np.iinfo(np.int32).max or np.isnan(scores).any():
+        raise ValueError('Invalid QSA scores/selection width')
+    source = np.ascontiguousarray(scores)
+    ids = np.empty(int(width), dtype=np.int64)
+    lib = _load_native()
+    rc = lib.mylocal_qsa_select(source.ctypes.data, source.size, int(width), ids.ctypes.data)
+    if rc:
+        raise RuntimeError(f'Native QSA selection failed with error code {rc}')
+    ids.sort()
+    return ids
 
 
 def packed_cpu_linear(x: np.ndarray, weight: PackedGGUFWeight, *, backend="native"):

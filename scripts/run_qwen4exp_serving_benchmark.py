@@ -19,8 +19,7 @@ def main():
     p.add_argument('--output', required=True)
     p.add_argument('--context', type=int, default=262144)
     p.add_argument('--chunk-size', type=int, default=0)
-    p.add_argument('--prefill-experts', choices=('decode', 'grouped', 'stream', 'strata'), default='decode')
-    p.add_argument('--strata-prefill-library')
+    p.add_argument('--prefill-experts', choices=('decode', 'grouped', 'stream', 'triton'), default='decode')
     p.add_argument('--sizes', default='128')
     p.add_argument('--max-output', type=int, default=128)
     p.add_argument('--repeat', type=int, default=2)
@@ -51,8 +50,6 @@ def main():
                '--prefill-chunk-size', str(args.chunk_size), '--prefill-experts', args.prefill_experts,
                '--cache-gib', args.cache_gib,
                '--port', str(args.port)]
-    if args.strata_prefill_library:
-        command += ['--strata-prefill-library', str(Path(args.strata_prefill_library).resolve())]
     if args.profile:
         command += ['--profile-directory', str(out / 'profiles')]
     if args.no_thinking:

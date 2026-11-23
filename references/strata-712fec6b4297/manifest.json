@@ -1,0 +1,42 @@
+{
+  "revision": "712fec6b4297c9cfd32ab43daaa2979a9aa01edf",
+  "purpose": "Read-only source reference; never imported, linked, or built by MyLocal_LLM",
+  "files": {
+    "AGENTS.md": {
+      "snapshot": "AGENTS.md",
+      "sha256": "15ca8d613dead1ffaed913eebe582a2db685e620efee0f99fdd99bfe194d6c6e"
+    },
+    "LICENSE": {
+      "snapshot": "LICENSE",
+      "sha256": "949b9b0aada7476006469e58ee4ffb0e0f68c2d9137e90a356757b61a09d37f0"
+    },
+    "docs/AI_REFERENCE.md": {
+      "snapshot": "docs__AI_REFERENCE.md",
+      "sha256": "3d3ef14e2384ec0fa9c5323c6a3a99e9ae0d6c50eb4354f93badc6d4b4b335fa"
+    },
+    "include/strata/prefill/moe_fused.hpp": {
+      "snapshot": "include__strata__prefill__moe_fused.hpp",
+      "sha256": "b9b5a197d16d254a1871d82aed7fca17cde130f0f8640aa21a898cf504bc8c9a"
+    },
+    "src/prefill/kernels.cu": {
+      "snapshot": "src__prefill__kernels.cu",
+      "sha256": "410f9436065015db76271bc3906b3e21dc1392b0d76a658860b69fd85296d590"
+    },
+    "src/prefill/moe_fused.cu": {
+      "snapshot": "src__prefill__moe_fused.cu",
+      "sha256": "a9961e10ffc4016ad4e0a86c13e800bdd21ea0b3ba0be9a2d8ee912cd54626fa"
+    },
+    "src/prefill/moe_fused_iq.cu": {
+      "snapshot": "src__prefill__moe_fused_iq.cu",
+      "sha256": "07272ec199e76f8c99cb9f4960e90027a887464db2012a34d406a24d297b7316"
+    },
+    "src/prefill/moe_mmq.cu": {
+      "snapshot": "src__prefill__moe_mmq.cu",
+      "sha256": "388d3b183b89534017b7dda0aa556fc99dfafc4df53856a65c0711ec967dcb02"
+    },
+    "src/prefill/prefill.cpp": {
+      "snapshot": "src__prefill__prefill.cpp",
+      "sha256": "38c561e063799c34030fc900c4b703619787e74805783f6fa0e5ea058f1f0d93"
+    }
+  }
+}

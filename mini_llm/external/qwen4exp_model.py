@@ -902,6 +902,9 @@ class Qwen4ExpGGUFModel:
         if not self._call_lock.acquire(blocking=False):
             raise RuntimeError('Cannot close during forward')
         try:
+            if getattr(self, '_native_prefill_pipeline', None) is not None:
+                self._native_prefill_pipeline.close()
+                self._native_prefill_pipeline = None
             if getattr(self, '_token_graph', None) is not None:
                 self._token_graph.close()
                 self._token_graph = None

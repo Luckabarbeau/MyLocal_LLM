@@ -19,9 +19,11 @@ singleton native row pool is not a multirow API. Device expert plans can select
 different GPU Q8 arithmetic: when enabled, routed experts retain singleton plan
 execution with the already-computed routes in the explicit decode fallback.
 The grouped preset retains that arithmetic with multirow expert execution;
-stream uses GPU Q8 for misses; strata explicitly uses the upstream fused int8
-tensor-core prompt kernels. The latter two are distinct arithmetic policies,
-not claims of mixed-CPU bitwise equivalence. No expert skipping is performed.
+stream uses GPU Q8 for misses; triton executes every prompt expert through
+wave-bounded grouped kernels that dequantize on device into FP16 tiles and
+compute FP16 tl.dot products accumulated in FP32 (opt-in policy, no external
+kernel library). The latter two are distinct arithmetic policies, not claims of
+mixed-CPU bitwise or decode equivalence. No expert skipping is performed.
 Short checkpoint parity is not long-context validation or evidence of HTTP speedup.
 """
 from copy import copy
@@ -144,6 +146,7 @@ def _recurrent(model, layer, mixer, hidden, state):
 
 def _qsa(model, layer, attention, hidden, state):
     from mini_llm.ops.qsa_prefill_gpu import try_qsa_chunk
+    from mini_llm.ops.qsa_sparse_prefill_gpu import try_sparse_qsa_chunk
     width = attention.config.index_topk + attention.config.block_size - 1
     prefix = max(0, min(hidden.shape[0], width-state.length))
     if prefix:
@@ -151,8 +154,13 @@ def _qsa(model, layer, attention, hidden, state):
         if result is not None:
             if prefix == hidden.shape[0]:
                 return result
-            tail = attention.forward(hidden[prefix:], state, start_position=state.length)
+            tail = try_sparse_qsa_chunk(model, layer, attention, hidden[prefix:], state)
+            if tail is None:
+                tail = attention.forward(hidden[prefix:], state, start_position=state.length)
             return xp.concatenate((result, tail), axis=0)
+    result = try_sparse_qsa_chunk(model, layer, attention, hidden, state)
+    if result is not None:
+        return result
     return attention.forward(hidden, state, start_position=state.length)
 
 
@@ -166,11 +174,15 @@ def _routed(experts, x, weights, ids):
     """
     executor = getattr(experts, 'expert_executor', None)
     mode = os.environ.get('MINI_LLM_PREFILL_EXPERTS', 'decode')
-    if mode == 'strata' and BACKEND_NAME == 'cupy':
-        from mini_llm.ops.strata_prefill_experts import try_strata_prefill
-        fused = try_strata_prefill(experts, x, weights, ids)
+    if mode not in ('decode', 'grouped', 'stream', 'triton'):
+        raise ValueError(f'Unsupported prefill expert mode: {mode!r}')
+    if mode == 'triton' and BACKEND_NAME == 'cupy':
+        from mini_llm.ops.triton_prefill_experts import try_triton_prefill_experts
+        fused = try_triton_prefill_experts(experts, x, weights, ids)
         if fused is not None:
             return fused
+        if os.environ.get('MINI_LLM_TRITON_ARITHMETIC', 'fp16') == 'native_int8':
+            raise RuntimeError('Native INT8 prefill is ineligible; refusing an arithmetic-policy fallback')
     if mode in ('grouped', 'stream') and BACKEND_NAME == 'cupy':
         from mini_llm.ops.prefill_experts import try_prefill_experts
         grouped = try_prefill_experts(experts, x, weights, ids, mode=mode)
@@ -186,7 +198,7 @@ def _routed(experts, x, weights, ids):
     return experts.forward(x, weights, ids)
 
 
-def _moe(model, layer, moe, hidden):
+def _moe(model, layer, moe, hidden, pipeline=None):
     x = hidden[None]
     if BACKEND_NAME == 'cupy' and not getattr(moe.router, '_capturable_logits', False):
         # The remaining CuPy GEMV path must not be substituted by GEMM.
@@ -195,7 +207,9 @@ def _moe(model, layer, moe, hidden):
         ids = xp.concatenate([i for _, i in routes], axis=1)
     else:
         weights, ids = moe.router.forward(x)
-    routed = _routed(moe.experts, x, weights * moe.scale, ids)[0]
+    # In the streamed source path, shared work is queued while the independent
+    # issuer continues H2D, before routed expert kernels on the compute stream.
+    routed = None if pipeline is not None else _routed(moe.experts, x, weights * moe.scale, ids)[0]
     stem = f'blk.{layer}.ffn_'
     gate = _project(model, moe.gate, stem + 'gate_shexp.weight', hidden)
     up = _project(model, moe.up, stem + 'up_shexp.weight', hidden)
@@ -210,6 +224,10 @@ def _moe(model, layer, moe, hidden):
             score = xp.stack([row @ moe.shared_gate for row in hidden])
     else:
         score = hidden @ moe.shared_gate
+    if pipeline is not None:
+        routed = pipeline.run(moe.experts, xp.ascontiguousarray(hidden),
+                              xp.ascontiguousarray(weights[0] * moe.scale),
+                              xp.ascontiguousarray(ids[0], dtype=xp.int32))
     return routed + _sigmoid(score)[:, None] * shared
 
 
@@ -230,6 +248,7 @@ def prefill_chunked(model, tokens, state, chunk_size):
 
     if not model._call_lock.acquire(blocking=False):
         raise RuntimeError('Calls sharing this model/executor must execute serially')
+    pipeline = None
     try:
         model._validate(state)
         if not state.has_capacity(tokens.size):
@@ -237,6 +256,21 @@ def prefill_chunked(model, tokens, state, chunk_size):
         try:
             for first in range(0, len(tokens), size):
                 chunk = tokens[first:first + size]
+                if os.environ.get('MINI_LLM_NATIVE_PREFILL_PIPELINE', '0') == '1':
+                    if BACKEND_NAME != 'cupy':
+                        raise RuntimeError('Native prefill pipeline requires CuPy CUDA')
+                    executor = model.expert_executor
+                    if len(chunk) >= 3072 and executor.cache._admission_limit == 0:
+                        from mini_llm.ops.native_prefill_pipeline import NativePrefillPipeline
+                        pipeline = getattr(model, '_native_prefill_pipeline', None)
+                        if pipeline is None:
+                            pipeline = NativePrefillPipeline()
+                            model._native_prefill_pipeline = pipeline
+                        pipeline.begin_chunk(model, len(chunk), topk=model.blocks[0].moe.router.k)
+                    else:
+                        # Explicitly reported compatibility path, not a claim
+                        # that the source's short CPU/MMQ branch is reproduced.
+                        executor.counters['native_prefill_short_reference_chunks'] += 1
                 streams = model.final_hc.initialize(xp.stack([
                     model.embedding(int(token)) for token in chunk]))
                 for i, b in enumerate(model.blocks):
@@ -256,8 +290,14 @@ def prefill_chunked(model, tokens, state, chunk_size):
                     model._diagnostic(i, 'post_mixer', streams)
                     hidden, gains = _hc_read(b.ffn_hc, streams)
                     model._diagnostic(i, 'hc_ffn_read', hidden)
-                    streams = b.ffn_hc.write(streams, _moe(model, i, b.moe, hidden), gains)
+                    streams = b.ffn_hc.write(streams, _moe(model, i, b.moe, hidden, pipeline), gains)
                     model._diagnostic(i, 'post_moe', streams)
+                if pipeline is not None:
+
+                    pipeline.end_chunk()
+                    for name, value in pipeline.counters.items():
+                        model.expert_executor.counters['native_prefill_' + name] = value
+                    pipeline = None
                 if first + len(chunk) == len(tokens):
                     hidden = _hc_read(model.final_hc, streams[-1])[0]
                     model._diagnostic(-1, 'hc_output_read', hidden)
@@ -274,4 +314,8 @@ def prefill_chunked(model, tokens, state, chunk_size):
             state.failed = True
             raise
     finally:
-        model._call_lock.release()
+        try:
+            if pipeline is not None:
+                pipeline.end_chunk()
+        finally:
+            model._call_lock.release()

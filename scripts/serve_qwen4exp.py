@@ -83,6 +83,7 @@ BEST_ENV = {
     'MINI_LLM_RECURRENT_CHAIN_GRAPH': '1',
     'MINI_LLM_QSA_WARP_DOTS': '1',
     'MINI_LLM_QSA_NATIVE_SELECT': '1',
+    'MINI_LLM_QSA_SPARSE_PREFILL': '0',
     'MINI_LLM_Q8_SHARED_GRID': '1',
     'MINI_LLM_TOKEN_GRAPH': '0',
     'MINI_LLM_TOKEN_GRAPH_PREP': '0',
@@ -90,6 +91,13 @@ BEST_ENV = {
     'MINI_LLM_HC_PARALLEL_READ': '0',
     'MINI_LLM_Q8_RECURRENT_PAIR': '0',
     'MINI_LLM_PLE_BATCHED_ROWS': '1',
+    'MINI_LLM_TRITON_WAVE': '32',
+    'MINI_LLM_TRITON_BM': '64',
+    'MINI_LLM_TRITON_THREADS': '6',
+    'MINI_LLM_NATIVE_PREFILL_PIPELINE': '0',
+    'MINI_LLM_TRITON_ARITHMETIC': 'fp16',
+    'MINI_LLM_TRITON_FUSED_DEQUANT': '0',
+    'MINI_LLM_TRITON_REUSE_WORKERS': '0',
     'MINI_LLM_MEMORY_CENSUS': '0',
     'OPENBLAS_NUM_THREADS': '1',
     'OMP_NUM_THREADS': '1',
@@ -289,10 +297,12 @@ def main():
     parser.add_argument('--qsa-state-storage', choices=('device', 'host'), default='device')
     parser.add_argument('--host-state-budget-gib', type=float, default=24,
                         help='Aggregate host memory budget in host-state mode (GiB)')
-    parser.add_argument('--prefill-experts', choices=('decode', 'grouped', 'stream', 'strata'), default='decode',
+    parser.add_argument('--prefill-experts', choices=('decode', 'grouped', 'stream', 'triton'), default='decode',
                         help='grouped retains mixed CPU/GPU arithmetic; stream uploads packed misses '
-                             'for GPU Q8 execution (a distinct prefill arithmetic policy)')
-    parser.add_argument('--strata-prefill-library', help='Explicit fused-kernel library from build_strata_prefill.py')
+                             'for GPU Q8 execution; triton runs every prompt expert through '
+                             'wave-bounded grouped kernels that dequantize to FP16 tiles and '
+                             'compute FP16 products with FP32 accumulation (opt-in; distinct '
+                             'prefill arithmetic policies, no bitwise decode parity)')
     parser.add_argument('--prefill-chunk-size', type=int, default=0,
                         help='Reference prefill when 0; otherwise forward chunk size to model')
     parser.add_argument('--max-new-tokens', type=int, default=512)
@@ -336,11 +346,7 @@ def main():
             parser.error(f'Cannot create --profile-directory: {exc}')
 
     if args.prefill_experts != 'decode' and not args.prefill_chunk_size:
-        parser.error('Grouped/streamed experts require --prefill-chunk-size > 0')
-    if args.prefill_experts == 'strata':
-        if not args.strata_prefill_library or not Path(args.strata_prefill_library).is_file():
-            parser.error('strata prefill requires --strata-prefill-library pointing to a built kernel library')
-        os.environ['MINI_LLM_STRATA_PREFILL_LIBRARY'] = str(Path(args.strata_prefill_library).resolve())
+        parser.error('Grouped/streamed/triton experts require --prefill-chunk-size > 0')
     os.environ['MINI_LLM_PREFILL_EXPERTS'] = args.prefill_experts
     for key, value in BEST_ENV.items():
         os.environ.setdefault(key, value)
@@ -415,8 +421,18 @@ def main():
         if not args.no_warmup:
             print('Warming decode graphs and expert placement...', file=sys.stderr, flush=True)
             warm_start = time.perf_counter()
-            for piece in session.generate('Reply with the single word: ready', 16):
-                pass
+            # Native prompt arithmetic requires frozen placement. Warm decode
+            # explicitly first, rather than silently falling back within a
+            # native-prefill request while cache admission is still active.
+            native_prompt = (args.prefill_experts == 'triton' and
+                             os.environ['MINI_LLM_TRITON_ARITHMETIC'] == 'native_int8')
+            if native_prompt:
+                session.prefill_chunk_size = 0
+            try:
+                for piece in session.generate('Reply with the single word: ready', 16):
+                    pass
+            finally:
+                session.prefill_chunk_size = args.prefill_chunk_size
             warm_stats = dict(session.last_stats)
             print(f"[warmup] prompt {warm_stats['prompt_tokens']} tok prefilled in "
                   f"{warm_stats['prefill_seconds']:.2f}s = "
@@ -435,7 +451,6 @@ def main():
 
         effective_config = dict(options, prefill_chunk_size=args.prefill_chunk_size,
                                         prefill_experts=args.prefill_experts,
-                                                                        strata_prefill_library=os.environ.get('MINI_LLM_STRATA_PREFILL_LIBRARY') if args.prefill_experts == 'strata' else None,
                                         expert_placement=args.expert_placement,
                                 profile_directory=str(profile_directory) if profile_directory is not None else None,
                                 thinking=not args.no_thinking, reasoning_effort=args.reasoning_effort,

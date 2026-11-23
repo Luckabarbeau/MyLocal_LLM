@@ -18,6 +18,9 @@ atol=rtol=1e-4, FP32 storage. Report actual errors and worst tolerance ratio;
 NEVER widen tolerances on failure. Integer counters and route IDs are exact.
 This is a short populated-prefix test at large reserved capacity, NOT evidence
 of long-context correctness or 1024-row execution when prompt length is 32.
+Opt-in --compare-sparse-qsa compares a chunked Triton reference with sparse
+QSA disabled against requested chunks with it enabled, without a singleton
+prompt pass. It tests the populated prefix, not the full reserved capacity.
 """
 import argparse
 from contextlib import contextmanager
@@ -44,10 +47,12 @@ def parser():
     p.add_argument('--host-state-budget-gib', type=float, default=24)
     p.add_argument('--cache-gib', default='6')
     p.add_argument('--cpu-workers', type=int, default=19)
-    p.add_argument('--prompt-length', type=int, choices=(16, 32, 128, 1024), default=32)
+    p.add_argument('--prompt-length', type=int, choices=(16, 32, 128, 1024, 4096), default=32)
     p.add_argument('--chunk-sizes', default='16,64,256,1024')
+    p.add_argument('--compare-sparse-qsa', action='store_true',
+                   help='Require MINI_LLM_PREFILL_EXPERTS=triton; compare sparse QSA off/on using a chunked reference at the first requested size (no singleton controls)')
     p.add_argument('--decode-tokens', default='1,2,3', help='Fixed IDs, not argmax sampling; 1 to 8 tokens')
-    p.add_argument('--sequential-repeats', type=int, default=1, help='Repeat the sequential control before chunk runs (0 to 2)')
+    p.add_argument('--sequential-repeats', type=int, default=1, help='Repeat the sequential control before chunk runs (0 to 2); ignored with --compare-sparse-qsa')
     p.add_argument('--trace-layers', type=int, default=0, help='Observe forward dependencies in the first N layers (0 to 4)')
     p.add_argument('--atol', type=float, default=1e-4)
     p.add_argument('--rtol', type=float, default=1e-4)
@@ -405,8 +410,10 @@ def main(argv=None):
         chunks, decode = integer_list(args.chunk_sizes), integer_list(args.decode_tokens)
         if not 0 <= args.sequential_repeats <= 2 or not 0 <= args.trace_layers <= 4:
             raise ValueError('sequential-repeats must be 0..2 and trace-layers 0..4')
-        if not chunks or len(chunks) > 8 or len(set(chunks)) != len(chunks) or any(not 1 <= n <= 1024 for n in chunks):
-            raise ValueError('chunk sizes must be 1 to 8 distinct integers in [1,1024]')
+        if not chunks or len(chunks) > 8 or len(set(chunks)) != len(chunks) or any(not 1 <= n <= 4096 for n in chunks):
+            raise ValueError('chunk sizes must be 1 to 8 distinct integers in [1,4096]')
+        if args.compare_sparse_qsa and os.environ.get('MINI_LLM_PREFILL_EXPERTS', 'decode') != 'triton':
+            raise ValueError('--compare-sparse-qsa requires MINI_LLM_PREFILL_EXPERTS=triton')
         if not 1 <= len(decode) <= 8 or any(t < 0 for t in decode):
             raise ValueError('decode-tokens requires 1 to 8 nonnegative IDs')
         if not args.prompt_length + len(decode) <= args.context <= 262144:
@@ -420,17 +427,27 @@ def main(argv=None):
         p.error(str(exc))
     for key, value in BEST_ENV.items():
         os.environ.setdefault(key, value)
+    comparison_mode = 'sparse_qsa' if args.compare_sparse_qsa else 'singleton_reference'
+    original_sparse_flag = os.environ.get('MINI_LLM_QSA_SPARSE_PREFILL')
+    sparse_flag = original_sparse_flag if original_sparse_flag is not None else '0'
     report = dict(status='running', model=args.model, options=options,
+        comparison_mode=comparison_mode,
             prefill_experts_mode=os.environ.get('MINI_LLM_PREFILL_EXPERTS', 'decode'),
+                        triton_fused_dequant=os.environ.get('MINI_LLM_TRITON_FUSED_DEQUANT','0'),
         environment={key: os.environ[key] for key in BEST_ENV},
         cuda_visible_devices=os.environ.get('CUDA_VISIBLE_DEVICES'),
         atol=args.atol, rtol=args.rtol, prompt_length=args.prompt_length,
         chunk_sizes=chunks, decode_tokens=decode, trace_layers=args.trace_layers,
-        sequential_repeats=args.sequential_repeats,
-        limitations=['Short populated prefix only; full host capacity is reserved.',
+        sequential_repeats=0 if args.compare_sparse_qsa else args.sequential_repeats,
+        limitations=[f'Only {args.prompt_length} prompt tokens plus {len(decode)} fixed decode tokens are populated; reserved context capacity is not populated-context validation.',
                       'Chunks larger than the prompt do not exercise their advertised row count.',
                       'Scoped captured route-copy instrumentation; timings are not benchmarks.',
                       'No expert page prefetch; production arithmetic/options otherwise retained.'], cases=[])
+    if args.compare_sparse_qsa:
+        report['limitations'].extend([
+            'Reference uses sparse QSA flag 0 at the first requested chunk size; flag-1 cases compare against that reference, not singleton prefill or an independent checkpoint oracle.',
+            'Sequential repeats are not run in this mode; differing chunk sizes also change chunk partitioning, so only the same-size case isolates the sparse-QSA flag.',
+            'The effective sparse flag records enablement, not proof that every QSA call used the eligible GPU fast path; fixed subsequent decode tokens are not sampled-answer quality validation.'])
     artifacts = args.output.parent / (args.output.stem + '_arrays')
     write_report(args.output, report)
     try:
@@ -451,9 +468,13 @@ def main(argv=None):
                 raise ValueError('Fixed decode token exceeds checkpoint vocabulary')
             text = ('Numerical validation of causal chunked prefill preserves recurrent memory, '
                     'attention history, routing, and subsequent decoding. ' * 128)
-            tokens = np.asarray(tokenizer.encode(text).ids, dtype=np.int64)[:args.prompt_length]
-            if len(tokens) != args.prompt_length:
-                raise ValueError('Tokenizer produced fewer than the requested prompt tokens')
+            encoded = tokenizer.encode(text).ids
+            while len(encoded) < args.prompt_length:
+                if not encoded:
+                    raise ValueError('Tokenizer produced no prompt tokens')
+                text *= 2
+                encoded = tokenizer.encode(text).ids
+            tokens = np.asarray(encoded, dtype=np.int64)[:args.prompt_length]
             report['tokens'] = tokens.tolist()
             print('Warming production decode graphs and expert placement...', flush=True)
             session = ChatSession(model, tokenizer, args.context, prefill_chunk_size=0)
@@ -468,8 +489,16 @@ def main(argv=None):
             report['frozen_placement'] = frozen
             write_report(args.output, report)
             reference = None
-            for ordinal, size in enumerate([0] * (1 + args.sequential_repeats) + chunks):
-                name = ('sequential' if ordinal == 0 else f'sequential_repeat_{ordinal}') if size == 0 else f'chunk_{size}'
+            sizes = ([chunks[0]] + chunks if args.compare_sparse_qsa else
+                     [0] * (1 + args.sequential_repeats) + chunks)
+            for ordinal, size in enumerate(sizes):
+                if args.compare_sparse_qsa:
+                    effective_sparse_flag = '0' if ordinal == 0 else '1'
+                    os.environ['MINI_LLM_QSA_SPARSE_PREFILL'] = effective_sparse_flag
+                    name = f'sparse_qsa_{effective_sparse_flag}_chunk_{size}'
+                else:
+                    effective_sparse_flag = sparse_flag
+                    name = ('sequential' if ordinal == 0 else f'sequential_repeat_{ordinal}') if size == 0 else f'chunk_{size}'
                 if placement(model.expert_executor) != frozen:
                     raise RuntimeError(f'Frozen residency changed before {name}')
                 print(f'Validating {name}: context={args.context}, prompt={len(tokens)}...', flush=True)
@@ -477,19 +506,23 @@ def main(argv=None):
                 # Streaming packed misses uses GPU rather than CPU activation
                 # quantizers. Its reference must use that same explicit policy,
                 # one token at a time, not claim mixed-CPU arithmetic equivalence.
-                run_size = 1 if size == 0 and report['prefill_experts_mode'] in ('stream', 'strata') else size
+                run_size = 1 if size == 0 and report['prefill_experts_mode'] in ('stream', 'triton') else size
                 arrays = run_case(model, tokens, decode, run_size, args.context, xp, asnumpy, args.trace_layers)
                 if placement(model.expert_executor) != frozen:
                     raise RuntimeError(f'Frozen residency changed during {name}')
                 file = artifacts / f'{name}.npz'
                 np.savez(file, **arrays)
-                case = dict(name=name, chunk_size=size, max_executed_chunk_rows=min(size or 1, len(tokens)),
+                case = dict(name=name, chunk_size=size, comparison_mode=comparison_mode,
+                            qsa_sparse_prefill=effective_sparse_flag,
+                            max_executed_chunk_rows=min(size or 1, len(tokens)),
                             snapshot=str(file), observed_seconds=time.monotonic() - started)
                 if reference is None:
                     reference = arrays
                     case['passed'] = True
-                    case['role'] = ('singleton explicit GPU prefill policy reference, not mixed-CPU arithmetic equivalence'
-                                                        if report['prefill_experts_mode'] in ('stream', 'strata') else
+                    case['role'] = ('chunked Triton reference with sparse QSA disabled, not a singleton or independent checkpoint oracle'
+                                    if args.compare_sparse_qsa else
+                                    'singleton explicit GPU prefill policy reference, not mixed-CPU arithmetic equivalence'
+                                                        if report['prefill_experts_mode'] in ('stream', 'triton') else
                                                         'sequential reference, not an independent checkpoint oracle')
                 else:
                     case.update(compare(reference, arrays, args.atol, args.rtol))
@@ -507,6 +540,11 @@ def main(argv=None):
         report['status'] = 'error'
         report['error'] = dict(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
         print(report['error']['traceback'], file=sys.stderr)
+    if args.compare_sparse_qsa:
+        if original_sparse_flag is None:
+            os.environ.pop('MINI_LLM_QSA_SPARSE_PREFILL', None)
+        else:
+            os.environ['MINI_LLM_QSA_SPARSE_PREFILL'] = original_sparse_flag
     write_report(args.output, report)
     print(json.dumps(dict(status=report['status'], output=str(args.output),
                           largest_error=report.get('largest_error'))), flush=True)

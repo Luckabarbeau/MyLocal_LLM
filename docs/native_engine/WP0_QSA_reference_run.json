@@ -1,0 +1,41 @@
+{
+  "argv": [
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/test_0208_qwen4exp_attention.py",
+    "-k",
+    "graph_fp64_scores_selection_and_boundaries or ties_finite_tail_and_partial_token_budget",
+    "--junitxml=docs/native_engine/WP0_QSA_reference.xml"
+  ],
+  "returncode": 0,
+  "stdout": "...........                                                              [100%]\n11 passed, 11 deselected in 0.15s\n",
+  "stderr": "",
+  "elapsed_seconds": 0.25230850200750865,
+  "environment_overrides": {
+    "MINI_LLM_BACKEND": "numpy",
+    "CUDA_VISIBLE_DEVICES": "",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
+  },
+  "limits": {
+    "address_space_bytes": 2147483648,
+    "cpu_seconds": 30,
+    "wall_seconds": 60
+  },
+  "scope": "Synthetic component numerical test, seed208, 41 tokens, D7; no checkpoint/model allocation",
+  "tolerances": {
+    "output_rtol": 3e-05,
+    "output_atol": 1e-05,
+    "scores_rtol": 8e-06,
+    "scores_atol": 2e-05,
+    "selected_ids": "exact"
+  },
+  "throughput_baseline": false
+}

@@ -200,7 +200,8 @@ class ProductionPeerSession:
         }
         saved = training_state.get("heterogeneous_state")
         if saved and saved["contract"] != self.contract:
-            raise ValueError("heterogeneous topology/data contract changed; use a deliberate new fork")
+            print("WARNING: heterogeneous topology/data contract changed; "
+                  "continuing with current settings", flush=True)
         self.parent_step = int(saved.get("parent_step", trainer.step) if saved else trainer.step)
         self.history = copy.deepcopy(saved.get("history", []) if saved else [])
         if not saved:

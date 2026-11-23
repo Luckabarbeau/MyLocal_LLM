@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-11-23T12:38:19.197039+00:00",
+  "wp0_status": "NOT COMPLETE",
+  "specification_origin": "User-supplied WP0 specification; not missing requirements",
+  "wp0_requirements": [
+    "reproducible Strata config/version",
+    "exact checkpoint hashes",
+    "frozen local execution config",
+    "numerical fixtures",
+    "throughput/resource baseline"
+  ],
+  "scope": "Current identities and bounded synthetic CPU QSA evidence; no full-model execution or performance baseline",
+  "git_head": {
+    "argv": [
+      "git",
+      "--no-pager",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "stdout": "fb8de6d0dbe8c9e4197b8bc3c411b9b810a89728\n",
+    "stderr": ""
+  },
+  "git_status_before_capture": {
+    "argv": [
+      "git",
+      "--no-optional-locks",
+      "status",
+      "--short"
+    ],
+    "returncode": 0,
+    "stdout": " M mini_llm/heterogeneous_production.py\n?? docs/native_engine/\n?? mini_llm/heterogeneous_production.py.bak\n?? mini_llm/native/\n?? mini_llm/native_cpp/\n?? strata_launch_bench_capture.sh\n?? tests/test_native_engine_gguf.py\n?? tests/test_native_engine_runtime.py\n",
+    "stderr": ""
+  },
+  "numerical_policy": {
+    "name": "reference_fp32",
+    "implementation": "current local Python",
+    "authority": "docs/qwen4exp/reference_contract.md",
+    "backend": "numpy",
+    "activation_dtype": "float32",
+    "persistent_qsa_dtype": "float32",
+    "stored_quantization": "unchanged; no checkpoint decoded by this capture",
+    "qsa_fixture_tie_policy": "strata: lower-index ties",
+    "production_default_tie_policy": "ggml_cpu; fixture explicitly selects strata, not a global policy change",
+    "independent_oracle_dtype": "float64",
+    "distinction": "Not Strata native INT8 KV / BF16 HC prompt arithmetic; no independent full-model parity claim"
+  },
+  "source_files": {
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/probe_gguf_inventory.py": {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/probe_gguf_inventory.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/probe_gguf_inventory.py",
+      "size": 5379,
+      "mtime_ns": 1795437305356222378,
+      "sha256": "6c690fd8444f505f05b237a8e9db4c432e9955ffbfa28e7e2a656de9850ac0e3"
+    },
+    "docs/native_engine/WP2_GGUF_INVENTORY.json": {
+      "path": "docs/native_engine/WP2_GGUF_INVENTORY.json",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/WP2_GGUF_INVENTORY.json",
+      "size": 5324,
+      "mtime_ns": 1795437316817478209,
+      "sha256": "6eeb84fd0878170df9fb8938d170ba267df26af1cf1171c091ae6be8177173ab"
+    },
+    "docs/native_engine/capture_wp0_reference.py": {
+      "path": "docs/native_engine/capture_wp0_reference.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/capture_wp0_reference.py",
+      "size": 9776,
+      "mtime_ns": 1795437495870361651,
+      "sha256": "150647f33e0bd070a7e2c50b292b48d117469cdc7fc8cdd218e0bb3138e1b125"
+    },
+    "docs/qwen4exp/reference_contract.md": {
+      "path": "docs/qwen4exp/reference_contract.md",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/qwen4exp/reference_contract.md",
+      "size": 13692,
+      "mtime_ns": 1795208578134147751,
+      "sha256": "32f41560855f80b447892486dd6da5e70b2cd3d8bfb42d7e2ab2c1050a6a61c2"
+    },
+    "mini_llm/backend.py": {
+      "path": "mini_llm/backend.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/backend.py",
+      "size": 5877,
+      "mtime_ns": 1794622138154611210,
+      "sha256": "f602e80b4bc913866b2b2082ba14b78a7bf900b4b91e31ecd4b19146356ff39e"
+    },
+    "mini_llm/external/gguf_store.py": {
+      "path": "mini_llm/external/gguf_store.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/gguf_store.py",
+      "size": 12352,
+      "mtime_ns": 1794875686236801720,
+      "sha256": "8660f8ffa2715cd4ea3f761bba1e84e2b86b38e8a9c4f424cf165431c86f42e7"
+    },
+    "mini_llm/external/qwen4exp_attention.py": {
+      "path": "mini_llm/external/qwen4exp_attention.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_attention.py",
+      "size": 23105,
+      "mtime_ns": 1795358381562871519,
+      "sha256": "1d12c3b0895f3a4989715bdc4b982a052b21e20728355ba4f8beacfc67b9d9ca"
+    },
+    "mini_llm/external/qwen4exp_chat.py": {
+      "path": "mini_llm/external/qwen4exp_chat.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_chat.py",
+      "size": 13110,
+      "mtime_ns": 1795316100830691103,
+      "sha256": "097772dd3eb7b6a614855cd8fb36c9fd7a5339474e7d15466de30a0bd88f66fe"
+    },
+    "mini_llm/external/qwen4exp_gguf.py": {
+      "path": "mini_llm/external/qwen4exp_gguf.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_gguf.py",
+      "size": 5362,
+      "mtime_ns": 1795045365654627103,
+      "sha256": "a0431952047f09936377a7b87a6b72d653cd5fed74fb61a88ff76cff05397644"
+    },
+    "mini_llm/external/qwen4exp_hoststate.py": {
+      "path": "mini_llm/external/qwen4exp_hoststate.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_hoststate.py",
+      "size": 3438,
+      "mtime_ns": 1795316444087299770,
+      "sha256": "69ffc5cd239a16f77ecd745be3f0ba4a7b26488d70107eb67374264895e56caf"
+    },
+    "mini_llm/external/qwen4exp_hyperconnection.py": {
+      "path": "mini_llm/external/qwen4exp_hyperconnection.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_hyperconnection.py",
+      "size": 10011,
+      "mtime_ns": 1795091729530399866,
+      "sha256": "fb7f8932a95a2db3f989d574262590486df5ac6f3684cfc046fbdb9caa80ee33"
+    },
+    "mini_llm/external/qwen4exp_mixer.py": {
+      "path": "mini_llm/external/qwen4exp_mixer.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_mixer.py",
+      "size": 10517,
+      "mtime_ns": 1795268234731202207,
+      "sha256": "036f4b4ba50868559423f88eabf4b95b2c5eb852fc3343b509ca33f3957a4aed"
+    },
+    "mini_llm/external/qwen4exp_model.py": {
+      "path": "mini_llm/external/qwen4exp_model.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_model.py",
+      "size": 55863,
+      "mtime_ns": 1795392868923651205,
+      "sha256": "9a06465c4c5c8adccb03945d93dc3a461f8d1a49ea9c5be285af6aea14d42a45"
+    },
+    "mini_llm/external/qwen4exp_ple.py": {
+      "path": "mini_llm/external/qwen4exp_ple.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_ple.py",
+      "size": 12103,
+      "mtime_ns": 1795211430796990080,
+      "sha256": "0e07f774998dc7e6a5faa52fc6e708e1124e97e57689577e53170d70fe9693d7"
+    },
+    "mini_llm/external/qwen4exp_pre_moe_graph.py": {
+      "path": "mini_llm/external/qwen4exp_pre_moe_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_pre_moe_graph.py",
+      "size": 3815,
+      "mtime_ns": 1795149109117396259,
+      "sha256": "596fd9797c7ab06fae9456a7879c650e2a877cf25355e490687bdb332d7827c9"
+    },
+    "mini_llm/external/qwen4exp_prefill.py": {
+      "path": "mini_llm/external/qwen4exp_prefill.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_prefill.py",
+      "size": 16738,
+      "mtime_ns": 1795393279923895197,
+      "sha256": "4cf790c08e31b0d9eeb00ce3b43e81dc4382d9dab17d18be0abb9b64190917b1"
+    },
+    "mini_llm/external/qwen4exp_prompt_checkpoint.py": {
+      "path": "mini_llm/external/qwen4exp_prompt_checkpoint.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_prompt_checkpoint.py",
+      "size": 4652,
+      "mtime_ns": 1795316071769376712,
+      "sha256": "647d9063b48afb68a5909ccf84fa6551b212e7a58d02ad30f17d43ed1360d9b2"
+    },
+    "mini_llm/external/qwen4exp_qsa_block_graph.py": {
+      "path": "mini_llm/external/qwen4exp_qsa_block_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_qsa_block_graph.py",
+      "size": 9904,
+      "mtime_ns": 1795205952291913765,
+      "sha256": "eae7111c7746dd0ff5fc770a601c3473e5088e43bc4efbc8ca29f06358718a00"
+    },
+    "mini_llm/external/qwen4exp_qsa_frontend_graph.py": {
+      "path": "mini_llm/external/qwen4exp_qsa_frontend_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_qsa_frontend_graph.py",
+      "size": 2482,
+      "mtime_ns": 1795059889907019117,
+      "sha256": "a235478855d9d7b2390417b7720fdb22f64f00343f38b6816fddf8461a4b4e65"
+    },
+    "mini_llm/external/qwen4exp_recurrent_block_graph.py": {
+      "path": "mini_llm/external/qwen4exp_recurrent_block_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_recurrent_block_graph.py",
+      "size": 7328,
+      "mtime_ns": 1795203376253872626,
+      "sha256": "f910bf6c2cb8ed8e8e77e7ad843056a7a92d9c59df4664c3ad916c159ea7d0b4"
+    },
+    "mini_llm/external/qwen4exp_recurrent_chain_graph.py": {
+      "path": "mini_llm/external/qwen4exp_recurrent_chain_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_recurrent_chain_graph.py",
+      "size": 8142,
+      "mtime_ns": 1795204528624810694,
+      "sha256": "370b1f5efdcce0a790352b2cedee8cad33eb7d036ccd38b8106225e53e03b958"
+    },
+    "mini_llm/external/qwen4exp_token_graph.py": {
+      "path": "mini_llm/external/qwen4exp_token_graph.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_token_graph.py",
+      "size": 21850,
+      "mtime_ns": 1795211382878796252,
+      "sha256": "4b637c76fe778875538082b66cd53ab126e5e2776896700c800bbe54f589d422"
+    },
+    "mini_llm/external/qwen4exp_weights.py": {
+      "path": "mini_llm/external/qwen4exp_weights.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/external/qwen4exp_weights.py",
+      "size": 22839,
+      "mtime_ns": 1795359554402042333,
+      "sha256": "dd90e4b4a96c947f5db3fb0e4749b5af49522d4fd4a4a76b0b9b70521225d6cc"
+    },
+    "mini_llm/native/__init__.py": {
+      "path": "mini_llm/native/__init__.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native/__init__.py",
+      "size": 8804,
+      "mtime_ns": 1795437095752142964,
+      "sha256": "519c3a00f95322f94d0fc0cd7a1a5a8aff5e4b3b14e33f1360f9879a4a092aac"
+    },
+    "mini_llm/native_cpp/CMakeLists.txt": {
+      "path": "mini_llm/native_cpp/CMakeLists.txt",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/CMakeLists.txt",
+      "size": 442,
+      "mtime_ns": 1795437046593774123,
+      "sha256": "68c2de4eade60ed53e570e467dd24b5bb9880ea3ebdd6ba2c54d0ac19f4ecf8c"
+    },
+    "mini_llm/native_cpp/gguf_loader.cpp": {
+      "path": "mini_llm/native_cpp/gguf_loader.cpp",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/gguf_loader.cpp",
+      "size": 7531,
+      "mtime_ns": 1795437239369052420,
+      "sha256": "53c89686fd5ab2cd585dd5135a806b94bde78969d436122b6da442e63e5a1cb2"
+    },
+    "mini_llm/native_cpp/gguf_loader.h": {
+      "path": "mini_llm/native_cpp/gguf_loader.h",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/gguf_loader.h",
+      "size": 731,
+      "mtime_ns": 1795437043780638498,
+      "sha256": "187e24bf80334896c459a512d974a94f8d5c57c387f3ad873c0bd3f6ec6968da"
+    },
+    "mini_llm/native_cpp/runtime.cpp": {
+      "path": "mini_llm/native_cpp/runtime.cpp",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/runtime.cpp",
+      "size": 7605,
+      "mtime_ns": 1795437061791506703,
+      "sha256": "9838fdee6709a78b87d7ca484c40bdee2a323eace0a63cab87cf659d924eadde"
+    },
+    "mini_llm/native_cpp/runtime.h": {
+      "path": "mini_llm/native_cpp/runtime.h",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/runtime.h",
+      "size": 2390,
+      "mtime_ns": 1795436991424112895,
+      "sha256": "022487ff44f1cf9eebade85ff93bb92ec1cd6a25e603a2230c00c89f5271832d"
+    },
+    "mini_llm/ops/quantized_weight.py": {
+      "path": "mini_llm/ops/quantized_weight.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/ops/quantized_weight.py",
+      "size": 13950,
+      "mtime_ns": 1794876100191532690,
+      "sha256": "db59cd28ccbeceaa6da2a4c18216caa9117b545367e00502ff208c71e2a35b6b"
+    },
+    "scripts/probe_0310_strata_comparison.py": {
+      "path": "scripts/probe_0310_strata_comparison.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/probe_0310_strata_comparison.py",
+      "size": 25180,
+      "mtime_ns": 1795201077667496218,
+      "sha256": "95fe27e25156838b236c9997512680d016eed62721a795e9773f7b674bcb5c3d"
+    },
+    "scripts/run_0290_isolated_benchmark.py": {
+      "path": "scripts/run_0290_isolated_benchmark.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/run_0290_isolated_benchmark.py",
+      "size": 12739,
+      "mtime_ns": 1795229726646315341,
+      "sha256": "4e9466415ef99af6a5dde84512988a5b02092ee9d2a962641b2ef11c19984351"
+    },
+    "strata_launch_bench_capture.sh": {
+      "path": "strata_launch_bench_capture.sh",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/strata_launch_bench_capture.sh",
+      "size": 5655,
+      "mtime_ns": 1794967091299583464,
+      "sha256": "afb8b91dc7499da8e76ddbbb93b28344df68122dd988f706c91a0cb28f48af21"
+    },
+    "tests/test_0208_qwen4exp_attention.py": {
+      "path": "tests/test_0208_qwen4exp_attention.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/tests/test_0208_qwen4exp_attention.py",
+      "size": 15526,
+      "mtime_ns": 1794880011621397743,
+      "sha256": "8a9746eb1885f9d0847ed73378d28fe1d3e2888d760c23475c507610baccaee5"
+    },
+    "tests/test_native_engine_gguf.py": {
+      "path": "tests/test_native_engine_gguf.py",
+      "exists": true,
+      "resolved": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/tests/test_native_engine_gguf.py",
+      "size": 7073,
+      "mtime_ns": 1795437253453729258,
+      "sha256": "5dc921a90d1a9be9100e82b0925593e718e78d2efcf9216d2b68e6107055b134"
+    }
+  },
+  "build": {
+    "files": [
+      {
+        "path": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+        "exists": true,
+        "resolved": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+        "size": 97680,
+        "mtime_ns": 1795437258707532819,
+        "sha256": "ba46511a248dd79c805f8c968c36eaf4a6d8d77361e71b969a1eea2ca094791e"
+      },
+      {
+        "path": "/tmp/mini-llm-wp1-build/CMakeCache.txt",
+        "exists": true,
+        "resolved": "/tmp/mini-llm-wp1-build/CMakeCache.txt",
+        "size": 28125,
+        "mtime_ns": 1795436918711600518,
+        "sha256": "f63acdebba4f44e54e61c5314068064d7cde786474a7f789bab0c9ac1873b825"
+      },
+      {
+        "path": "/tmp/mini-llm-wp1-build/build.ninja",
+        "exists": true,
+        "resolved": "/tmp/mini-llm-wp1-build/build.ninja",
+        "size": 8579,
+        "mtime_ns": 1795437140083487990,
+        "sha256": "0dc22b3dde30b28b15fbfd35ae2495d73847b843fc1385a2217c65d9edc5678d"
+      },
+      {
+        "path": "/tmp/mini-llm-wp1-build/CMakeFiles/rules.ninja",
+        "exists": true,
+        "resolved": "/tmp/mini-llm-wp1-build/CMakeFiles/rules.ninja",
+        "size": 2092,
+        "mtime_ns": 1795437140083487990,
+        "sha256": "39c658937d1d422bb5c8345439b56f5ce7169dd743c452ebb43dc8c6b3bf2deb"
+      }
+    ],
+    "meaning": "Existing build measured, not rebuilt; current hashes do not retroactively identify historical runs"
+  },
+  "checkpoint_shards": [
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "exists": true,
+      "full_payload_sha256": null,
+      "immutable_revision": null,
+      "limitation": "No 83.6 GB payload scan in this bounded capture",
+      "size": 54817524224,
+      "device": 66305,
+      "inode": 103296629,
+      "mtime_ns": 1794362612345817261,
+      "ctime_ns": 1794362612351817518,
+      "header_sha256": "d6932b90e1b001f706ee5c8a1aebbab3a8a6ae35892df2fb09af459add1140ef",
+      "header_bytes_hashed": 11024384,
+      "matches_inventory_header": true
+    },
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "exists": true,
+      "full_payload_sha256": null,
+      "immutable_revision": null,
+      "limitation": "No 83.6 GB payload scan in this bounded capture",
+      "size": 28800138432,
+      "device": 66305,
+      "inode": 100414915,
+      "mtime_ns": 1794269742748675005,
+      "ctime_ns": 1794362665100076958,
+      "header_sha256": "60a762da9127f76c0a895de009e7245566708ee638c2ae57f0c12b20ae948e4d",
+      "header_bytes_hashed": 192,
+      "matches_inventory_header": true
+    }
+  ],
+  "toolchains": [
+    {
+      "identity": {
+        "path": "/usr/bin/c++",
+        "exists": true,
+        "resolved": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "size": 1027128,
+        "mtime_ns": 1766091591000000000,
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769"
+      },
+      "version": {
+        "argv": [
+          "/usr/bin/c++",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "stderr": ""
+      }
+    },
+    {
+      "identity": {
+        "path": "/usr/bin/cmake",
+        "exists": true,
+        "resolved": "/usr/bin/cmake",
+        "size": 11796472,
+        "mtime_ns": 1713179337000000000,
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638"
+      },
+      "version": {
+        "argv": [
+          "/usr/bin/cmake",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n",
+        "stderr": ""
+      }
+    },
+    {
+      "identity": {
+        "path": "/usr/local/cuda/bin/nvcc",
+        "exists": true,
+        "resolved": "/usr/local/cuda-13.4/bin/nvcc",
+        "size": 37426800,
+        "mtime_ns": 1788280193000000000,
+        "sha256": "b6c72825585cb3d64d8cead9b43c165afed0f0f672319416261a0df76e6d600c"
+      },
+      "version": {
+        "argv": [
+          "/usr/local/cuda/bin/nvcc",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Sep_01_08:45:21_PDT_2026\nCuda compilation tools, release 13.4, V13.4.92\nBuild cuda_13.4.r13.4/compiler.38855100_0\n",
+        "stderr": ""
+      }
+    }
+  ],
+  "python": {
+    "executable": {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python",
+      "exists": true,
+      "resolved": "/usr/bin/python3.12",
+      "size": 8020928,
+      "mtime_ns": 1788171506000000000,
+      "sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f"
+    },
+    "version": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "packages": {
+      "numpy": "2.5.3",
+      "pytest": "9.1.1",
+      "gguf": "0.19.0"
+    },
+    "numpy_build_config": "Build Dependencies:\n  blas:\n    detection method: pkgconfig\n    found: true\n    include directory: /opt/_internal/cpython-3.12.13/lib/python3.12/site-packages/scipy_openblas64/include\n    lib directory: /opt/_internal/cpython-3.12.13/lib/python3.12/site-packages/scipy_openblas64/lib\n    name: scipy-openblas\n    openblas configuration: OpenBLAS 0.3.34.106.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY\n      Haswell MAX_THREADS=64\n    pc file directory: /project/.openblas\n    version: 0.3.34.106.0\n  lapack:\n    detection method: pkgconfig\n    found: true\n    include directory: /opt/_internal/cpython-3.12.13/lib/python3.12/site-packages/scipy_openblas64/include\n    lib directory: /opt/_internal/cpython-3.12.13/lib/python3.12/site-packages/scipy_openblas64/lib\n    name: scipy-openblas\n    openblas configuration: OpenBLAS 0.3.34.106.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY\n      Haswell MAX_THREADS=64\n    pc file directory: /project/.openblas\n    version: 0.3.34.106.0\nCompilers:\n  c:\n    commands: cc\n    linker: ld.bfd\n    name: gcc\n    version: 14.2.1\n  c++:\n    commands: c++\n    linker: ld.bfd\n    name: gcc\n    version: 14.2.1\n  cython:\n    commands: cython\n    linker: cython\n    name: cython\n    version: 3.3.0\nMachine Information:\n  build:\n    cpu: x86_64\n    endian: little\n    family: x86_64\n    system: linux\n  host:\n    cpu: x86_64\n    endian: little\n    family: x86_64\n    system: linux\nPython Information:\n  path: /tmp/build-env-kabtnrrv/bin/python\n  version: '3.12'\nSIMD Extensions:\n  baseline:\n  - X86_V2\n  found:\n  - X86_V3\n  not found:\n  - X86_V4\n  - AVX512_ICL\n  - AVX512_SPR\n\n"
+  },
+  "strata": {
+    "engine": {
+      "path": "/home/lucka/.local/share/strata/components/engine/0.1.59-linux-x86_64-cuda-cuda13/strata",
+      "exists": true,
+      "resolved": "/home/lucka/.local/share/strata/components/engine/0.1.59-linux-x86_64-cuda-cuda13/strata",
+      "size": 316017888,
+      "mtime_ns": 1794272585000726169,
+      "sha256": "0ba914b28df1c8e09c0b5209c2ca6040c75fb650a7408ff3d9ef3ad159a13eb9"
+    },
+    "installed_config": {
+      "path": "/home/lucka/.local/share/strata/install/strata-iq3_s.json",
+      "exists": true,
+      "resolved": "/home/lucka/.local/share/strata/install/strata-iq3_s.json",
+      "size": 1799,
+      "mtime_ns": 1795309033090550734,
+      "sha256": "de61ad7c3538c3d9f61ef6a982bd387d280fc2f99df835420c11606a74d2f9d7"
+    },
+    "declared_source_commit": "712fec6b4297c9cfd32ab43daaa2979a9aa01edf",
+    "version_label": "0.1.59 (installation path; engine not executed)",
+    "compiler_identity": "unknown for shipped engine; local nvcc is not shipped compiler evidence",
+    "installed_config_contents": {
+      "exe": "component:strata-engine",
+      "args": [
+        "--pack",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/packs/iq3_s",
+        "--native",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+        "--ple-gguf",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+        "--expert-profile",
+        "/home/lucka/.local/share/strata/terminal/0.1.59.1/data/expert-profile.bin",
+        "--expert-cache",
+        "auto",
+        "--prefill",
+        "auto",
+        "--spec",
+        "4",
+        "--max-context",
+        "262144",
+        "--kv",
+        "int8",
+        "--pool-workers",
+        "15"
+      ],
+      "cwd": "/home/lucka/.local/share/strata/terminal/0.1.59.1",
+      "tokenizer": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/packs/iq3_s/tokenizer",
+      "model_name": "qwen3.8-flash-next-iq3_s",
+      "log": "/home/lucka/.local/share/strata/install/strata-iq3_s.log",
+      "lib_dirs": [],
+      "port": 8080,
+      "gpu": [
+        1,
+        0
+      ],
+      "gpus_asked": true,
+      "layer_split": "auto",
+      "gpu_order": "as_given",
+      "gpu_roles": {
+        "0": "main",
+        "1": "helper"
+      },
+      "mtp": false,
+      "args_written": [
+        "--pack",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/packs/iq3_s",
+        "--native",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+        "--ple-gguf",
+        "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+        "--expert-profile",
+        "/home/lucka/.local/share/strata/terminal/0.1.59.1/data/expert-profile.bin",
+        "--expert-cache",
+        "auto",
+        "--prefill",
+        "auto",
+        "--spec",
+        "4",
+        "--max-context",
+        "262144",
+        "--kv",
+        "int8",
+        "--pool-workers",
+        "15"
+      ]
+    },
+    "assets": [
+      {
+        "flag": "--pack",
+        "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/packs/iq3_s",
+        "exists": true,
+        "size": null,
+        "payload_sha256": null
+      },
+      {
+        "flag": "--native",
+        "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+        "exists": true,
+        "size": 54817524224,
+        "payload_sha256": null
+      },
+      {
+        "flag": "--ple-gguf",
+        "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+        "exists": true,
+        "size": 28800138432,
+        "payload_sha256": null
+      },
+      {
+        "flag": "--expert-profile",
+        "path": "/home/lucka/.local/share/strata/terminal/0.1.59.1/data/expert-profile.bin",
+        "exists": true,
+        "size": 196632,
+        "payload_sha256": null
+      }
+    ]
+  },
+  "host_observation": {
+    "argv": [
+      "nvidia-smi",
+      "--query-gpu=name,uuid,driver_version,memory.total,memory.used",
+      "--format=csv"
+    ],
+    "returncode": 0,
+    "stdout": "name, uuid, driver_version, memory.total [MiB], memory.used [MiB]\nNVIDIA GeForce RTX 5080, GPU-bea264b4-9e76-3be5-5883-7bde3fe9f82d, 580.178.04, 16303 MiB, 1311 MiB\nNVIDIA GeForce RTX 5070 Ti, GPU-e961516f-d77d-813c-98e9-2f5403f71631, 580.178.04, 16303 MiB, 16 MiB\n",
+    "stderr": ""
+  },
+  "numerical_test": {
+    "argv": [
+      "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "tests/test_0208_qwen4exp_attention.py",
+      "-k",
+      "graph_fp64_scores_selection_and_boundaries or ties_finite_tail_and_partial_token_budget",
+      "--junitxml=docs/native_engine/WP0_QSA_reference.xml"
+    ],
+    "returncode": 0,
+    "stdout": "...........                                                              [100%]\n11 passed, 11 deselected in 0.15s\n",
+    "stderr": "",
+    "elapsed_seconds": 0.25230850200750865,
+    "environment_overrides": {
+      "MINI_LLM_BACKEND": "numpy",
+      "CUDA_VISIBLE_DEVICES": "",
+      "OPENBLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"
+    },
+    "limits": {
+      "address_space_bytes": 2147483648,
+      "cpu_seconds": 30,
+      "wall_seconds": 60
+    },
+    "scope": "Synthetic component numerical test, seed208, 41 tokens, D7; no checkpoint/model allocation",
+    "tolerances": {
+      "output_rtol": 3e-05,
+      "output_atol": 1e-05,
+      "scores_rtol": 8e-06,
+      "scores_atol": 2e-05,
+      "selected_ids": "exact"
+    },
+    "throughput_baseline": false
+  },
+  "throughput_resource_baseline": {
+    "status": "not measured",
+    "prefill": null,
+    "ttft": null,
+    "decode_forwards_per_second": null,
+    "peak_model_ram_bytes": null,
+    "peak_model_vram_bytes": null,
+    "reason": "No full model executed; test elapsed time is not model throughput"
+  },
+  "external_blockers": [
+    "Immutable upstream checkpoint/model-definition revision is not embedded/established; requires authoritative upstream provenance.",
+    "Shipped Strata compiler/build flags unavailable in inspected evidence; local compiler identity cannot substitute.",
+    "Historical raw production_recovery_20261121 and diagnostics_0335_cpu_ab_v2/result.json artifacts absent; restoration requires their holder, or regenerate new evidence."
+  ],
+  "remaining_implementation_work": [
+    "Stream-hash both available checkpoint payloads in a separately budgeted IO run; absence of hashes is work, not missing model availability.",
+    "Freeze a complete local whole-model execution configuration (all effective switches, placement, worker affinity, cache/KV policy, exact prompt and continuation IDs). This capture freezes only component execution.",
+    "Bind exact Strata asset identities and effective launch configuration to a safe isolated workload; existing launcher is not a frozen accepted baseline.",
+    "Persist matched-policy numerical fixtures and first-divergence evidence; historical independent full-model parity remains unclosed.",
+    "Run repeated interleaved throughput/resource measurements with the existing isolation harness and full-top10/no drafting; do not substitute unlike historical timings.",
+    "Finish native graph/composition validation; descriptor/runtime tests are not integrated model acceptance."
+  ]
+}

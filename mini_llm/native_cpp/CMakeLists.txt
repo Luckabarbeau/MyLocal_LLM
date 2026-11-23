@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(mini_llm_native LANGUAGES CXX)
+find_package(CUDAToolkit 13.0 REQUIRED)
+add_library(mini_llm_native SHARED runtime.cpp gguf_loader.cpp)
+target_compile_features(mini_llm_native PRIVATE cxx_std_20)
+set_target_properties(mini_llm_native PROPERTIES CXX_EXTENSIONS OFF)
+target_link_libraries(mini_llm_native PRIVATE CUDA::cudart)
+target_compile_options(mini_llm_native PRIVATE -Wall -Wextra -Wpedantic)

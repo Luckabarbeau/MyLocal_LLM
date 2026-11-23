@@ -1,0 +1,167 @@
+{
+  "scope": "header-only, no tensor decode or GPU uploads",
+  "command_checkpoint": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "gguf_version": "0.19.0",
+  "constants_path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/lib/python3.12/site-packages/gguf/constants.py",
+  "constants_sha256": "19e98ab20fb4d197efb4e23e5fc8de21a8c0d528af1dffc14695af84a0015f24",
+  "git_head": "fb8de6d0dbe8c9e4197b8bc3c411b9b810a89728",
+  "source_sha256": {
+    "mini_llm/native_cpp/gguf_loader.cpp": "53c89686fd5ab2cd585dd5135a806b94bde78969d436122b6da442e63e5a1cb2",
+    "mini_llm/native_cpp/gguf_loader.h": "187e24bf80334896c459a512d974a94f8d5c57c387f3ad873c0bd3f6ec6968da",
+    "mini_llm/native_cpp/runtime.cpp": "9838fdee6709a78b87d7ca484c40bdee2a323eace0a63cab87cf659d924eadde",
+    "mini_llm/native_cpp/runtime.h": "022487ff44f1cf9eebade85ff93bb92ec1cd6a25e603a2230c00c89f5271832d",
+    "mini_llm/native_cpp/CMakeLists.txt": "68c2de4eade60ed53e570e467dd24b5bb9880ea3ebdd6ba2c54d0ac19f4ecf8c",
+    "mini_llm/native/__init__.py": "519c3a00f95322f94d0fc0cd7a1a5a8aff5e4b3b14e33f1360f9879a4a092aac",
+    "mini_llm/external/gguf_store.py": "8660f8ffa2715cd4ea3f761bba1e84e2b86b38e8a9c4f424cf165431c86f42e7",
+    "mini_llm/ops/quantized_weight.py": "db59cd28ccbeceaa6da2a4c18216caa9117b545367e00502ff208c71e2a35b6b",
+    "tests/test_native_engine_gguf.py": "5dc921a90d1a9be9100e82b0925593e718e78d2efcf9216d2b68e6107055b134",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/docs/native_engine/probe_gguf_inventory.py": "6c690fd8444f505f05b237a8e9db4c432e9955ffbfa28e7e2a656de9850ac0e3"
+  },
+  "library": {
+    "path": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+    "sha256": "ba46511a248dd79c805f8c968c36eaf4a6d8d77361e71b969a1eea2ca094791e"
+  },
+  "tensor_count": 1224,
+  "tensor_bytes": 83606638080,
+  "total_file_bytes": 83617662656,
+  "shards": [
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "device": 66305,
+      "inode": 103296629,
+      "size": 54817524224,
+      "mtime_ns": 1794362612345817261,
+      "ctime_ns": 1794362612351817518,
+      "tensor_count": 1223,
+      "metadata_count": 67,
+      "data_offset": 11024384,
+      "tensor_bytes": 54806499840,
+      "header_sha256": "d6932b90e1b001f706ee5c8a1aebbab3a8a6ae35892df2fb09af459add1140ef"
+    },
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "device": 66305,
+      "inode": 100414915,
+      "size": 28800138432,
+      "mtime_ns": 1794269742748675005,
+      "ctime_ns": 1794362665100076958,
+      "tensor_count": 1,
+      "metadata_count": 3,
+      "data_offset": 192,
+      "tensor_bytes": 28800138240,
+      "header_sha256": "60a762da9127f76c0a895de009e7245566708ee638c2ae57f0c12b20ae948e4d"
+    }
+  ],
+  "formats": {
+    "BF16": {
+      "count": 484,
+      "nbytes": 1527889920,
+      "type_id": 30,
+      "block_elements": 1,
+      "block_bytes": 2
+    },
+    "F16": {
+      "count": 1,
+      "nbytes": 81920,
+      "type_id": 1,
+      "block_elements": 1,
+      "block_bytes": 2
+    },
+    "F32": {
+      "count": 292,
+      "nbytes": 10063360,
+      "type_id": 0,
+      "block_elements": 1,
+      "block_bytes": 4
+    },
+    "IQ2_S": {
+      "count": 40,
+      "nbytes": 10747904000,
+      "type_id": 22,
+      "block_elements": 256,
+      "block_bytes": 82
+    },
+    "IQ3_S": {
+      "count": 20,
+      "nbytes": 7208960000,
+      "type_id": 21,
+      "block_elements": 256,
+      "block_bytes": 110
+    },
+    "IQ3_XXS": {
+      "count": 34,
+      "nbytes": 10918297600,
+      "type_id": 18,
+      "block_elements": 256,
+      "block_bytes": 98
+    },
+    "IQ4_NL": {
+      "count": 87,
+      "nbytes": 47245962240,
+      "type_id": 20,
+      "block_elements": 32,
+      "block_bytes": 18
+    },
+    "IQ4_XS": {
+      "count": 45,
+      "nbytes": 1398906880,
+      "type_id": 23,
+      "block_elements": 256,
+      "block_bytes": 136
+    },
+    "Q2_0": {
+      "count": 9,
+      "nbytes": 2123366400,
+      "type_id": 42,
+      "block_elements": 64,
+      "block_bytes": 18
+    },
+    "Q4_K": {
+      "count": 47,
+      "nbytes": 198696960,
+      "type_id": 12,
+      "block_elements": 256,
+      "block_bytes": 144
+    },
+    "Q5_K": {
+      "count": 35,
+      "nbytes": 346931200,
+      "type_id": 13,
+      "block_elements": 256,
+      "block_bytes": 176
+    },
+    "Q6_K": {
+      "count": 129,
+      "nbytes": 1877836800,
+      "type_id": 14,
+      "block_elements": 256,
+      "block_bytes": 210
+    },
+    "Q8_0": {
+      "count": 1,
+      "nbytes": 1740800,
+      "type_id": 8,
+      "block_elements": 32,
+      "block_bytes": 34
+    }
+  },
+  "descriptor_fields_compared": [
+    "name",
+    "shard_index",
+    "shape",
+    "ggml_shape",
+    "relative_offset",
+    "data_offset",
+    "nbytes",
+    "row_bytes",
+    "byte_shape",
+    "byte_strides",
+    "type_id",
+    "block_elements",
+    "block_bytes"
+  ],
+  "status": "passed",
+  "elapsed_seconds": 4.953515704997699,
+  "full_payload_hashes": "not attempted: header-only IO scope; 83+ GB checkpoint",
+  "checkpoint_revision": "unknown; stat and header hashes are not payload identity"
+}

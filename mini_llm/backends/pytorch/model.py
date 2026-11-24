@@ -211,6 +211,12 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
         self.Wv = _parameter((config.d_model, kv_width), config.init_std, dtype)
         self.Wo = _parameter((q_width, config.d_model), config.residual_init_std, dtype)
         self.matrix_pool = MatrixPool(config, dtype)
+        # Same resolved architecture as the reference operator: the mode comes
+        # from the configuration, which is resolved once at load/launch time.
+        self.attention_branch_mode = str(
+            getattr(dual, "attention_branch_mode", "legacy")
+        )
+        self.parallel_branches = self.attention_branch_mode == "parallel"
         self.global_attention = GlobalAttention(config, dtype) if dual.global_enabled else None
         # Expose the native canonical prefix ``attention.global.*``.
         if self.global_attention is not None:
@@ -346,12 +352,13 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
             ),
         ).permute(0, 2, 1, 3)
         local_delta = local_context.reshape(batch, length, self.d_model) @ self.Wo
-        local_state = residual_input.float() + local_delta.float()
+        global_input = (x if self.parallel_branches
+                        else residual_input.float() + local_delta.float())
 
         global_module = self.global_module
         if global_module is None or metadata["block_indices"].shape[1] == 0:
             return local_delta
-        summaries = self._pool(local_state, metadata)
+        summaries = self._pool(global_input, metadata)
         summary_flat = summaries.reshape(batch, -1, self.d_model).to(x.dtype)
         summary_valid = metadata["block_valid"].repeat_interleave(
             self.summaries_per_block, dim=1
@@ -363,7 +370,7 @@ class MatrixPoolDualResolutionAttention(_torch().nn.Module):
             self.summaries_per_block, dim=1
         )
         summary_rope = torch.where(summary_valid, summary_ends, torch.zeros_like(summary_ends))
-        qg = (local_state.to(x.dtype) @ global_module.Wq).reshape(
+        qg = (global_input.to(x.dtype) @ global_module.Wq).reshape(
             batch, length, self.global_heads, self.global_head_dim
         )
         kg = (summary_flat @ global_module.Wk).reshape(

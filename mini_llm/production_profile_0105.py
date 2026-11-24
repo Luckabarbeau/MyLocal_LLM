@@ -39,6 +39,9 @@ ENVIRONMENT = {
     "MINI_LLM_MATRIX_POOL_FUSED_FORWARD": "0",
     "MINI_LLM_MATRIX_POOL_FUSED_BACKWARD": "1",
     "MINI_LLM_MATRIX_POOL_GRAD_SCATTER_INPLACE": "1",
+    # Model B's attention branch topology is deliberately absent from this
+    # frozen contract: it is architecture, so it is recorded in config.json
+    # (dual_resolution.attention_branch_mode), not pinned in the environment.
     "MINI_LLM_FUSED_QKV_ROPE_FORWARD": "1",
     "MINI_LLM_ROPE_PREPARED_POSITIONS": "1",
     "MINI_LLM_LOCAL_ATTN_RECOMPUTE_PROBS": "1",

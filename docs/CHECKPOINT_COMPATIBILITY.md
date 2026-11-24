@@ -49,7 +49,8 @@ migration override. Current Model B should deserialize as:
 - CLI preset `dual-resolution-matrix-pool-sparse-1024-20l`;
 - 20 layers, `d_model=1024`, `d_ff=4096`, vocabulary 32,768;
 - 16 query heads and 4 KV heads;
-- matrix-pool summaries and sparse stride-16 layers `2..17`.
+- matrix-pool summaries and sparse stride-16 layers `2..17`;
+- an explicit `dual_resolution.attention_branch_mode` (see below).
 
 A missing `config.json` triggers a legacy CLI fallback in `train_model.py`.
 Treat that as a recovery case, not normal strict resume. Reconstruct and validate
@@ -60,6 +61,66 @@ run context, optimizer/schedule arguments, and data locations still need to
 match the intended run contract. The pinned Model B values are recorded in
 [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) and
 `mini_llm/production_profile_0105.py`.
+
+### Model B attention branch topology
+
+Model B executes one of two local/global branch topologies. This is
+architecture, not a runtime knob:
+
+- `legacy`: the global branch consumes `residual_hidden + local_delta`. This is
+  the graph under which every Model B checkpoint created before the 2026-11-23
+  fork was trained.
+- `parallel`: both branches consume the same pre-attention normalized input;
+  the historical pooling cache stores that normalized input. This is the
+  default for new Model B runs and is selected by the canonical presets.
+
+The resolved mode is persisted in `config.json` under
+`dual_resolution.attention_branch_mode` and is also recorded in the
+`training_resume_contract`. Resolution precedence:
+
+1. an explicit `MINI_LLM_MATRIX_POOL_PARALLEL_BRANCHES` override, if set;
+2. the architecture recorded in the checkpoint's `config.json`;
+3. the canonical preset (`parallel`) for newly created models;
+4. `legacy` for checkpoints written before the field existed.
+
+An old checkpoint without the field therefore loads as `legacy` and emits one
+warning naming both the original and selected architecture. The environment
+variable is read-only input: repository code never writes it, so it cannot
+leak between models in one process, and it is never required again once a
+migration has been saved.
+
+A deliberate legacy->parallel migration (for example to continue pretrained
+Model B weights on the new graph) keeps every compatible model tensor and
+optimizer state; both topologies have identical parameter geometry, names, and
+counts, so strict resume stays exact. A temporary loss increase afterwards is
+expected and is not treated as an error; the resume contract records the
+change as provenance instead of blocking it. Never migrate in place: resume
+from an approved copy into a new output destination.
+
+```bash
+# Intentional architectural fork of a pre-fork Model B checkpoint.
+source scripts/0105_model_b_profile.env
+MINI_LLM_MATRIX_POOL_PARALLEL_BRANCHES=1 python -u train_model.py \
+  --model dual-resolution-matrix-pool-sparse-1024-20l \
+  --resume-from /path/to/approved-checkpoint-copy \
+  --checkpoint-dir /path/to/new-empty-destination \
+  --mixed-shard-root /path/to/paired-mixed-shards \
+  ...
+```
+
+The first save of that run records `attention_branch_mode=parallel`, and every
+later load reproduces the parallel graph with the variable cleared. Verify with:
+
+```bash
+python -c "from mini_llm.model_loading import read_native_config; \
+print(read_native_config('/path/to/new-checkpoint').dual_resolution.attention_branch_mode)"
+```
+
+Compatibility boundary: old checkpoints always load in current code. New
+checkpoints carry a key that older repository revisions do not understand;
+loading them with pre-fork code raises a `DualResolutionConfig` `TypeError`.
+That one-way direction is accepted: checkpoint provenance must not be
+weakened to keep old code working.
 
 ### Tensor schema must be exact
 

@@ -126,7 +126,7 @@ _bootstrap_backend_from_cli()
 import numpy as np
 
 from mini_llm.backend import xp, BACKEND_NAME, validate_bfloat16_backend
-from mini_llm.config import ModelConfig
+from mini_llm.config import ModelConfig, resolve_attention_branch_mode
 from mini_llm.model.decoder_lm import DecoderLanguageModel
 from mini_llm.optim.adamw import (
     AdamW, DEFAULT_ADAM_BETA1, DEFAULT_ADAM_BETA2, DEFAULT_ADAM_EPS,
@@ -1303,6 +1303,7 @@ def main():
 
     # Resolve the architecture first so its native context length can be used
     # when --context-length is omitted.
+    saved_attention_branch_mode = None
     if args.resume_from:
         requested_checkpoint_path = Path(args.resume_from)
         checkpoint_path = resolve_checkpoint_path(requested_checkpoint_path)
@@ -1311,12 +1312,43 @@ def main():
         config_path = checkpoint_path / "config.json"
         if config_path.exists():
             with open(config_path, "r") as f:
-                config = ModelConfig(**json.load(f))
+                saved_config = json.load(f)
+            # Absent means the checkpoint predates the Model B attention-branch
+            # fork, i.e. it executed the sequential "legacy" graph.
+            saved_attention_branch_mode = (
+                saved_config.get("dual_resolution") or {}
+            ).get("attention_branch_mode")
+            config = ModelConfig(**saved_config)
         else:
             config = model_config_from_name(args.model)
     else:
         checkpoint_path = None
         config = model_config_from_name(args.model)
+
+    # Model B's local/global branch topology is architecture, not a runtime knob.
+    # Resolving it once here, before the model is constructed and before
+    # config.json is written to the output directory, keeps the operators, the
+    # resume contract and every later checkpoint reporting the same graph.  A
+    # checkpoint loaded above is already resolved during deserialization; this
+    # also lets an explicit override win over a preset launch.
+    config = resolve_attention_branch_mode(config)
+    if (config.dual_resolution.enabled
+            and config.dual_resolution.compression_mode == "matrix_pool"):
+        selected_branch = config.dual_resolution.attention_branch_mode
+        if saved_attention_branch_mode not in (None, selected_branch):
+            print(
+                "  Attention architecture migration: "
+                f"{saved_attention_branch_mode} -> {selected_branch}; compatible "
+                "pretrained weights and optimizer state will be reused, and "
+                "subsequent checkpoints will record "
+                f"attention_branch_mode={selected_branch}."
+            )
+        elif saved_attention_branch_mode is None and args.resume_from:
+            print(
+                f"  Attention architecture: {selected_branch}; the checkpoint "
+                "predates the attention-branch fork, so the architecture its "
+                "weights were trained under was legacy."
+            )
 
     # 0058/0060: the long historical store is searched outside the deep
     # Transformer.  Routed-prefix mode reopens only a bounded 2k subset before

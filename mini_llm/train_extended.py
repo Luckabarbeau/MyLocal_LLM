@@ -3576,6 +3576,14 @@ class ExtendedTrainer:
             "ar_accum_length_buckets": bool(self.ar_accum_length_buckets),
             "dual_accum_length_buckets": bool(self.dual_accum_length_buckets),
             "dual_shape_bucket": self.dual_shape_bucket,
+            # Architectural execution semantics (Model B local/global branch
+            # topology).  Recorded so an intentional legacy<->parallel migration
+            # is auditable provenance; geometry and identity live in the model
+            # contract, not here.
+            "attention_branch_mode": str(getattr(
+                getattr(self.model.config, "dual_resolution", None),
+                "attention_branch_mode", "legacy",
+            )),
             "parameter_signature_sha256": hashlib.sha256(
                 signature.encode("utf-8")
             ).hexdigest(),
@@ -3625,6 +3633,13 @@ class ExtendedTrainer:
         }
         mismatches = []
         for key in sorted(set(expected) | set(actual)):
+            if key == "attention_branch_mode" and expected.get(key) is None:
+                # A pre-fork checkpoint records no branch mode; the graph it
+                # actually executed was "legacy", so resuming on "legacy" is
+                # not drift.  An explicit "parallel" migration does show up as
+                # an intentional, auditable contract change.
+                if actual.get(key, "legacy") == "legacy":
+                    continue
             if expected.get(key) != actual.get(key):
                 mismatches.append({
                     "field": key,

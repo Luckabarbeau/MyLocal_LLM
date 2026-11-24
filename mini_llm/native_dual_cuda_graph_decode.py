@@ -189,6 +189,22 @@ extern "C" __global__ void dual_local_state_store(
     if (tid == 0) incomplete_count[0] = offset + 1;
 }
 
+// Parallel-branch Model B: the pooled history reads the same normalized block
+// input as local Q/K/V, so this stores it directly instead of forming
+// residual + local_delta.  It mirrors the training operator's global_input.
+extern "C" __global__ void dual_shared_input_store(
+    const __nv_bfloat16* normalized, __nv_bfloat16* incomplete,
+    int* incomplete_count, int d_model)
+{
+    const int tid = threadIdx.x;
+    int offset = incomplete_count[0];
+    for (int col = tid; col < d_model; col += blockDim.x) {
+        incomplete[(long long)offset * d_model + col] = normalized[col];
+    }
+    __syncthreads();
+    if (tid == 0) incomplete_count[0] = offset + 1;
+}
+
 extern "C" __global__ void dual_global_attention(
     const __nv_bfloat16* q_pre, const __nv_bfloat16* cos_table,
     const __nv_bfloat16* sin_table, const __nv_bfloat16* summary_k,
@@ -357,7 +373,7 @@ def _module():
         names = (
             "dual_reset_if_pending", "dual_qkv_rope_store",
             "dual_local_attention", "dual_local_state_store",
-            "dual_global_attention", "dual_residual_rmsnorm",
+            "dual_shared_input_store", "dual_global_attention", "dual_residual_rmsnorm",
             "dual_pool_reduce", "dual_summary_store",
             "dual_advance_document",
         )
@@ -370,7 +386,12 @@ def _module():
 
 
 class NativeDualBF16CudaGraphDecoder:
-    """Captured exact-architecture decoder for Model B matrix-pool attention."""
+    """Captured exact-architecture decoder for Model B matrix-pool attention.
+
+    A CUDA Graph bakes in one branch topology, so the parallel (default) and
+    legacy sequential Model B global-attention semantics are chosen when this
+    decoder is built and are then frozen for every captured variant.
+    """
 
     def __init__(self, engine, state):
         if BACKEND_NAME != "cupy" or not is_bfloat16_dtype(resolve_dtype(engine.dtype)):
@@ -396,6 +417,11 @@ class NativeDualBF16CudaGraphDecoder:
         if state.eos_token_id is not None and not 0 <= int(state.eos_token_id) < engine.vocab_size:
             raise ValueError("invalid EOS token for dual CUDA Graph decode")
         self.engine, self.state, self.module = engine, state, _module()
+        modes = {bool(getattr(block.attention, "parallel_branches", False))
+                 for block in engine.blocks}
+        if len(modes) != 1:
+            raise ValueError("dual CUDA Graph decode needs one Model B branch mode")
+        self.parallel_branches = modes.pop()
         self.base = _base_module()
         self.d_model = int(engine.d_model)
         self.d_ff = int(engine.blocks[0].d_ff)
@@ -417,7 +443,11 @@ class NativeDualBF16CudaGraphDecoder:
         self.q = xp.empty((1, self.d_model), dtype=self.bf)
         self.context = xp.empty_like(self.q)
         self.local_delta = xp.empty_like(self.q)
-        self.local_state = xp.empty_like(self.q)
+        # Only the legacy sequential branch needs a post-local global input.
+        self.local_state = None if self.parallel_branches else xp.empty_like(self.q)
+        # Captured graphs hold buffer addresses, so the global-branch input is
+        # resolved once here: the shared normalized input, or post-local state.
+        self.global_input_source = self.norm if self.parallel_branches else self.local_state
         self.global_q = xp.empty((1, 128), dtype=self.bf)
         self.global_context = xp.empty_like(self.global_q)
         self.global_delta = xp.empty((1, self.d_model), dtype=self.bf)
@@ -494,7 +524,7 @@ class NativeDualBF16CudaGraphDecoder:
         with self.stream:
             bf16_matmul_into(self.norm, layer["wqkv"], self.qkv, context=self.ctx)
             bf16_matmul_into(self.context, layer["wo"], self.local_delta, context=self.ctx)
-            bf16_matmul_into(self.local_state, layer["global_q"], self.global_q, context=self.ctx)
+            bf16_matmul_into(self.global_input_source, layer["global_q"], self.global_q, context=self.ctx)
             bf16_matmul_into(self.global_context, layer["global_o"], self.global_delta, context=self.ctx)
             bf16_matmul_into(self.norm, layer["gate"], self.gate, context=self.ctx)
             bf16_matmul_into(self.norm, layer["up"], self.up, context=self.ctx)
@@ -547,14 +577,24 @@ class NativeDualBF16CudaGraphDecoder:
                 ),
             )
             bf16_matmul_into(self.context, layer["wo"], self.local_delta, context=self.ctx)
-            module.get_function("dual_local_state_store")(
-                (1,), (threads,), (
-                    self.ra, self.local_delta, self.local_state, layer["incomplete"],
-                    layer["incomplete_count"], np.int32(self.d_model),
-                ),
-            )
+            # `self.norm` is still this layer's pre-attention normalized input
+            # here; it is only rewritten with the norm2 output further below.
+            if self.parallel_branches:
+                module.get_function("dual_shared_input_store")(
+                    (1,), (threads,), (
+                        self.norm, layer["incomplete"],
+                        layer["incomplete_count"], np.int32(self.d_model),
+                    ),
+                )
+            else:
+                module.get_function("dual_local_state_store")(
+                    (1,), (threads,), (
+                        self.ra, self.local_delta, self.local_state, layer["incomplete"],
+                        layer["incomplete_count"], np.int32(self.d_model),
+                    ),
+                )
             if use_global:
-                bf16_matmul_into(self.local_state, layer["global_q"], self.global_q, context=self.ctx)
+                bf16_matmul_into(self.global_input_source, layer["global_q"], self.global_q, context=self.ctx)
                 module.get_function("dual_global_attention")(
                     (2,), (32,), (
                         self.global_q, layer["cos"], layer["sin"],

@@ -1,5 +1,16 @@
 from dataclasses import dataclass, field, replace
 import math
+import os
+
+# Model B local/global attention branch topologies.  "legacy" is the historical
+# sequential graph (global branch consumes residual + local_delta); "parallel"
+# lets both branches consume the shared pre-attention normalized block input.
+# This is execution semantics: the parameter geometry, tensor names and model
+# identity are identical for both modes.
+ATTENTION_BRANCH_MODES = ("legacy", "parallel")
+# Backward-compatible architectural override only; the resolved value is always
+# written back into the in-memory configuration and never into os.environ.
+ATTENTION_BRANCH_MODE_ENV = "MINI_LLM_MATRIX_POOL_PARALLEL_BRANCHES"
 
 @dataclass(frozen=True)
 class MemoryContextConfig:
@@ -242,6 +253,16 @@ class DualResolutionConfig:
     sparse_retrieval_head: int = 1
     sparse_retrieval_phase: int = -1  # per-layer; -1 disables retrieval in that layer
     sparse_retrieval_layers: tuple = ()  # model-level layer schedule (0-based)
+    # Model B local/global branch topology (execution semantics, not geometry).
+    # "legacy": the historical sequential graph where the global branch consumes
+    #   residual + local_delta, so pool/global gradients flow back through the
+    #   local output and the identity residual.
+    # "parallel": both branches consume the same pre-attention normalized block
+    #   input, so the global branch has no local-output dependency.
+    # The default is the pre-fork semantics so a checkpoint written before this
+    # field existed keeps the architecture its weights were trained under.  The
+    # canonical Model B presets select "parallel" explicitly.
+    attention_branch_mode: str = "legacy"
 
     def __post_init__(self):
         # JSON restores sequences as lists. Canonicalize this architecture
@@ -260,6 +281,17 @@ class DualResolutionConfig:
             raise ValueError("compression_mode must be transformer or matrix_pool")
         if not isinstance(self.global_enabled, bool):
             raise TypeError("global_enabled must be a bool")
+        if not isinstance(self.attention_branch_mode, str):
+            raise TypeError(
+                "attention_branch_mode must be a string, one of: "
+                + ", ".join(ATTENTION_BRANCH_MODES)
+            )
+        if self.attention_branch_mode not in ATTENTION_BRANCH_MODES:
+            raise ValueError(
+                "attention_branch_mode must be one of: "
+                + ", ".join(ATTENTION_BRANCH_MODES)
+                + f" (got {self.attention_branch_mode!r})"
+            )
         if not isinstance(self.pool_position_bias, bool):
             raise TypeError("pool_position_bias must be a bool")
         for name, value in {
@@ -321,13 +353,99 @@ class DualResolutionConfig:
             raise ValueError("compression_dim must be divisible by compression_heads")
 
 
+def attention_branch_mode_override(environ=None):
+    """Explicit Model B architectural override, or None when nothing is selected.
+
+    ``MINI_LLM_MATRIX_POOL_PARALLEL_BRANCHES`` is retained only as a
+    backward-compatible way to *select* an architecture (for example to continue
+    a pre-fork Model B checkpoint on the parallel graph).  It is read-only input:
+    this repository never writes it, so an override cannot leak into models
+    instantiated later in the same process.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(ATTENTION_BRANCH_MODE_ENV)
+    if raw is None or not str(raw).strip():
+        return None
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on", "parallel"}:
+        return "parallel"
+    if value in {"0", "false", "no", "off", "legacy"}:
+        return "legacy"
+    raise ValueError(
+        f"{ATTENTION_BRANCH_MODE_ENV} must select 'legacy' or 'parallel' "
+        "(accepted spellings: 0, 1, true, false, yes, no, on, off)"
+    )
+
+
+def resolve_attention_branch_mode(config, *, environ=None):
+    """Return `config` with Model B's attention branch mode explicitly resolved.
+
+    Precedence: an explicit environment override, then the mode recorded by the
+    configuration (which defaults to the pre-fork ``"legacy"`` for checkpoints
+    written before the field existed, and ``"parallel"`` for the canonical Model
+    B presets).  The returned configuration reports the graph the constructed
+    model will actually execute, so the environment can never select an
+    architecture the configuration denies.  ``os.environ`` is never modified and
+    already-resolved configurations are returned unchanged.
+    """
+    dual = getattr(config, "dual_resolution", config)
+    recorded = getattr(dual, "attention_branch_mode", "legacy")
+    selected = attention_branch_mode_override(environ) or recorded
+    if selected == recorded:
+        return config
+    resolved = replace(dual, attention_branch_mode=selected)
+    if dual is config:
+        return resolved
+    return replace(config, dual_resolution=resolved)
+
+
+def _attention_branch_notice(original, selected, *, pre_fork):
+    """One informative notice per deserialized Model B configuration."""
+    if pre_fork and selected == original:
+        print(
+            "WARNING: Model B checkpoint predates the attention-branch fork.\n"
+            f"  Original attention architecture: {original}\n"
+            f"  Selected attention architecture: {selected} (preserved)\n"
+            f"  Set {ATTENTION_BRANCH_MODE_ENV}=1 to continue this model on the "
+            "parallel architecture."
+        )
+    else:
+        print(
+            "WARNING: "
+            + ("Legacy Model B checkpoint detected." if pre_fork
+               else "Model B attention architecture override.")
+            + "\n"
+            f"  Original attention architecture: {original}\n"
+            f"  Selected attention architecture: {selected}\n"
+            "  This is an intentional architectural fork.\n"
+            f"  Subsequent checkpoints will record attention_branch_mode={selected}."
+        )
+
+
+def _dual_resolution_from_mapping(value):
+    """Rebuild a serialized DualResolutionConfig and resolve its branch mode.
+
+    A mapping without ``attention_branch_mode`` predates the parallel-branch
+    fork, so the architecture it actually executed is the pre-fork ``legacy``
+    graph; interpreting it as ``parallel`` silently would change the model.
+    """
+    recorded = value.get("attention_branch_mode")
+    resolved = resolve_attention_branch_mode(DualResolutionConfig(**value))
+    if resolved.enabled and resolved.compression_mode == "matrix_pool":
+        original = "legacy" if recorded is None else recorded
+        if original != resolved.attention_branch_mode or recorded is None:
+            _attention_branch_notice(original, resolved.attention_branch_mode,
+                                     pre_fork=recorded is None)
+    return resolved
+
+
 def _coerce_dual_resolution(value):
     if value is None:
         return DualResolutionConfig(enabled=False)
     if isinstance(value, DualResolutionConfig):
         return value
     if isinstance(value, dict):
-        return DualResolutionConfig(**value)
+        return _dual_resolution_from_mapping(value)
     raise TypeError("dual_resolution must be DualResolutionConfig-compatible")
 
 
@@ -1321,6 +1439,11 @@ class ModelConfig:
                 global_heads=2,
                 global_head_dim=64,
                 global_enabled=True,
+                # Canonical Model B now trains and serves with independent
+                # local/global branches.  Pre-fork checkpoints keep "legacy"
+                # because their saved config.json records it explicitly, and
+                # checkpoints without the field deserialize to "legacy".
+                attention_branch_mode="parallel",
             ),
         )
 

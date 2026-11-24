@@ -162,11 +162,12 @@ class TorchGenerationEngine:
             ))
         local_context = torch.stack(contexts, dim=2)
         local_delta = local_context.reshape(normalized.shape[0], 1, -1) @ attention.Wo
-        local_state = residual.float() + local_delta.float()
+        global_input = (normalized if attention.parallel_branches
+                        else residual.float() + local_delta.float())
         global_delta = torch.zeros_like(local_delta)
         global_module = attention.global_module
         if global_module is not None and cache.summary_count:
-            qg = (local_state.to(self.dtype)[:, 0] @ global_module.Wq).reshape(
+            qg = (global_input.to(self.dtype)[:, 0] @ global_module.Wq).reshape(
                 normalized.shape[0], 1, attention.global_heads,
                 attention.global_head_dim,
             )
@@ -185,7 +186,7 @@ class TorchGenerationEngine:
             global_delta = global_context.reshape(normalized.shape[0], 1, -1) @ global_module.Wo
 
         if global_module is not None:
-            cache.incomplete_hidden[:, cache.incomplete_count].copy_(local_state[:, 0])
+            cache.incomplete_hidden[:, cache.incomplete_count].copy_(global_input[:, 0])
             cache.incomplete_count += 1
             if cache.incomplete_count == attention.block_size:
                 block = cache.incomplete_hidden[:, :attention.block_size]

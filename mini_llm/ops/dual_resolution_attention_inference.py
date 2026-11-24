@@ -128,6 +128,13 @@ class DualResolutionAttentionInference:
         self.W_pool_k = self.W_pool_v = self.W_pool_o = None
         self.training_attention = None
         self.compressor = None
+        # Model B branch topology comes from the same resolved configuration the
+        # training operator uses.  It is kept here so decode-only construction
+        # (no training operator attached yet) still reports one unambiguous mode.
+        self.attention_branch_mode = str(
+            getattr(dual_config, "attention_branch_mode", "legacy")
+        )
+        self.parallel_branches = self.attention_branch_mode == "parallel"
         self._compress_callable = None
         self._compress_norm_gamma = None
         self._compress_norm_eps = self.rms_eps
@@ -156,6 +163,24 @@ class DualResolutionAttentionInference:
         are supported by the native fallback below.
         """
         self.training_attention = training_attention
+        operator_mode = getattr(training_attention, "attention_branch_mode", None)
+        if operator_mode is None:
+            operator_mode = (
+                "parallel" if getattr(training_attention, "parallel_branches", False)
+                else "legacy"
+            )
+        if operator_mode != self.attention_branch_mode:
+            # One model instance must execute one branch topology.  Reaching
+            # this point means a training operator and an inference adapter were
+            # built from configurations that disagree, which would silently mix
+            # the sequential and parallel graphs.
+            raise ValueError(
+                "Model B attention branch mode mismatch: training operator uses "
+                f"{operator_mode!r} but this inference adapter is configured for "
+                f"{self.attention_branch_mode!r}"
+            )
+        self.attention_branch_mode = operator_mode
+        self.parallel_branches = operator_mode == "parallel"
         required = ("Wq", "Wk", "Wv", "Wo")
         missing = [name for name in required if not hasattr(training_attention, name)]
         if missing:
@@ -531,8 +556,14 @@ class DualResolutionAttentionInference:
         sparse_k=None, sparse_v=None, sparse_count=None, absolute_position=None,
         host_counters=None,
     ):
-        if residual_input is None or residual_input.shape != x.shape:
+        # The parallel branch never reads the residual stream; only the legacy
+        # sequential layout needs it, mirroring the training operator's contract.
+        if residual_input is not None and getattr(residual_input, "shape", None) != x.shape:
             raise ValueError("matrix-pool inference requires residual_input [B,1,d_model]")
+        if not self.parallel_branches and residual_input is None:
+            raise ValueError(
+                "legacy sequential matrix-pool inference requires residual_input"
+            )
         batch = int(x.shape[0])
         qkv = (x[:, 0, :] @ self.Wqkv)[:, None, :]
         q_end = self.n_q_heads * self.d_head
@@ -597,9 +628,11 @@ class DualResolutionAttentionInference:
                 local_context.reshape(1, self.d_model).astype(x.dtype, copy=False)
                 @ self.Wo
             ).reshape(1, 1, self.d_model)
-            local_state = (
-                _work_array(residual_input[row:row + 1])
-                + _work_array(local_delta)
+            global_input = (
+                x[row:row + 1] if self.parallel_branches else (
+                    _work_array(residual_input[row:row + 1])
+                    + _work_array(local_delta)
+                )
             )
             global_delta = xp.zeros_like(local_delta)
             ss = (
@@ -611,7 +644,7 @@ class DualResolutionAttentionInference:
                 if counters is not None else int(summary_count[row].item())
             )
             if self.global_enabled and sc:
-                state_compute = local_state.astype(x.dtype, copy=False)
+                state_compute = global_input.astype(x.dtype, copy=False)
                 qg = (
                     state_compute.reshape(1, self.d_model) @ self.W_global_q
                 ).reshape(1, 1, self.global_heads, self.global_head_dim)
@@ -632,7 +665,7 @@ class DualResolutionAttentionInference:
                     int(counters["incomplete_count"])
                     if counters is not None else int(incomplete_count[row].item())
                 )
-                incomplete_hidden[row, offset, :] = local_state[0, 0].astype(
+                incomplete_hidden[row, offset, :] = global_input[0, 0].astype(
                     incomplete_hidden.dtype, copy=False
                 )
                 offset += 1

@@ -107,6 +107,10 @@ _MODEL_B_INFERENCE_DEFAULTS: dict[str, str] = {
     "MINI_LLM_MATRIX_POOL_PREPARED_GLOBAL_ROPE": "1",
     "MINI_LLM_MATRIX_POOL_PREPARED_LOCAL_ROPE": "1",
     "MINI_LLM_MATRIX_POOL_FUSED_FORWARD": "0",
+    # Model B's attention branch topology is deliberately absent here.  It is
+    # architecture, so it lives in config.json (dual_resolution.attention_branch_mode)
+    # and is resolved once per configuration; materializing it in the environment
+    # would silently override a pre-fork checkpoint's recorded architecture.
 }
 
 

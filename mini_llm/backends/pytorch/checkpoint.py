@@ -309,7 +309,30 @@ def _prepare_ancillary_files(path: Path, model: Any, tokenizer: Any | None) -> N
     if config_file.is_file():
         current = json.loads(config_file.read_text(encoding="utf-8"))
         if current != config_value:
-            raise ValueError("existing config.json does not exactly match model.config")
+            dual = config_value.get("dual_resolution") if isinstance(config_value, dict) else None
+            fork = None
+            if isinstance(dual, dict) and isinstance(current, dict):
+                previous = current.get("dual_resolution")
+                if isinstance(previous, dict):
+                    switched = previous.get("attention_branch_mode", "legacy") != dual[
+                        "attention_branch_mode"
+                    ]
+                    replaced = {**current, "dual_resolution": {**previous, "attention_branch_mode": dual["attention_branch_mode"]}}
+                    if switched and replaced == config_value:
+                        fork = (previous.get("attention_branch_mode", "legacy"),
+                                dual["attention_branch_mode"])
+            if fork is None:
+                raise ValueError("existing config.json does not exactly match model.config")
+            # Deliberate Model B architectural migration (legacy <-> parallel):
+            # every other field matches, so recording the switched architecture
+            # is exactly the provenance update the fork requires.
+            print(
+                f"WARNING: rewriting {config_file}: attention architecture "
+                f"{fork[0]!r} -> {fork[1]!r}; all other configuration is identical."
+            )
+        config_file.write_text(
+            json.dumps(config_value, indent=2), encoding="utf-8"
+        )
     else:
         config_file.write_text(
             json.dumps(config_value, indent=2), encoding="utf-8"

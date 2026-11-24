@@ -44,11 +44,16 @@ def _output_projection_wgrad(activation, gradient):
 class MatrixPoolDualResolutionAttention:
     """Full-context Model B attention with learned matrix-pooled summaries.
 
-    The operator returns ``local_delta + global_delta``.  ``residual_input`` is
-    used only to construct the post-local state consumed by pooling/global
-    attention; the Transformer block owns the actual residual addition.
-    Backward therefore returns gradients for both the normalized attention input
-    and this direct residual dependency.
+    The operator returns ``local_delta + global_delta``.  Which branch topology
+    it executes comes from ``config.attention_branch_mode`` (resolved once when
+    the configuration is loaded, never re-read from the environment here):
+
+    * ``parallel``: both branches consume the same pre-attention normalized
+      input, so global pooling cannot backpropagate through the local output.
+    * ``legacy``: the historical post-local sequential dependency, where the
+      global branch consumes ``residual_input + local_delta``.
+
+    The Transformer block owns the residual addition in both cases.
     """
 
     def __init__(
@@ -88,6 +93,13 @@ class MatrixPoolDualResolutionAttention:
         self.global_head_dim = int(config.global_head_dim)
         self.global_width = self.global_heads * self.global_head_dim
         self.global_enabled = bool(config.global_enabled)
+        # Configuration, not environment: the mode is resolved once when the
+        # configuration is loaded or launched, so this operator, the inference
+        # adapter and the captured CUDA graph can never disagree.
+        self.attention_branch_mode = str(
+            getattr(config, "attention_branch_mode", "legacy")
+        )
+        self.parallel_branches = self.attention_branch_mode == "parallel"
         self.pool_position_bias = bool(config.pool_position_bias)
         self.global_query_chunk = int(config.global_query_chunk)
         self.recompute_attention_probs = bool(config.recompute_attention_probs)
@@ -624,11 +636,12 @@ class MatrixPoolDualResolutionAttention:
     def forward(self, x, return_cache=True, position_ids=None,
                 dual_resolution_metadata=None, residual_input=None, **ignored):
         del ignored
-        if residual_input is None:
-            raise ValueError("Model B attention requires residual_input")
         batch, length, width = x.shape
-        if width != self.d_model or residual_input.shape != x.shape:
+        if width != self.d_model or (residual_input is not None
+                                   and getattr(residual_input, "shape", None) != x.shape):
             raise ValueError("attention and residual inputs must be [B,T,d_model]")
+        if not self.parallel_branches and residual_input is None:
+            raise ValueError("legacy sequential attention requires residual_input")
         metadata = self._prepare_metadata(
             dual_resolution_metadata, batch, length, position_ids
         )
@@ -693,8 +706,12 @@ class MatrixPoolDualResolutionAttention:
         local_merged = local_context.reshape(batch, length, self.d_model)
         local_compute = local_merged.astype(x.dtype, copy=False)
         local_delta = _linear_forward(local_compute, self.Wo)
-        local_state = (_work_array(residual_input)
-                       + _work_array(local_delta))
+        # Parallel branch: global queries and pooled K/V consume the same
+        # normalized block input as local Q/K/V, with no local-output dependency.
+        # Legacy branch: retain post-local semantics for A/B evaluation.
+        global_input = x if self.parallel_branches else (
+            _work_array(residual_input) + _work_array(local_delta)
+        )
 
         # Global work is optional for short sequences and local-only ablations.
         # Do not allocate a full [B,T,D] zero tensor just to add it to local_delta.
@@ -704,14 +721,14 @@ class MatrixPoolDualResolutionAttention:
             with performance_scope("matrix_pool.pool.forward"):
                 with matrix_pool_detail_scope("matrix_pool.pool.forward"):
                     summaries, pool_cache = self._pool_forward(
-                        local_state, metadata, return_cache
+                        global_input, metadata, return_cache
                     )
             with matrix_pool_detail_scope("matrix_pool.metadata.forward"):
                 summary_meta = self._summary_metadata(metadata)
                 summary_flat = summaries.reshape(
                     batch, -1, self.d_model
                 ).astype(x.dtype, copy=False)
-                state_compute = local_state.astype(x.dtype, copy=False)
+                state_compute = global_input.astype(x.dtype, copy=False)
             with matrix_pool_detail_scope("matrix_pool.global_q_projection.forward"):
                 qg_projection = _linear_forward(state_compute, self.W_global_q)
             with matrix_pool_detail_scope("matrix_pool.global_kv_projection.forward"):
@@ -784,6 +801,7 @@ class MatrixPoolDualResolutionAttention:
         d_local_delta = dy_work
         global_cache = cache["global"]
         d_residual_input = None
+        d_global_input = None
         if global_cache is not None:
             global_compute = global_cache["global_compute"]
             dy2 = dy_work.reshape(-1, self.d_model)
@@ -854,25 +872,31 @@ class MatrixPoolDualResolutionAttention:
                     if inplace_pool_scatter:
                         dh = self._pool_backward(
                             dsummary, global_cache["pool"],
-                            cache["residual_input"].shape,
+                            cache["x"].shape,
                             accumulate_parameter_grads,
                             initial_dx=_work_array(dx_q),
                         )
                     else:
                         dx_pool = self._pool_backward(
                             dsummary, global_cache["pool"],
-                            cache["residual_input"].shape,
+                            cache["x"].shape,
                             accumulate_parameter_grads,
                         )
                         dh = _work_array(dx_q) + dx_pool
-            # The reference residual-gradient buffer is FP32.  On GPU `dh`
-            # is already FP32, so this does not introduce a copy.
             with matrix_pool_detail_scope("matrix_pool.integration.backward"):
-                d_residual_input = dh.astype(xp.float32, copy=False)
-                d_local_delta = d_local_delta + dh
+                if self.parallel_branches:
+                    # Pool and global query gradients flow through norm1(x),
+                    # not through local attention or the identity residual.
+                    d_global_input = dh.astype(xp.float32, copy=False)
+                else:
+                    d_residual_input = dh.astype(xp.float32, copy=False)
+                    d_local_delta = d_local_delta + dh
+        # Keep the established (dx_norm, dx_residual) backward API. In the
+        # parallel graph, dx_residual is identically zero, because the global
+        # branch no longer reads the residual directly.
         if d_residual_input is None:
             d_residual_input = xp.zeros(
-                cache["residual_input"].shape, dtype=xp.float32
+                cache["x"].shape, dtype=xp.float32
             )
 
         with matrix_pool_detail_scope("matrix_pool.local_output_projection.backward"):
@@ -941,4 +965,6 @@ class MatrixPoolDualResolutionAttention:
                     dv.reshape(batch, length, kv_width), cache["x"], self.Wv,
                     accumulate_parameter_grads,
                 )
+        if d_global_input is not None:
+            dx_norm = _work_array(dx_norm) + d_global_input
         return dx_norm, d_residual_input

@@ -129,6 +129,23 @@ MINI_LLM_BACKEND=cupy python inference.py \
 `inference.py` accepts native checkpoints. GGUF and Safetensors models use the
 external loader, unified benchmark runner, or `serve.py`.
 
+### Experimental native CUDA payload uploads
+
+The isolated `mini_llm.native` API supports native GGUF payload leases and
+`Engine.upload(lease) -> UploadedTensor`. Uploads preserve **exact stored bytes**
+for dense and packed formats: no implicit decoding or precision conversion.
+Completion uses CUDA event `query()` / `wait()`; native shared ownership keeps
+source mappings and the engine safe across public close until retirement.
+The shared engine budget counts live uploaded device bytes plus session device
+and pinned buffers, with peak tracking; uploads use no application-managed pinned
+staging. Pageable mmap `cudaMemcpyAsync` may block the host, so host return is **not
+guaranteed asynchronous**. No whole-model pinning or production Qwen/training
+integration is introduced. This is not model inference or full WP2 completion.
+
+Build, API, accounting exclusions, and the explicit caller-buffer test-only
+readback are documented in [`mini_llm/native_cpp/README.md`](mini_llm/native_cpp/README.md)
+and [`docs/native_engine/WP2_WEIGHT_UPLOADS.md`](docs/native_engine/WP2_WEIGHT_UPLOADS.md).
+
 ## Training safety
 
 The complete launch and resume workflow lives in

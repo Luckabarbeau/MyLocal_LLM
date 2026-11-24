@@ -76,7 +76,7 @@ def _load_bridge():
     iq4_header=source.with_name('iq4_cpu_vnni.h')
     iq3xxs_header=source.with_name('iq3xxs_cpu_simd.h')
     pair_header=source.with_name('iq3xxs_cpu_pair.h')
-    digest = hashlib.sha256(source.read_bytes() + header.read_bytes() + rows_header.read_bytes() + service_header.read_bytes() + stage_header.read_bytes() + iq3_header.read_bytes() + iq2_header.read_bytes() + codebooks.read_bytes() + iq4_header.read_bytes() + iq3xxs_header.read_bytes() + pair_header.read_bytes() + repr(
+    digest = hashlib.sha256(source.with_suffix('.h').read_bytes() + source.read_bytes() + header.read_bytes() + rows_header.read_bytes() + service_header.read_bytes() + stage_header.read_bytes() + iq3_header.read_bytes() + iq2_header.read_bytes() + codebooks.read_bytes() + iq4_header.read_bytes() + iq3xxs_header.read_bytes() + pair_header.read_bytes() + repr(
         (compiler, flags, platform.machine(), sys.platform)).encode()).hexdigest()[:20]
     cache = Path(os.environ.get('MINI_LLM_NATIVE_BUILD_DIR',
                               str(Path.home() / '.cache/mylocal_llm/native')))

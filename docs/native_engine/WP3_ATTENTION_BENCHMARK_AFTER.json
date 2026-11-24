@@ -1,0 +1,278 @@
+{
+  "capacity": 16384,
+  "device_bytes": 69392936,
+  "pinned_bytes": 20,
+  "repeats": 10,
+  "samples": 3,
+  "timings": [
+    {
+      "combined": false,
+      "median_ms": 0.008559999987483025,
+      "n": 1,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.008457600139081478,
+        0.008559999987483025,
+        0.008608000352978706
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 0.03705280274152756,
+      "n": 1,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.03781440109014511,
+        0.03705280274152756,
+        0.03701440244913101
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.008559999987483025,
+      "n": 1,
+      "policy": "strata",
+      "samples_ms": [
+        0.008630400523543358,
+        0.008403199724853039,
+        0.008559999987483025
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 0.03701759874820709,
+      "n": 1,
+      "policy": "strata",
+      "samples_ms": [
+        0.03701759874820709,
+        0.036982398480176926,
+        0.0371071994304657
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6099103689193726,
+      "n": 2051,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.6565312147140503,
+        0.6099103689193726,
+        0.6091455817222595
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 2.4973790645599365,
+      "n": 2051,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        2.4973790645599365,
+        2.4498400688171387,
+        2.499155282974243
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6097311973571777,
+      "n": 2051,
+      "policy": "strata",
+      "samples_ms": [
+        0.609548807144165,
+        0.6097311973571777,
+        0.6530399918556213
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 2.4984896183013916,
+      "n": 2051,
+      "policy": "strata",
+      "samples_ms": [
+        2.470031976699829,
+        2.5369374752044678,
+        2.4984896183013916
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.609881579875946,
+      "n": 2053,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.609881579875946,
+        0.6101568341255188,
+        0.6097472310066223
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 2.449375867843628,
+      "n": 2053,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        2.4944255352020264,
+        2.449375867843628,
+        2.3860926628112793
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.587875247001648,
+      "n": 2053,
+      "policy": "strata",
+      "samples_ms": [
+        0.587875247001648,
+        0.5878399610519409,
+        0.5880703926086426
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 2.3917696475982666,
+      "n": 2053,
+      "policy": "strata",
+      "samples_ms": [
+        2.3983423709869385,
+        2.3465311527252197,
+        2.3917696475982666
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.5935488343238831,
+      "n": 4096,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.5931519865989685,
+        0.6392576098442078,
+        0.5935488343238831
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 3.6297824382781982,
+      "n": 4096,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        3.652057647705078,
+        3.6297824382781982,
+        3.6244735717773438
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.5898079872131348,
+      "n": 4096,
+      "policy": "strata",
+      "samples_ms": [
+        0.5902847647666931,
+        0.5894976258277893,
+        0.5898079872131348
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 3.654595136642456,
+      "n": 4096,
+      "policy": "strata",
+      "samples_ms": [
+        3.688908815383911,
+        3.630998134613037,
+        3.654595136642456
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6000319719314575,
+      "n": 8192,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.6000319719314575,
+        0.5999072194099426,
+        0.6001759767532349
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 5.123839855194092,
+      "n": 8192,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        5.123839855194092,
+        5.071887969970703,
+        5.130041599273682
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6003456115722656,
+      "n": 8192,
+      "policy": "strata",
+      "samples_ms": [
+        0.6007232069969177,
+        0.6003136038780212,
+        0.6003456115722656
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 5.169232368469238,
+      "n": 8192,
+      "policy": "strata",
+      "samples_ms": [
+        5.1738786697387695,
+        5.119625568389893,
+        5.169232368469238
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6262944340705872,
+      "n": 16384,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        0.6277664303779602,
+        0.6258751749992371,
+        0.6262944340705872
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 6.942006587982178,
+      "n": 16384,
+      "policy": "ggml_cpu",
+      "samples_ms": [
+        6.942006587982178,
+        7.013094425201416,
+        6.932137489318848
+      ]
+    },
+    {
+      "combined": false,
+      "median_ms": 0.6273024082183838,
+      "n": 16384,
+      "policy": "strata",
+      "samples_ms": [
+        0.6281119585037231,
+        0.6265760064125061,
+        0.6273024082183838
+      ]
+    },
+    {
+      "combined": true,
+      "median_ms": 7.013369560241699,
+      "n": 16384,
+      "policy": "strata",
+      "samples_ms": [
+        7.018438816070557,
+        7.009251594543457,
+        7.013369560241699
+      ]
+    }
+  ],
+  "provenance": "Captured directly from /tmp/mini-llm-wp3-attention-after.log printed by the unchanged optional benchmark after the history-validation optimization.",
+  "phase": "after: once-per-element parallel historical KV finite validation",
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "device": 0,
+  "driver_version": "580.178.04"
+}

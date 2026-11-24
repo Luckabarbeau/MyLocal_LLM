@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "scope": "Full SHA256 of every byte of both checkpoint shard files; no model execution, tensor decode, or cache writes",
+  "started_at_utc": "2026-11-23T13:05:41.046394+00:00",
+  "completed_at_utc": "2026-11-23T13:06:36.469231+00:00",
+  "elapsed_seconds": 55.42283928100369,
+  "total_bytes_hashed": 83617662656,
+  "terminal_timeout_seconds": 180,
+  "internal_deadline_seconds": 178,
+  "method": {
+    "algorithm": "SHA256",
+    "workers": 2,
+    "buffer_bytes_per_worker": 8388608,
+    "open_flags": "O_RDONLY | O_NOATIME | O_CLOEXEC",
+    "stat_fields_compared": [
+      "device",
+      "inode",
+      "size",
+      "mtime_ns",
+      "ctime_ns"
+    ],
+    "atime_policy": "O_NOATIME prevents read-induced access-time updates; no fallback",
+    "checkpoint_cache_operations": "none; no writes, fadvise, cache eviction, or cache reset"
+  },
+  "source_identity": {
+    "git_head": "5760b4e708d91c5b8a597c4f9fbc6814e64c100c",
+    "manifest_git_head_at_capture": {
+      "argv": [
+        "git",
+        "--no-pager",
+        "rev-parse",
+        "HEAD"
+      ],
+      "returncode": 0,
+      "stdout": "fb8de6d0dbe8c9e4197b8bc3c411b9b810a89728\n",
+      "stderr": ""
+    },
+    "inventory_git_head_at_capture": "fb8de6d0dbe8c9e4197b8bc3c411b9b810a89728",
+    "input_documents": [
+      {
+        "path": "docs/native_engine/native_reference_manifest.json",
+        "sha256_before_reference_update": "5f1e615d5f1d5f1dd8cdd71e608e026980650d42d3511ca987841d9ee4788fff",
+        "size_bytes": 30004
+      },
+      {
+        "path": "docs/native_engine/WP2_GGUF_INVENTORY.json",
+        "sha256": "6eeb84fd0878170df9fb8938d170ba267df26af1cf1171c091ae6be8177173ab",
+        "size_bytes": 5324
+      }
+    ],
+    "python_executable": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python3",
+    "python_version": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.39",
+    "openssl_version": "OpenSSL 3.0.13 30 Jan 2024"
+  },
+  "execution": {
+    "working_directory": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM",
+    "command": "python3 -c 'import sys; source = sys.stdin.read(); exec(compile(source, \"<WP0-readonly-checkpoint-hashing>\", \"exec\"))' <<'PY'\nimport concurrent.futures\nimport datetime\nimport hashlib\nimport json\nimport os\nimport pathlib\nimport platform\nimport subprocess\nimport sys\nimport time\n\nstarted = time.monotonic()\nstarted_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()\ndeadline = started + 178.0\nroot = pathlib.Path.cwd()\nmanifest_path = root / 'docs/native_engine/native_reference_manifest.json'\ninventory_path = root / 'docs/native_engine/WP2_GGUF_INVENTORY.json'\noutput_path = root / 'docs/native_engine/WP0_CHECKPOINT_HASHES.json'\nassert not output_path.exists(), 'Refusing to overwrite existing evidence'\nmanifest_bytes = manifest_path.read_bytes()\ninventory_bytes = inventory_path.read_bytes()\nmanifest = json.loads(manifest_bytes)\ninventory = json.loads(inventory_bytes)\nfields = ('device', 'inode', 'size', 'mtime_ns', 'ctime_ns')\ndef identity(st):\n    return dict(zip(fields, (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)))\nrecords = manifest['checkpoint_shards']\nassert len(records) == 2\ninventory_records = {r['path']: r for r in inventory['shards']}\nfor r in records:\n    assert all(r[k] == inventory_records[r['path']][k] for k in fields)\nbefore = {r['path']: identity(os.stat(r['path'])) for r in records}\nfor r in records:\n    assert before[r['path']] == {k: r[k] for k in fields}, 'Current stat differs from measured identity'\n\ndef hash_shard(record):\n    path = record['path']\n    t0 = time.monotonic()\n    digest = hashlib.sha256()\n    count = 0\n    next_progress = 8 * 1024**3\n    fd = os.open(path, os.O_RDONLY | os.O_NOATIME | os.O_CLOEXEC)\n    try:\n        fd_before = identity(os.fstat(fd))\n        assert fd_before == before[path]\n        buffer = bytearray(8 * 1024**2)\n        view = memoryview(buffer)\n        with os.fdopen(fd, 'rb', buffering=0, closefd=False) as stream:\n            while True:\n                if time.monotonic() >= deadline:\n                    raise TimeoutError('178-second internal deadline; no full evidence written')\n                n = stream.readinto(buffer)\n                if not n:\n                    break\n                digest.update(view[:n])\n                count += n\n                if count >= next_progress:\n                    print(json.dumps({'progress_path': path, 'bytes_read': count, 'elapsed_seconds': time.monotonic() - t0}), flush=True)\n                    next_progress += 8 * 1024**3\n        fd_after = identity(os.fstat(fd))\n    finally:\n        os.close(fd)\n    result = {'path': path, 'resolved_path': os.path.realpath(path), 'sha256': digest.hexdigest(), 'bytes_hashed': count, 'size_bytes': before[path]['size'], 'elapsed_seconds': time.monotonic() - t0, 'stat_before': before[path], 'descriptor_stat_before': fd_before, 'descriptor_stat_after': fd_after, 'matches_manifest_identity': True, 'matches_inventory_identity': True}\n    assert count == before[path]['size']\n    assert fd_after == fd_before\n    print(json.dumps({'completed_shard': result}), flush=True)\n    return result\n\ntry:\n    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:\n        results = list(pool.map(hash_shard, records))\n    for result in results:\n        result['stat_after'] = identity(os.stat(result['path']))\n        result['stat_stable'] = result['stat_before'] == result['stat_after'] == result['descriptor_stat_before'] == result['descriptor_stat_after']\n        assert result['stat_stable'], 'Shard changed during hashing'\n    assert manifest_path.read_bytes() == manifest_bytes\n    assert inventory_path.read_bytes() == inventory_bytes\n    elapsed = time.monotonic() - started\n    assert elapsed < 180.0\n    evidence = {\n        'schema_version': 1,\n        'status': 'complete',\n        'scope': 'Full SHA256 of every byte of both checkpoint shard files; no model execution, tensor decode, or cache writes',\n        'started_at_utc': started_utc,\n        'completed_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),\n        'elapsed_seconds': elapsed,\n        'total_bytes_hashed': sum(r['bytes_hashed'] for r in results),\n        'terminal_timeout_seconds': 180,\n        'internal_deadline_seconds': 178,\n        'method': {'algorithm': 'SHA256', 'workers': 2, 'buffer_bytes_per_worker': 8 * 1024**2, 'open_flags': 'O_RDONLY | O_NOATIME | O_CLOEXEC', 'stat_fields_compared': list(fields), 'atime_policy': 'O_NOATIME prevents read-induced access-time updates; no fallback', 'checkpoint_cache_operations': 'none; no writes, fadvise, cache eviction, or cache reset'},\n        'source_identity': {\n            'git_head': subprocess.check_output(['git', '--no-pager', 'rev-parse', 'HEAD'], text=True).strip(),\n            'manifest_git_head_at_capture': manifest.get('git_head'),\n            'inventory_git_head_at_capture': inventory.get('git_head'),\n            'input_documents': [\n                {'path': str(manifest_path.relative_to(root)), 'sha256_before_reference_update': hashlib.sha256(manifest_bytes).hexdigest(), 'size_bytes': len(manifest_bytes)},\n                {'path': str(inventory_path.relative_to(root)), 'sha256': hashlib.sha256(inventory_bytes).hexdigest(), 'size_bytes': len(inventory_bytes)}\n            ],\n            'python_executable': sys.executable,\n            'python_version': sys.version,\n            'platform': platform.platform(),\n            'openssl_version': __import__('ssl').OPENSSL_VERSION\n        },\n        'execution': {'working_directory': str(root), 'command': 'python3 -c \\'import sys; source = sys.stdin.read(); exec(compile(source, \"<WP0-readonly-checkpoint-hashing>\", \"exec\"))\\' <<\\'PY\\'\\n' + source + 'PY', 'script': source, 'script_sha256': hashlib.sha256(source.encode()).hexdigest()},\n        'shards': results\n    }\n    with output_path.open('x') as stream:\n        json.dump(evidence, stream, indent=2)\n        stream.write('\\n')\n    print(json.dumps({'status': 'complete', 'evidence_path': str(output_path.relative_to(root)), 'elapsed_seconds': elapsed, 'total_bytes_hashed': evidence['total_bytes_hashed'], 'shards': results}), flush=True)\nexcept Exception as exc:\n    print(json.dumps({'status': 'incomplete', 'error_type': type(exc).__name__, 'error': str(exc), 'elapsed_seconds': time.monotonic() - started, 'evidence_written': False}), flush=True)\n    raise\nPY",
+    "script": "import concurrent.futures\nimport datetime\nimport hashlib\nimport json\nimport os\nimport pathlib\nimport platform\nimport subprocess\nimport sys\nimport time\n\nstarted = time.monotonic()\nstarted_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()\ndeadline = started + 178.0\nroot = pathlib.Path.cwd()\nmanifest_path = root / 'docs/native_engine/native_reference_manifest.json'\ninventory_path = root / 'docs/native_engine/WP2_GGUF_INVENTORY.json'\noutput_path = root / 'docs/native_engine/WP0_CHECKPOINT_HASHES.json'\nassert not output_path.exists(), 'Refusing to overwrite existing evidence'\nmanifest_bytes = manifest_path.read_bytes()\ninventory_bytes = inventory_path.read_bytes()\nmanifest = json.loads(manifest_bytes)\ninventory = json.loads(inventory_bytes)\nfields = ('device', 'inode', 'size', 'mtime_ns', 'ctime_ns')\ndef identity(st):\n    return dict(zip(fields, (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)))\nrecords = manifest['checkpoint_shards']\nassert len(records) == 2\ninventory_records = {r['path']: r for r in inventory['shards']}\nfor r in records:\n    assert all(r[k] == inventory_records[r['path']][k] for k in fields)\nbefore = {r['path']: identity(os.stat(r['path'])) for r in records}\nfor r in records:\n    assert before[r['path']] == {k: r[k] for k in fields}, 'Current stat differs from measured identity'\n\ndef hash_shard(record):\n    path = record['path']\n    t0 = time.monotonic()\n    digest = hashlib.sha256()\n    count = 0\n    next_progress = 8 * 1024**3\n    fd = os.open(path, os.O_RDONLY | os.O_NOATIME | os.O_CLOEXEC)\n    try:\n        fd_before = identity(os.fstat(fd))\n        assert fd_before == before[path]\n        buffer = bytearray(8 * 1024**2)\n        view = memoryview(buffer)\n        with os.fdopen(fd, 'rb', buffering=0, closefd=False) as stream:\n            while True:\n                if time.monotonic() >= deadline:\n                    raise TimeoutError('178-second internal deadline; no full evidence written')\n                n = stream.readinto(buffer)\n                if not n:\n                    break\n                digest.update(view[:n])\n                count += n\n                if count >= next_progress:\n                    print(json.dumps({'progress_path': path, 'bytes_read': count, 'elapsed_seconds': time.monotonic() - t0}), flush=True)\n                    next_progress += 8 * 1024**3\n        fd_after = identity(os.fstat(fd))\n    finally:\n        os.close(fd)\n    result = {'path': path, 'resolved_path': os.path.realpath(path), 'sha256': digest.hexdigest(), 'bytes_hashed': count, 'size_bytes': before[path]['size'], 'elapsed_seconds': time.monotonic() - t0, 'stat_before': before[path], 'descriptor_stat_before': fd_before, 'descriptor_stat_after': fd_after, 'matches_manifest_identity': True, 'matches_inventory_identity': True}\n    assert count == before[path]['size']\n    assert fd_after == fd_before\n    print(json.dumps({'completed_shard': result}), flush=True)\n    return result\n\ntry:\n    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:\n        results = list(pool.map(hash_shard, records))\n    for result in results:\n        result['stat_after'] = identity(os.stat(result['path']))\n        result['stat_stable'] = result['stat_before'] == result['stat_after'] == result['descriptor_stat_before'] == result['descriptor_stat_after']\n        assert result['stat_stable'], 'Shard changed during hashing'\n    assert manifest_path.read_bytes() == manifest_bytes\n    assert inventory_path.read_bytes() == inventory_bytes\n    elapsed = time.monotonic() - started\n    assert elapsed < 180.0\n    evidence = {\n        'schema_version': 1,\n        'status': 'complete',\n        'scope': 'Full SHA256 of every byte of both checkpoint shard files; no model execution, tensor decode, or cache writes',\n        'started_at_utc': started_utc,\n        'completed_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),\n        'elapsed_seconds': elapsed,\n        'total_bytes_hashed': sum(r['bytes_hashed'] for r in results),\n        'terminal_timeout_seconds': 180,\n        'internal_deadline_seconds': 178,\n        'method': {'algorithm': 'SHA256', 'workers': 2, 'buffer_bytes_per_worker': 8 * 1024**2, 'open_flags': 'O_RDONLY | O_NOATIME | O_CLOEXEC', 'stat_fields_compared': list(fields), 'atime_policy': 'O_NOATIME prevents read-induced access-time updates; no fallback', 'checkpoint_cache_operations': 'none; no writes, fadvise, cache eviction, or cache reset'},\n        'source_identity': {\n            'git_head': subprocess.check_output(['git', '--no-pager', 'rev-parse', 'HEAD'], text=True).strip(),\n            'manifest_git_head_at_capture': manifest.get('git_head'),\n            'inventory_git_head_at_capture': inventory.get('git_head'),\n            'input_documents': [\n                {'path': str(manifest_path.relative_to(root)), 'sha256_before_reference_update': hashlib.sha256(manifest_bytes).hexdigest(), 'size_bytes': len(manifest_bytes)},\n                {'path': str(inventory_path.relative_to(root)), 'sha256': hashlib.sha256(inventory_bytes).hexdigest(), 'size_bytes': len(inventory_bytes)}\n            ],\n            'python_executable': sys.executable,\n            'python_version': sys.version,\n            'platform': platform.platform(),\n            'openssl_version': __import__('ssl').OPENSSL_VERSION\n        },\n        'execution': {'working_directory': str(root), 'command': 'python3 -c \\'import sys; source = sys.stdin.read(); exec(compile(source, \"<WP0-readonly-checkpoint-hashing>\", \"exec\"))\\' <<\\'PY\\'\\n' + source + 'PY', 'script': source, 'script_sha256': hashlib.sha256(source.encode()).hexdigest()},\n        'shards': results\n    }\n    with output_path.open('x') as stream:\n        json.dump(evidence, stream, indent=2)\n        stream.write('\\n')\n    print(json.dumps({'status': 'complete', 'evidence_path': str(output_path.relative_to(root)), 'elapsed_seconds': elapsed, 'total_bytes_hashed': evidence['total_bytes_hashed'], 'shards': results}), flush=True)\nexcept Exception as exc:\n    print(json.dumps({'status': 'incomplete', 'error_type': type(exc).__name__, 'error': str(exc), 'elapsed_seconds': time.monotonic() - started, 'evidence_written': False}), flush=True)\n    raise\n",
+    "script_sha256": "0a9c7ddaaec12d10d5afb61815312188f696bb43472924954e25d6c254a7fa2a"
+  },
+  "shards": [
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "resolved_path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "sha256": "4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3",
+      "bytes_hashed": 54817524224,
+      "size_bytes": 54817524224,
+      "elapsed_seconds": 55.42062510200776,
+      "stat_before": {
+        "device": 66305,
+        "inode": 103296629,
+        "size": 54817524224,
+        "mtime_ns": 1794362612345817261,
+        "ctime_ns": 1794362612351817518
+      },
+      "descriptor_stat_before": {
+        "device": 66305,
+        "inode": 103296629,
+        "size": 54817524224,
+        "mtime_ns": 1794362612345817261,
+        "ctime_ns": 1794362612351817518
+      },
+      "descriptor_stat_after": {
+        "device": 66305,
+        "inode": 103296629,
+        "size": 54817524224,
+        "mtime_ns": 1794362612345817261,
+        "ctime_ns": 1794362612351817518
+      },
+      "matches_manifest_identity": true,
+      "matches_inventory_identity": true,
+      "stat_after": {
+        "device": 66305,
+        "inode": 103296629,
+        "size": 54817524224,
+        "mtime_ns": 1794362612345817261,
+        "ctime_ns": 1794362612351817518
+      },
+      "stat_stable": true
+    },
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "resolved_path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113",
+      "bytes_hashed": 28800138432,
+      "size_bytes": 28800138432,
+      "elapsed_seconds": 29.843382401013514,
+      "stat_before": {
+        "device": 66305,
+        "inode": 100414915,
+        "size": 28800138432,
+        "mtime_ns": 1794269742748675005,
+        "ctime_ns": 1794362665100076958
+      },
+      "descriptor_stat_before": {
+        "device": 66305,
+        "inode": 100414915,
+        "size": 28800138432,
+        "mtime_ns": 1794269742748675005,
+        "ctime_ns": 1794362665100076958
+      },
+      "descriptor_stat_after": {
+        "device": 66305,
+        "inode": 100414915,
+        "size": 28800138432,
+        "mtime_ns": 1794269742748675005,
+        "ctime_ns": 1794362665100076958
+      },
+      "matches_manifest_identity": true,
+      "matches_inventory_identity": true,
+      "stat_after": {
+        "device": 66305,
+        "inode": 100414915,
+        "size": 28800138432,
+        "mtime_ns": 1794269742748675005,
+        "ctime_ns": 1794362665100076958
+      },
+      "stat_stable": true
+    }
+  ]
+}

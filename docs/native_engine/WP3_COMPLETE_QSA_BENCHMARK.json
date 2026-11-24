@@ -1,0 +1,459 @@
+{
+  "timestamp_utc": "2026-11-23T23:01:58.693602+00:00",
+  "argv": [
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/benchmark_native_qsa_layer.py",
+    "--device",
+    "0",
+    "--layer",
+    "3",
+    "--samples",
+    "3",
+    "--warmups",
+    "1",
+    "--output",
+    "docs/native_engine/WP3_COMPLETE_QSA_BENCHMARK.json"
+  ],
+  "backend": "cupy",
+  "numpy_version": "2.5.3",
+  "cupy_version": "14.2.0",
+  "device": 0,
+  "gpu": "name, driver_version\nNVIDIA GeForce RTX 5080, 580.178.04\nNVIDIA GeForce RTX 5070 Ti, 580.178.04\n",
+  "layer": 3,
+  "samples": 3,
+  "warmups": 1,
+  "lengths": [
+    128,
+    2051,
+    2052,
+    2053,
+    4096,
+    8192,
+    16384
+  ],
+  "timing": "perf_counter_ns full API wall time; native includes scalar status/commit sync; reference includes stream sync; excludes imports, reset, setup, uploads, diagnostics",
+  "precision": "FP32 projections, norms, RoPE, scoring, attention, gate, output; native packed weights vs same bytes decoded exactly to FP32 for reference; no TF32 request",
+  "reference_projection": "CuPy FP32 dense GEMV decoded once outside timing",
+  "caveat": "Python reference retains its host selection and per-block Python loop, even on CuPy. One-layer microbenchmark, not full model or model speedup evidence.",
+  "trajectory": "tests.hidden(t): 0.2*sin(arange(2560)*0.03125+(t%11)*0.125); reference-operator seeded valid history; exact same pre-step arrays and hidden per trial",
+  "selection_native_reference_override": false,
+  "fast_decode": false,
+  "payload_limit_bytes": 536870912,
+  "native_budget_bytes": 201326592,
+  "native_peak_bytes": 188532280,
+  "combined_reserved_payload_peak_observed": 445239848,
+  "cupy_pool_limit_bytes": 335544320,
+  "checkpoint_inventory": "docs/native_engine/WP2_GGUF_INVENTORY.json",
+  "inventory_sha256": "6eeb84fd0878170df9fb8938d170ba267df26af1cf1171c091ae6be8177173ab",
+  "checkpoint_shard": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "tensor_payloads": [
+    {
+      "name": "blk.3.attn_q.weight",
+      "type_id": 23,
+      "shape": [
+        2560,
+        12288
+      ],
+      "nbytes": 16711680,
+      "sha256": "aa6488b2d976c83be44361750661115988473ec9a8654d5aa3ce6d4e5d8d0d84"
+    },
+    {
+      "name": "blk.3.attn_k.weight",
+      "type_id": 14,
+      "shape": [
+        2560,
+        512
+      ],
+      "nbytes": 1075200,
+      "sha256": "fc99283cad4c6206c1d3839f011030b599757de68e1ef34aac27826883b620c6"
+    },
+    {
+      "name": "blk.3.attn_v.weight",
+      "type_id": 14,
+      "shape": [
+        2560,
+        512
+      ],
+      "nbytes": 1075200,
+      "sha256": "282dad3ccfbbe125680c45936fd18a1ba3be41539662b4488e648dfd96fee670"
+    },
+    {
+      "name": "blk.3.indexer.q_proj.weight",
+      "type_id": 30,
+      "shape": [
+        2560,
+        512
+      ],
+      "nbytes": 2621440,
+      "sha256": "e7b6c1a8155fc909393eb9eae0564fb38e4350a5c5a739ca26f259aaa40b7d57"
+    },
+    {
+      "name": "blk.3.indexer.k_proj.weight",
+      "type_id": 30,
+      "shape": [
+        2560,
+        128
+      ],
+      "nbytes": 655360,
+      "sha256": "cd7a840db4207d821314674795bca3c223d82c3eb3bf5abc96eb4e2d6d073c1b"
+    },
+    {
+      "name": "blk.3.attn_output.weight",
+      "type_id": 12,
+      "shape": [
+        6144,
+        2560
+      ],
+      "nbytes": 8847360,
+      "sha256": "f09f950589f7a00c73d8eb00836b71a120780c0dea16c637da65b25e584ccb8b"
+    },
+    {
+      "name": "blk.3.attn_q_norm.weight",
+      "type_id": 0,
+      "nbytes": 1024,
+      "sha256": "1a4d26002707c6ff0731776196ab83429605d605962421ca8b976c95239406b9"
+    },
+    {
+      "name": "blk.3.attn_k_norm.weight",
+      "type_id": 0,
+      "nbytes": 1024,
+      "sha256": "a1df2291a9c20903e471593daa81567dc2e45aa1e95649890d42df661bb0a335"
+    },
+    {
+      "name": "blk.3.indexer.q_norm.weight",
+      "type_id": 0,
+      "nbytes": 512,
+      "sha256": "5fbf994c6acea483aa8c7e53ed5e10fe8214b805b4e78723d3019c6a6f0a4441"
+    },
+    {
+      "name": "blk.3.indexer.k_norm.weight",
+      "type_id": 0,
+      "nbytes": 512,
+      "sha256": "a251770eb43e4c78d6103bad01ff65be045662dee5a52a65031035befa37b6d7"
+    }
+  ],
+  "native_library": {
+    "path": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+    "sha256": "9167ad6bb896b92b89d499eb444b973f06a74d6767cf02691b492004ac5c5da3"
+  },
+  "source_sha256": {
+    "benchmarks/benchmark_native_qsa_layer.py": "83b417ae36cccf120c7399c093c634c4cc78f6a3fe48975d356d69276addcbd3",
+    "tests/test_native_engine_qsa_layer.py": "198de0c5e0bf1b5c534edf9570933a2882aa063bfca5bd886416094a2f6c4135",
+    "mini_llm/native/__init__.py": "d408d3723a729aae64574d6a4a1f46841e15510a392198a25cc6bcf8dd992231",
+    "mini_llm/backend.py": "f602e80b4bc913866b2b2082ba14b78a7bf900b4b91e31ecd4b19146356ff39e",
+    "mini_llm/native_cpp/hyperconnection.cu": "18ea2683a4863272f99cffca404fa46aa4b8d99a071338c40e06e181a6799b46",
+    "mini_llm/native_cpp/qsa_layer_runtime.inc": "656848cb5f54fc0f08b177e70f9b930ab0741af8186e24662edd1c67db8dcbcd",
+    "mini_llm/native_cpp/qsa_projection.cu": "945d818a09ef2856abcbd4e74cefb8bc40047efe619b0c3512559bd90538497e",
+    "mini_llm/native_cpp/qsa_attention.h": "0495e8f8c35618643360a9aee736d5471640e77dc578e1c28561bf86cd5b2641",
+    "mini_llm/native_cpp/qsa_layer.cu": "0eb199943dd906717c290eaab9bccba7d74cd31173f8e50121a35fb650cff260",
+    "mini_llm/native_cpp/qsa_attention.cu": "e452f487d53ed5f43103e6757b5f5d6a36f842842002d2633c85898df4c49581",
+    "mini_llm/native_cpp/gguf_loader.h": "187e24bf80334896c459a512d974a94f8d5c57c387f3ad873c0bd3f6ec6968da",
+    "mini_llm/native_cpp/runtime.h": "18ab47d2e057fda9b847f6b9171357caa63bb162dd356cce8a81627d8b6f0bbc",
+    "mini_llm/native_cpp/CMakeLists.txt": "6fa625db2112cdba27ecd42f74f26e97e0314ffab5115d188d10b20a6089c8f1",
+    "mini_llm/native_cpp/qsa_selection.h": "fdcf4e8e4e7681f3a659cda997d98a8dc72ec568923c307703855cbe3e3d735a",
+    "mini_llm/native_cpp/qsa_frontend.h": "c31a70a3dc4e368cd14ce78ab966f164717c28eae8bfea4ce9ff31ba0fd84d35",
+    "mini_llm/native_cpp/qsa_projection.h": "bfe12a8f6b92fbe34d8dac8ee1810c98f4d8a1686549297ecc6abaff33466a0c",
+    "mini_llm/native_cpp/README.md": "eda89842b953c682e702798b54c9bdbc56d5265b877b67ab3ec4474158f7d26d",
+    "mini_llm/native_cpp/gguf_loader.cpp": "53c89686fd5ab2cd585dd5135a806b94bde78969d436122b6da442e63e5a1cb2",
+    "mini_llm/native_cpp/qsa_frontend.cu": "4522e80fbffc2d9696ac08d1df0470c82304a91e406eb2b99318dce81fa45d9e",
+    "mini_llm/native_cpp/qsa_selection.cu": "1547d9587ea4c927fe3ddb324e595233e8bb1bbd20ced1197b4b29620ff067aa",
+    "mini_llm/native_cpp/runtime.cpp": "7a47baba8d2e58dacc4c718b0f35eb882ab6cf320abfea985a54f1ed63e61b1e",
+    "mini_llm/native_cpp/hyperconnection.h": "11e9e07381f3b13acedb50dd3758d2088f3b36e39f882a701bcf7f1ae9d65a2c",
+    "mini_llm/external/qwen4exp_hoststate.py": "69ffc5cd239a16f77ecd745be3f0ba4a7b26488d70107eb67374264895e56caf",
+    "mini_llm/external/qwen4exp_qsa_block_graph.py": "eae7111c7746dd0ff5fc770a601c3473e5088e43bc4efbc8ca29f06358718a00",
+    "mini_llm/external/qwen4exp_model.py": "9a06465c4c5c8adccb03945d93dc3a461f8d1a49ea9c5be285af6aea14d42a45",
+    "mini_llm/external/qwen4exp_prompt_checkpoint.py": "647d9063b48afb68a5909ccf84fa6551b212e7a58d02ad30f17d43ed1360d9b2",
+    "mini_llm/external/qwen4exp_recurrent_chain_graph.py": "370b1f5efdcce0a790352b2cedee8cad33eb7d036ccd38b8106225e53e03b958",
+    "mini_llm/external/qwen4exp_token_graph.py": "4b637c76fe778875538082b66cd53ab126e5e2776896700c800bbe54f589d422",
+    "mini_llm/external/qwen4exp_prefill.py": "4cf790c08e31b0d9eeb00ce3b43e81dc4382d9dab17d18be0abb9b64190917b1",
+    "mini_llm/external/qwen4exp_pre_moe_graph.py": "596fd9797c7ab06fae9456a7879c650e2a877cf25355e490687bdb332d7827c9",
+    "mini_llm/external/qwen4exp_mixer.py": "036f4b4ba50868559423f88eabf4b95b2c5eb852fc3343b509ca33f3957a4aed",
+    "mini_llm/external/qwen4exp_attention.py": "1d12c3b0895f3a4989715bdc4b982a052b21e20728355ba4f8beacfc67b9d9ca",
+    "mini_llm/external/qwen4exp_recurrent_block_graph.py": "f910bf6c2cb8ed8e8e77e7ad843056a7a92d9c59df4664c3ad916c159ea7d0b4",
+    "mini_llm/external/qwen4exp_hyperconnection.py": "fb7f8932a95a2db3f989d574262590486df5ac6f3684cfc046fbdb9caa80ee33",
+    "mini_llm/external/qwen4exp_weights.py": "dd90e4b4a96c947f5db3fb0e4749b5af49522d4fd4a4a76b0b9b70521225d6cc",
+    "mini_llm/external/qwen4exp_qsa_frontend_graph.py": "a235478855d9d7b2390417b7720fdb22f64f00343f38b6816fddf8461a4b4e65",
+    "mini_llm/external/qwen4exp_chat.py": "097772dd3eb7b6a614855cd8fb36c9fd7a5339474e7d15466de30a0bd88f66fe",
+    "mini_llm/external/qwen4exp_ple.py": "0e07f774998dc7e6a5faa52fc6e708e1124e97e57689577e53170d70fe9693d7",
+    "mini_llm/external/qwen4exp_gguf.py": "a0431952047f09936377a7b87a6b72d653cd5fed74fb61a88ff76cff05397644",
+    "mini_llm/ops/quantized_weight.py": "db59cd28ccbeceaa6da2a4c18216caa9117b545367e00502ff208c71e2a35b6b",
+    "mini_llm/ops/rmsnorm_inference.py": "9139ec2b312f16087ab370621ebf2f4c5f9679d4d6812df768251c8797212f61",
+    "mini_llm/ops/rotary_inference.py": "0c24c3c71be582a908b9f4f57a84da57c8a00266c5f94bc16e9674336839899f"
+  },
+  "source_files_changed_during_run": [],
+  "results": [
+    {
+      "n": 128,
+      "capacity": 4096,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        0.448575,
+        0.447945,
+        0.446104
+      ],
+      "reference_wall_ms": [
+        4.049866,
+        4.035461,
+        4.035692
+      ],
+      "native_median_ms": 0.447945,
+      "reference_median_ms": 4.035692,
+      "max_output_abs": 1.3783574104309082e-07
+    },
+    {
+      "n": 2051,
+      "capacity": 4096,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.74433,
+        2.746523,
+        2.746716
+      ],
+      "reference_wall_ms": [
+        21.443793,
+        20.777206,
+        20.783384
+      ],
+      "native_median_ms": 2.746523,
+      "reference_median_ms": 20.783384,
+      "max_output_abs": 1.043081283569336e-07
+    },
+    {
+      "n": 2052,
+      "capacity": 4096,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.752936,
+        2.749894,
+        2.760152
+      ],
+      "reference_wall_ms": [
+        21.057163,
+        21.335163,
+        20.958771
+      ],
+      "native_median_ms": 2.752936,
+      "reference_median_ms": 21.057163,
+      "max_output_abs": 9.685754776000977e-08
+    },
+    {
+      "n": 2053,
+      "capacity": 4096,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.746932,
+        2.756786,
+        3.239475
+      ],
+      "reference_wall_ms": [
+        20.776316,
+        20.600275,
+        20.824102
+      ],
+      "native_median_ms": 2.756786,
+      "reference_median_ms": 20.776316,
+      "max_output_abs": 1.1920928955078125e-07
+    },
+    {
+      "n": 4096,
+      "capacity": 4096,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        4.003604,
+        4.001534,
+        4.004003
+      ],
+      "reference_wall_ms": [
+        39.992757,
+        39.456187,
+        40.09012
+      ],
+      "native_median_ms": 4.003604,
+      "reference_median_ms": 39.992757,
+      "max_output_abs": 1.1920928955078125e-07
+    },
+    {
+      "n": 8192,
+      "capacity": 16384,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        6.021891,
+        6.030836,
+        6.031735
+      ],
+      "reference_wall_ms": [
+        76.267253,
+        75.873553,
+        76.444184
+      ],
+      "native_median_ms": 6.030836,
+      "reference_median_ms": 76.267253,
+      "max_output_abs": 9.220093488693237e-08
+    },
+    {
+      "n": 16384,
+      "capacity": 16384,
+      "policy": "ggml_cpu",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        9.554288,
+        10.066784,
+        10.150902
+      ],
+      "reference_wall_ms": [
+        149.774928,
+        148.769798,
+        149.220433
+      ],
+      "native_median_ms": 10.066784,
+      "reference_median_ms": 149.220433,
+      "max_output_abs": 1.043081283569336e-07
+    },
+    {
+      "n": 128,
+      "capacity": 4096,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        0.444679,
+        0.44692,
+        0.450517
+      ],
+      "reference_wall_ms": [
+        4.032484,
+        4.049176,
+        4.029973
+      ],
+      "native_median_ms": 0.44692,
+      "reference_median_ms": 4.032484,
+      "max_output_abs": 1.3783574104309082e-07
+    },
+    {
+      "n": 2051,
+      "capacity": 4096,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.743362,
+        2.743579,
+        2.743305
+      ],
+      "reference_wall_ms": [
+        20.641207,
+        20.359401,
+        20.354635
+      ],
+      "native_median_ms": 2.743362,
+      "reference_median_ms": 20.359401,
+      "max_output_abs": 1.043081283569336e-07
+    },
+    {
+      "n": 2052,
+      "capacity": 4096,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.747198,
+        3.243779,
+        2.749126
+      ],
+      "reference_wall_ms": [
+        20.622676,
+        20.382916,
+        20.678315
+      ],
+      "native_median_ms": 2.749126,
+      "reference_median_ms": 20.622676,
+      "max_output_abs": 9.685754776000977e-08
+    },
+    {
+      "n": 2053,
+      "capacity": 4096,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        2.750218,
+        2.755897,
+        2.749169
+      ],
+      "reference_wall_ms": [
+        20.397064,
+        21.033255,
+        20.62634
+      ],
+      "native_median_ms": 2.750218,
+      "reference_median_ms": 20.62634,
+      "max_output_abs": 1.1920928955078125e-07
+    },
+    {
+      "n": 4096,
+      "capacity": 4096,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        3.990815,
+        4.546536,
+        3.992357
+      ],
+      "reference_wall_ms": [
+        37.687144,
+        37.626248,
+        37.670677
+      ],
+      "native_median_ms": 3.992357,
+      "reference_median_ms": 37.670677,
+      "max_output_abs": 1.1920928955078125e-07
+    },
+    {
+      "n": 8192,
+      "capacity": 16384,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        6.438462,
+        6.44168,
+        5.985118
+      ],
+      "reference_wall_ms": [
+        71.936996,
+        71.95844,
+        71.621412
+      ],
+      "native_median_ms": 6.438462,
+      "reference_median_ms": 71.936996,
+      "max_output_abs": 1.043081283569336e-07
+    },
+    {
+      "n": 16384,
+      "capacity": 16384,
+      "policy": "strata",
+      "validation": "passed every trial including warmups",
+      "native_wall_ms": [
+        9.490295,
+        9.491425,
+        9.491535
+      ],
+      "reference_wall_ms": [
+        140.250682,
+        141.102954,
+        139.929115
+      ],
+      "native_median_ms": 9.491425,
+      "reference_median_ms": 140.250682,
+      "max_output_abs": 1.043081283569336e-07
+    }
+  ],
+  "speedup_claim": null,
+  "environment": {
+    "MINI_LLM_BACKEND": "cupy",
+    "MINI_LLM_QSA_NATIVE_SELECT": "0",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "NVIDIA_TF32_OVERRIDE": "0"
+  }
+}

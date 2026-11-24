@@ -27,16 +27,7 @@
 #include "iq3xxs_cpu_pair.h"
 #include "iq4_cpu_vnni.h"
 
-using Quantize = void (*)(const float *, void *, int64_t);
-using Dot = void (*)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
-
-struct Projection {
-    const uint8_t *weight;
-    size_t stride;
-    int qtype; // GGML_TYPE_Q8_0=8 or GGML_TYPE_Q8_K=15
-    Quantize quantize;
-    Dot dot;
-};
+#include "ggml_packed_cpu.h"
 
 static bool valid(const Projection &p, int k) {
     return p.weight && p.quantize && p.dot && p.stride && k > 0 &&
@@ -56,8 +47,6 @@ static void rows(const Projection &p, int n, int k, const void *q, float *out) {
 
 // Original bounded row-phase scheduler. All workers cross every phase barrier;
 // descriptors/scratch cannot be reused while a worker still references them.
-struct PoolExpert { Projection gate, up, down; };
-
 class RowPool {
 public:
     const int d, f, capacity;

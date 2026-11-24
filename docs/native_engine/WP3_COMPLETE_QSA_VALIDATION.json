@@ -1,0 +1,285 @@
+{
+  "checkpoint_gate": {
+    "summary": "24 passed, 19 deselected in 34.08s",
+    "cases": [
+      {
+        "layer": 3,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.2351741790771484e-07,
+        "device_bytes": 51206696,
+        "pinned_bytes": 16,
+        "peak_bytes": 51206712
+      },
+      {
+        "layer": 7,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 3.5762786865234375e-07,
+        "device_bytes": 54882856,
+        "pinned_bytes": 16,
+        "peak_bytes": 54882872
+      },
+      {
+        "layer": 11,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 56070696,
+        "pinned_bytes": 16,
+        "peak_bytes": 56070712
+      },
+      {
+        "layer": 15,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.0489096641540527e-07,
+        "device_bytes": 55261736,
+        "pinned_bytes": 16,
+        "peak_bytes": 55261752
+      },
+      {
+        "layer": 19,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 60002856,
+        "pinned_bytes": 16,
+        "peak_bytes": 60002872
+      },
+      {
+        "layer": 23,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.384185791015625e-07,
+        "device_bytes": 60176936,
+        "pinned_bytes": 16,
+        "peak_bytes": 60176952
+      },
+      {
+        "layer": 27,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.3096799850463867e-07,
+        "device_bytes": 60176936,
+        "pinned_bytes": 16,
+        "peak_bytes": 60176952
+      },
+      {
+        "layer": 31,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 1.9371509552001953e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 35,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 39,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 3.501772880554199e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 43,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 2.3469328880310059e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 47,
+        "policy": "ggml_cpu",
+        "steps": 9,
+        "max_output_abs": 1.6391277313232422e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 3,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.2351741790771484e-07,
+        "device_bytes": 51206696,
+        "pinned_bytes": 16,
+        "peak_bytes": 51206712
+      },
+      {
+        "layer": 7,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 3.5762786865234375e-07,
+        "device_bytes": 54882856,
+        "pinned_bytes": 16,
+        "peak_bytes": 54882872
+      },
+      {
+        "layer": 11,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 56070696,
+        "pinned_bytes": 16,
+        "peak_bytes": 56070712
+      },
+      {
+        "layer": 15,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.0489096641540527e-07,
+        "device_bytes": 55261736,
+        "pinned_bytes": 16,
+        "peak_bytes": 55261752
+      },
+      {
+        "layer": 19,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 60002856,
+        "pinned_bytes": 16,
+        "peak_bytes": 60002872
+      },
+      {
+        "layer": 23,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.384185791015625e-07,
+        "device_bytes": 60176936,
+        "pinned_bytes": 16,
+        "peak_bytes": 60176952
+      },
+      {
+        "layer": 27,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.3096799850463867e-07,
+        "device_bytes": 60176936,
+        "pinned_bytes": 16,
+        "peak_bytes": 60176952
+      },
+      {
+        "layer": 31,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 1.9371509552001953e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 35,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.1606683731079102e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 39,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 3.501772880554199e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 43,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 2.3469328880310059e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      },
+      {
+        "layer": 47,
+        "policy": "strata",
+        "steps": 9,
+        "max_output_abs": 1.6391277313232422e-07,
+        "device_bytes": 64354856,
+        "pinned_bytes": 16,
+        "peak_bytes": 64354872
+      }
+    ],
+    "raw_log": "\nWP3_LAYER_CHECKPOINT={\"layer\": 3, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.2351741790771484e-07, \"device_bytes\": 51206696, \"pinned_bytes\": 16, \"peak_bytes\": 51206712}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 7, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 3.5762786865234375e-07, \"device_bytes\": 54882856, \"pinned_bytes\": 16, \"peak_bytes\": 54882872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 11, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 56070696, \"pinned_bytes\": 16, \"peak_bytes\": 56070712}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 15, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.0489096641540527e-07, \"device_bytes\": 55261736, \"pinned_bytes\": 16, \"peak_bytes\": 55261752}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 19, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 60002856, \"pinned_bytes\": 16, \"peak_bytes\": 60002872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 23, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.384185791015625e-07, \"device_bytes\": 60176936, \"pinned_bytes\": 16, \"peak_bytes\": 60176952}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 27, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.3096799850463867e-07, \"device_bytes\": 60176936, \"pinned_bytes\": 16, \"peak_bytes\": 60176952}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 31, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 1.9371509552001953e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 35, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 39, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 3.501772880554199e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 43, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 2.3469328880310059e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 47, \"policy\": \"ggml_cpu\", \"steps\": 9, \"max_output_abs\": 1.6391277313232422e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 3, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.2351741790771484e-07, \"device_bytes\": 51206696, \"pinned_bytes\": 16, \"peak_bytes\": 51206712}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 7, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 3.5762786865234375e-07, \"device_bytes\": 54882856, \"pinned_bytes\": 16, \"peak_bytes\": 54882872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 11, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 56070696, \"pinned_bytes\": 16, \"peak_bytes\": 56070712}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 15, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.0489096641540527e-07, \"device_bytes\": 55261736, \"pinned_bytes\": 16, \"peak_bytes\": 55261752}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 19, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 60002856, \"pinned_bytes\": 16, \"peak_bytes\": 60002872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 23, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.384185791015625e-07, \"device_bytes\": 60176936, \"pinned_bytes\": 16, \"peak_bytes\": 60176952}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 27, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.3096799850463867e-07, \"device_bytes\": 60176936, \"pinned_bytes\": 16, \"peak_bytes\": 60176952}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 31, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 1.9371509552001953e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 35, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.1606683731079102e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 39, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 3.501772880554199e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 43, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 2.3469328880310059e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\nWP3_LAYER_CHECKPOINT={\"layer\": 47, \"policy\": \"strata\", \"steps\": 9, \"max_output_abs\": 1.6391277313232422e-07, \"device_bytes\": 64354856, \"pinned_bytes\": 16, \"peak_bytes\": 64354872}\n.\n24 passed, 19 deselected in 34.08s\n"
+  },
+  "native_regression": {
+    "summary": "396 passed, 3 skipped in 52.22s",
+    "raw_log": "........................................................................ [ 18%]\n........................................................................ [ 36%]\n.....................................s.................................. [ 54%]\n..............................................................s......... [ 72%]\n............................................s........................... [ 90%]\n.......................................                                  [100%]\n396 passed, 3 skipped in 52.22s\n"
+  },
+  "source_sha256": {
+    "benchmarks/benchmark_native_qsa_layer.py": "83b417ae36cccf120c7399c093c634c4cc78f6a3fe48975d356d69276addcbd3",
+    "tests/test_native_engine_qsa_layer.py": "198de0c5e0bf1b5c534edf9570933a2882aa063bfca5bd886416094a2f6c4135",
+    "mini_llm/native/__init__.py": "d408d3723a729aae64574d6a4a1f46841e15510a392198a25cc6bcf8dd992231",
+    "mini_llm/backend.py": "f602e80b4bc913866b2b2082ba14b78a7bf900b4b91e31ecd4b19146356ff39e",
+    "mini_llm/native_cpp/hyperconnection.cu": "18ea2683a4863272f99cffca404fa46aa4b8d99a071338c40e06e181a6799b46",
+    "mini_llm/native_cpp/qsa_layer_runtime.inc": "656848cb5f54fc0f08b177e70f9b930ab0741af8186e24662edd1c67db8dcbcd",
+    "mini_llm/native_cpp/qsa_projection.cu": "945d818a09ef2856abcbd4e74cefb8bc40047efe619b0c3512559bd90538497e",
+    "mini_llm/native_cpp/qsa_attention.h": "0495e8f8c35618643360a9aee736d5471640e77dc578e1c28561bf86cd5b2641",
+    "mini_llm/native_cpp/qsa_layer.cu": "0eb199943dd906717c290eaab9bccba7d74cd31173f8e50121a35fb650cff260",
+    "mini_llm/native_cpp/qsa_attention.cu": "e452f487d53ed5f43103e6757b5f5d6a36f842842002d2633c85898df4c49581",
+    "mini_llm/native_cpp/gguf_loader.h": "187e24bf80334896c459a512d974a94f8d5c57c387f3ad873c0bd3f6ec6968da",
+    "mini_llm/native_cpp/runtime.h": "18ab47d2e057fda9b847f6b9171357caa63bb162dd356cce8a81627d8b6f0bbc",
+    "mini_llm/native_cpp/CMakeLists.txt": "6fa625db2112cdba27ecd42f74f26e97e0314ffab5115d188d10b20a6089c8f1",
+    "mini_llm/native_cpp/qsa_selection.h": "fdcf4e8e4e7681f3a659cda997d98a8dc72ec568923c307703855cbe3e3d735a",
+    "mini_llm/native_cpp/qsa_frontend.h": "c31a70a3dc4e368cd14ce78ab966f164717c28eae8bfea4ce9ff31ba0fd84d35",
+    "mini_llm/native_cpp/qsa_projection.h": "bfe12a8f6b92fbe34d8dac8ee1810c98f4d8a1686549297ecc6abaff33466a0c",
+    "mini_llm/native_cpp/README.md": "eda89842b953c682e702798b54c9bdbc56d5265b877b67ab3ec4474158f7d26d",
+    "mini_llm/native_cpp/gguf_loader.cpp": "53c89686fd5ab2cd585dd5135a806b94bde78969d436122b6da442e63e5a1cb2",
+    "mini_llm/native_cpp/qsa_frontend.cu": "4522e80fbffc2d9696ac08d1df0470c82304a91e406eb2b99318dce81fa45d9e",
+    "mini_llm/native_cpp/qsa_selection.cu": "1547d9587ea4c927fe3ddb324e595233e8bb1bbd20ced1197b4b29620ff067aa",
+    "mini_llm/native_cpp/runtime.cpp": "7a47baba8d2e58dacc4c718b0f35eb882ab6cf320abfea985a54f1ed63e61b1e",
+    "mini_llm/native_cpp/hyperconnection.h": "11e9e07381f3b13acedb50dd3758d2088f3b36e39f882a701bcf7f1ae9d65a2c",
+    "mini_llm/external/qwen4exp_hoststate.py": "69ffc5cd239a16f77ecd745be3f0ba4a7b26488d70107eb67374264895e56caf",
+    "mini_llm/external/qwen4exp_qsa_block_graph.py": "eae7111c7746dd0ff5fc770a601c3473e5088e43bc4efbc8ca29f06358718a00",
+    "mini_llm/external/qwen4exp_model.py": "9a06465c4c5c8adccb03945d93dc3a461f8d1a49ea9c5be285af6aea14d42a45",
+    "mini_llm/external/qwen4exp_prompt_checkpoint.py": "647d9063b48afb68a5909ccf84fa6551b212e7a58d02ad30f17d43ed1360d9b2",
+    "mini_llm/external/qwen4exp_recurrent_chain_graph.py": "370b1f5efdcce0a790352b2cedee8cad33eb7d036ccd38b8106225e53e03b958",
+    "mini_llm/external/qwen4exp_token_graph.py": "4b637c76fe778875538082b66cd53ab126e5e2776896700c800bbe54f589d422",
+    "mini_llm/external/qwen4exp_prefill.py": "4cf790c08e31b0d9eeb00ce3b43e81dc4382d9dab17d18be0abb9b64190917b1",
+    "mini_llm/external/qwen4exp_pre_moe_graph.py": "596fd9797c7ab06fae9456a7879c650e2a877cf25355e490687bdb332d7827c9",
+    "mini_llm/external/qwen4exp_mixer.py": "036f4b4ba50868559423f88eabf4b95b2c5eb852fc3343b509ca33f3957a4aed",
+    "mini_llm/external/qwen4exp_attention.py": "1d12c3b0895f3a4989715bdc4b982a052b21e20728355ba4f8beacfc67b9d9ca",
+    "mini_llm/external/qwen4exp_recurrent_block_graph.py": "f910bf6c2cb8ed8e8e77e7ad843056a7a92d9c59df4664c3ad916c159ea7d0b4",
+    "mini_llm/external/qwen4exp_hyperconnection.py": "fb7f8932a95a2db3f989d574262590486df5ac6f3684cfc046fbdb9caa80ee33",
+    "mini_llm/external/qwen4exp_weights.py": "dd90e4b4a96c947f5db3fb0e4749b5af49522d4fd4a4a76b0b9b70521225d6cc",
+    "mini_llm/external/qwen4exp_qsa_frontend_graph.py": "a235478855d9d7b2390417b7720fdb22f64f00343f38b6816fddf8461a4b4e65",
+    "mini_llm/external/qwen4exp_chat.py": "097772dd3eb7b6a614855cd8fb36c9fd7a5339474e7d15466de30a0bd88f66fe",
+    "mini_llm/external/qwen4exp_ple.py": "0e07f774998dc7e6a5faa52fc6e708e1124e97e57689577e53170d70fe9693d7",
+    "mini_llm/external/qwen4exp_gguf.py": "a0431952047f09936377a7b87a6b72d653cd5fed74fb61a88ff76cff05397644",
+    "mini_llm/ops/quantized_weight.py": "db59cd28ccbeceaa6da2a4c18216caa9117b545367e00502ff208c71e2a35b6b",
+    "mini_llm/ops/rmsnorm_inference.py": "9139ec2b312f16087ab370621ebf2f4c5f9679d4d6812df768251c8797212f61",
+    "mini_llm/ops/rotary_inference.py": "0c24c3c71be582a908b9f4f57a84da57c8a00266c5f94bc16e9674336839899f"
+  },
+  "helper_sha256": {
+    "tests/test_native_engine_qsa.py": "fc3a311146576b3e7d5449c4afb6cf0d83af526b925cb363b6bbacabb69b5715",
+    "tests/test_native_engine_qsa_projection.py": "5305e918fbf89b4b770a22b1ae1f0c8ba0b9f9df4dbb9148a33210ccdf960932",
+    "tests/test_native_engine_qsa_hidden_frontend.py": "001c554a2cef046c85d2bb84daad756794c9a85f93e8af28dd9a9721f698058d",
+    "tests/test_0201_gguf_store.py": "a89abe76369200bc812a0522510f254dc7bf4222993a7b3854908e4dbd1bff29"
+  },
+  "native_library": {
+    "path": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+    "sha256": "9167ad6bb896b92b89d499eb444b973f06a74d6767cf02691b492004ac5c5da3"
+  },
+  "benchmark_json_sha256": "2c7b109795cbda799c96b39c84f63df1b22b6a121845e719ab7f2f7287d980d0",
+  "sources_unchanged_after_regression": true,
+  "gate": "requested validation and benchmark passed; parent owns WP3 acceptance"
+}

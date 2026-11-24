@@ -365,6 +365,7 @@
     ],
     "meaning": "Existing build measured, not rebuilt; current hashes do not retroactively identify historical runs"
   },
+  "checkpoint_hash_evidence": "docs/native_engine/WP0_CHECKPOINT_HASHES.json",
   "checkpoint_shards": [
     {
       "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",

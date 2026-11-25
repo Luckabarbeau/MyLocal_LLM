@@ -19,6 +19,7 @@ an explicit value in the parent environment still wins.
 """
 import argparse
 import cProfile
+from contextlib import ExitStack, closing, nullcontext
 import json
 import math
 import os
@@ -37,6 +38,12 @@ MODEL = ('/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/'
 GGML_CPU = ('/home/lucka/Documents/my_local_LLM/qwen4exp-references/'
             'llama-no-prefetch/build-cpu/bin/libggml-cpu.so')
 GiB = 1024**3
+
+TRAJECTORY_DIAGNOSTICS = (
+    'All-48 conditioned operator checks passed at roundoff; independent strict '
+    'whole-trajectory diagnostics remain failed (WP7/WP8_NATIVE_CHAT). '
+    'Different arithmetic policies can produce different logits and sampled trajectories; '
+    'no model-quality or competitive-performance acceptance is claimed.')
 
 # 0321-control settings from scripts/probe_0302_decode_configuration.py plus
 # the 0327/0329 exact warp-router flags. Losing/quality-rejected arms stay off.
@@ -198,7 +205,7 @@ async function send(){
        full+=d.content;el.innerHTML=esc(full)+'<span class="cur">\\u258d</span>';}
      }}}
   }
- }catch(e){if(e.name==='AbortError')err='stopped by client (the server finishes the current turn; New chat keeps things aligned)';else err='network: '+esc(e.message||String(e));}
+ }catch(e){if(e.name==='AbortError')err='stopped by client (generation is closed; the next request validates or resets its prefix)';else err='network: '+esc(e.message||String(e));}
  $('#stop').disabled=true;
  el.innerHTML=esc(full);
  if(full&&!err)history.push({role:'assistant',content:full});
@@ -267,8 +274,45 @@ class Service:
     def prepare(self, messages):
         self.session.prepare(messages)
 
+    @property
+    def native(self):
+        return self.config.get('backend') == 'native'
+
+    def stream(self, messages, limit, *, temperature, top_p, top_k, raw_response):
+        if self.native:
+            output = self.session.stream(
+                messages, limit, temperature=temperature, top_p=top_p, top_k=top_k,
+                thinking=self.config.get('thinking', True),
+                reasoning_effort=self.config.get('reasoning_effort'))
+        else:
+            from mini_llm.generation import sample_token
+            self.prepare(messages)
+            def sampler(logits):
+                return sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k)
+            output = self.session.generate(messages[-1]['content'], limit, sampler=sampler,
+                                           raw_response=raw_response)
+        with closing(output):
+            yield from output
+
+    def reset_on_error(self):
+        # NativeChatSession already invalidates interrupted/error paths and drains
+        # its worker. Do not reset outside that request's exclusive ownership.
+        if not self.native:
+            self.session.reset(reason='generation_error')
+
     def record(self, request_id, started):
         stats = dict(self.session.last_stats)
+        if self.native:
+            stats.update(generated_tokens=stats.get('sampled_tokens', 0),
+                         stopped=stats.get('termination') == 'eos',
+                         backend='native', arithmetic_policy=self.config['arithmetic_policy'])
+            stats.update(request_id=request_id, total_seconds=time.perf_counter() - started)
+            stats['cache'] = dict(committed_tokens=len(self.session.committed_tokens),
+                                  reused_tokens=stats.get('reused_tokens', 0),
+                                  reset_reason=stats.get('reset_reason'),
+                                  require_reset=self.session.require_reset)
+            self.last_request = stats
+            return stats
         stats.update(request_id=request_id, total_seconds=time.perf_counter() - started)
         stats['cache'] = dict(total_tokens=stats['prompt_tokens'],
                               new_tokens=stats['new_prompt_tokens'], reused_tokens=stats['reused_tokens'],
@@ -281,11 +325,24 @@ class Service:
         # Only sampled on an explicit metrics request, never in the token loop.
         with self.lock:
             return {'config': self.config, 'mylocal_stats': dict(self.last_request),
-                    'experts': self.session.model.expert_executor.statistics()}
+                    'experts': (None if self.native else
+                                self.session.model.expert_executor.statistics())}
 
 
-def main():
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--backend', choices=('python', 'native'), default='python')
+    parser.add_argument('--native-library', type=Path)
+    parser.add_argument('--native-bridge-library', type=Path)
+    parser.add_argument('--native-ggml-library', type=Path)
+    for name in ('budget', 'dense-budget', 'mapped-budget', 'host-budget'):
+        parser.add_argument(f'--native-{name}-gib', type=float,
+                            help='Explicit native allocation limit in GiB (required for native)')
+    parser.add_argument('--native-page-size', type=int, default=16)
+    parser.add_argument('--native-physical-pages', type=int, default=2)
+    parser.add_argument('--native-threads', type=int, default=4)
+    parser.add_argument('--native-seed', type=int, default=0)
+    parser.add_argument('--native-queue-capacity', type=int, default=1)
     parser.add_argument('--model', default=MODEL, help='Original GGUF shard or shard directory')
     parser.add_argument('--model-id', default='qwen3.8-flash-next-iq3_s')
     parser.add_argument('--host', default='127.0.0.1')
@@ -324,6 +381,418 @@ def main():
                              'adaptive retains synchronous admissions and disables those plans')
     parser.add_argument('--no-warmup', action='store_true',
                         help='Skip the bounded decode warmup turn (cold first responses are slow)')
+    return parser
+
+
+def make_handler(service, args, profile_directory=None):
+    """Shared HTTP protocol for both owners; construction never opens a model."""
+    model_id = args.model_id
+    service_api_key = args.api_key
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        timeout = 5 if service.native else None
+        seen_noisy = set()
+
+        def log_message(self, format, *values):
+            line = format % values
+            if any(needle in line for needle in ('/props', 'sw.js', 'workbox-',
+                                                 '/models/sse', 'favicon')):
+                parts = line.split(' ')
+                key = parts[1].split('?')[0] if len(parts) > 1 else line
+                if key in self.seen_noisy:
+                    return
+                self.seen_noisy.add(key)
+                sys.stderr.write(
+                    f'[{time.strftime("%H:%M:%S")}] {line}  <- stale PWA/service-worker '
+                    'request from an older server on this port; a self-destruct worker '
+                    'is served now, repeats are suppressed\n')
+                return
+            sys.stderr.write(f'[{time.strftime("%H:%M:%S")}] {format % values}\n')
+
+        def _write(self, body):
+            try:
+                self.wfile.write(body)
+                return True
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+                return False
+
+        def _json(self, payload, status=200):
+            body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            try:
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self._write(body)
+            except OSError:
+                self.close_connection = True
+
+        def _html(self, page):
+            body = page.encode('utf-8')
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self._write(body)
+            except OSError:
+                self.close_connection = True
+
+        def _sw(self):
+            # Browsers fetch /sw.js directly (not through the stale worker),
+            # so this reliably replaces it on the next navigation.
+            body = SW_JS.encode('utf-8')
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+                self.send_header('Service-Worker-Allowed', '/')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self._write(body)
+            except OSError:
+                self.close_connection = True
+
+        def _error(self, message, status=400, code='invalid_request_error'):
+            self._json({'error': {'message': message, 'type': code}}, status)
+
+        def _authenticated(self):
+            if not service_api_key:
+                return True
+            header = self.headers.get('Authorization', '')
+            return header == f'Bearer {service_api_key}'
+
+        def do_GET(self):
+            route = self.path.split('?', 1)[0]
+            if route == '/sw.js':
+                self._sw()
+                return
+            if route in ('/', '/ui', '/webui'):
+                # The page itself is public; its API calls still carry the key.
+                self._html(WEBUI_HTML)
+                return
+            if not self._authenticated():
+                self._error('Invalid API key', 401, 'authentication_error')
+                return
+            if self.path == '/health':
+                self._json({'status': 'ok', 'model': model_id, 'loaded': True,
+                            'max_context': args.context, 'service': 'mylocal_llm_qwen4exp',
+                            'config': service.config})
+            elif self.path == '/metrics':
+                self._json(service.metrics())
+            elif self.path in ('/v1/models', '/v1/models/'):
+                self._json({'object': 'list', 'data': [{
+                    'id': model_id, 'object': 'model', 'owned_by': 'mylocal_llm',
+                    'status': {'value': 'loaded'}, 'meta': {'n_ctx': args.context}}]})
+            else:
+                self._error('Unknown endpoint', 404, 'not_found_error')
+
+        def do_POST(self):
+            if profile_directory is None:
+                return self._do_POST()
+            profiler = cProfile.Profile()
+            try:
+                return profiler.runcall(self._do_POST)
+            finally:
+                profiler.dump_stats(str(profile_directory / f'request-{uuid.uuid4().hex}.pstats'))
+
+        def _do_POST(self):
+            if not self._authenticated():
+                self._error('Invalid API key', 401, 'authentication_error')
+                return
+            if self.path not in ('/v1/chat/completions', '/v1/chat/completions/'):
+                self._error('Unknown endpoint', 404, 'not_found_error')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if length < 1 or length > 32 * 1024 * 1024:
+                    raise ValueError('Request body must be 1B-32MiB')
+                request = json.loads(self.rfile.read(length))
+                if not isinstance(request, dict):
+                    raise ValueError('Request body must be an object')
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._error(f'Invalid request body: {exc}')
+                return
+            messages = request.get('messages')
+            if not isinstance(messages, list) or not messages:
+                self._error('messages must be a nonempty array')
+                return
+            roles = {'system', 'user', 'assistant'}
+            for message in messages:
+                if (not isinstance(message, dict) or message.get('role') not in roles
+                        or not isinstance(message.get('content'), str)
+                        or ('reasoning_content' in message and
+                            not isinstance(message['reasoning_content'], str))):
+                    self._error('Only string-content system/user/assistant messages are supported')
+                    return
+            if messages[-1]['role'] != 'user':
+                self._error('The last message must have role user')
+                return
+            value = request.get('max_completion_tokens',
+                                 request.get('max_tokens', args.max_new_tokens))
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                self._error('max_tokens / max_completion_tokens must be a positive integer')
+                return
+            requested = request.get('model')
+            if isinstance(requested, str) and requested and requested != model_id:
+                print(f'[note] requested model {requested!r} is served as {model_id!r}',
+                      file=sys.stderr, flush=True)
+            temperature = request.get('temperature', 0.0)
+            top_p = request.get('top_p', 1.0)
+            top_k = request.get('top_k')
+            try:
+                temperature = float(temperature)
+                top_p = float(top_p)
+                top_k = None if top_k is None else int(top_k)
+            except (TypeError, ValueError):
+                self._error('Invalid sampling parameters')
+                return
+            if (not math.isfinite(temperature) or not math.isfinite(top_p) or
+                    temperature < 0 or not 0 < top_p <= 1 or (top_k is not None and top_k < 1)):
+                self._error('Invalid sampling parameters')
+                return
+
+
+            created = int(time.time())
+            completion = f'chatcmpl-{uuid.uuid4().hex[:24]}'
+            t0 = time.perf_counter()
+            print(f'[request] accepted: {len(messages)} messages, max_tokens {value}, '
+                  f'temperature {temperature} (prefill starts now; slow prompts show '
+                  f'their speed at the [ttft] and [turn] lines)', file=sys.stderr, flush=True)
+
+            def turn():
+                output = service.stream(messages, value, temperature=temperature,
+                                        top_p=top_p, top_k=top_k,
+                                        raw_response=request.get('stream') is True)
+                with closing(output):
+                    yield from timed_pieces(output)
+
+            def timed_pieces(output):
+                first = True
+                for piece in output:
+                    if first:
+                        first = False
+                        waited = time.perf_counter() - t0
+                        print(f'[ttft] first token after {waited:.2f}s '
+                              f'(prompt prefill + first forward)', file=sys.stderr, flush=True)
+                    yield piece
+
+            if request.get('stream') is not True:
+                try:
+                    with service.lock:
+                        with closing(turn()) as output:
+                            text = ''.join(output)
+                        stats = service.record(completion, t0)
+                        assistant = ({'content': text} if service.native else
+                                     service.session.messages[-1]
+                                     if service.session.messages
+                                     and service.session.messages[-1]['role'] == 'assistant'
+                                     else {})
+                except ValueError as exc:
+                    self._error(str(exc))
+                    return
+                except Exception as exc:
+                    with service.lock:
+                        service.reset_on_error()
+                    self._error(f'Generation failed: {exc}', 500, 'server_error')
+                    return
+                answer = assistant.get('content', '')
+                reasoning = assistant.get('reasoning_content', '')
+                message = {'role': 'assistant', 'content': answer}
+                if reasoning:
+                    message['reasoning_content'] = reasoning
+                self._json({
+                    'id': completion, 'object': 'chat.completion', 'created': created,
+                    'model': model_id, 'request_id': completion, 'mylocal_stats': stats,
+                    'choices': [{'index': 0, 'message': message,
+                                 'finish_reason': 'stop' if stats.get('stopped') else 'length'}],
+                    'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
+                              'completion_tokens': stats.get('generated_tokens', 0),
+                              'total_tokens': stats.get('prompt_tokens', 0)
+                                              + stats.get('generated_tokens', 0)},
+                })
+                self._report(stats)
+                return
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.close_connection = True
+
+            def chunk(delta, finish=None):
+                payload = {'id': completion, 'object': 'chat.completion.chunk',
+                           'created': created, 'model': model_id,
+                           'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
+                if not self._write(b'data: ' + json.dumps(payload, ensure_ascii=False).encode()
+                                   + b'\n\n'):
+                    raise BrokenPipeError('client disconnected')
+                try:
+                    self.wfile.flush()
+                except OSError:
+                    raise BrokenPipeError('client disconnected')
+
+            stats = {}
+            try:
+                with service.lock:
+                    chunk({'role': 'assistant', 'content': ''})
+                    with closing(turn()) as output:
+                        try:
+                            for piece in output:
+                                chunk({'content': piece})
+                        finally:
+                            # Close/drain before another request can take the owner.
+                            output.close()
+                            if service.native and service.session.last_stats:
+                                stats = service.record(completion, t0)
+                    stats = service.record(completion, t0)
+                    chunk({}, 'stop' if stats.get('stopped') else 'length')
+                    self._write(b'data: ' + json.dumps({
+                        'id': completion, 'object': 'chat.completion.chunk',
+                        'created': created, 'model': model_id, 'choices': [],
+                        'request_id': completion, 'mylocal_stats': stats,
+                        'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
+                                  'completion_tokens': stats.get('generated_tokens', 0),
+                                  'total_tokens': stats.get('prompt_tokens', 0)
+                                                  + stats.get('generated_tokens', 0)},
+                    }).encode() + b'\n\n')
+                    self._write(b'data: [DONE]\n\n')
+                    try:
+                        self.wfile.flush()
+                    except OSError:
+                        pass
+            except ValueError as exc:
+                if not stats or service.native:
+                    self._write(b'data: ' + json.dumps(
+                        {'error': {'message': str(exc), 'type': 'invalid_request_error'}}
+                    ).encode() + b'\n\n')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as exc:
+                with service.lock:
+                    service.reset_on_error()
+                if not stats or service.native:
+                    self._write(b'data: ' + json.dumps(
+                        {'error': {'message': f'Generation failed: {exc}',
+                                   'type': 'server_error'}}
+                    ).encode() + b'\n\n')
+            self._report(stats)
+
+        def _report(self, stats):
+            if not stats:
+                return
+            if service.native:
+                print(f"[turn native experimental] {json.dumps(stats)}", file=sys.stderr, flush=True)
+                return
+            cache = service.session.model.expert_executor.statistics()['device']
+            prefill_tokens = stats.get('new_prompt_tokens', 0)
+            prefill_seconds = max(stats.get('prefill_seconds', 0.0), 1e-30)
+            generated = stats.get('generated_tokens', 0)
+            decode_seconds = max(stats.get('decode_seconds', 0.0), 1e-30)
+            print(f"[turn] prompt {stats.get('prompt_tokens')} tokens "
+                  f"(prefilled {prefill_tokens}, reused {stats.get('reused_tokens')}); "
+                  f"PREFILL {prefill_tokens} tok in {prefill_seconds:.2f}s "
+                  f"= {prefill_tokens / prefill_seconds:.1f} tok/s; "
+                  f"DECODE {generated} tok in {decode_seconds:.2f}s "
+                  f"= {generated / decode_seconds:.2f} tok/s "
+                  f"({stats.get('decode_forwards_per_second', 0):.2f} model-forwards/s, "
+                  f"{stats.get('decode_forward_tokens', 0)} forwards); "
+                  f"cache hit {cache['hit_rate']:.1%}", file=sys.stderr, flush=True)
+    return Handler
+
+
+def serve_http(service, args, profile_directory=None):
+    model_id = args.model_id
+    server = QuietServer((args.host, args.port), make_handler(service, args, profile_directory))
+    # Join native request cleanup before closing the decoder/sampler allocations.
+    server.daemon_threads = not service.native
+    print(f'MyLocal_LLM Qwen4Exp OpenAI-style API ({args.backend}) at '
+          f'http://{args.host}:{args.port}/v1 (model {model_id}, context {args.context}, '
+          f'cache {args.cache_gib}GiB, {args.cpu_workers} CPU workers).',
+          file=sys.stderr, flush=True)
+    print(f'WebUI for quick chat tests at http://{args.host}:{args.port}/',
+          file=sys.stderr, flush=True)
+    print('Ctrl-C stops the server and releases GPU/host resources.', file=sys.stderr, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def run_native(args, profile_directory=None):
+    """Explicit experimental owner setup; no BEST_ENV, Python model or fallback."""
+    for name in ('library', 'bridge_library', 'ggml_library'):
+        path = getattr(args, 'native_' + name)
+        if path is None or not path.is_file():
+            raise ValueError(f'--native-{name.replace("_", "-")} must name an existing library')
+    budgets = {}
+    for name in ('budget', 'dense_budget', 'mapped_budget', 'host_budget'):
+        value = getattr(args, 'native_' + name + '_gib')
+        if value is None or not math.isfinite(value) or value <= 0:
+            raise ValueError(f'--native-{name.replace("_", "-")}-gib must be explicit, finite and positive')
+        budgets[name + '_bytes'] = int(value * GiB)
+    if args.context % 4 or args.context > 262144:
+        raise ValueError('native --context must be divisible by four and <=262144')
+    if (args.native_page_size < 4 or args.native_page_size > 4096 or args.native_page_size % 4
+            or not 1 <= args.native_physical_pages <= math.ceil(args.context / args.native_page_size)
+            or args.native_threads < 1 or not 0 <= args.native_seed < 2**64
+            or not 1 <= args.native_queue_capacity <= 4096):
+        raise ValueError('Invalid native page/thread/seed/queue configuration')
+    from mini_llm.native import Runtime
+    from mini_llm.native.decoder import NativeDecoder
+    from mini_llm.native.chat import NativeChatSession
+    from mini_llm.external.gguf_store import MultiShardTensorStore
+    from mini_llm.external.gguf_tokenizer import load_gguf_tokenizer
+
+    options = dict(capacity=args.context, bridge_library=str(args.native_bridge_library.resolve()),
+                   ggml_library=str(args.native_ggml_library.resolve()),
+                   page_size=args.native_page_size, physical_pages=args.native_physical_pages,
+                   threads=args.native_threads, trace=False,
+                   **budgets)
+    config = dict(backend='native', experimental=True,
+                  arithmetic_policy='reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; '
+                                    'all routed experts CPU mmap ggml_q8; native GPU sampler',
+                  diagnostic_trajectory_differences=TRAJECTORY_DIAGNOSTICS,
+                  native_library=str(args.native_library.resolve()), **options,
+                  sampler_engine='same as decoder; shared device allocation budget',
+                  seed=args.native_seed, queue_capacity=args.native_queue_capacity,
+                  thinking=not args.no_thinking, reasoning_effort=args.reasoning_effort,
+                  prefill='native sequential consume (not batched prefill)',
+                  python_tuning_options_applied=False)
+    print('Native experimental backend: ' + TRAJECTORY_DIAGNOSTICS, file=sys.stderr, flush=True)
+    with ExitStack() as stack:
+        class ServingRuntime(Runtime):
+            def engine(self, **kwargs):
+                # The factory normally closes its Engine registry owner after
+                # binding. Retain it until serving ends to create a same-engine
+                # sampler, as required by ml_generation_start. Native objects
+                # still use this real Runtime, not a proxy or borrowed handle.
+                self.engine_owner = stack.enter_context(super().engine(**kwargs))
+                return nullcontext(self.engine_owner)
+
+        runtime = ServingRuntime(args.native_library)
+        decoder = stack.enter_context(NativeDecoder.open(runtime, args.model, **options))
+        sampler = stack.enter_context(runtime.engine_owner.sampler(decoder.vocab,
+                                                                  seed=args.native_seed))
+        with MultiShardTensorStore.open(args.model) as store:
+            tokenizer = load_gguf_tokenizer(store.metadata, vocab_size=decoder.vocab)
+            eos_ids = tuple(int(store.metadata[key]) for key in (
+                'tokenizer.ggml.eos_token_id', 'tokenizer.ggml.eot_token_id',
+                'tokenizer.ggml.eom_token_id') if key in store.metadata)
+        session = NativeChatSession(decoder, sampler, tokenizer, eos_ids=eos_ids,
+                                    queue_capacity=args.native_queue_capacity)
+        # Warmup is opt-in only through a real request: do not conceal model-scale cost.
+        serve_http(Service(session, config), args, profile_directory)
+
+
+def main():
+    parser = argument_parser()
     args = parser.parse_args()
     if args.context < 2 or args.max_new_tokens < 1 or args.cpu_workers < 1:
         parser.error('context, max-new-tokens and cpu-workers must be positive')
@@ -345,6 +814,13 @@ def main():
         except OSError as exc:
             parser.error(f'Cannot create --profile-directory: {exc}')
 
+    if args.backend == 'native':
+        try:
+            run_native(args, profile_directory)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            parser.error(f'Native backend unavailable: {exc}')
+        return
+
     if args.prefill_experts != 'decode' and not args.prefill_chunk_size:
         parser.error('Grouped/streamed/triton experts require --prefill-chunk-size > 0')
     os.environ['MINI_LLM_PREFILL_EXPERTS'] = args.prefill_experts
@@ -355,7 +831,6 @@ def main():
     from mini_llm.external.gguf_tokenizer import load_gguf_tokenizer
     from mini_llm.external.qwen4exp_chat import ChatSession
     from mini_llm.external.qwen4exp_model import Qwen4ExpGGUFModel
-    from mini_llm.generation import sample_token
 
     print(f'Loading original model natively ({BACKEND_NAME}, context {args.context}, '
           'full top-10, FP32, best measured decode config)...', file=sys.stderr, flush=True)
@@ -449,7 +924,11 @@ def main():
             print('Expert placement frozen: native device plans enabled; all CPU misses still execute.',
                   file=sys.stderr, flush=True)
 
-        effective_config = dict(options, prefill_chunk_size=args.prefill_chunk_size,
+        effective_config = dict(options, backend='python', experimental=False,
+                                arithmetic_policy='Python orchestration; mixed GPU Q8 / CPU ggml_q8; '
+                                                  'HC BF16 storage; environment overrides reported below',
+                                diagnostic_trajectory_differences=TRAJECTORY_DIAGNOSTICS,
+                                prefill_chunk_size=args.prefill_chunk_size,
                                         prefill_experts=args.prefill_experts,
                                         expert_placement=args.expert_placement,
                                 profile_directory=str(profile_directory) if profile_directory is not None else None,
@@ -460,328 +939,8 @@ def main():
                                                os.environ.get('MINI_LLM_QSA_BLOCK_GRAPH') == '1')
         service = Service(session, effective_config)
 
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = 'HTTP/1.1'
-            seen_noisy = set()
+        serve_http(service, args, profile_directory)
 
-            def log_message(self, format, *values):
-                line = format % values
-                if any(needle in line for needle in ('/props', 'sw.js', 'workbox-',
-                                                     '/models/sse', 'favicon')):
-                    parts = line.split(' ')
-                    key = parts[1].split('?')[0] if len(parts) > 1 else line
-                    if key in self.seen_noisy:
-                        return
-                    self.seen_noisy.add(key)
-                    sys.stderr.write(
-                        f'[{time.strftime("%H:%M:%S")}] {line}  <- stale PWA/service-worker '
-                        'request from an older server on this port; a self-destruct worker '
-                        'is served now, repeats are suppressed\n')
-                    return
-                sys.stderr.write(f'[{time.strftime("%H:%M:%S")}] {format % values}\n')
-
-            def _write(self, body):
-                try:
-                    self.wfile.write(body)
-                    return True
-                except (BrokenPipeError, ConnectionResetError):
-                    self.close_connection = True
-                    return False
-
-            def _json(self, payload, status=200):
-                body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-                try:
-                    self.send_response(status)
-                    self.send_header('Content-Type', 'application/json; charset=utf-8')
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self._write(body)
-                except OSError:
-                    self.close_connection = True
-
-            def _html(self, page):
-                body = page.encode('utf-8')
-                try:
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html; charset=utf-8')
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self._write(body)
-                except OSError:
-                    self.close_connection = True
-
-            def _sw(self):
-                # Browsers fetch /sw.js directly (not through the stale worker),
-                # so this reliably replaces it on the next navigation.
-                body = SW_JS.encode('utf-8')
-                try:
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/javascript; charset=utf-8')
-                    self.send_header('Service-Worker-Allowed', '/')
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self._write(body)
-                except OSError:
-                    self.close_connection = True
-
-            def _error(self, message, status=400, code='invalid_request_error'):
-                self._json({'error': {'message': message, 'type': code}}, status)
-
-            def _authenticated(self):
-                if not service_api_key:
-                    return True
-                header = self.headers.get('Authorization', '')
-                return header == f'Bearer {service_api_key}'
-
-            def do_GET(self):
-                route = self.path.split('?', 1)[0]
-                if route == '/sw.js':
-                    self._sw()
-                    return
-                if route in ('/', '/ui', '/webui'):
-                    # The page itself is public; its API calls still carry the key.
-                    self._html(WEBUI_HTML)
-                    return
-                if not self._authenticated():
-                    self._error('Invalid API key', 401, 'authentication_error')
-                    return
-                if self.path == '/health':
-                    self._json({'status': 'ok', 'model': model_id, 'loaded': True,
-                                'max_context': args.context, 'service': 'mylocal_llm_qwen4exp',
-                                'config': service.config})
-                elif self.path == '/metrics':
-                    self._json(service.metrics())
-                elif self.path in ('/v1/models', '/v1/models/'):
-                    self._json({'object': 'list', 'data': [{
-                        'id': model_id, 'object': 'model', 'owned_by': 'mylocal_llm',
-                        'status': {'value': 'loaded'}, 'meta': {'n_ctx': args.context}}]})
-                else:
-                    self._error('Unknown endpoint', 404, 'not_found_error')
-
-            def do_POST(self):
-                if profile_directory is None:
-                    return self._do_POST()
-                profiler = cProfile.Profile()
-                try:
-                    return profiler.runcall(self._do_POST)
-                finally:
-                    profiler.dump_stats(str(profile_directory / f'request-{uuid.uuid4().hex}.pstats'))
-
-            def _do_POST(self):
-                if not self._authenticated():
-                    self._error('Invalid API key', 401, 'authentication_error')
-                    return
-                if self.path not in ('/v1/chat/completions', '/v1/chat/completions/'):
-                    self._error('Unknown endpoint', 404, 'not_found_error')
-                    return
-                try:
-                    length = int(self.headers.get('Content-Length', '0'))
-                    if length < 1 or length > 32 * 1024 * 1024:
-                        raise ValueError('Request body must be 1B-32MiB')
-                    request = json.loads(self.rfile.read(length))
-                except (ValueError, json.JSONDecodeError) as exc:
-                    self._error(f'Invalid request body: {exc}')
-                    return
-                messages = request.get('messages')
-                if not isinstance(messages, list) or not messages:
-                    self._error('messages must be a nonempty array')
-                    return
-                roles = {'system', 'user', 'assistant'}
-                for message in messages:
-                    if (not isinstance(message, dict) or message.get('role') not in roles
-                            or not isinstance(message.get('content'), str)
-                            or ('reasoning_content' in message and
-                                not isinstance(message['reasoning_content'], str))):
-                        self._error('Only string-content system/user/assistant messages are supported')
-                        return
-                if messages[-1]['role'] != 'user':
-                    self._error('The last message must have role user')
-                    return
-                value = request.get('max_completion_tokens',
-                                     request.get('max_tokens', args.max_new_tokens))
-                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                    self._error('max_tokens / max_completion_tokens must be a positive integer')
-                    return
-                requested = request.get('model')
-                if isinstance(requested, str) and requested and requested != model_id:
-                    print(f'[note] requested model {requested!r} is served as {model_id!r}',
-                          file=sys.stderr, flush=True)
-                temperature = request.get('temperature', 0.0)
-                top_p = request.get('top_p', 1.0)
-                top_k = request.get('top_k')
-                try:
-                    temperature = float(temperature)
-                    top_p = float(top_p)
-                    top_k = None if top_k is None else int(top_k)
-                except (TypeError, ValueError):
-                    self._error('Invalid sampling parameters')
-                    return
-                if (not math.isfinite(temperature) or not math.isfinite(top_p) or
-                        temperature < 0 or not 0 < top_p <= 1 or (top_k is not None and top_k < 1)):
-                    self._error('Invalid sampling parameters')
-                    return
-
-                def sampler(logits_row):
-                    return sample_token(logits_row, temperature=temperature, top_p=top_p,
-                                        top_k=top_k)
-
-                created = int(time.time())
-                completion = f'chatcmpl-{uuid.uuid4().hex[:24]}'
-                t0 = time.perf_counter()
-                print(f'[request] accepted: {len(messages)} messages, max_tokens {value}, '
-                      f'temperature {temperature} (prefill starts now; slow prompts show '
-                      f'their speed at the [ttft] and [turn] lines)', file=sys.stderr, flush=True)
-
-                def turn():
-                    service.prepare(messages)
-                    first = True
-                    for piece in service.session.generate(messages[-1]['content'], value,
-                                                          sampler=sampler,
-                                                          raw_response=request.get('stream') is True):
-                        if first:
-                            first = False
-                            waited = time.perf_counter() - t0
-                            print(f'[ttft] first token after {waited:.2f}s '
-                                  f'(prompt prefill + first forward)', file=sys.stderr, flush=True)
-                        yield piece
-
-                if request.get('stream') is not True:
-                    try:
-                        with service.lock:
-                            for _ in turn():
-                                pass
-                            stats = service.record(completion, t0)
-                            assistant = (service.session.messages[-1]
-                                         if service.session.messages
-                                         and service.session.messages[-1]['role'] == 'assistant'
-                                         else {})
-                    except ValueError as exc:
-                        self._error(str(exc))
-                        return
-                    except Exception as exc:
-                        with service.lock:
-                            service.session.reset(reason='generation_error')
-                        self._error(f'Generation failed: {exc}', 500, 'server_error')
-                        return
-                    answer = assistant.get('content', '')
-                    reasoning = assistant.get('reasoning_content', '')
-                    message = {'role': 'assistant', 'content': answer}
-                    if reasoning:
-                        message['reasoning_content'] = reasoning
-                    self._json({
-                        'id': completion, 'object': 'chat.completion', 'created': created,
-                        'model': model_id, 'request_id': completion, 'mylocal_stats': stats,
-                        'choices': [{'index': 0, 'message': message,
-                                     'finish_reason': 'stop' if stats.get('stopped') else 'length'}],
-                        'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
-                                  'completion_tokens': stats.get('generated_tokens', 0),
-                                  'total_tokens': stats.get('prompt_tokens', 0)
-                                                  + stats.get('generated_tokens', 0)},
-                    })
-                    self._report(stats)
-                    return
-
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
-                self.send_header('Cache-Control', 'no-cache')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.close_connection = True
-
-                def chunk(delta, finish=None):
-                    payload = {'id': completion, 'object': 'chat.completion.chunk',
-                               'created': created, 'model': model_id,
-                               'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
-                    if not self._write(b'data: ' + json.dumps(payload, ensure_ascii=False).encode()
-                                       + b'\n\n'):
-                        raise BrokenPipeError('client disconnected')
-                    try:
-                        self.wfile.flush()
-                    except OSError:
-                        raise BrokenPipeError('client disconnected')
-
-                stats = {}
-                try:
-                    with service.lock:
-                        chunk({'role': 'assistant', 'content': ''})
-                        broken = False
-                        for piece in turn():
-                            if not broken:
-                                try:
-                                    chunk({'content': piece})
-                                except (BrokenPipeError, ConnectionResetError):
-                                    broken = True
-                        stats = service.record(completion, t0)
-                        if not broken:
-                            chunk({}, 'stop' if stats.get('stopped') else 'length')
-                            self._write(b'data: ' + json.dumps({
-                                'id': completion, 'object': 'chat.completion.chunk',
-                                'created': created, 'model': model_id, 'choices': [],
-                                'request_id': completion, 'mylocal_stats': stats,
-                                'usage': {'prompt_tokens': stats.get('prompt_tokens', 0),
-                                          'completion_tokens': stats.get('generated_tokens', 0),
-                                          'total_tokens': stats.get('prompt_tokens', 0)
-                                                          + stats.get('generated_tokens', 0)},
-                            }).encode() + b'\n\n')
-                            self._write(b'data: [DONE]\n\n')
-                            try:
-                                self.wfile.flush()
-                            except OSError:
-                                pass
-                except ValueError as exc:
-                    if not stats:
-                        self._write(b'data: ' + json.dumps(
-                            {'error': {'message': str(exc), 'type': 'invalid_request_error'}}
-                        ).encode() + b'\n\n')
-                except (BrokenPipeError, ConnectionResetError):
-                    broken = True
-                except Exception as exc:
-                    with service.lock:
-                        service.session.reset(reason='generation_error')
-                    if not stats:
-                        self._write(b'data: ' + json.dumps(
-                            {'error': {'message': f'Generation failed: {exc}',
-                                       'type': 'server_error'}}
-                        ).encode() + b'\n\n')
-                self._report(stats)
-
-            def _report(self, stats):
-                if not stats:
-                    return
-                cache = model.expert_executor.statistics()['device']
-                prefill_tokens = stats.get('new_prompt_tokens', 0)
-                prefill_seconds = max(stats.get('prefill_seconds', 0.0), 1e-30)
-                generated = stats.get('generated_tokens', 0)
-                decode_seconds = max(stats.get('decode_seconds', 0.0), 1e-30)
-                print(f"[turn] prompt {stats.get('prompt_tokens')} tokens "
-                      f"(prefilled {prefill_tokens}, reused {stats.get('reused_tokens')}); "
-                      f"PREFILL {prefill_tokens} tok in {prefill_seconds:.2f}s "
-                      f"= {prefill_tokens / prefill_seconds:.1f} tok/s; "
-                      f"DECODE {generated} tok in {decode_seconds:.2f}s "
-                      f"= {generated / decode_seconds:.2f} tok/s "
-                      f"({stats.get('decode_forwards_per_second', 0):.2f} model-forwards/s, "
-                      f"{stats.get('decode_forward_tokens', 0)} forwards); "
-                      f"cache hit {cache['hit_rate']:.1%}", file=sys.stderr, flush=True)
-
-        model_id = args.model_id
-        service_api_key = args.api_key
-        server = QuietServer((args.host, args.port), Handler)
-        print(f'MyLocal_LLM native Qwen4Exp OpenAI-style API at '
-              f'http://{args.host}:{args.port}/v1 (model {model_id}, context {args.context}, '
-              f'cache {args.cache_gib}GiB, {args.cpu_workers} CPU workers).',
-              file=sys.stderr, flush=True)
-        print(f'WebUI for quick chat tests at http://{args.host}:{args.port}/',
-              file=sys.stderr, flush=True)
-        print('Ctrl-C stops the server and releases GPU/host resources.', file=sys.stderr, flush=True)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
 
 
 if __name__ == '__main__':

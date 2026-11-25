@@ -11,6 +11,19 @@ from . import (_Owned, _DecoderLayer, _integer, NativeError, PayloadLease,
                UploadedTensor, HCWeights, HCState, RecurrentLayer, QSALayer, MoE, PLEState)
 
 
+class NativePromptCheckpoint(_Owned):
+    """Weak native session checkpoint; reset/replacement/owner close makes it stale."""
+    _destroy = 'ml_decoder_checkpoint_destroy'
+
+    def restore(self, decoder):
+        if decoder._runtime is not self._runtime:
+            raise TypeError('same-runtime decoder required')
+        committed = C.c_uint64()
+        self._runtime._call('ml_decoder_checkpoint_restore', decoder._require_open(),
+                           self._require_open(), C.byref(committed))
+        return committed.value
+
+
 class NativeDecoder(_Owned):
     _destroy = 'ml_decoder_destroy'
 
@@ -63,6 +76,30 @@ class NativeDecoder(_Owned):
 
     def reset(self):
         self._runtime._call('ml_decoder_reset', self._require_open())
+
+    def checkpoint(self, *, host_budget_bytes=256*1024**2):
+        """Replace the sole prompt snapshot; ordinary host RAM, never full KV."""
+        _integer(host_budget_bytes, 'host_budget_bytes', 2**63-1)
+        out, size = C.c_uint64(), C.c_uint64()
+        self._runtime._call('ml_decoder_checkpoint_capture', self._require_open(),
+                           host_budget_bytes, C.byref(out), C.byref(size))
+        result = NativePromptCheckpoint(self._runtime, out.value)
+        result.host_bytes = size.value
+        return result
+
+    def consume(self, tokens):
+        """Sequential native prompt loop; absolute committed length, no logits D2H.
+
+        This is not WP10 batched prefill. A native execution error requires reset;
+        state reports the last committed position, not a resumable partial prompt.
+        """
+        tokens = tuple(tokens)
+        for token in tokens:
+            _integer(token, 'token', self.vocab-1)
+        committed = C.c_uint64()
+        self._runtime._call('ml_decoder_consume', self._require_open(),
+                           (C.c_int32*len(tokens))(*tokens), len(tokens), C.byref(committed))
+        return committed.value
 
     def step_device(self, token):
         """Commit a step leaving logits resident; returns only committed position."""

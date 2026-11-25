@@ -6,7 +6,10 @@ struct DecoderLayer {
     std::shared_ptr<PLEState> ple;
     std::shared_ptr<MoeOwner> moe;
 };
+struct DecoderPromptCheckpoint;
 struct Decoder {
+    std::shared_ptr<DecoderPromptCheckpoint> checkpoint;
+    uint64_t checkpoint_epoch=0;
     std::shared_ptr<Engine> engine;
     std::shared_ptr<PayloadLease> embedding;
     std::shared_ptr<UploadedTensor> output;
@@ -53,6 +56,7 @@ struct Decoder {
         if(ffn) b.moe->length=position+1;
     }
     void reset() {
+        checkpoint.reset(); ++checkpoint_epoch;
         failed=true; valid=false;
         auto stream=engine->stream;
         for(auto& b:layers) {
@@ -84,6 +88,157 @@ struct Decoder {
 };
 std::unordered_map<ml_handle,std::shared_ptr<Decoder>> decoders;
 
+// Ordinary host snapshots have an explicit per-checkpoint budget. No full QSA
+// raw/K/V/pooled prefix is copied; those committed rows cannot be overwritten by
+// append-only decode. The raw ring is the only mutable QSA dependency copied.
+struct PromptCopy {
+    void* device;
+    uint64_t offset,bytes;
+};
+struct DecoderPromptCheckpoint {
+    std::weak_ptr<Decoder> owner;
+    uint64_t epoch=0,position=0,host_bytes=0;
+    ml_handle owner_id=0;
+    bool logits_valid=false,fail_restore_for_test=false;
+    std::vector<PromptCopy> copies;
+    std::vector<unsigned char> data;
+    struct PleMetadata { int32_t predecessors[2]; uint64_t rows[16]; };
+    std::vector<PleMetadata> ple;
+};
+std::unordered_map<ml_handle,std::weak_ptr<DecoderPromptCheckpoint>> prompt_checkpoints;
+
+extern "C" int ml_decoder_checkpoint_capture(ml_handle id,uint64_t budget,ml_handle* out,
+    uint64_t* host_bytes) noexcept {
+    return boundary([&] {
+        if(out) *out=0;
+        if(host_bytes) *host_bytes=0;
+        auto p=lookup(decoders,id); // Unavailable while native worker owns it.
+        if(!out || !host_bytes || !budget || p->failed)
+            fail(ML_INVALID,"invalid prompt checkpoint capture/session");
+        auto c=std::make_shared<DecoderPromptCheckpoint>();
+        c->owner=p; c->owner_id=id; c->epoch=p->checkpoint_epoch; c->position=p->position; c->logits_valid=p->valid;
+        uint64_t bytes=0;
+        auto add=[&](void* device,uint64_t count) {
+            c->copies.push_back({device,bytes,count}); bytes+=count;
+        };
+        for(auto& b:p->layers) {
+            if(b.recurrent) {
+                auto w=b.recurrent;
+                if(w->invalid || w->length!=p->position) fail(ML_INVALID,"checkpoint recurrent position");
+                add(w->history,w->history_count*4); add(w->memory,w->memory_count*4);
+            } else {
+                auto w=b.qsa;
+                if(w->invalid || w->length!=p->position || (w->paged && w->paged->stats.length!=p->position))
+                    fail(ML_INVALID,"checkpoint QSA position");
+                if(w->paged) add(w->raw,640*4);
+            }
+            if(b.ple) {
+                auto w=b.ple;
+                if(w->poisoned || w->position!=p->position) fail(ML_INVALID,"checkpoint PLE position");
+                add(w->history,92160*4);
+                DecoderPromptCheckpoint::PleMetadata meta{};
+                std::copy_n(w->predecessors,2,meta.predecessors); std::copy_n(w->rows,16,meta.rows);
+                c->ple.push_back(meta);
+            }
+        }
+        if(p->valid) add(p->logits,uint64_t(p->vocab)*4);
+        c->host_bytes=bytes+sizeof(DecoderPromptCheckpoint)+c->copies.capacity()*sizeof(PromptCopy)+
+            c->ple.capacity()*sizeof(DecoderPromptCheckpoint::PleMetadata);
+        if(c->host_bytes>budget) fail(ML_CAPACITY,"prompt checkpoint host budget exhausted");
+        // Drop the previous host buffer before allocating its replacement: one
+        // bounded retained checkpoint, never two complete state copies.
+        p->checkpoint.reset();
+        c->data.resize(bytes);
+        DeviceGuard guard(p->engine->device); StreamCompletion completion{p->engine->stream};
+        for(auto& copy:c->copies) if(copy.bytes)
+            cuda_check(cudaMemcpyAsync(c->data.data()+copy.offset,copy.device,copy.bytes,
+                cudaMemcpyDeviceToHost,p->engine->stream));
+        cuda_check(cudaStreamSynchronize(p->engine->stream));
+        auto h=new_handle(); prompt_checkpoints.emplace(h,c); p->checkpoint=c;
+        *host_bytes=c->host_bytes; *out=h;
+    });
+}
+extern "C" int ml_decoder_checkpoint_restore(ml_handle id,ml_handle checkpoint,uint64_t* committed) noexcept {
+    return boundary([&] {
+        auto p=lookup(decoders,id);
+        auto c=lookup(prompt_checkpoints,checkpoint).lock();
+        if(!committed || !c || c->owner.lock()!=p || p->checkpoint!=c ||
+           c->epoch!=p->checkpoint_epoch || p->failed || p->position<c->position)
+            fail(ML_INVALID,"stale prompt checkpoint/session; reset required");
+        for(auto& b:p->layers) {
+            if(b.recurrent && (b.recurrent->invalid || b.recurrent->length!=p->position))
+                fail(ML_INVALID,"checkpoint recurrent history changed");
+            if(b.qsa && (b.qsa->invalid || b.qsa->length!=p->position ||
+                (b.qsa->paged && b.qsa->paged->stats.length!=p->position)))
+                fail(ML_INVALID,"checkpoint QSA history changed");
+            if(b.ple && (b.ple->poisoned || b.ple->position!=p->position))
+                fail(ML_INVALID,"checkpoint PLE history changed");
+        }
+        DeviceGuard guard(p->engine->device); StreamCompletion completion{p->engine->stream};
+        // Publish no usable session until all copies, pager truncation and fences
+        // succeed. A partial failure quarantines the decoder and checkpoint.
+        p->failed=true; p->valid=false; p->trace_valid=false;
+        try {
+            cuda_check(cudaStreamSynchronize(p->engine->stream));
+            for(auto& copy:c->copies) if(copy.bytes) {
+                cuda_check(cudaMemcpyAsync(copy.device,c->data.data()+copy.offset,copy.bytes,
+                    cudaMemcpyHostToDevice,p->engine->stream));
+                if(c->fail_restore_for_test) fail(ML_CUDA,"injected prompt checkpoint restore failure");
+            }
+            size_t ple_index=0;
+            for(auto& b:p->layers) {
+                if(b.recurrent) {
+                    b.recurrent->length=c->position; b.recurrent->output_valid=false;
+                } else {
+                    auto w=b.qsa;
+                    if(w->paged) w->paged->truncate(c->position);
+                    // New pools beyond floor(position/4) are ignored/recomputed;
+                    // stale IDs/scores/staging are not diagnostic-valid after restore.
+                    cuda_check(cudaMemcpyAsync(w->n,&c->position,8,cudaMemcpyHostToDevice,p->engine->stream));
+                    w->length=c->position; w->output_valid=false;
+                }
+                if(b.ple) {
+                    auto& meta=c->ple[ple_index++]; auto w=b.ple;
+                    std::copy_n(meta.predecessors,2,w->predecessors); std::copy_n(meta.rows,16,w->rows);
+                    w->position=c->position; w->valid=false;
+                }
+                b.moe->length=c->position; b.moe->result_valid=false;
+            }
+            auto w=p->hc;
+            w->pending.reset(); w->ticket=0; w->initialized=false; w->collapsed=false; w->hidden_valid=false;
+            cuda_check(cudaStreamSynchronize(p->engine->stream));
+            p->position=c->position; p->valid=c->logits_valid; p->failed=false; *committed=p->position;
+        } catch(...) { p->checkpoint.reset(); ++p->checkpoint_epoch; throw; }
+    });
+}
+extern "C" int ml_decoder_checkpoint_fail_restore_for_test(ml_handle id) noexcept {
+    return boundary([&] {
+        auto c=lookup(prompt_checkpoints,id).lock();
+        if(!c || !decoders.count(c->owner_id)) fail(ML_INVALID,"stale/worker-owned checkpoint");
+        c->fail_restore_for_test=true;
+    });
+}
+extern "C" int ml_decoder_checkpoint_readback_for_test(ml_handle id,void* out,uint64_t count,uint64_t* size) noexcept {
+    return boundary([&] {
+        auto c=lookup(prompt_checkpoints,id).lock();
+        if(!c || !size) fail(ML_INVALID,"stale prompt checkpoint diagnostic");
+        *size=c->data.size();
+        if(!out && !count) return;
+        if(!out || count<c->data.size()) fail(ML_INVALID,"checkpoint diagnostic capacity");
+        std::memcpy(out,c->data.data(),c->data.size());
+    });
+}
+extern "C" int ml_decoder_checkpoint_destroy(ml_handle id) noexcept {
+    return boundary([&] {
+        if(!id) return;
+        auto c=lookup(prompt_checkpoints,id).lock();
+        if(c) if(auto p=c->owner.lock(); p && p->checkpoint==c) {
+            if(!decoders.count(c->owner_id)) fail(ML_INVALID,"checkpoint owner handle unavailable during generation");
+            p->checkpoint.reset();
+        }
+        prompt_checkpoints.erase(id);
+    });
+}
 extern "C" int ml_decoder_create(ml_handle engine,ml_handle embedding,ml_handle output,
     ml_handle final,ml_handle hc,const ml_decoder_layer* bindings,uint64_t count,
     uint64_t capacity,float scale,int trace,ml_handle* out) noexcept {
@@ -213,6 +368,24 @@ void decoder_step_native(const std::shared_ptr<Decoder>& p,int32_t token,float* 
             }
             ++p->position; p->valid=true; p->trace_valid=capture_trace; *committed=p->position;
         } catch(...) { p->failed=true; throw; }
+}
+extern "C" int ml_decoder_consume(ml_handle id,const int32_t* tokens,uint64_t count,uint64_t* committed) noexcept {
+    return boundary([&] {
+        auto p=lookup(decoders,id);
+        if(!committed || (count && !tokens)) fail(ML_INVALID,"null decoder consume input/output");
+        *committed=p->position;
+        if(p->failed) fail(ML_INVALID,"decoder unresumable; reset required");
+        if(count>p->capacity-p->position) fail(ML_CAPACITY,"decoder consume capacity");
+        // Validate the entire vector before any mutation. Execution failures still
+        // poison the decoder and retain the last successfully committed position.
+        for(uint64_t i=0;i<count;++i)
+            if(tokens[i]<0 || tokens[i]>=p->vocab) fail(ML_INVALID,"decoder consume token");
+        for(uint64_t i=0;i<count;++i) {
+            uint64_t position=0;
+            decoder_step_native(p,tokens[i],nullptr,0,&position,false);
+            *committed=position;
+        }
+    });
 }
 extern "C" int ml_decoder_step(ml_handle id,int32_t token,float* logits,uint64_t count,uint64_t* committed) noexcept {
     return boundary([&] { decoder_step_native(lookup(decoders,id),token,logits,count,committed); });

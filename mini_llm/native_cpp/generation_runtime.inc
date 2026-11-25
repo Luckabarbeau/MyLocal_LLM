@@ -44,6 +44,7 @@ struct Generation {
                     // A cancellation observed before dispatch does not consume input.
                     if(cancelled.load()) { reason=ML_GEN_CANCELLED; break; }
                     { std::lock_guard queue_lock(queue_mutex); running=true; }
+                    auto decode_start=std::chrono::steady_clock::now();
                     uint64_t committed=0;
                     decoder_step_native(decoder,input,nullptr,0,&committed,false);
                     state.position=committed;
@@ -52,6 +53,8 @@ struct Generation {
                     sampler_sample_native(sampler,decoder->logits,temperature,top_p,k,0,0,&state.sample);
                     input=state.sample.token; ++state.sampled;
                     state.pending=1; state.pending_token=input;
+                    state.decode_seconds+=std::chrono::duration<double>(
+                        std::chrono::steady_clock::now()-decode_start).count();
                 }
                 state.kind=1;
                 {

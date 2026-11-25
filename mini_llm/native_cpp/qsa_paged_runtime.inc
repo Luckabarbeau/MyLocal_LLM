@@ -79,6 +79,24 @@ struct QSAPagedState {
         ++stats.generation; stats.length=stats.populated_bytes=stats.resident_pages=0;
         stats.hits=stats.misses=stats.h2d_bytes=stats.metadata_bytes=0;
     }
+    void truncate(uint64_t length) {
+        if(length>stats.length) fail(ML_INVALID,"paged QSA rollback beyond committed prefix");
+        if(stats.generation==UINT64_MAX) fail(ML_CAPACITY,"paged QSA generation exhausted");
+        // Retire every gather/copy before invalidating mappings or freeing suffix
+        // pages. Prefix backing is append-only and is deliberately not copied.
+        wait(); cuda_check(cudaStreamSynchronize(engine->stream));
+        cuda_check(cudaMemsetAsync(table,0,logical_pages*8,engine->stream)); finish();
+        std::fill_n(host_table.get(),logical_pages,0);
+        std::fill_n(slot_page.get(),slots,UINT64_MAX);
+        std::fill_n(slot_generation.get(),slots,0);
+        const uint64_t keep=(length+page_size-1)/page_size;
+        for(auto it=backing.begin();it!=backing.end();) {
+            if(it->first>=keep) { it=backing.erase(it); stats.host_bytes-=host_page_bytes; }
+            else ++it;
+        }
+        ++stats.generation; stats.length=length; stats.populated_bytes=length*row_bytes;
+        stats.resident_pages=0;
+    }
     void pack(const float* k,const float* v,uint64_t rows,int* status) {
         wait(); cuda_check(ml_qsa_paged_pack(engine->stream,k,v,rows,quantized,stage,status));
     }

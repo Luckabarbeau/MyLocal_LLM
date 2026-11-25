@@ -21,6 +21,8 @@ typedef struct ml_generation_event {
         int32_t in_flight, reserved;
     ml_sample_result sample;
     char error[512];
+    /* Cumulative native step+sample wall time, excluding queue/runtime-lock waits. */
+    double decode_seconds;
 } ml_generation_event;
 int ml_generation_start(ml_handle decoder, ml_handle sampler, int32_t input_token,
     uint64_t max_tokens, const int32_t* eos_ids, uint64_t eos_count,

@@ -47,6 +47,19 @@ int ml_decoder_state(ml_handle decoder, uint64_t* position, int* failed) ML_NOEX
 /* Null logits with count=0 explicitly suppresses full-vocabulary D2H. */
 int ml_decoder_step(ml_handle decoder, int32_t token, float* logits, uint64_t count,
     uint64_t* committed) ML_NOEXCEPT;
+/* Sequential baseline, not batched prefill. No logits D2H; committed is the
+ * absolute successful length (also on partial execution failure). Empty is a no-op.
+ * Input/capacity validation is atomic; execution errors require reset. */
+int ml_decoder_consume(ml_handle decoder, const int32_t* tokens, uint64_t count,
+    uint64_t* committed) ML_NOEXCEPT;
+/* One ordinary-host-budgeted prompt boundary per decoder, no QSA prefix copy.
+ * Capture replaces the previous checkpoint. Reset/close invalidate it. Both
+ * operations reject worker-owned decoders. Partial restore errors poison state. */
+int ml_decoder_checkpoint_capture(ml_handle decoder, uint64_t host_budget,
+    ml_handle* out, uint64_t* host_bytes) ML_NOEXCEPT;
+int ml_decoder_checkpoint_restore(ml_handle decoder, ml_handle checkpoint,
+    uint64_t* committed) ML_NOEXCEPT;
+int ml_decoder_checkpoint_destroy(ml_handle checkpoint) ML_NOEXCEPT;
 int ml_decoder_trace(ml_handle decoder, uint64_t layer, int stage, float* out, uint64_t count) ML_NOEXCEPT;
 /* Latest completed MoE epoch only, read-only, no extra step allocations.
  * which: 0 IDs(int32[10]), 1 weights[10], 2 logits[512], 3 probs[512],

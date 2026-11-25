@@ -12,7 +12,8 @@ class GenerationEvent(C.Structure):
                 ('position', C.c_uint64), ('sampled', C.c_uint64),
                 ('pending', C.c_int32), ('failed', C.c_int32),
                                 ('in_flight', C.c_int32), ('reserved', C.c_int32),
-                ('sample', SampleResult), ('error', C.c_char * 512)]
+                ('sample', SampleResult), ('error', C.c_char * 512),
+                                ('decode_seconds', C.c_double)]
 
     @property
     def termination(self):

@@ -1,0 +1,4 @@
+{
+  "gpu": "index, uuid, memory.used [MiB], memory.free [MiB]\n1, GPU-e961516f-d77d-813c-98e9-2f5403f71631, 7824 MiB, 8017 MiB\n",
+  "compute_apps": "GPU-e961516f-d77d-813c-98e9-2f5403f71631, 606495, /home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python, 7800 MiB\n"
+}

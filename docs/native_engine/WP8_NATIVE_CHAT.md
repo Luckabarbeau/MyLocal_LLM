@@ -4,7 +4,9 @@
 
 Implemented `mini_llm/native/chat.py`, backed by the existing `NativeDecoder`, `NativeGeneration`, and native `Sampler`. This is actual opt-in session development following the all-48 conditioned operation evidence in `WP7_CONDITIONED_ALL_LAYERS.md`, **not** a replacement for the failed strict whole-trajectory diagnostic or a quality/performance acceptance claim.
 
-Production defaults, existing servers, training, decoder equations, GPU kernels, reference tests and fixed tolerances are unchanged. No full checkpoint was loaded during this work. Parent-owned status files are untouched. Server integration remains parent-assigned follow-up.
+This adapter/runtime work does not change production defaults, server files, training, decoder equations, GPU kernels, reference tests or fixed tolerances. No full model checkpoint was loaded. Parent-owned status files are untouched; concurrent server integration is owned by the other agent.
+
+**Prompt-boundary rollback is now implemented:** one bounded native host snapshot at `prompt[:-1]` enables exact repeated-request prefix caching without re-prefill. Public chat method signatures remain unchanged. See `WP8_PROMPT_CHECKPOINT.md` for the new API, replay evidence, pager fencing and scope.
 
 ## APIs
 
@@ -63,7 +65,7 @@ pending unconsumed ID   = S[-1]          (including EOS)
 
 For a reusable prefix of length `r`, consume `P[r:-1]` in the native prompt loop and start the worker with `P[-1]`. The worker consumes that last prompt token before sampling. **Do not consume all of P and then pass its final ID again.** A continuation containing the prior pending sample consumes it exactly once. A newly rendered template that does not contain that ID never gets an implicit pending-token insertion.
 
-Reuse requires the actual incoming IDs to begin with the entire committed token sequence, with an additional tail. This rule does not depend on conversation labels, message object equality, or caller claims. Shorter/different histories reset/replay. A prompt exactly equal to committed tokens also resets/replays: starting the current worker without a new input would double-consume a token. Repeating an original prompt after a longer completion therefore recomputes rather than pretending a prompt checkpoint exists.
+Ordinary continuation reuse requires the actual incoming IDs to begin with the entire committed token sequence, with an additional tail. The additional exact-request cache recognizes only the **entire last prompt's token vector** and restores its checkpoint at `prompt[:-1]`, discarding the generated suffix. It skips `consume`, then sends the final prompt token to the native worker exactly once. Other shorter/different histories reset/replay; there is no arbitrary-prefix rollback or multi-request cache. A prompt equal to committed tokens can use the cache only if it is also that exact saved request; otherwise it still resets. No rule depends on conversation labels, message object equality, or caller claims.
 
 The session holds a nonblocking serialization lock from first iterator advance through completion/finally. Concurrent generation/reset is rejected, not interleaved. Decoder and sampler must be exclusively borrowed by **one** session, including between requests; do not construct competing sessions on the same owners. A changed native position/failed flag is detected and resets the session, but an external reset-and-replay to the same position cannot prove token identity. The exclusive-owner API contract is necessary, not optional.
 
@@ -79,7 +81,8 @@ The consumer polls a bounded native output queue in 100 ms waits. Native backpre
 
 `last_stats` separates:
 
-- `prefill_seconds`: wall time for the one sequential `consume` call over all **but the final prompt token**. Empty input still incurs ABI overhead. Reset time is outside this measurement.
+- `prefill_seconds`: wall time for the one sequential `consume` call over all **but the final prompt token**. Empty uncached input still incurs ABI overhead. A prompt-checkpoint cache hit skips the call and reports zero. Reset and checkpoint capture/restore are outside this measurement.
+- `checkpoint_restore`, `checkpoint_restore_seconds`, `checkpoint_host_bytes`: cache-hit status, native rollback call wall time, and the retained snapshot's bounded requested ordinary-host storage. Capture overhead is included in request time, not a separate metric. Cache restore preserves the sampler's advancing RNG; it does not cache sampled responses.
 - `decode_seconds`: cumulative native successful decoder-step **plus sample** wall time, including the first worker step on the final prompt token. Excludes native queue backpressure and runtime-mutex wait. This is not pure GPU kernel time; incomplete failing steps are not included.
 - `output_queue_wait_seconds`: cumulative Python `poll` call wall time (may overlap decode time). It is not native producer queue-full wait and must not be added to decode as disjoint phases.
 - `ttft_seconds`: time from activation of the token-ID request iterator to the first nonempty text piece yielded; `None` for EOS-only/no emitted text. Template rendering/encoding done by `stream` before this iterator starts is excluded. It measures adapter emission, not transport delivery.
@@ -87,7 +90,7 @@ The consumer polls a bounded native output queue in 100 ms waits. Native backpre
 
 The experimental `ml_generation_event` C/ctypes layout gains a trailing `double decode_seconds`. **Rebuild the native library and restart callers together**; old external struct consumers must be rebuilt. No compatibility with an old binary layout is claimed.
 
-## Executed validation
+## Initial adapter validation (before prompt-checkpoint follow-up)
 
 All terminal test/build invocations were bounded to **120 seconds**. All GPU test processes used only:
 
@@ -132,7 +135,7 @@ The historical actual-checkpoint strict whole-trajectory failure in `WP7_CONDITI
 
 ## Next gate and limitations
 
-1. **Pending-prefix checkpoint/rollback gate:** retain/restore an exact initial-prompt checkpoint including the resident output/sampler-start contract. Until then identical/shortened prompt retries recompute, and no resume-after-unknown-drain is supported.
-2. Parent-assigned server lifecycle integration must reliably close generators on disconnect and keep decoder/sampler ownership exclusive. No existing server was edited.
+1. **Implemented checkpoint gate:** exact last-request rollback at the pre-final-input boundary; see `WP8_PROMPT_CHECKPOINT.md`. Arbitrary shortened prompts and resume-after-unknown-drain are still unsupported. Sampler RNG/response replay is not a checkpoint feature.
+2. Parent/other-agent server lifecycle integration must reliably close generators on disconnect and keep decoder/sampler ownership exclusive. No server files were edited by this adapter/runtime task.
 3. Longer-context, actual mixed recurrent/QSA/PLE chat, actual stop-ID sets, model quality, transport timing and model-scale resource acceptance remain separate gates. The tiny fixture cannot certify them.
 4. WP10 batched prefill is not implemented. No throughput or latency improvement is claimed.

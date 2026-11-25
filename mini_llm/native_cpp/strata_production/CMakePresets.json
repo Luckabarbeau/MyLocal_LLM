@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "rtx5080-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/rtx5080-release",
+      "cacheVariables": {
+        "STRATA_BUILD_JOBS": "4",
+        "STRATA_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "rtx5080-release",
+      "configurePreset": "rtx5080-release",
+      "targets": ["mini_llm_strata_engine"]
+    }
+  ]
+}

@@ -331,7 +331,13 @@ class Service:
 
 def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--backend', choices=('python', 'native'), default='python')
+    parser.add_argument('--backend', choices=('python', 'native', 'strata-native'), default='python')
+    parser.add_argument('--strata-config', type=Path,
+                        default=Path('/home/lucka/.local/share/strata/install/strata-iq3_s.json'),
+                        help='Production Strata profile to inherit without modifying it')
+    parser.add_argument('--strata-log', type=Path, default=Path('strata-native-engine.log'))
+    parser.add_argument('--strata-dry-run', action='store_true',
+                        help='Print source-built production config and RAM gate; never load a model')
     parser.add_argument('--native-library', type=Path)
     parser.add_argument('--native-bridge-library', type=Path)
     parser.add_argument('--native-ggml-library', type=Path)
@@ -710,9 +716,12 @@ def serve_http(service, args, profile_directory=None):
     server = QuietServer((args.host, args.port), make_handler(service, args, profile_directory))
     # Join native request cleanup before closing the decoder/sampler allocations.
     server.daemon_threads = not service.native
+    placement = (f'all routed experts CPU mmap, {args.native_threads} CPU threads; '
+                 f'device budget {args.native_budget_gib}GiB, dense {args.native_dense_budget_gib}GiB'
+                 if service.native else f'cache {args.cache_gib}GiB, {args.cpu_workers} CPU workers')
     print(f'MyLocal_LLM Qwen4Exp OpenAI-style API ({args.backend}) at '
           f'http://{args.host}:{args.port}/v1 (model {model_id}, context {args.context}, '
-          f'cache {args.cache_gib}GiB, {args.cpu_workers} CPU workers).',
+          f'{placement}).',
           file=sys.stderr, flush=True)
     print(f'WebUI for quick chat tests at http://{args.host}:{args.port}/',
           file=sys.stderr, flush=True)
@@ -794,6 +803,23 @@ def run_native(args, profile_directory=None):
 def main():
     parser = argument_parser()
     args = parser.parse_args()
+    if args.backend == 'strata-native':
+        # A separate upstream HTTP owner, never this script's model or token loop.
+        allowed = {'--backend', '--strata-config', '--strata-log', '--strata-dry-run',
+                   '--host', '--port', '--api-key'}
+        unsupported = [value.split('=', 1)[0] for value in sys.argv[1:]
+                       if value.startswith('--') and value.split('=', 1)[0] not in allowed]
+        if unsupported:
+            parser.error('strata-native inherits production settings; unsupported options: '
+                         + ', '.join(unsupported))
+        if not 1 <= args.port <= 65535:
+            parser.error('--port must be 1..65535')
+        from mini_llm.native.strata_production import run
+        try:
+            run(args)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            parser.error(f'Strata production backend unavailable: {exc}')
+        return
     if args.context < 2 or args.max_new_tokens < 1 or args.cpu_workers < 1:
         parser.error('context, max-new-tokens and cpu-workers must be positive')
     if not math.isfinite(args.host_state_budget_gib) or args.host_state_budget_gib < 0:

@@ -53,6 +53,43 @@ def request(port, payload=None, path='/v1/chat/completions'):
         connection.close()
 
 
+def test_native_repeated_http_prompt_checkpoint(fake):
+    chat, decoder, output, workers, seen = fake
+    service = native_service(chat)
+    with running(service) as port:
+        status, first = request(port, body())
+        assert status == 200
+        calls = len(decoder.consume_calls)
+        resets = decoder.resets
+        status, second = request(port, body())
+        assert status == 200
+        assert json.loads(first)['choices'][0]['message'] == json.loads(second)['choices'][0]['message']
+        _, metrics = request(port, path='/metrics')
+        stats = json.loads(metrics)['mylocal_stats']
+        assert stats['checkpoint_restore'] is True
+        assert stats['reset_reason'] == 'prompt_checkpoint_restore'
+        assert stats['reused_tokens'] == stats['prompt_tokens'] - 1
+        assert stats['new_prompt_tokens'] == 1 and stats['prefill_seconds'] == 0
+        assert len(decoder.consume_calls) == calls and decoder.resets == resets
+        assert stats['checkpoint_host_bytes'] > 0 and not stats['require_reset']
+
+
+def test_native_banner_reports_native_policy(monkeypatch, capsys):
+    from unittest.mock import Mock
+    server = Mock()
+    server.serve_forever.side_effect = KeyboardInterrupt
+    monkeypatch.setattr(http, 'QuietServer', Mock(return_value=server))
+    config = args('--backend', 'native', '--native-threads', '4',
+                  '--native-budget-gib', '10', '--native-dense-budget-gib', '7')
+    http.serve_http(Mock(native=True), config)
+    banner = capsys.readouterr().err
+    assert 'all routed experts CPU mmap, 4 CPU threads' in banner
+    assert 'device budget 10.0GiB, dense 7.0GiB' in banner
+    assert 'cache 6GiB' not in banner and '19 CPU workers' not in banner
+    server.server_close.assert_called_once()
+    assert not server.daemon_threads
+
+
 def body(**kwargs):
     return dict(messages=[dict(role='user', content='Hi')], max_tokens=2, **kwargs)
 

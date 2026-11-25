@@ -1,0 +1,89 @@
+{
+  "status": "partial: timer fallback passed; Nsight capture finalization failed",
+  "baseline_median_step_ms": 114.574749,
+  "baseline_steps_per_second": 8.727926604491186,
+  "diagnostic_wall_ms": 485.34009,
+  "stages": {
+    "hc_read": {
+      "count": 384,
+      "total_ms": 24.178166,
+      "ms_per_step": 6.0445415,
+      "wall_percent": 4.981695618839153,
+      "nested": false
+    },
+    "moe_submit": {
+      "count": 192,
+      "total_ms": 61.785286,
+      "ms_per_step": 15.4463215,
+      "wall_percent": 12.730307525183012,
+      "nested": false
+    },
+    "moe_finish": {
+      "count": 192,
+      "total_ms": 301.40539900000005,
+      "ms_per_step": 75.35134975000001,
+      "wall_percent": 62.10189621879371,
+      "nested": false
+    },
+    "recurrent": {
+      "count": 144,
+      "total_ms": 49.361186000000004,
+      "ms_per_step": 12.340296500000001,
+      "wall_percent": 10.17043244871859,
+      "nested": false
+    },
+    "qsa": {
+      "count": 48,
+      "total_ms": 31.619442,
+      "ms_per_step": 7.9048605,
+      "wall_percent": 6.514904219018874,
+      "nested": false
+    },
+    "hc_write": {
+      "count": 384,
+      "total_ms": 5.706484000000001,
+      "ms_per_step": 1.4266210000000001,
+      "wall_percent": 1.1757701697380905,
+      "nested": false
+    },
+    "ple": {
+      "count": 4,
+      "total_ms": 0.784812,
+      "ms_per_step": 0.196203,
+      "wall_percent": 0.16170351804236902,
+      "nested": false
+    },
+    "cpu_expert_exposed_wait": {
+      "count": 192,
+      "total_ms": 288.32125199999996,
+      "ms_per_step": 72.08031299999999,
+      "wall_percent": 59.40602434058146,
+      "nested": true
+    },
+    "final_head_tail": {
+      "count": 4,
+      "total_ms": 9.912605999999998,
+      "ms_per_step": 2.4781514999999996,
+      "wall_percent": 2.0424041212008675,
+      "nested": false
+    },
+    "cudaStreamSynchronize": {
+      "count": 2192,
+      "total_ms": 89.024508,
+      "ms_per_step": 22.256127,
+      "wall_percent": 18.342706451469937,
+      "nested": true
+    }
+  },
+  "unattributed_outer_ms": 0.5867089999999631,
+  "same_fixed_inputs": true,
+  "same_samples": true,
+  "kernel_ranking": null,
+  "sqlite": null,
+  "critical_path": "exposed synchronous CPU-expert wait: measured nested 59.4 percent of full diagnostic wall",
+  "caveats": [
+    "Nested sync/wait totals are not additive with stages",
+    "CPU wait is exposed blocking, not total CPU compute or GPU idle",
+    "No per-kernel duration or OSRT proof available"
+  ]
+}

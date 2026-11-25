@@ -167,3 +167,5 @@ rollback_backups/
 .playwright-mcp/
 
 
+
+mini_llm/native_cpp/third_party/

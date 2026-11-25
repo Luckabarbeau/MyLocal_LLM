@@ -1,0 +1,24 @@
+{
+  "status": "capture finalization timeout; no usable report or SQLite",
+  "nsys_version": "2026.3.2.476-263238834031v0",
+  "capture_started_monotonic": 303054.796880752,
+  "before_cudaProfilerStop_monotonic": 303055.324171918,
+  "last_observed_stage": "before_cudaProfilerStop",
+  "raw_trace": "decode_incomplete.qdstrm",
+  "offline_import_command": ["/usr/local/cuda/bin/nsys", "import", "--output-file=benchmarks/native_critical_path_gpu1_16/decode_recovered", "benchmarks/native_critical_path_gpu1_16/decode_incomplete.qdstrm"],
+  "offline_import_returncode": 1,
+  "offline_import_error": "QdstrmFile.cpp(221): QdstrmFile::verifyHeader(): boost::wrapexcept<QuadDCommon::IncompleteFileException>: Qdstrm file is incomplete.",
+  "environment_check": {
+    "kernel_paranoid_level": 4,
+    "perf_event_open": "Fail",
+    "cpu_profiling_process_tree": "Fail",
+    "cpu_profiling_system_wide": "Fail",
+    "initial_warning": "CPU context switch tracing will be disabled",
+    "retry_cpuctxsw": "none"
+  },
+  "cuda_permission_denied_observed": false,
+  "cause": "unknown; observed hang at cudaProfilerStop, not proven CUDA permission denial",
+  "gpu_kernel_ranking": null,
+  "osrt_wait_statistics": null,
+  "sqlite_statistics": null
+}

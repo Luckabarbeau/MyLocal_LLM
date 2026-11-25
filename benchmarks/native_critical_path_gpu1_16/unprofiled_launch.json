@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/profile_native_qwen_decode.py",
+    "--output",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_critical_path_gpu1_16",
+    "--steps",
+    "4",
+    "--prompt-tokens",
+    "16",
+    "--worker",
+    "unprofiled"
+  ],
+  "cuda_visible_devices": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+  "owned_pid": 611000,
+  "returncode": 0,
+  "seconds": 11.197498949011788
+}

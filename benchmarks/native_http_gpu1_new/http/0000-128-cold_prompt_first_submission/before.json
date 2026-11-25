@@ -1,0 +1,166 @@
+{
+  "/health": {
+    "path": "/health",
+    "status": 200,
+    "raw": "{\"status\": \"ok\", \"model\": \"qwen3.8-flash-next-iq3_s\", \"loaded\": true, \"max_context\": 256, \"service\": \"mylocal_llm_qwen4exp\", \"config\": {\"backend\": \"native\", \"experimental\": true, \"arithmetic_policy\": \"reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler\", \"diagnostic_trajectory_differences\": \"All-48 conditioned operator checks passed at roundoff; independent strict whole-trajectory diagnostics remain failed (WP7/WP8_NATIVE_CHAT). Different arithmetic policies can produce different logits and sampled trajectories; no model-quality or competitive-performance acceptance is claimed.\", \"native_library\": \"/tmp/mini-llm-wp1-build/libmini_llm_native.so\", \"capacity\": 256, \"bridge_library\": \"/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_e231d10a715274f9e9e6.so\", \"ggml_library\": \"/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3\", \"page_size\": 16, \"physical_pages\": 2, \"threads\": 4, \"trace\": false, \"budget_bytes\": 10737418240, \"dense_budget_bytes\": 7516192768, \"mapped_budget_bytes\": 103079215104, \"host_budget_bytes\": 1073741824, \"sampler_engine\": \"same as decoder; shared device allocation budget\", \"seed\": 0, \"queue_capacity\": 1, \"thinking\": false, \"reasoning_effort\": null, \"prefill\": \"native sequential consume (not batched prefill)\", \"python_tuning_options_applied\": false}}",
+    "json": {
+      "status": "ok",
+      "model": "qwen3.8-flash-next-iq3_s",
+      "loaded": true,
+      "max_context": 256,
+      "service": "mylocal_llm_qwen4exp",
+      "config": {
+        "backend": "native",
+        "experimental": true,
+        "arithmetic_policy": "reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler",
+        "diagnostic_trajectory_differences": "All-48 conditioned operator checks passed at roundoff; independent strict whole-trajectory diagnostics remain failed (WP7/WP8_NATIVE_CHAT). Different arithmetic policies can produce different logits and sampled trajectories; no model-quality or competitive-performance acceptance is claimed.",
+        "native_library": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+        "capacity": 256,
+        "bridge_library": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_e231d10a715274f9e9e6.so",
+        "ggml_library": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "page_size": 16,
+        "physical_pages": 2,
+        "threads": 4,
+        "trace": false,
+        "budget_bytes": 10737418240,
+        "dense_budget_bytes": 7516192768,
+        "mapped_budget_bytes": 103079215104,
+        "host_budget_bytes": 1073741824,
+        "sampler_engine": "same as decoder; shared device allocation budget",
+        "seed": 0,
+        "queue_capacity": 1,
+        "thinking": false,
+        "reasoning_effort": null,
+        "prefill": "native sequential consume (not batched prefill)",
+        "python_tuning_options_applied": false
+      }
+    },
+    "error": null,
+    "headers": {
+      "Server": "BaseHTTP/0.6 Python/3.12.3",
+      "Date": "Wed, 25 Nov 2026 12:14:12 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": "1402"
+    },
+    "truncated": false,
+    "seconds": 0.0008919929969124496
+  },
+  "/v1/models": {
+    "path": "/v1/models",
+    "status": 200,
+    "raw": "{\"object\": \"list\", \"data\": [{\"id\": \"qwen3.8-flash-next-iq3_s\", \"object\": \"model\", \"owned_by\": \"mylocal_llm\", \"status\": {\"value\": \"loaded\"}, \"meta\": {\"n_ctx\": 256}}]}",
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "id": "qwen3.8-flash-next-iq3_s",
+          "object": "model",
+          "owned_by": "mylocal_llm",
+          "status": {
+            "value": "loaded"
+          },
+          "meta": {
+            "n_ctx": 256
+          }
+        }
+      ]
+    },
+    "error": null,
+    "headers": {
+      "Server": "BaseHTTP/0.6 Python/3.12.3",
+      "Date": "Wed, 25 Nov 2026 12:14:12 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": "165"
+    },
+    "truncated": false,
+    "seconds": 0.0005193860270082951
+  },
+  "/props": {
+    "path": "/props",
+    "status": 404,
+    "raw": "{\"error\": {\"message\": \"Unknown endpoint\", \"type\": \"not_found_error\"}}",
+    "json": {
+      "error": {
+        "message": "Unknown endpoint",
+        "type": "not_found_error"
+      }
+    },
+    "error": null,
+    "headers": {
+      "Server": "BaseHTTP/0.6 Python/3.12.3",
+      "Date": "Wed, 25 Nov 2026 12:14:12 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": "69"
+    },
+    "truncated": false,
+    "seconds": 0.0006332400371320546
+  },
+  "/metrics": {
+    "path": "/metrics",
+    "status": 200,
+    "raw": "{\"config\": {\"backend\": \"native\", \"experimental\": true, \"arithmetic_policy\": \"reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler\", \"diagnostic_trajectory_differences\": \"All-48 conditioned operator checks passed at roundoff; independent strict whole-trajectory diagnostics remain failed (WP7/WP8_NATIVE_CHAT). Different arithmetic policies can produce different logits and sampled trajectories; no model-quality or competitive-performance acceptance is claimed.\", \"native_library\": \"/tmp/mini-llm-wp1-build/libmini_llm_native.so\", \"capacity\": 256, \"bridge_library\": \"/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_e231d10a715274f9e9e6.so\", \"ggml_library\": \"/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3\", \"page_size\": 16, \"physical_pages\": 2, \"threads\": 4, \"trace\": false, \"budget_bytes\": 10737418240, \"dense_budget_bytes\": 7516192768, \"mapped_budget_bytes\": 103079215104, \"host_budget_bytes\": 1073741824, \"sampler_engine\": \"same as decoder; shared device allocation budget\", \"seed\": 0, \"queue_capacity\": 1, \"thinking\": false, \"reasoning_effort\": null, \"prefill\": \"native sequential consume (not batched prefill)\", \"python_tuning_options_applied\": false}, \"mylocal_stats\": {}, \"experts\": null}",
+    "json": {
+      "config": {
+        "backend": "native",
+        "experimental": true,
+        "arithmetic_policy": "reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler",
+        "diagnostic_trajectory_differences": "All-48 conditioned operator checks passed at roundoff; independent strict whole-trajectory diagnostics remain failed (WP7/WP8_NATIVE_CHAT). Different arithmetic policies can produce different logits and sampled trajectories; no model-quality or competitive-performance acceptance is claimed.",
+        "native_library": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+        "capacity": 256,
+        "bridge_library": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_e231d10a715274f9e9e6.so",
+        "ggml_library": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+        "page_size": 16,
+        "physical_pages": 2,
+        "threads": 4,
+        "trace": false,
+        "budget_bytes": 10737418240,
+        "dense_budget_bytes": 7516192768,
+        "mapped_budget_bytes": 103079215104,
+        "host_budget_bytes": 1073741824,
+        "sampler_engine": "same as decoder; shared device allocation budget",
+        "seed": 0,
+        "queue_capacity": 1,
+        "thinking": false,
+        "reasoning_effort": null,
+        "prefill": "native sequential consume (not batched prefill)",
+        "python_tuning_options_applied": false
+      },
+      "mylocal_stats": {},
+      "experts": null
+    },
+    "error": null,
+    "headers": {
+      "Server": "BaseHTTP/0.6 Python/3.12.3",
+      "Date": "Wed, 25 Nov 2026 12:14:12 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": "1316"
+    },
+    "truncated": false,
+    "seconds": 0.000526138988789171
+  },
+  "/slots": {
+    "path": "/slots",
+    "status": 404,
+    "raw": "{\"error\": {\"message\": \"Unknown endpoint\", \"type\": \"not_found_error\"}}",
+    "json": {
+      "error": {
+        "message": "Unknown endpoint",
+        "type": "not_found_error"
+      }
+    },
+    "error": null,
+    "headers": {
+      "Server": "BaseHTTP/0.6 Python/3.12.3",
+      "Date": "Wed, 25 Nov 2026 12:14:12 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": "69"
+    },
+    "truncated": false,
+    "seconds": 0.0006164629594422877
+  }
+}

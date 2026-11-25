@@ -1,0 +1,37 @@
+{
+  "source_revision": "712fec6b4297c9cfd32ab43daaa2979a9aa01edf",
+  "configure": {
+    "command": "cmake --preset rtx5080-release",
+    "exit_code": 0
+  },
+  "build": {
+    "command": "timeout --signal=TERM --kill-after=5s 160s cmake --build --preset rtx5080-release",
+    "exit_code": 0
+  },
+  "initial_build_window": "timed out after 170 seconds; resumed incrementally and completed",
+  "source_integrity": "6112 file hashes and all 9 reference files passed at configure, unchanged source",
+  "toolkit": "13.4.92",
+  "cuda_architectures": "120 (SASS and PTX); upstream W4A4 unit 120a",
+  "help": {
+    "argv": [
+      "build/rtx5080-release/upstream/strata",
+      "--help"
+    ],
+    "timeout_seconds": 10,
+    "exit_code": 0,
+    "CUDA_VISIBLE_DEVICES": "GPU-bea264b4-9e76-3be5-5883-7bde3fe9f82d"
+  },
+  "artifacts": {
+    "build/rtx5080-release/upstream/strata": {
+      "bytes": 126836320,
+      "sha256": "54c8c450c6ab21f5da4a41cf9707a8891f4984187f46360083118e321a835b33"
+    },
+    "build/rtx5080-release/upstream/libstrata_kq.so": {
+      "bytes": 14501088,
+      "sha256": "e0415580a8212bc5ae60aee85f42211fc4947f39fba8358da29152951dfccbc6"
+    }
+  },
+  "inference_run": false,
+  "throughput_measured": false,
+  "host_arena_residency_measured": false
+}

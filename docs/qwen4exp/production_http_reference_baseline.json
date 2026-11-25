@@ -1,0 +1,60 @@
+{
+  "schema": "production-http-reference-status-v1",
+  "status": "pending_host_headroom",
+  "production_comparison_accepted": false,
+  "fresh_http_requests_completed": 0,
+  "server_started": false,
+  "gpu_uuid": "GPU-bea264b4-9e76-3be5-5883-7bde3fe9f82d",
+  "physical_gpu_index": 0,
+  "configured_context": 262144,
+  "runtime_context_verified": false,
+  "attempt_artifacts": "benchmarks/strata-production-http-reference-v1",
+  "launch_command": "/home/lucka/.local/share/strata/terminal/0.1.59.1/python/bin/python3 scripts/run_strata_production_comparison.py --output benchmarks/strata-production-http-reference-v1 --deadline 170 --startup-timeout 75 --max-output 256 --max-requests 3",
+  "failure": "ValueError: Insufficient MemAvailable for arena + 4-GiB reserve + 1-GiB startup allowance",
+  "preflight": {
+    "host_total_bytes": 66850373632,
+    "host_available_bytes": 50676617216,
+    "estimated_arena_gib": 46.84,
+    "required_reserve_gib": 4,
+    "startup_allowance_gib": 1,
+    "required_available_gib": 51.84,
+    "competing_gpu0_compute_observed": false,
+    "other_gpu_job_stopped": false
+  },
+  "workload": {
+    "prepared_using": "installed Strata CPU tokenizer and chat template; existing benchmark standard coding workload",
+    "manifest": "benchmarks/strata-production-http-reference-v1/workload.json",
+    "sha256": "5aeb0fafa30010ba5616148dbd41c794a7df3be78c7bcc8b632863267585309a",
+    "sizing_counts": [128, 1024, 4096],
+    "served_counts": null,
+    "natural_max_tokens": 256,
+    "sampler": {"temperature": 1.0, "top_p": 0.95, "top_k": 20},
+    "user_agent": "qwen4exp-production-http/1"
+  },
+  "configured_drafting": {
+    "mtp": false,
+    "spec": 4,
+    "server_selection": "production automatic selection, effective drafter unobserved",
+    "actual_drafter": null,
+    "drafts_offered": null,
+    "drafts_accepted": null
+  },
+  "observed_arena_bytes": null,
+  "startup_available_bytes": null,
+  "observed_prefill_chunk": null,
+  "observed_token_graph": null,
+  "observed_expert_gpu_slots": null,
+  "observed_cpu_workers": null,
+  "observed_uncached_prefill_tokens_per_second": null,
+  "observed_emitted_tokens_per_active_decode_second": null,
+  "matched_candidate_pipeline_verified": false,
+  "validation": {
+    "benchmark_unit_tests": "25 passed: /usr/bin/python3 -m unittest discover -s tests -p test_benchmark_qwen4exp_serving.py",
+    "production_contract_unit_tests": "6 passed: /usr/bin/python3 -m unittest discover -s tests -p test_strata_production_comparison.py",
+    "python_syntax": "py_compile passed for both scripts and new test module",
+    "installed_server_help": "completed with installed Python and installed terminal PYTHONPATH; no model launch",
+    "installed_engine_help": "completed; --mmap-experts explicitly opts out of default resident arena",
+    "performance": "not validated; guard refused before model startup"
+  },
+  "next_experiment": "When MemAvailable is at least 51.84 GiB and GPU 0 has no competing compute, launch the installed production service on a new owned free port and collect the frozen 128/1K/4K natural-256-token SSE matrix within a 170-second deadline. Preserve the existing jobs and host reserve."
+}

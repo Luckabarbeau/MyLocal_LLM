@@ -1,0 +1,194 @@
+{
+  "ok": true,
+  "error": null,
+  "http_status": 200,
+  "usage": {
+    "prompt_tokens": 128,
+    "completion_tokens": 8,
+    "total_tokens": 136
+  },
+  "timings": null,
+  "message": {
+    "role": "assistant",
+    "content": "The issue is in `compute_1"
+  },
+  "finish_reason": "length",
+  "done": true,
+  "first_content_seconds": 0.33805293100886047,
+  "first_reasoning_seconds": null,
+  "ttft_seconds": 0.33805293100886047,
+  "seconds": 1.1665531520266086,
+  "response_headers": {
+    "Server": "BaseHTTP/0.6 Python/3.12.3",
+    "Date": "Wed, 25 Nov 2026 12:14:48 GMT",
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    "Connection": "close"
+  },
+  "timing_note": "Client arrivals are durations, not tokens per SSE event. Nonstream TTFT is unavailable; response arrival is not first-token time.",
+  "cache": {
+    "committed_tokens": 135,
+    "reused_tokens": 127,
+    "reset_reason": "prompt_checkpoint_restore",
+    "require_reset": false
+  },
+  "hardware": null,
+  "resources": {
+    "sample_count": 2,
+    "metrics": {
+      "process.cpu_percent_one_core": {
+        "min": 203.97504038869482,
+        "max": 203.97504038869482
+      },
+      "process.rss_bytes": {
+        "min": 28373876736,
+        "max": 28527755264
+      },
+      "process.virtual_bytes": {
+        "min": 109630152704,
+        "max": 109630169088
+      },
+      "global_cpu.busy_percent": {
+        "min": 9.53177257525084,
+        "max": 9.53177257525084
+      },
+      "global_memory.total_bytes": {
+        "min": 66850373632,
+        "max": 66850373632
+      },
+      "global_memory.available_bytes": {
+        "min": 58176118784,
+        "max": 58246393856
+      },
+      "global_memory.used_bytes": {
+        "min": 8603979776,
+        "max": 8674254848
+      },
+      "gpu.utilization_percent": {
+        "min": 19.0,
+        "max": 38.0
+      },
+      "gpu.memory_utilization_percent": {
+        "min": 5.0,
+        "max": 10.0
+      },
+      "gpu.memory_used_bytes": {
+        "min": 8189378560.0,
+        "max": 8189378560.0
+      },
+      "gpu.memory_total_bytes": {
+        "min": 17094934528.0,
+        "max": 17094934528.0
+      },
+      "gpu.power_watts": {
+        "min": 54.58,
+        "max": 58.82
+      },
+      "gpu.temperature_c": {
+        "min": 32.0,
+        "max": 33.0
+      }
+    },
+    "error": null,
+    "pid": 589642,
+    "gpu_uuid": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+    "interval_seconds": 1.0,
+    "labels": {
+      "process": "Selected PID only; CPU percent uses one logical core=100%, may exceed 100%.",
+      "global_cpu": "Whole host, all processes; interval busy percent.",
+      "global_memory": "Whole host; used_bytes = total_bytes - available_bytes.",
+      "gpu": "Whole selected GPU, all processes; not PID-attributed."
+    }
+  },
+  "tokens": {
+    "prompt_tokens": 128,
+    "completion_tokens": 8,
+    "reasoning_tokens": null,
+    "processed_prompt_tokens": 1,
+    "reused_prompt_tokens": 127,
+    "decode_forward_tokens": null
+  },
+  "phases": {
+    "prefill_seconds": 0.0,
+    "decode_seconds": 0.9150186639999999,
+    "total_seconds": 1.1386187630123459,
+    "first_piece_seconds": null,
+    "first_engine_token_seconds": null,
+    "prefill_tokens_per_second": null,
+    "decode_tokens_per_second": null,
+    "decode_forwards_per_second": null
+  },
+  "mylocal_stats": {
+    "prompt_tokens": 128,
+    "reused_tokens": 127,
+    "new_prompt_tokens": 1,
+    "prefill_seconds": 0.0,
+    "decode_seconds": 0.9150186639999999,
+    "output_queue_wait_seconds": 0.916242964041885,
+    "ttft_seconds": 0.27001700800610706,
+    "emitted_pieces": 8,
+    "sampled_tokens": 8,
+    "termination": "max_tokens",
+    "reset_reason": "prompt_checkpoint_restore",
+    "checkpoint_restore": true,
+    "checkpoint_restore_seconds": 0.00682525901356712,
+    "checkpoint_host_bytes": 119065880,
+    "require_reset": false,
+    "request_seconds": 1.0715635100496002,
+    "generated_tokens": 8,
+    "stopped": false,
+    "backend": "native",
+    "arithmetic_policy": "reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler",
+    "request_id": "chatcmpl-e1529934082c4163ab979abe",
+    "total_seconds": 1.1386187630123459,
+    "cache": {
+      "committed_tokens": 135,
+      "reused_tokens": 127,
+      "reset_reason": "prompt_checkpoint_restore",
+      "require_reset": false
+    }
+  },
+  "metrics_request": null,
+  "cache_snapshots": null,
+  "completion_tokens_per_second_end_to_end": 6.85781011015392,
+  "usage_available": true,
+  "raw_server_telemetry": [
+    {
+      "mylocal_stats": {
+        "prompt_tokens": 128,
+        "reused_tokens": 127,
+        "new_prompt_tokens": 1,
+        "prefill_seconds": 0.0,
+        "decode_seconds": 0.9150186639999999,
+        "output_queue_wait_seconds": 0.916242964041885,
+        "ttft_seconds": 0.27001700800610706,
+        "emitted_pieces": 8,
+        "sampled_tokens": 8,
+        "termination": "max_tokens",
+        "reset_reason": "prompt_checkpoint_restore",
+        "checkpoint_restore": true,
+        "checkpoint_restore_seconds": 0.00682525901356712,
+        "checkpoint_host_bytes": 119065880,
+        "require_reset": false,
+        "request_seconds": 1.0715635100496002,
+        "generated_tokens": 8,
+        "stopped": false,
+        "backend": "native",
+        "arithmetic_policy": "reference_fp32 HC/PLE/recurrent/KV; QSA ggml_cpu; all routed experts CPU mmap ggml_q8; native GPU sampler",
+        "request_id": "chatcmpl-e1529934082c4163ab979abe",
+        "total_seconds": 1.1386187630123459,
+        "cache": {
+          "committed_tokens": 135,
+          "reused_tokens": 127,
+          "reset_reason": "prompt_checkpoint_restore",
+          "require_reset": false
+        }
+      },
+      "usage": {
+        "prompt_tokens": 128,
+        "completion_tokens": 8,
+        "total_tokens": 136
+      }
+    }
+  ]
+}

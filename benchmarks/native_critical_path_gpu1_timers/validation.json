@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "path": "scripts/profile_native_qwen_decode.py",
+      "sha256": "1783505d35909b49890bfbc98b9ec7cffa09045af551a97f2b1070f7fe4c76b8"
+    },
+    {
+      "path": "scripts/build_native_decode_diagnostic.py",
+      "sha256": "89c9ecf41e319abebeed990e811de5c5d7914b69c97ed3b2d1b1ccd96739ad0c"
+    },
+    {
+      "path": "tests/test_profile_native_qwen_decode.py",
+      "sha256": "b738a3f08b18ba08952b3323e2bf333cf03f62d3c3446e8c1df7b5afabe421b2"
+    }
+  ],
+  "validation": {
+    "command": "CUDA_VISIBLE_DEVICES= MINI_LLM_BACKEND=numpy PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests .venv/bin/python -m pytest -q tests/test_profile_native_qwen_decode.py tests/test_run_qwen4exp_serving_benchmark.py tests/test_native_chat.py tests/test_native_http.py --tb=short",
+    "result": "49 passed in 1.39s"
+  },
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+    "MINI_LLM_BACKEND": "numpy",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "NVIDIA_TF32_OVERRIDE": "0",
+    "PYTHONPATH": "."
+  },
+  "parent_status": "unchanged",
+  "numerical_status": "48 conditioned checks remain established; strict whole trajectory remains diagnostic, not equality green"
+}

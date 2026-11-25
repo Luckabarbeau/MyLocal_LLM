@@ -1,0 +1,31 @@
+{
+  "cpu_before_gpu": {
+    "command": "CUDA_VISIBLE_DEVICES='' MINI_LLM_BACKEND=numpy PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests .venv/bin/python -m pytest -q tests/test_run_qwen4exp_serving_benchmark.py tests/test_benchmark_qwen4exp_serving.py tests/test_native_http.py --tb=short",
+    "passed": 53,
+    "subtests_passed": 7,
+    "seconds": 4.1
+  },
+  "cpu_final": {
+    "command": "CUDA_VISIBLE_DEVICES='' MINI_LLM_BACKEND=numpy PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests .venv/bin/python -m pytest -q tests/test_run_qwen4exp_serving_benchmark.py tests/test_benchmark_qwen4exp_serving.py tests/test_native_http.py tests/test_native_chat.py tests/test_qwen4exp_serving_state.py tests/test_0239_qwen4exp_chat.py --tb=short",
+    "passed": 120,
+    "skipped": 1,
+    "subtests_passed": 7,
+    "seconds": 19.4,
+    "terminal_timeout_seconds": 120
+  },
+  "actual_http": {
+    "runner_returncode": 0,
+    "terminal_timeout_seconds": 180,
+    "artifact_checks": "baseline.json",
+    "all_checks_passed": true
+  },
+  "corrections": [
+    "Runner module import path corrected after mocked test failure; relevant rerun passed.",
+    "Actual native banner misleadingly showed Python defaults; banner-only correction and new regression passed.",
+    "New HTTP checkpoint regression initially duplicated fixture max_tokens argument; test-local call corrected, broad rerun passed."
+  ],
+  "native_core_edited": false,
+  "numerical_tolerances_changed": false,
+  "strict_trajectory_diagnostic": "historical FAIL unchanged; not rerun",
+  "matched_strata_run": false
+}

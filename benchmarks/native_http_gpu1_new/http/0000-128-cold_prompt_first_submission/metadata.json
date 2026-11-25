@@ -1,0 +1,16 @@
+{
+  "size": "128",
+  "target_prompt_tokens": 128,
+  "sizing_prompt_tokens": 128,
+  "sizing_source": "local_gguf_template_and_tokenizer:/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "workload": "cold_prompt_first_submission",
+  "repeat_index": 0,
+  "source_content": "generated_synthetic_code",
+  "source_files": [],
+  "repeated_source_content": false,
+  "weights_label": "unknown_initial_state",
+  "server_reset": false,
+  "context": 256,
+  "output_reserve": 8,
+  "request_sha256": "b0fee04ba7a614c038e2db729c7718053d367d07d48d76d6472744d23f958a61"
+}

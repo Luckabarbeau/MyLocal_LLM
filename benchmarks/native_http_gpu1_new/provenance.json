@@ -1,0 +1,485 @@
+{
+  "files": [
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "bytes": 54817524224,
+      "mtime_ns": 1794362612345817261,
+      "sha256": "4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3"
+    },
+    {
+      "path": "/home/lucka/softwares/local_llm_lab_north_v7/local_llm_lab/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "bytes": 28800138432,
+      "mtime_ns": 1794269742748675005,
+      "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/libmini_llm_native.so",
+      "bytes": 1906664,
+      "mtime_ns": 1795576534528483489,
+      "sha256": "fd72e97da4d0976a1a8f79fd23def26d2c33883eb135905e563be04bebabd493"
+    },
+    {
+      "path": "/home/lucka/.cache/mylocal_llm/native/ggml_packed_cpu_e231d10a715274f9e9e6.so",
+      "bytes": 116520,
+      "mtime_ns": 1795479622652709619,
+      "sha256": "9be971e4091c0eda183e635d41d2bdb8fc24e3ac17b86b4ed90060bf7f7b6f5b"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/qwen4exp-references/llama-no-prefetch/build-cpu/bin/libggml-cpu.so.0.25.3",
+      "bytes": 1217704,
+      "mtime_ns": 1794882149356829610,
+      "sha256": "924ac13f3e949cb1b62eddff20221600a6efcb1a2b99eb4abd390e75c23df839"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/CMakeLists.txt",
+      "bytes": 825,
+      "mtime_ns": 1795563216934016138,
+      "sha256": "58218c03b678a61988983747505c363281143da94e34e5af8286aab6dbdc443f"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/README.md",
+      "bytes": 8233,
+      "mtime_ns": 1795564064324563325,
+      "sha256": "684886f9f3ae68b6cc3ef7eb08563c73a35bd201c672dd507f34a0c09dd91029"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/chaining_runtime.inc",
+      "bytes": 3827,
+      "mtime_ns": 1795482573640088091,
+      "sha256": "b297f325f46fc9b41e1d0c16bef96ecbd0c318f69d7dbbe5113f444add6a93a9"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/cpu_expert_runtime.inc",
+      "bytes": 9271,
+      "mtime_ns": 1795564905337896514,
+      "sha256": "01f0ed4996f39e9c86a487af110357f7d855c41529b329adc628983954c2e750"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/decoder_runtime.inc",
+      "bytes": 23518,
+      "mtime_ns": 1795576492356532483,
+      "sha256": "624c513351469fbea03625c43533261aedac955668a5d7aa6d40396c7c1305f8"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/generation.h",
+      "bytes": 1865,
+      "mtime_ns": 1795574323209033244,
+      "sha256": "c43361e99c220464f4b741102c10c666a555da24eb128b7e0853ecc2dd4826ed"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/generation_runtime.inc",
+      "bytes": 8819,
+      "mtime_ns": 1795574323210033291,
+      "sha256": "999b5694e58fed522c23ee185ed366b8f955b5b4a5b03e3c1efecb11fd4b49dc"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/gguf_loader.cpp",
+      "bytes": 7531,
+      "mtime_ns": 1795437239369052420,
+      "sha256": "53c89686fd5ab2cd585dd5135a806b94bde78969d436122b6da442e63e5a1cb2"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/gguf_loader.h",
+      "bytes": 731,
+      "mtime_ns": 1795437043780638498,
+      "sha256": "187e24bf80334896c459a512d974a94f8d5c57c387f3ad873c0bd3f6ec6968da"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/hyperconnection.cu",
+      "bytes": 7078,
+      "mtime_ns": 1795475366147197447,
+      "sha256": "93542aa089e4cce97701cbb144d75355280d7f6ed16d50bfd6dbf7ece7c153c8"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/hyperconnection.h",
+      "bytes": 3329,
+      "mtime_ns": 1795475344141172669,
+      "sha256": "192d5412162f20925e5e2b7843e8e5538bfb08429ae633d21745508379db448c"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/hyperconnection_runtime.inc",
+      "bytes": 13869,
+      "mtime_ns": 1795478645449166175,
+      "sha256": "66e2e8ea9d352916e140e3b172febc9010a27812908d8fe56206e585ab49cb3a"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_pages.cu",
+      "bytes": 2266,
+      "mtime_ns": 1795522784825757100,
+      "sha256": "0f57d80f29fdeb5205721438f06f3f566d15867658319a255be2d34b4c91b942"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_pages.h",
+      "bytes": 528,
+      "mtime_ns": 1795522577820127704,
+      "sha256": "e9149b33a3306a80f65fb9be7c41fb07d551807e62cf28ce92fba3f90bc67e00"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_pages_runtime.inc",
+      "bytes": 10234,
+      "mtime_ns": 1795522800827501534,
+      "sha256": "755f626f05244ea30da55cd3795da7213dbed60c1605df638e159ea4bad3c454"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_streamed.cu",
+      "bytes": 6048,
+      "mtime_ns": 1795523985818642944,
+      "sha256": "862133813886690ab2a7afeb1cee57f5a19376df53382d8490a774cf24b657a1"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_streamed.h",
+      "bytes": 741,
+      "mtime_ns": 1795523963820619194,
+      "sha256": "43b44f188836ca7057749ce6e08dda8a9a20d3150af3d16ef3ca8e23630051de"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/kv_streamed_runtime.inc",
+      "bytes": 13541,
+      "mtime_ns": 1795523962820572653,
+      "sha256": "f7b3ab31daff943508f3048ec1ab369bbc4a43c7679ce20fa87c88738a052ed9"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/moe.cu",
+      "bytes": 11705,
+      "mtime_ns": 1795480774716269530,
+      "sha256": "1ad77357bab0a2819632b514884d2e7b8ce8c7aa6ded8b33193b2dbb387341aa"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/moe.h",
+      "bytes": 3841,
+      "mtime_ns": 1795480788686894574,
+      "sha256": "be2d1a48e032b31da741e28233436b9e1a3587bd4ca98e660470e5c28850ac59"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/moe_formats.cuh",
+      "bytes": 33400,
+      "mtime_ns": 1795480415601290273,
+      "sha256": "ea7d4328097531e7a4a408901471334b8cdf089cd20b46db532f5abbe7afc973"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/moe_runtime.inc",
+      "bytes": 17513,
+      "mtime_ns": 1795528104863481922,
+      "sha256": "26266db7ab7300a4641f8f4b205aed02e61a06f049b0634ae517143f87e4d238"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/ple.cu",
+      "bytes": 5089,
+      "mtime_ns": 1795477518334402459,
+      "sha256": "bfe1ad0f2003c92b38ffe67718554f2b5ca1ab3071d316ae3a1db3a98d162956"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/ple.h",
+      "bytes": 2537,
+      "mtime_ns": 1795477480442528461,
+      "sha256": "d42b53e92d2e6b10a4002cba62ff812c72c79ba98e68092793ed2a6c2015832f"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/ple_hash.cpp",
+      "bytes": 1137,
+      "mtime_ns": 1795477464042714826,
+      "sha256": "0c47974560cb7308e5ee1596db2011b3a5e555eed3c70c2db9d624e99a5b29e6"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/ple_hash.h",
+      "bytes": 715,
+      "mtime_ns": 1795477453573194562,
+      "sha256": "ad6143f60e80404a755eb3df9844e634c3ae86048ada9e9540507bb3c52e1701"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/ple_runtime.inc",
+      "bytes": 13467,
+      "mtime_ns": 1795526631631675179,
+      "sha256": "b824ff8ee1bd8f8fa2a7b44bc394a0f32a336f9457bb3031ceba0d3fc2792642"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_attention.cu",
+      "bytes": 4874,
+      "mtime_ns": 1795441934608182168,
+      "sha256": "e452f487d53ed5f43103e6757b5f5d6a36f842842002d2633c85898df4c49581"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_attention.h",
+      "bytes": 415,
+      "mtime_ns": 1795441159565894343,
+      "sha256": "0495e8f8c35618643360a9aee736d5471640e77dc578e1c28561bf86cd5b2641"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_frontend.cu",
+      "bytes": 4774,
+      "mtime_ns": 1795443347566442043,
+      "sha256": "4522e80fbffc2d9696ac08d1df0470c82304a91e406eb2b99318dce81fa45d9e"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_frontend.h",
+      "bytes": 2635,
+      "mtime_ns": 1795443257632287519,
+      "sha256": "c31a70a3dc4e368cd14ce78ab966f164717c28eae8bfea4ce9ff31ba0fd84d35"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_layer.cu",
+      "bytes": 473,
+      "mtime_ns": 1795445162580183449,
+      "sha256": "0eb199943dd906717c290eaab9bccba7d74cd31173f8e50121a35fb650cff260"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_layer_runtime.inc",
+      "bytes": 15314,
+      "mtime_ns": 1795525670457791160,
+      "sha256": "4dd3af8fea11c4ee30ecca80d74e1ef018a236522c546e12b46770ee0a17b7ef"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_paged.cu",
+      "bytes": 2215,
+      "mtime_ns": 1795525335108969686,
+      "sha256": "5ee5fda2d8033feb1e6a9fbee9f9e5167579d0bb1b41ebdbb38124416e214a95"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_paged.h",
+      "bytes": 495,
+      "mtime_ns": 1795525314739006701,
+      "sha256": "2874a2cd3d166175925215b823716b2baa3061db360ff577f0f641fd2ce6632e"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_paged_import_runtime.inc",
+      "bytes": 3724,
+      "mtime_ns": 1795531297779907282,
+      "sha256": "6a8499717d26eacd43d77dc6962c23c6d57e8cb5f391ac980cf675879b89d9f8"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_paged_runtime.inc",
+      "bytes": 10164,
+      "mtime_ns": 1795575728287377866,
+      "sha256": "0e0c08852e841797f58d7189def41acf7f06dc6e018b6ecfef455598af1eabef"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_projection.cu",
+      "bytes": 7404,
+      "mtime_ns": 1795527169387410455,
+      "sha256": "f8a8dfc8c03708ebeeb2295d46d76dca1e7d5f837b66f7d1883680ef1f7b6241"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_projection.h",
+      "bytes": 611,
+      "mtime_ns": 1795477874156687447,
+      "sha256": "141d402769b38673175742845fe0e871f5d499aafec6904e0c0091b207d3c056"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_selection.cu",
+      "bytes": 4117,
+      "mtime_ns": 1795445139565177290,
+      "sha256": "1547d9587ea4c927fe3ddb324e595233e8bb1bbd20ced1197b4b29620ff067aa"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/qsa_selection.h",
+      "bytes": 407,
+      "mtime_ns": 1795445116561173045,
+      "sha256": "fdcf4e8e4e7681f3a659cda997d98a8dc72ec568923c307703855cbe3e3d735a"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/recurrent.cu",
+      "bytes": 6966,
+      "mtime_ns": 1795476912122151910,
+      "sha256": "be3fd2eb4559bc277c5ed58cdb7c59c50ef8d78348d043a09c3a693303879167"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/recurrent.h",
+      "bytes": 610,
+      "mtime_ns": 1795476440119594045,
+      "sha256": "50c11aae6fc1fd52637e29e06b4f16eadb597acddd8ed7de06c9fce7ba81aa5a"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/recurrent_runtime.inc",
+      "bytes": 10238,
+      "mtime_ns": 1795479023350851459,
+      "sha256": "12915f73864d62ddd3ffbc7aeda2c6ccd54c43c1d71264bf7d1406e15f7251ad"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/runtime.cpp",
+      "bytes": 44813,
+      "mtime_ns": 1795563216935016178,
+      "sha256": "80f3497a843b5373918d23ad7fe9a1444a2c55fac1f6a3c64c5da6851975fea0"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/runtime.h",
+      "bytes": 30967,
+      "mtime_ns": 1795575805900922375,
+      "sha256": "0e6cf1081573653e85ec80d44f05356c026106e730ed2c83ee8d0e923cc2c411"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/sampler_runtime.inc",
+      "bytes": 5697,
+      "mtime_ns": 1795563147346716246,
+      "sha256": "ed8eab855a59c2e17bc948db26a4a0e1ede48c3e37118479082f4b17a3f3f73b"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/sampling.cu",
+      "bytes": 5537,
+      "mtime_ns": 1795562040427858302,
+      "sha256": "d8282126aa87e8cc07bed05c7f141c13652ee2134787bb89694c7ab496543ea8"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp/sampling.h",
+      "bytes": 658,
+      "mtime_ns": 1795562057280647258,
+      "sha256": "d69976628907e33a50e28aa7afb0e3645b1cfe58f62613a08ef76f2a75488802"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native/__init__.py",
+      "bytes": 76868,
+      "mtime_ns": 1795575805913922969,
+      "sha256": "b5cc962306ae6b4811f9e044d5a2c5e09f1c24f174bf6d8738f3aaa898762724"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native/chat.py",
+      "bytes": 12604,
+      "mtime_ns": 1795575831303084358,
+      "sha256": "d5c3b4b220e87f7d522523f8dff7e67bc005b858610e5e49de696023ef2b91b0"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native/decoder.py",
+      "bytes": 13436,
+      "mtime_ns": 1795575805914923015,
+      "sha256": "d8cd4344676e7cfd7870a9415fcaef72a75e39681102591b25c438d9c9bbbfb7"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native/generation.py",
+      "bytes": 4195,
+      "mtime_ns": 1795574323210033291,
+      "sha256": "c8e49855eb2ecdc11300b5cb7c31e7748bc05b879fa554b5b753f85778310ad9"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/run_qwen4exp_serving_benchmark.py",
+      "bytes": 8756,
+      "mtime_ns": 1795608790572436567,
+      "sha256": "826657d0fdd605b0ee44cfbb58be9f4ce776e535b60da49e690cbb57812d10a5"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/benchmark_qwen4exp_serving.py",
+      "bytes": 44689,
+      "mtime_ns": 1795608706588785906,
+      "sha256": "2a8fd37cdd82e292a40a76486eb85f74c27314f11d58896c7eabbe47fb11d883"
+    },
+    {
+      "path": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/serve_qwen4exp.py",
+      "bytes": 49834,
+      "mtime_ns": 1795608991597180031,
+      "sha256": "da6db88a02a0da3e851b1223cc0b6c0a141ce5a214aa2c45ad69299f13b8c69d"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeCache.txt",
+      "bytes": 29450,
+      "mtime_ns": 1795441473790122020,
+      "sha256": "25ee684f896fdab582108e59bad2d1a8b8aa993db8d013b8566ad1915bbda237"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/build.ninja",
+      "bytes": 19106,
+      "mtime_ns": 1795563250404698847,
+      "sha256": "a3c799d618d660df75e651d98dc59fc3826fbe29a530a143228379c2f00097bf"
+    }
+  ],
+  "seconds": 70.81146025657654,
+  "git_head": "eeeeff9a59a9884162941b3ea8f2915f937ce507",
+  "build_check": "cmake --build /tmp/mini-llm-wp1-build -- -n: ninja: no work to do.",
+  "note": "Source hashes include pre-existing parent-owned changes. Native core not edited in WP9; startup banner-only server correction occurred after measured run.",
+  "executed_server_source": {
+    "path": "scripts/serve_qwen4exp.py",
+    "sha256": "5d5445e63ead69684552560d8050579185d1c430d21a445ef964487f052da36a",
+    "basis": "File clean at initial git status; measured run used HEAD server source. Only subsequent source change is native banner reporting."
+  },
+  "final_server_source": {
+    "path": "scripts/serve_qwen4exp.py",
+    "sha256": "da6db88a02a0da3e851b1223cc0b6c0a141ce5a214aa2c45ad69299f13b8c69d"
+  },
+  "native_build_flags": [
+    "FLAGS = -O3 -DNDEBUG -std=c++20 -fPIC -Wall -Wextra -Wpedantic",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 -fPIC -Wall -Wextra -Wpedantic",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 -fPIC -Wall -Wextra -Wpedantic",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "FLAGS = -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --fmad=false --ftz=false --prec-div=true --prec-sqrt=true",
+    "INCLUDES = -isystem /usr/local/cuda/targets/x86_64-linux/include",
+    "LANGUAGE_COMPILE_FLAGS = -O3 -DNDEBUG"
+  ],
+  "bridge_source_files": [
+    {
+      "path": "mini_llm/ops/ggml_packed_cpu.py",
+      "sha256": "4422b28e095131fb067c2212f25c38049903cb5aeff399d46643c049be24a6d7"
+    },
+    {
+      "path": "mini_llm/ops/ggml_packed_cpu.cpp",
+      "sha256": "a4c9bfadb6d27ceb82570cb71bc0b98ee596e1c2e8ba1328ce5d619ba228cb0d"
+    },
+    {
+      "path": "mini_llm/ops/ggml_packed_cpu.h",
+      "sha256": "8fa70588ec7d87df0966aba7d96b995b1ea5e4ab589d7b2299b0bd3f1ec8281a"
+    },
+    {
+      "path": "mini_llm/ops/gguf_codebooks.h",
+      "sha256": "f2ab04debe621f6ae799c34996b0086419ecef36939753fd58a4b47a338cc28c"
+    },
+    {
+      "path": "mini_llm/ops/iq2_cpu_simd.h",
+      "sha256": "d5e9c5bc8047920ed95c7da208cddea23d82363c407e5b62e63c8a81b575cdf4"
+    },
+    {
+      "path": "mini_llm/ops/iq3_cpu_simd.h",
+      "sha256": "748fee163595ed15e1db833445bdc91c58c796dabc877a6445d8e472c7a8a4d1"
+    },
+    {
+      "path": "mini_llm/ops/iq3xxs_cpu_pair.h",
+      "sha256": "de90b531f5b05db9dab82de9919325215beef09628811904ebde11f379580431"
+    },
+    {
+      "path": "mini_llm/ops/iq3xxs_cpu_simd.h",
+      "sha256": "3e6cd063413acc0e29bde0e7c5c37d105ccbef50ad034fb6223e92aac9150da3"
+    },
+    {
+      "path": "mini_llm/ops/iq4_cpu_vnni.h",
+      "sha256": "32e1c47dfcb6bcececc91da2977f1ebd0e76fbacf13aaa76b7f756a59d05c9d8"
+    },
+    {
+      "path": "mini_llm/ops/native_expert_service.h",
+      "sha256": "f414a0efe6891dad61948e86831f47230a494828333da4ac5d2626fe4ae5e82e"
+    },
+    {
+      "path": "mini_llm/ops/native_expert_staging.h",
+      "sha256": "aad553bf6085ce10cc0eb306c289cd9290b83cc3afb270f955b919595dd64929"
+    },
+    {
+      "path": "mini_llm/ops/q2_cpu_rows.h",
+      "sha256": "d60fde75dc5502da1977775b8de0f7171fb1c7b795dba8401e0f12b696b74949"
+    },
+    {
+      "path": "mini_llm/ops/q2_cpu_simd.h",
+      "sha256": "b635985f9aa61242526779c6b6feaaf8b7ddda2035049ea8dbbdd7da98ea578c"
+    }
+  ],
+  "bridge_resolution_command": "CUDA_VISIBLE_DEVICES=GPU-e961516f-d77d-813c-98e9-2f5403f71631 MINI_LLM_BACKEND=numpy OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=. .venv/bin/python -c \"from mini_llm.ops.ggml_packed_cpu import _load_bridge; print(_load_bridge()._name)\""
+}

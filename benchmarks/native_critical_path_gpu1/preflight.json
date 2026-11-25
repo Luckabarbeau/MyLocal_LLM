@@ -1,0 +1,4 @@
+{
+  "gpu": "index, uuid, name, driver_version, memory.used [MiB], memory.free [MiB]\n1, GPU-e961516f-d77d-813c-98e9-2f5403f71631, NVIDIA GeForce RTX 5070 Ti, 580.178.04, 16 MiB, 15825 MiB\n",
+  "compute_apps": ""
+}

@@ -1,0 +1,1 @@
+{"pid": 606495, "verified_cmdline": "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python /home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/profile_native_qwen_decode.py --output /home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_critical_path_gpu1 --steps 4 --worker profile ", "signal": "SIGKILL", "reason": "nsys detached owned probe session"}

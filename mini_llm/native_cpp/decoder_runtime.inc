@@ -102,7 +102,10 @@ struct DecoderPromptCheckpoint {
     bool logits_valid=false,fail_restore_for_test=false;
     std::vector<PromptCopy> copies;
     std::vector<unsigned char> data;
-    struct PleMetadata { int32_t predecessors[2]; uint64_t rows[16]; };
+    struct PleMetadata {
+        int32_t predecessors[2]; uint64_t rows[16];
+        float *history=nullptr,*next_history=nullptr;
+    };
     std::vector<PleMetadata> ple;
 };
 std::unordered_map<ml_handle,std::weak_ptr<DecoderPromptCheckpoint>> prompt_checkpoints;
@@ -137,6 +140,7 @@ extern "C" int ml_decoder_checkpoint_capture(ml_handle id,uint64_t budget,ml_han
                 if(w->poisoned || w->position!=p->position) fail(ML_INVALID,"checkpoint PLE position");
                 add(w->history,92160*4);
                 DecoderPromptCheckpoint::PleMetadata meta{};
+                meta.history=w->history; meta.next_history=w->next_history;
                 std::copy_n(w->predecessors,2,meta.predecessors); std::copy_n(w->rows,16,meta.rows);
                 c->ple.push_back(meta);
             }
@@ -199,6 +203,9 @@ extern "C" int ml_decoder_checkpoint_restore(ml_handle id,ml_handle checkpoint,u
                 }
                 if(b.ple) {
                     auto& meta=c->ple[ple_index++]; auto w=b.ple;
+                    // PLE swaps these buffers each step. Copies above target the
+                    // captured allocation; restore its committed/scratch roles too.
+                    w->history=meta.history; w->next_history=meta.next_history;
                     std::copy_n(meta.predecessors,2,w->predecessors); std::copy_n(meta.rows,16,w->rows);
                     w->position=c->position; w->valid=false;
                 }
@@ -209,6 +216,15 @@ extern "C" int ml_decoder_checkpoint_restore(ml_handle id,ml_handle checkpoint,u
             cuda_check(cudaStreamSynchronize(p->engine->stream));
             p->position=c->position; p->valid=c->logits_valid; p->failed=false; *committed=p->position;
         } catch(...) { p->checkpoint.reset(); ++p->checkpoint_epoch; throw; }
+    });
+}
+extern "C" int ml_decoder_paged_stats_for_test(ml_handle id,uint64_t layer,ml_kvi8_stats* out) noexcept {
+    return boundary([&] {
+        auto p=lookup(decoders,id);
+        if(!out || layer>=p->layers.size() || !p->layers[layer].qsa || !p->layers[layer].qsa->paged)
+            fail(ML_INVALID,"decoder paged diagnostic unavailable");
+        auto w=p->layers[layer].qsa->paged;
+        *out=w->stats; out->pending=w->pending?1:0;
     });
 }
 extern "C" int ml_decoder_checkpoint_fail_restore_for_test(ml_handle id) noexcept {

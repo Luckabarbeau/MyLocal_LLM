@@ -54,7 +54,8 @@ class HTTP:
 
     def open(self, path, body=None, stream=False):
         headers = {'Content-Type': 'application/json',
-                   'Accept': 'text/event-stream' if stream else 'application/json'}
+                   'Accept': 'text/event-stream' if stream else 'application/json',
+                   'User-Agent': 'qwen4exp-production-http/1'}
         if self.api_key:
             headers['Authorization'] = 'Bearer ' + self.api_key
         request = urllib.request.Request(self.base_url + path, data=body, headers=headers)
@@ -370,11 +371,13 @@ class ResourceSampler:
 
 
 def benchmark_request(http, payload, directory, metadata=None, telemetry_paths=TELEMETRY_PATHS,
-                      resource_pid=None, resource_gpu_uuid=None):
+                      resource_pid=None, resource_gpu_uuid=None, raw_body=None):
     """One request. Failures return records too; raw chunks/events survive interruption."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
-    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    body = raw_body if raw_body is not None else json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    if json.loads(body) != payload:
+        raise ValueError('Wire bytes differ from the declared request payload')
     # These bytes, not a re-serialization, are sent on the wire.
     with (directory / 'request.json').open('xb') as stream:
         stream.write(body)
@@ -510,6 +513,19 @@ def benchmark_request(http, payload, directory, metadata=None, telemetry_paths=T
         completion = result['tokens']['completion_tokens']
         result['completion_tokens_per_second_end_to_end'] = (
             completion / result['seconds'] if isinstance(completion, int) else None)
+        decode_seconds = result['phases']['decode_seconds']
+        prefill_seconds = result['phases']['prefill_seconds']
+        processed = result['tokens']['processed_prompt_tokens']
+        result['production_rates'] = dict(
+            emitted_tokens_per_active_decode_second=(completion / decode_seconds
+                if isinstance(completion, int) and completion >= 2 and decode_seconds and decode_seconds > 0 else None),
+            uncached_prompt_tokens_per_prefill_second=(processed / prefill_seconds
+                if isinstance(processed, int) and processed > 0 and prefill_seconds and prefill_seconds > 0 else None),
+            numerator_source='SSE/backend usage completion_tokens; never drafts, forwards or SSE event count',
+            decode_denominator_source='request-local backend active decode time',
+            context_capacity=(metadata or {}).get('context'),
+            context_occupancy_tokens=(result['tokens']['prompt_tokens'] + completion
+                if isinstance(result['tokens']['prompt_tokens'], int) and isinstance(completion, int) else None))
         save_json(directory / 'response.json', result)
     return result
 
@@ -735,6 +751,8 @@ def run(args):
         previous = None
         messages = base
         for case in range(args.repeat + args.turns - 1):
+            if args.max_requests is not None and request_index >= args.max_requests:
+                break
             repeated = case < args.repeat
             kind = 'cold_prompt_first_submission' if case == 0 else (
                 'identical_prefix_repeat' if repeated else 'multi_turn')
@@ -789,7 +807,7 @@ def parser():
     p.add_argument('--workload-id', help='Deterministic source nonce, recorded in config; random if omitted')
     p.add_argument('--replay-from', help='Prior artifact directory: sorted saved payloads, replace ONLY model; '
                    'fixed trajectories, no sizing or new followup construction')
-    p.add_argument('--max-requests', type=int, help='Replay only: send at most this many sorted saved requests')
+    p.add_argument('--max-requests', type=int, help='Send at most this many requests (live or replay)' )
     p.add_argument('--source-file', action='append', default=[],
                    help='Read-only UTF-8 source path; repeat for ordered file banners/concatenation. '
                    'Token-sized truncation; whole source repeats for large targets (labeled).')
@@ -821,8 +839,8 @@ def main(argv=None):
     if (min(args.context, args.max_output, args.repeat, args.turns) < 1 or args.headroom < 0
             or not math.isfinite(args.timeout) or args.timeout <= 0):
         p.error('Positive context/output/repeat/turns/timeout and nonnegative headroom required')
-    if args.max_requests is not None and (args.max_requests < 1 or not args.replay_from):
-        p.error('--max-requests must be positive and requires --replay-from')
+    if args.max_requests is not None and args.max_requests < 1:
+        p.error('--max-requests must be positive')
     if args.resource_pid is not None and args.resource_pid < 1:
         p.error('--resource-pid must be positive')
     if args.resource_gpu_uuid is not None and (

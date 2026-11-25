@@ -1,0 +1,12 @@
+{
+  "memory": {
+    "MemTotal": 66850373632,
+    "MemAvailable": 50676617216,
+    "SwapFree": 6265204736
+  },
+  "gpu": "0, GPU-bea264b4-9e76-3be5-5883-7bde3fe9f82d, NVIDIA GeForce RTX 5080\n1, GPU-e961516f-d77d-813c-98e9-2f5403f71631, NVIDIA GeForce RTX 5070 Ti\n",
+  "processes": "582719, GPU-bea264b4-9e76-3be5-5883-7bde3fe9f82d, /home/lucka/.local/zed.app/libexec/zed-editor\n650439, GPU-e961516f-d77d-813c-98e9-2f5403f71631, .venv/bin/python\n",
+  "expected_arena_gib": 46.84,
+  "reserve_gib": 4,
+  "installed_config_sha256": "de61ad7c3538c3d9f61ef6a982bd387d280fc2f99df835420c11606a74d2f9d7"
+}

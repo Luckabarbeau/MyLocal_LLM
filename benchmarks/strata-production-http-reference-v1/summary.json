@@ -1,0 +1,13 @@
+{
+  "status": "pending",
+  "production_comparison_accepted": false,
+  "error": "ValueError: Insufficient MemAvailable for arena + 4-GiB reserve + 1-GiB startup allowance",
+  "requests_completed": 0,
+  "elapsed_seconds": 0.057709085987880826,
+  "final_memory": {
+    "MemTotal": 66850373632,
+    "MemAvailable": 50676617216,
+    "SwapFree": 6265204736
+  },
+  "server_returncode": null
+}

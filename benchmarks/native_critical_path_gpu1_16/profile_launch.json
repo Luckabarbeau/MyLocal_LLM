@@ -1,0 +1,32 @@
+{
+  "command": [
+    "/usr/local/cuda/bin/nsys",
+    "profile",
+    "--trace=cuda,nvtx,osrt",
+    "--sample=none",
+    "--cpuctxsw=none",
+    "--capture-range=cudaProfilerApi",
+    "--capture-range-end=stop",
+    "--export=sqlite",
+    "--output=/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_critical_path_gpu1_16/decode",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/.venv/bin/python",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/scripts/profile_native_qwen_decode.py",
+    "--output",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_critical_path_gpu1_16",
+    "--steps",
+    "4",
+    "--prompt-tokens",
+    "16",
+    "--worker",
+    "profile"
+  ],
+  "cuda_visible_devices": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+  "owned_pid": 611416,
+  "timeout": true,
+  "detached_worker_cleanup": {
+    "pid": 611458,
+    "start_ticks": "30304327"
+  },
+  "returncode": -9,
+  "seconds": 163.7408620819915
+}

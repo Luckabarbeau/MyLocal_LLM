@@ -1,0 +1,10 @@
+[
+  {
+    "source": "/v1/models:qwen3.8-flash-next-iq3_s.meta.n_ctx",
+    "value": 256
+  },
+  {
+    "source": "/health.max_context",
+    "value": 256
+  }
+]

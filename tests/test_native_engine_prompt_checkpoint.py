@@ -5,7 +5,8 @@ import ctypes as C
 import numpy as np
 import pytest
 
-from mini_llm.native import NativeError
+from mini_llm.native import NativeError, KVStreamedStats
+from mini_llm.external.gguf_tokenizer import load_gguf_tokenizer
 from mini_llm.native.chat import NativeChatSession
 from mini_llm.native.generation import NativeGeneration
 from native_prompt_fixture import mixed_setup
@@ -32,6 +33,15 @@ def snapshot_bytes(cp):
     buffer = C.create_string_buffer(size.value)
     assert function(cp._handle,buffer,size.value,C.byref(size)) == 0
     return buffer.raw
+
+
+def paged_stats(decoder):
+    function = decoder._runtime._lib.ml_decoder_paged_stats_for_test
+    function.argtypes = [C.c_uint64,C.c_uint64,C.POINTER(KVStreamedStats)]
+    function.restype = C.c_int
+    stats = KVStreamedStats()
+    assert function(decoder._handle,0,C.byref(stats)) == 0
+    return stats
 
 
 @pytest.mark.parametrize('chunks', [(3,), (1,2), (1,1,1)])
@@ -63,7 +73,8 @@ def test_gdn_checkpoint_chunk_replay_and_resident_logits(tmp_path, libraries, ch
 
 
 @pytest.mark.parametrize('fmt', ['reference_fp32','strata_int8_per64_fp16'])
-def test_mixed_pool_page_tail_ple_eos_bitwise(tmp_path, libraries, fmt):
+@pytest.mark.parametrize('suffix_count', [3,4])
+def test_mixed_pool_page_tail_ple_eos_bitwise(tmp_path, libraries, fmt, suffix_count, monkeypatch):
     with ExitStack() as stack:
         d, _, e = mixed_setup(stack,tmp_path,libraries,fmt)
         tokens = [1,7,7,2,3,4,5,6,1,2,3,4]
@@ -75,17 +86,25 @@ def test_mixed_pool_page_tail_ple_eos_bitwise(tmp_path, libraries, fmt):
             d.consume(tokens[:boundary])
             cp = stack.enter_context(d.checkpoint(host_budget_bytes=2**20))
             saved = snapshot_bytes(cp)
+            prefix_pages = paged_stats(d)
             sizes.append(cp.host_bytes)
-            expected = [d.step(token).tobytes() for token in tokens[boundary:boundary+4]]
+            expected = [d.step(token).tobytes() for token in tokens[boundary:boundary+suffix_count]]
+            suffix_pages = paged_stats(d)
             assert cp.restore(d) == boundary
+            rolled_back = paged_stats(d)
+            assert rolled_back.length == boundary
+            assert rolled_back.populated_bytes == boundary*(4096 if fmt=='reference_fp32' else 1056)
+            assert rolled_back.generation == suffix_pages.generation+1
+            assert rolled_back.host_bytes == prefix_pages.host_bytes
+            assert rolled_back.resident_pages == 0 and not rolled_back.pending
             # Capture directly after restore verifies committed GDN/PLe/raw-ring
             # and resident logits, then continue from the replacement checkpoint.
             restored = stack.enter_context(d.checkpoint(host_budget_bytes=2**20))
             assert snapshot_bytes(restored) == saved
-            got = [d.step(token).tobytes() for token in tokens[boundary:boundary+4]]
+            got = [d.step(token).tobytes() for token in tokens[boundary:boundary+suffix_count]]
             assert got == expected
             restored.restore(d)
-            alternative = list(reversed(tokens[boundary:boundary+4]))
+            alternative = list(reversed(tokens[boundary:boundary+suffix_count]))
             got = [d.step(token).tobytes() for token in alternative]
             d.reset(); d.consume(tokens[:boundary])
             want = [d.step(token).tobytes() for token in alternative]
@@ -96,6 +115,24 @@ def test_mixed_pool_page_tail_ple_eos_bitwise(tmp_path, libraries, fmt):
         assert sizes[0] < sizes[1] < 2**20
         assert e.stats.device_bytes < 512*2**20
         print('WP8 mixed checkpoint host_bytes',sizes,'device_bytes',e.stats.device_bytes)
+        t = load_gguf_tokenizer({
+            'tokenizer.ggml.model':'gpt2', 'tokenizer.ggml.pre':'qwen35',
+            'tokenizer.ggml.tokens':['a','b','ab','c','d','e','f','<eos>'],
+            'tokenizer.ggml.merges':['a b'],
+            'tokenizer.ggml.token_type':[1]*7+[3], 'tokenizer.ggml.eos_token_id':7,
+        })
+        sampler = stack.enter_context(e.sampler(8,seed=1))
+        chat = NativeChatSession(d,sampler,t,eos_ids=())
+        prompt = [1,7,7,2]  # PLE EOS predecessor behavior is part of the boundary.
+        text = ''.join(chat.stream_tokens(prompt,suffix_count))
+        committed,pending = chat.committed_tokens,chat.pending_token
+        with monkeypatch.context() as patch:
+            patch.setattr(d,'consume',forbidden)
+            patch.setattr(d,'reset',forbidden)
+            assert ''.join(chat.stream_tokens(prompt,suffix_count)) == text
+        assert chat.committed_tokens == committed and chat.pending_token == pending
+        assert chat.last_stats['checkpoint_restore']
+        chat.reset()
 
 
 def test_checkpoint_budget_epoch_close_and_worker_exclusivity(tmp_path, libraries):

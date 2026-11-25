@@ -1,0 +1,6 @@
+{
+  "engine_path": "/home/lucka/.local/share/strata/components/engine/0.1.59-linux-x86_64-cuda-cuda13/strata",
+  "engine_sha256": "0ba914b28df1c8e09c0b5209c2ca6040c75fb650a7408ff3d9ef3ad159a13eb9",
+  "server_sha256": "398dea98fd319ad3b570a006dd1a4c1907480cb1ab07737368382620d85f2d14",
+  "note": "CPU-only postflight identity capture; no server launched; port 0 is unallocated prospective configuration"
+}

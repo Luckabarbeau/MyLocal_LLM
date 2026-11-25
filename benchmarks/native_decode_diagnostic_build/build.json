@@ -1,0 +1,110 @@
+{
+  "compile": [
+    "/usr/bin/mpicxx",
+    "-Dmini_llm_native_EXPORTS",
+    "-isystem",
+    "/usr/local/cuda/targets/x86_64-linux/include",
+    "-I",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/mini_llm/native_cpp",
+    "-O3",
+    "-DNDEBUG",
+    "-std=c++20",
+    "-fPIC",
+    "-c",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_decode_diagnostic_build/runtime_diagnostic.cpp",
+    "-o",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_decode_diagnostic_build/runtime_diagnostic.o"
+  ],
+  "link": [
+    "/usr/bin/mpicxx",
+    "-shared",
+    "-fPIC",
+    "-o",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_decode_diagnostic_build/libmini_llm_native_diagnostic.so",
+    "/home/lucka/Documents/my_local_LLM/MyLocal_LLM/benchmarks/native_decode_diagnostic_build/runtime_diagnostic.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/gguf_loader.cpp.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/hyperconnection.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/kv_pages.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/kv_streamed.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/moe.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/ple.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/ple_hash.cpp.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_attention.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_frontend.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_layer.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_paged.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_projection.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_selection.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/recurrent.cu.o",
+    "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/sampling.cu.o",
+    "-L/usr/local/cuda/lib64",
+    "-Wl,-rpath,/usr/local/cuda/lib64",
+    "-lcudart",
+    "-ldl",
+    "-lpthread"
+  ],
+  "source_sha256": "49dccf114070071d53c381cc045b9c062fccf1e650dbcb4d2ac3f4da6b6d66d2",
+  "library_sha256": "e2549452a8556e7ea17890d64105610c64d8ce00e74512816ff0305782ab1389",
+  "unchanged_reused_objects": [
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/gguf_loader.cpp.o",
+      "sha256": "622a116e13cf8f6490cc9d5927dd8361a7775117838144006d0dead37144bba7"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/hyperconnection.cu.o",
+      "sha256": "1d4af85eda3057b53156fd86300546326535315629e0c43e5d226b96f6a93015"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/kv_pages.cu.o",
+      "sha256": "ce7ac44cf97cabba0ac64bf85fe79ef7e511ddbcda98cecc43b184238c600ddd"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/kv_streamed.cu.o",
+      "sha256": "e8ca8a4a77874ee6ecc1f3090c2af683e0b3da02963653da5b1f325c3da42618"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/moe.cu.o",
+      "sha256": "4d7c155c1d3c609db780eabea94215a31722e7a042fb1c6a7587cfa37809630a"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/ple.cu.o",
+      "sha256": "471b97bb10daa67b49c139a4ebe93b2fba857ff3510a1deae19590fd418fb96d"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/ple_hash.cpp.o",
+      "sha256": "f493b3be96f8518a7d15136f75098c55a74d9168cc0a62daaaed3f6361a3ad93"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_attention.cu.o",
+      "sha256": "2f71ec2ebfa7f7020fa0faea978dfb8ce7b7f9a1455bee0136979b73f17302fd"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_frontend.cu.o",
+      "sha256": "90eaac7ac1fd37f74fdd3805ccd787353bb493d99c980031b57c79ae6dd079e2"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_layer.cu.o",
+      "sha256": "565e33004166d0570741681199a1ecd5b0bd3cadef947930db369cd80906d440"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_paged.cu.o",
+      "sha256": "8e59fd521724ffdb61f54562e4930088e655b38193993972528e7a14d0bb5b8e"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_projection.cu.o",
+      "sha256": "be307eee9eb00034223b91770b811d9e119de0fc2d44231ee084883d150c33d2"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/qsa_selection.cu.o",
+      "sha256": "c007c2f64794cc6f5d735fc9c9dac13ce4d7c9cf7fa185db9f959dd967e425c7"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/recurrent.cu.o",
+      "sha256": "2744a27d5c7ef4f0db6b5117bcead5ac922d72f4a8e8b0ff47afadf6fb1db7fe"
+    },
+    {
+      "path": "/tmp/mini-llm-wp1-build/CMakeFiles/mini_llm_native.dir/sampling.cu.o",
+      "sha256": "212696380fdef2c05f4ad732a8eff76a6aa5c3590d0f5fcce9c187a11bfa777d"
+    }
+  ]
+}

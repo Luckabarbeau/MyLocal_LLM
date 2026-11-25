@@ -12,6 +12,50 @@ extern "C" {
  * Budget covers requested device+pinned payload, not CUDA context/allocator overhead.
  */
 typedef uint64_t ml_handle;
+/* WP8 independent sampler. All full-array copies are explicit test diagnostics.
+ * top_k=0 means full vocabulary; temperature=0 ignores top_k. CuPy stable
+ * ascending partition / reversed stable nucleus order; greedy ties lower ID.
+ * Device result status: 1 nonfinite input, 2 scaled overflow,
+ * 3 invalid mass. Only a compact result crosses D2H during sample. */
+typedef struct ml_sample_result {
+    int32_t token, status, kept, reserved;
+    double uniform;
+    float total, probability, cdf_low, cdf_high;
+} ml_sample_result;
+int ml_sampler_create(ml_handle engine, uint64_t vocab, uint64_t seed, ml_handle* out) ML_NOEXCEPT;
+int ml_sampler_destroy(ml_handle sampler) ML_NOEXCEPT;
+int ml_sampler_reset(ml_handle sampler, uint64_t seed) ML_NOEXCEPT;
+int ml_sampler_sample(ml_handle sampler, ml_handle source, int decoder,
+    double temperature, double top_p, uint64_t top_k, int supplied, double uniform,
+    ml_sample_result* out) ML_NOEXCEPT;
+int ml_sampler_readback_for_test(ml_handle sampler, int32_t* ids, float* probabilities,
+    float* cdf, uint64_t count) ML_NOEXCEPT;
+/* Decoder consumes all mutable handles on successful create; immutable weights
+ * remain shareable. Failure leaves bindings untouched. All steps are native.
+ * Any failed step poisons the session; committed global position never advances.
+ * Diagnostic trace stages: attention read, post mixer, FFN read, post MoE. */
+typedef struct ml_decoder_layer {
+    ml_handle attention_hc, branch, ffn_hc, moe, ple;
+    int32_t kind; /* 0 QSA, 1 GDN */
+} ml_decoder_layer;
+int ml_decoder_create(ml_handle engine, ml_handle embedding, ml_handle output,
+    ml_handle final, ml_handle hc, const ml_decoder_layer* layers, uint64_t count,
+    uint64_t capacity, float scale, int trace, ml_handle* out) ML_NOEXCEPT;
+int ml_decoder_destroy(ml_handle decoder) ML_NOEXCEPT;
+int ml_decoder_reset(ml_handle decoder) ML_NOEXCEPT;
+int ml_decoder_state(ml_handle decoder, uint64_t* position, int* failed) ML_NOEXCEPT;
+/* Null logits with count=0 explicitly suppresses full-vocabulary D2H. */
+int ml_decoder_step(ml_handle decoder, int32_t token, float* logits, uint64_t count,
+    uint64_t* committed) ML_NOEXCEPT;
+int ml_decoder_trace(ml_handle decoder, uint64_t layer, int stage, float* out, uint64_t count) ML_NOEXCEPT;
+/* Latest completed MoE epoch only, read-only, no extra step allocations.
+ * which: 0 IDs(int32[10]), 1 weights[10], 2 logits[512], 3 probs[512],
+ * 4 CPU unweighted[10,D], 5 weighted[10,D], 6 routed[D], 7 shared[D],
+ * 8 output[D], 9 input[D], 10 gate[SF], 11 up[SF], 12 hidden[SF],
+ * 13 shared score[1], 14 shared raw[D]. Others are FP32; count is elements.
+ * CPU rows for GPU-resident slots are zero. Decoder requires enabled trace. */
+int ml_moe_diagnostic_for_test(ml_handle owner,int which,void* out,uint64_t count) ML_NOEXCEPT;
+int ml_decoder_moe_diagnostic_for_test(ml_handle decoder,uint64_t layer,int which,void* out,uint64_t count) ML_NOEXCEPT;
 enum ml_status { ML_OK=0, ML_INVALID=1, ML_CAPACITY=2, ML_CUDA=3, ML_INTERNAL=4 };
 typedef struct ml_stats {
     uint64_t device_bytes, pinned_bytes, peak_bytes, sessions, budget_bytes;
@@ -116,6 +160,49 @@ int ml_moe_job_destroy(ml_handle job) ML_NOEXCEPT;
  * benchmark repeats scores+selection only, CUDA-event milliseconds per iteration;
  * excludes n upload, input uploads, diagnostics, and host synchronization.
  * Readback is explicit diagnostics: element capacities, no partial bounds copy. */
+/* WP6 independent FP32 per-session/layer paged KV. capacity<=262144, page_size
+ * 1..4096, fixed physical_pages<=ceil(capacity/page_size). No full raw/KV cache.
+ * Device table + bounded physical pool + fixed selected gather/remap scratch are
+ * engine-budgeted. All calls serialize and fence readers before mutation/free.
+ * Generation starts at 1, increments on reset; stale generation is rejected.
+ * append takes finite F32 [rows,2,256] uploads and commits consecutive history.
+ * remap swaps occupied slots (or moves to an empty slot), preserving token data.
+ * attention consumes an existing valid device selection, n=history length+1,
+ * separate current k/v; no host IDs. Output uses the existing attention snapshot.
+ * Readback is diagnostic only: interleaved [length,2,512] (K then V), F32 count.
+ * Capacity is address space, not a promise that all pages fit or are populated. */
+/* Explicit strata_int8_per64_fp16 policy: 64 signed bytes + FP16 scale per
+ * group, 16 groups/token (1056 bytes). Separate bounded ordinary-RAM backing;
+ * engine budget charges GPU only. Append <=page_size rows. All selected history
+ * pages must fit GPU slots: preflight refuses before eviction/staging otherwise.
+ * Native device->host page metadata transfer is allowed; no Python token IDs.
+ * Calls fence completion; no async return, hidden full-resident fallback or FP32
+ * substitution. Current K/V is quantized too. Packed diagnostics are bytes. */
+typedef struct ml_kvi8_stats {
+    uint64_t length, generation, device_bytes, host_bytes, host_budget,
+        populated_bytes, resident_pages, hits, misses, h2d_bytes, metadata_bytes, pending;
+} ml_kvi8_stats;
+int ml_kvi8_create(ml_handle engine, uint64_t capacity, uint64_t page_size, uint64_t slots,
+    uint64_t host_budget, const char* policy, ml_handle* out) ML_NOEXCEPT;
+int ml_kvi8_destroy(ml_handle store) ML_NOEXCEPT;
+int ml_kvi8_stats_get(ml_handle store, ml_kvi8_stats* out) ML_NOEXCEPT;
+int ml_kvi8_reset(ml_handle store) ML_NOEXCEPT;
+int ml_kvi8_append(ml_handle store, uint64_t generation, ml_handle keys, ml_handle values) ML_NOEXCEPT;
+int ml_kvi8_remap(ml_handle store, uint64_t generation, uint64_t logical, uint64_t slot) ML_NOEXCEPT;
+int ml_kvi8_attention(ml_handle store, uint64_t generation, ml_handle attention,
+    ml_handle query, ml_handle gate, ml_handle key, ml_handle value, float scale) ML_NOEXCEPT;
+int ml_kvi8_readback_for_test(ml_handle store, uint64_t generation, uint64_t start,
+    uint64_t rows, void* output, uint64_t bytes) ML_NOEXCEPT;
+int ml_kv_create(ml_handle engine, uint64_t capacity, uint64_t page_size,
+    uint64_t physical_pages, ml_handle* out) ML_NOEXCEPT;
+int ml_kv_destroy(ml_handle store) ML_NOEXCEPT;
+int ml_kv_state(ml_handle store, uint64_t* length, uint64_t* generation) ML_NOEXCEPT;
+int ml_kv_reset(ml_handle store) ML_NOEXCEPT;
+int ml_kv_append(ml_handle store, uint64_t generation, ml_handle keys, ml_handle values) ML_NOEXCEPT;
+int ml_kv_remap(ml_handle store, uint64_t generation, uint64_t logical_page, uint64_t slot) ML_NOEXCEPT;
+int ml_kv_attention(ml_handle store, uint64_t generation, ml_handle attention,
+    ml_handle query, ml_handle gate, ml_handle key, ml_handle value, float scale) ML_NOEXCEPT;
+int ml_kv_readback_for_test(ml_handle store, uint64_t generation, float* output, uint64_t count) ML_NOEXCEPT;
 int ml_qsa_create(ml_handle engine, uint64_t capacity, ml_handle* out) ML_NOEXCEPT;
 int ml_qsa_destroy(ml_handle workspace) ML_NOEXCEPT;
 int ml_qsa_set_n(ml_handle workspace, uint64_t n) ML_NOEXCEPT;
@@ -197,6 +284,28 @@ int ml_qsa_frontend_readback_for_test(ml_handle workspace,
  * Diagnostic which: output=0, raw=1, keys=2, values=3, pool=4, IDs=5, scores=6. */
 int ml_qsa_layer_create(ml_handle engine, uint64_t capacity, const ml_handle* tensors,
     int policy, float epsilon, float scale, ml_handle* out) ML_NOEXCEPT;
+/* Opt-in complete paged layer, same step/import/reset APIs and monolithic default.
+ * capacity<=262144, divisible by4; explicit reference_fp32/strata_int8_per64_fp16.
+ * Only first raw + four raw slots on GPU; pooled/staged index arrays stay GPU.
+ * Lazy ordinary-RAM K/V pages and optional full raw diagnostics share host_budget.
+ * Chunked gather supports any selected working set with >=1 fixed GPU slot.
+ * Status is validated before append; failed CUDA commit poisons until reset.
+ * Diagnostics keys/values return decoded storage; raw requires raw_diagnostics=1.
+ * Extra diagnostics 7=first raw[128], 8=token%4 raw slots[4,128]. */
+int ml_qsa_layer_create_paged(ml_handle engine, uint64_t capacity, const ml_handle* tensors,
+    int policy, float epsilon, float scale, uint64_t page_size, uint64_t slots,
+    uint64_t host_budget, const char* format, int raw_diagnostics, ml_handle* out) ML_NOEXCEPT;
+int ml_qsa_layer_paged_stats(ml_handle layer, ml_kvi8_stats* out) ML_NOEXCEPT;
+/* Paged-only consecutive prepared-state chunks, 1..4096 rows, position==length.
+ * F32 raw[rows,128], K/V[rows,512]; pool rows=floor(end/4)-floor(start/4),
+ * with zero pool handle iff no block completes. Caller supplies fixture provenance.
+ * No model forward computation. Mutation failures poison until reset. */
+int ml_qsa_layer_import_chunk(ml_handle layer, uint64_t position, ml_handle raw,
+    ml_handle keys, ml_handle values, ml_handle pooled) ML_NOEXCEPT;
+/* Detached bounded diagnostics: which=1 raw,2 keys,3 values,4 pools. start/rows
+ * count tokens except pools count blocks; count is caller F32 element capacity. */
+int ml_qsa_layer_paged_range_for_test(ml_handle layer, int which, uint64_t start,
+    uint64_t rows, void* destination, uint64_t count) ML_NOEXCEPT;
 int ml_qsa_layer_destroy(ml_handle layer) ML_NOEXCEPT;
 int ml_qsa_layer_reset(ml_handle layer) ML_NOEXCEPT;
 int ml_qsa_layer_position(ml_handle layer, uint64_t* length) ML_NOEXCEPT;

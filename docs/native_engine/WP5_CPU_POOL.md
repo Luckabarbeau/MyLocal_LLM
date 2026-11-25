@@ -72,9 +72,17 @@ All public ABI operations follow the existing runtime's serialized boundary lock
 ## Dynamic loading and ABI validation
 
 The native caller uses `dlopen(..., RTLD_NOW | RTLD_LOCAL)` for both explicit
-paths and resolves symbols once. It retains both handles until after pool worker
-destruction, and uses RAII for partial-setup failures. Resolution errors are
-reported, never converted into a fallback backend.
+paths, additionally requesting `RTLD_NODELETE` **only for GGML**, and resolves
+symbols once. It retains both owned handles until after pool worker destruction,
+then balances them with `dlclose`, including partial-setup failures. GGML library
+mappings/static state (and loader-required dependencies) intentionally remain
+resident until process exit because the external build installs a process-global
+C++ terminate handler that cannot safely survive unload/reinitialization. This
+exception does not retain pool workers, jobs, weights/mmaps, engines, or explicitly
+pin the bridge. A loader without `RTLD_NODELETE` is rejected explicitly; resolution
+errors are reported, never converted into a fallback backend. See
+[GGML library lifetime evidence](WP5_GGML_LIBRARY_LIFETIME.md) for the reproducer,
+selected-library provenance, cleanup scope, and bounded regression results.
 
 Bridge symbols resolved: `mylocal_ggml_pool_create`, `_register`,
 `_submit_registered`, `_wait`, `_destroy`.

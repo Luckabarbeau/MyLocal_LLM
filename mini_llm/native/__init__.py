@@ -1,4 +1,4 @@
-"""Native exact-byte GGUF uploads and synthetic CUDA transport; no model inference."""
+"""Native GGUF owners, validated operators, and experimental reference decoder."""
 from __future__ import annotations
 
 import ctypes as C
@@ -25,6 +25,11 @@ def _integer(value, name, maximum):
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
         raise ValueError(f"{name} must be an integer in [0, {maximum}]")
     return value
+
+
+class _DecoderLayer(C.Structure):
+    _fields_ = [(name, C.c_uint64) for name in
+                ('attention_hc', 'branch', 'ffn_hc', 'moe', 'ple')] + [('kind', C.c_int32)]
 
 
 class _TensorRequirement(C.Structure):
@@ -87,6 +92,20 @@ def _gguf_value(raw, kind):
     return read(kind, 0)[0]
 
 
+class KVStreamedStats(C.Structure):
+    _fields_ = [(name, C.c_uint64) for name in (
+        'length', 'generation', 'device_bytes', 'host_bytes', 'host_budget',
+        'populated_bytes', 'resident_pages', 'hits', 'misses', 'h2d_bytes',
+        'metadata_bytes', 'pending')]
+
+
+class SampleResult(C.Structure):
+    _fields_ = [('token', C.c_int32), ('status', C.c_int32), ('kept', C.c_int32),
+                ('reserved', C.c_int32), ('uniform', C.c_double),
+                ('total', C.c_float), ('probability', C.c_float),
+                ('cdf_low', C.c_float), ('cdf_high', C.c_float)]
+
+
 class Runtime:
     """Load an explicitly built shared library; never builds or falls back to CPU."""
     def __init__(self, library=None):
@@ -96,7 +115,41 @@ class Runtime:
         self._lib = C.CDLL(os.fspath(path))
         self._lock = threading.RLock()
         h, u, i = C.c_uint64, C.c_uint64, C.c_int32
+        from .generation import GenerationEvent
         signatures = {
+            'ml_generation_start': [h, h, i, u, C.POINTER(i), u, C.c_double,
+                                    C.c_double, u, u, C.POINTER(h)],
+            'ml_generation_poll': [h, u, C.POINTER(GenerationEvent)],
+            'ml_generation_cancel': [h],
+                        'ml_generation_state': [h, C.POINTER(GenerationEvent), C.POINTER(u), C.POINTER(i)],
+            'ml_generation_close': [h, C.POINTER(GenerationEvent)],
+            'ml_sampler_create': [h, u, u, C.POINTER(h)],
+            'ml_sampler_destroy': [h], 'ml_sampler_reset': [h, u],
+            'ml_sampler_sample': [h, h, C.c_int, C.c_double, C.c_double, u,
+                                  C.c_int, C.c_double, C.POINTER(SampleResult)],
+            'ml_sampler_readback_for_test': [h, C.POINTER(i), C.POINTER(C.c_float),
+                                             C.POINTER(C.c_float), u],
+            'ml_decoder_create': [h]*5 + [C.POINTER(_DecoderLayer), u, u, C.c_float, C.c_int, C.POINTER(h)],
+            'ml_decoder_destroy': [h], 'ml_decoder_reset': [h],
+            'ml_decoder_state': [h, C.POINTER(u), C.POINTER(i)],
+            'ml_decoder_step': [h, i, C.POINTER(C.c_float), u, C.POINTER(u)],
+            'ml_decoder_trace': [h, u, C.c_int, C.POINTER(C.c_float), u],
+            'ml_moe_diagnostic_for_test': [h, C.c_int, C.c_void_p, u],
+            'ml_decoder_moe_diagnostic_for_test': [h, u, C.c_int, C.c_void_p, u],
+            'ml_kvi8_create': [h, u, u, u, u, C.c_char_p, C.POINTER(h)],
+            'ml_kvi8_destroy': [h], 'ml_kvi8_reset': [h],
+            'ml_kvi8_stats_get': [h, C.POINTER(KVStreamedStats)],
+            'ml_kvi8_append': [h, u, h, h],
+            'ml_kvi8_remap': [h, u, u, u],
+            'ml_kvi8_attention': [h, u, h, h, h, h, h, C.c_float],
+            'ml_kvi8_readback_for_test': [h, u, u, u, C.c_void_p, u],
+            'ml_kv_create': [h, u, u, u, C.POINTER(h)],
+            'ml_kv_destroy': [h], 'ml_kv_reset': [h],
+            'ml_kv_state': [h, C.POINTER(u), C.POINTER(u)],
+            'ml_kv_append': [h, u, h, h],
+            'ml_kv_remap': [h, u, u, u],
+            'ml_kv_attention': [h, u, h, h, h, h, h, C.c_float],
+            'ml_kv_readback_for_test': [h, u, C.POINTER(C.c_float), u],
             'ml_moe_create': [h, C.c_int, C.c_int, C.POINTER(h), C.POINTER(h), C.POINTER(i), u, C.c_int, C.c_char_p, C.c_char_p, C.c_char_p, C.POINTER(h)],
             'ml_moe_submit': [h, C.POINTER(C.c_float), u, C.c_float, C.POINTER(h)],
             'ml_moe_reset': [h], 'ml_moe_destroy': [h],
@@ -157,6 +210,11 @@ class Runtime:
                         "ml_hc_collapse": [h, h],
                         "ml_hc_readback_for_test": [h, C.c_int, C.POINTER(C.c_float), u],
                         "ml_qsa_layer_create": [h, u, C.POINTER(h), C.c_int, C.c_float, C.c_float, C.POINTER(h)],
+            'ml_qsa_layer_create_paged': [h, u, C.POINTER(h), C.c_int, C.c_float, C.c_float,
+                                          u, u, u, C.c_char_p, C.c_int, C.POINTER(h)],
+            'ml_qsa_layer_paged_stats': [h, C.POINTER(KVStreamedStats)],
+            'ml_qsa_layer_import_chunk': [h, u, h, h, h, h],
+            'ml_qsa_layer_paged_range_for_test': [h, C.c_int, u, u, C.c_void_p, u],
             "ml_qsa_layer_destroy": [h],
             "ml_qsa_layer_reset": [h],
             "ml_qsa_layer_position": [h, C.POINTER(u)],
@@ -380,6 +438,47 @@ class PayloadLease(_Owned):
 class Engine(_Owned):
     _destroy = "ml_engine_destroy"
 
+    def sampler(self, vocab=248320, *, seed):
+        _integer(vocab, 'vocab', 248320)
+        _integer(seed, 'seed', 2**64-1)
+        out = C.c_uint64()
+        self._runtime._call('ml_sampler_create', self._require_open(), vocab, seed, C.byref(out))
+        return Sampler(self._runtime, out.value, vocab, seed)
+
+    def decoder(self, embedding, output, final_hc, hc, layers, *, capacity,
+                scale=1.0, trace=False):
+        from .decoder import NativeDecoder
+        return NativeDecoder.bind(self, embedding, output, final_hc, hc, layers,
+                                  capacity=capacity, scale=scale, trace=trace)
+
+    def quantized_streamed_kv(self, capacity, *, page_size, physical_pages,
+                              host_budget_bytes, policy):
+        """Explicit INT8/pageable-host owner; selected history pages must fit slots.
+
+        Native C++ may copy page-miss metadata to host. No Python ID roundtrip.
+        Host backing is ordinary RAM with an independent requested-byte budget.
+        """
+        for value, name, maximum in [(capacity, 'capacity', 262144),
+                                     (page_size, 'page_size', 4096),
+                                     (physical_pages, 'physical_pages', 262144),
+                                     (host_budget_bytes, 'host_budget_bytes', 2**63-1)]:
+            _integer(value, name, maximum)
+        handle = C.c_uint64()
+        self._runtime._call('ml_kvi8_create', self._require_open(), capacity,
+                            page_size, physical_pages, host_budget_bytes,
+                            policy.encode(), C.byref(handle))
+        return QuantizedStreamedKV(self._runtime, handle.value)
+
+    def kv_pages(self, capacity, *, page_size=16, physical_pages):
+        """Independent session/layer FP32 KV store; fixed bounded physical pool."""
+        for value, name in [(capacity, 'capacity'), (page_size, 'page_size'),
+                            (physical_pages, 'physical_pages')]:
+            _integer(value, name, 262144)
+        handle = C.c_uint64()
+        self._runtime._call('ml_kv_create', self._require_open(), capacity,
+                            page_size, physical_pages, C.byref(handle))
+        return KVPages(self._runtime, handle.value)
+
     def moe(self, router, shared_gate, shared_up, shared_down, scalar_gate,
             gate_bank, up_bank, down_bank, *, d_model, d_ff, gpu_experts,
             bridge_library, ggml_library, threads=4,
@@ -523,13 +622,31 @@ class Engine(_Owned):
 
     def qsa_layer(self, capacity, query_gate, key, value, index_query, index_key,
                   output, gamma_q, gamma_k, gamma_iq, gamma_ik, *,
-                  policy, epsilon=1e-6, attention_scale=1/16):
+                  policy, epsilon=1e-6, attention_scale=1/16,
+                  kv_policy=None, page_size=None, physical_pages=None,
+                  host_budget_bytes=None, raw_diagnostics=False):
         """Own a complete native FP32 QSA attention layer and append-only cache.
 
         Fixed geometry: hidden/output 2560, Q24/KV2 x 256, index Q4 x 128.
-        capacity is 4096 or 16384. Explicit converted gammas, no model lookup.
+        Default monolithic capacity is 4096/16384. Opt-in kv_policy is explicitly
+        reference_fp32 or strata_int8_per64_fp16, with bounded GPU slots and lazy
+        ordinary-RAM backing. Paged capacity <=262144, divisible by4. Native page
+        metadata may cross to C++; no Python selection or numerical intermediates.
+        Full raw readback requires explicit host-backed raw_diagnostics=True.
         """
-        _integer(capacity, "capacity", 16384)
+        _integer(capacity, "capacity", 262144 if kv_policy is not None else 16384)
+        if kv_policy is None:
+            if any(x is not None for x in (page_size, physical_pages, host_budget_bytes)) or raw_diagnostics:
+                raise ValueError('paged options require an explicit kv_policy')
+        else:
+            if kv_policy not in ('reference_fp32', 'strata_int8_per64_fp16'):
+                raise ValueError('explicit supported kv_policy required')
+            for option, name, maximum in [(page_size, 'page_size', 4096),
+                                          (physical_pages, 'physical_pages', 262144),
+                                          (host_budget_bytes, 'host_budget_bytes', 2**63-1)]:
+                _integer(option, name, maximum)
+            if not isinstance(raw_diagnostics, bool):
+                raise ValueError('raw_diagnostics must be bool')
         if policy not in ("ggml_cpu", "strata"):
             raise ValueError("explicit policy must be ggml_cpu or strata")
         with self._runtime._lock:
@@ -540,10 +657,17 @@ class Engine(_Owned):
                     raise ValueError("inputs must be UploadedTensor from the same Runtime")
                 handles.append(tensor._require_open())
             handle = C.c_uint64()
-            self._runtime._call("ml_qsa_layer_create", self._require_open(), capacity,
-                                (C.c_uint64 * 10)(*handles), int(policy == "strata"),
-                                epsilon, attention_scale, C.byref(handle))
-            return QSALayer(self._runtime, handle.value)
+            arguments = (self._require_open(), capacity, (C.c_uint64 * 10)(*handles),
+                         int(policy == 'strata'), epsilon, attention_scale)
+            if kv_policy is None:
+                self._runtime._call('ml_qsa_layer_create', *arguments, C.byref(handle))
+            else:
+                self._runtime._call('ml_qsa_layer_create_paged', *arguments, page_size,
+                                    physical_pages, host_budget_bytes, kv_policy.encode(),
+                                    int(raw_diagnostics), C.byref(handle))
+            layer = QSALayer(self._runtime, handle.value)
+            layer._paged = kv_policy is not None
+            return layer
 
     def qsa_frontend(self):
         """Allocate fixed projected-input QSA normalization/RoPE/pooling storage."""
@@ -691,6 +815,55 @@ class CPUExpertJob(_Owned):
             self._runtime._call("ml_cpu_job_readback_for_test", handle,
                 output.ctypes.data_as(C.POINTER(C.c_float)), output.size)
             return output
+
+
+class Sampler(_Owned):
+    """GPU-only sampling, with explicit seed and optional supplied-uniform diagnostics."""
+    _destroy = 'ml_sampler_destroy'
+
+    def __init__(self, runtime, handle, vocab, seed):
+        super().__init__(runtime, handle)
+        self.vocab, self.seed = vocab, seed
+
+    def reset(self, *, seed=None):
+        seed = self.seed if seed is None else seed
+        _integer(seed, 'seed', 2**64-1)
+        self._runtime._call('ml_sampler_reset', self._require_open(), seed)
+        self.seed = seed
+
+    def _sample(self, source, decoder, temperature, top_p, top_k, uniform, metadata):
+        from .decoder import NativeDecoder
+        kind = NativeDecoder if decoder else UploadedTensor
+        if not isinstance(source, kind) or source._runtime is not self._runtime:
+            raise TypeError('same-runtime native source required')
+        if top_k is not None:
+            _integer(top_k, 'top_k', 2**64-1)
+            if top_k == 0 and temperature != 0:
+                raise ValueError('top_k must be >= 1')
+        result = SampleResult()
+        with self._runtime._lock:
+            self._runtime._call('ml_sampler_sample', self._require_open(), source._require_open(),
+                int(decoder), temperature, top_p, top_k or 0, int(uniform is not None),
+                0.0 if uniform is None else uniform, C.byref(result))
+        return result if metadata else result.token
+
+    def sample(self, uploaded, *, temperature=0.0, top_p=1.0, top_k=None,
+               uniform=None, metadata=False):
+        return self._sample(uploaded, False, temperature, top_p, top_k, uniform, metadata)
+
+    def sample_decoder(self, decoder, *, temperature=0.0, top_p=1.0, top_k=None,
+                       uniform=None, metadata=False):
+        return self._sample(decoder, True, temperature, top_p, top_k, uniform, metadata)
+
+    def readback_for_test(self):
+        import numpy as np
+        ids = np.empty(self.vocab, np.int32)
+        probabilities, cdf = np.empty(self.vocab, np.float32), np.empty(self.vocab, np.float32)
+        self._runtime._call('ml_sampler_readback_for_test', self._require_open(),
+            ids.ctypes.data_as(C.POINTER(C.c_int32)),
+            probabilities.ctypes.data_as(C.POINTER(C.c_float)),
+            cdf.ctypes.data_as(C.POINTER(C.c_float)), self.vocab)
+        return ids, probabilities, cdf
 
 
 class UploadedTensor(_Owned):
@@ -888,6 +1061,12 @@ class QSALayer(_Owned):
     _destroy = "ml_qsa_layer_destroy"
 
     @property
+    def paged_stats(self):
+        result = KVStreamedStats()
+        self._runtime._call('ml_qsa_layer_paged_stats', self._require_open(), C.byref(result))
+        return result
+
+    @property
     def position(self):
         value = C.c_uint64()
         self._runtime._call("ml_qsa_layer_position", self._require_open(), C.byref(value))
@@ -913,7 +1092,7 @@ class QSALayer(_Owned):
         length >= 4. Caller establishes reference provenance and semantic
         consistency with this layer's weights, gamma, RoPE and epsilon.
         """
-        _integer(length, "length", 16384)
+        _integer(length, "length", 262144 if getattr(self, '_paged', False) else 16384)
         with self._runtime._lock:
             handles = []
             for tensor in (raw_index, keys, values, pooled):
@@ -922,13 +1101,44 @@ class QSALayer(_Owned):
                 handles.append(tensor._require_open())
             self._runtime._call("ml_qsa_layer_import", self._require_open(), length, *handles)
 
+    def import_reference_chunk(self, position, raw_index, keys, values, pooled=None):
+        """Paged-only prepared-history transport, <=4096 consecutive rows.
+
+        Pool rows are floor(end/4)-floor(position/4); omit pooled if zero.
+        This imports a caller-defined snapshot, not a model/prefill computation.
+        """
+        _integer(position, 'position', 262144)
+        handles = []
+        for tensor in (raw_index, keys, values, pooled):
+            if tensor is None and len(handles) == 3:
+                handles.append(0)
+            elif not isinstance(tensor, UploadedTensor) or tensor._runtime is not self._runtime:
+                raise ValueError('chunk state must be UploadedTensor from the same Runtime')
+            else:
+                handles.append(tensor._require_open())
+        self._runtime._call('ml_qsa_layer_import_chunk', self._require_open(), position, *handles)
+
+    def readback_range_for_test(self, which, start, rows, destination):
+        """Paged-only bounded raw/K/V/pool diagnostics; FP32 elements, no state input."""
+        names = ('raw', 'keys', 'values', 'pooled')
+        if which not in names:
+            raise ValueError('unknown range diagnostic')
+        _integer(start, 'start', 262144)
+        _integer(rows, 'rows', 262144)
+        view = memoryview(destination)
+        if view.readonly or not view.c_contiguous or view.itemsize != 4 or view.format != 'f':
+            raise ValueError('expected writable contiguous native F32 buffer')
+        buffer = (C.c_float * (view.nbytes // 4)).from_buffer(view)
+        self._runtime._call('ml_qsa_layer_paged_range_for_test', self._require_open(),
+                            names.index(which)+1, start, rows, buffer, len(buffer))
+
     def readback_for_test(self, which, destination):
         """Explicit diagnostics only: output/raw/keys/values/pooled/ids/scores.
 
         Copies committed prefixes (no future capacity); output/IDs/scores require
         a successful step. Destination is writable contiguous F32 (IDs int64).
         """
-        names = ("output", "raw", "keys", "values", "pooled", "ids", "scores")
+        names = ("output", "raw", "keys", "values", "pooled", "ids", "scores", 'raw_first', 'raw_window', 'queries', 'gates')
         if which not in names:
             raise ValueError("unknown diagnostic")
         view = memoryview(destination)
@@ -1145,6 +1355,102 @@ class QSASelection(_Owned):
         finally:
             for view in views:
                 view.release()
+
+
+class KVPages(_Owned):
+    """Explicit per-session/layer owner, not automatic model dispatch or offload.
+
+    Calls synchronize; native shared ownership and completion fences protect page
+    uses. Pass a saved generation to reject work belonging to a reset session.
+    """
+    _destroy = 'ml_kv_destroy'
+
+    @property
+    def state(self):
+        length, generation = C.c_uint64(), C.c_uint64()
+        self._runtime._call('ml_kv_state', self._require_open(),
+                            C.byref(length), C.byref(generation))
+        return length.value, generation.value
+
+    def reset(self):
+        self._runtime._call('ml_kv_reset', self._require_open())
+
+    def _input(self, value, kind):
+        if not isinstance(value, kind) or value._runtime is not self._runtime:
+            raise ValueError('paged KV inputs must belong to the same Runtime')
+        return value._require_open()
+
+    def append(self, keys, values, *, generation):
+        self._runtime._call('ml_kv_append', self._require_open(), generation,
+                            self._input(keys, UploadedTensor), self._input(values, UploadedTensor))
+
+    def remap(self, logical_page, physical_slot, *, generation):
+        _integer(logical_page, 'logical_page', 262144)
+        _integer(physical_slot, 'physical_slot', 262144)
+        self._runtime._call('ml_kv_remap', self._require_open(), generation,
+                            logical_page, physical_slot)
+
+    def attention(self, attention, query, gate, key, value, *, generation, scale=1/16):
+        handles = [self._input(attention, QSAAttention)] + [
+            self._input(x, UploadedTensor) for x in (query, gate, key, value)]
+        self._runtime._call('ml_kv_attention', self._require_open(), generation, *handles, scale)
+
+    def readback_for_test(self, output, *, generation):
+        view = memoryview(output)
+        if view.readonly or not view.c_contiguous or view.itemsize != 4 or view.format != 'f':
+            raise ValueError('expected writable contiguous native F32 buffer')
+        buffer = (C.c_float * (view.nbytes // 4)).from_buffer(view)
+        self._runtime._call('ml_kv_readback_for_test', self._require_open(), generation,
+                            buffer, len(buffer))
+
+
+class QuantizedStreamedKV(KVPages):
+    """strata_int8_per64_fp16 storage; current K/V is quantized as well.
+
+    This does not select Strata's prompt MMA/query arithmetic. Outputs use the
+    existing FP32 attention graph over decoded quantized K/V. Calls synchronize.
+    """
+    _destroy = 'ml_kvi8_destroy'
+
+    @property
+    def stats(self):
+        result = KVStreamedStats()
+        self._runtime._call('ml_kvi8_stats_get', self._require_open(), C.byref(result))
+        return result
+
+    @property
+    def state(self):
+        stats = self.stats
+        return stats.length, stats.generation
+
+    def reset(self):
+        self._runtime._call('ml_kvi8_reset', self._require_open())
+
+    def append(self, keys, values, *, generation):
+        self._runtime._call('ml_kvi8_append', self._require_open(), generation,
+                            self._input(keys, UploadedTensor), self._input(values, UploadedTensor))
+
+    def remap(self, logical_page, physical_slot, *, generation):
+        _integer(logical_page, 'logical_page', 262144)
+        _integer(physical_slot, 'physical_slot', 262144)
+        self._runtime._call('ml_kvi8_remap', self._require_open(), generation,
+                            logical_page, physical_slot)
+
+    def attention(self, attention, query, gate, key, value, *, generation, scale=1/16):
+        handles = [self._input(attention, QSAAttention)] + [
+            self._input(x, UploadedTensor) for x in (query, gate, key, value)]
+        self._runtime._call('ml_kvi8_attention', self._require_open(), generation, *handles, scale)
+
+    def readback_for_test(self, output, *, start, rows, generation):
+        """Detached packed bytes: [row,16 groups,64 INT8 bytes + 2 FP16 bytes]."""
+        _integer(start, 'start', 262144)
+        _integer(rows, 'rows', 262144)
+        view = memoryview(output)
+        if view.readonly or not view.c_contiguous or view.itemsize != 1:
+            raise ValueError('expected writable contiguous byte buffer')
+        buffer = (C.c_ubyte * view.nbytes).from_buffer(view)
+        self._runtime._call('ml_kvi8_readback_for_test', self._require_open(), generation,
+                            start, rows, buffer, len(buffer))
 
 
 class QSAAttention(_Owned):

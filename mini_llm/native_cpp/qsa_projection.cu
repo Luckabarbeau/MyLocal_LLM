@@ -32,6 +32,10 @@ __device__ float half_at(const unsigned char* b) {
 __device__ float decode(const unsigned char* row, unsigned type, int col) {
     if (type==0) return reinterpret_cast<const float*>(row)[col];
     if (type==1) return half_at(row+2*col);
+    if (type==8) {
+        const unsigned char* b=row+(col/32)*34;
+        return half_at(b)*float(reinterpret_cast<const signed char*>(b+2)[col%32]);
+    }
     if (type==20) {
         const unsigned char* b=row+(col/32)*18;
         int lane=col%32;
@@ -98,13 +102,28 @@ __global__ void project(const unsigned char* weight, unsigned type,
 }
 cudaError_t ml_qsa_decode_rows_launch(cudaStream_t stream, const void* source,
     uint32_t type, uint64_t rows, uint64_t columns, uint64_t rb, float* output, int* status) {
-    uint64_t expected=type==20?columns/32*18:columns*(type==0?4:2);
+    uint64_t expected=type==20?columns/32*18:type==23?columns/256*136:columns*(type==0?4:2);
     if (!source || !output || !status || !rows || rows>12288 || !columns || columns>6144 ||
-        (type!=0 && type!=1 && type!=20 && type!=30) || (type==20 && columns%32) || rb!=expected)
+        (type!=0 && type!=1 && type!=20 && type!=23 && type!=30) ||
+                (type==20 && columns%32) || (type==23 && columns%256) || rb!=expected)
         return cudaErrorInvalidValue;
     uint64_t count=rows*columns;
     decode_rows<<<unsigned((count+255)/256),256,0,stream>>>(
         static_cast<const unsigned char*>(source),type,columns,rb,count,output,status);
+    return cudaGetLastError();
+}
+// Same FP32 reduction as layer projections; the vocabulary is not a hidden width.
+cudaError_t ml_vocab_projection_launch(cudaStream_t stream, const void* weight,
+    uint32_t type, uint64_t rows, uint64_t columns, uint64_t rb, const float* input,
+    float* output, int* status) {
+    uint64_t expected=type==20?columns/32*18:type==8?columns/32*34:
+        type==23?columns/256*136:type==12?columns/256*144:
+                type==13?columns/256*176:type==14?columns/256*210:type==0?columns*4:0;
+    if (!weight || !input || !output || !status || !rows || rows>248320 ||
+        !columns || columns>6144 || columns%256 || !expected || rb!=expected)
+        return cudaErrorInvalidValue;
+    project<<<unsigned(rows),128,0,stream>>>(static_cast<const unsigned char*>(weight),
+        type,columns,rb,input,output,status);
     return cudaGetLastError();
 }
 cudaError_t ml_qsa_projection_launch(cudaStream_t stream, const void* weight,

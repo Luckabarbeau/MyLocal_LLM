@@ -1,5 +1,11 @@
 # Experimental native CUDA runtime: transport, uploads, and bounded QSA selection
 
+**Current independent decoder/sampler/worker work:** see
+[`WP8_GENERATION.md`](../../docs/native_engine/WP8_GENERATION.md).
+The generation worker is experimental, **WP7 remains OPEN**, and HTTP/production
+integration is not enabled. The introduction below describes the original WP1
+transport scope; it is not the current decoder/worker feature inventory.
+
 This provides **synthetic token transport, exact stored-byte weight upload, and
 bounded GPU QSA index scoring/selection, not Qwen or any model inference**. No
 logits, sampling, tokenizer, KV cache, native weight projections, full QSA attention,

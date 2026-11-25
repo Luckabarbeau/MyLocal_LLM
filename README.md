@@ -26,6 +26,11 @@ its exact architecture, pinned production profile, protected external-run
 status, and verification boundary. Older 338M and 500M families are historical
 research, not the current model.
 
+The independent native WP8 generation worker is **experimental**, with **WP7
+OPEN** and no HTTP/production enablement. See
+[`WP8_GENERATION.md`](docs/native_engine/WP8_GENERATION.md) for ownership,
+pending-token semantics, bounded queues, and measured validation limits.
+
 ## Philosophy
 
 - **Own the numerics.** Parameters, gradients, attention, loss, optimizer state,

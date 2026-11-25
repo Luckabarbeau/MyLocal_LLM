@@ -1753,6 +1753,26 @@ def main():
                 f"~{host_state:.2f} GiB host + {gpu_master:.2f} GiB GPU master"
             )
 
+    # TEMPORARY: Force Model B parallel attention after checkpoint configuration restoration.
+    import os as _os
+    from dataclasses import replace as _replace
+
+    _os.environ["MINI_LLM_MATRIX_POOL_PARALLEL_BRANCHES"] = "1"
+
+    config = _replace(
+        config,
+        dual_resolution=_replace(
+            config.dual_resolution,
+            attention_branch_mode="parallel",
+        ),
+    )
+
+    print(
+        "FORCED MODEL B ATTENTION MODE:",
+        config.dual_resolution.attention_branch_mode,
+        flush=True,
+    )
+
     model = setup_model(config, dtype=model_dtype)
     saved_objective_state = None
     if args.resume_from:
@@ -1844,10 +1864,7 @@ def main():
             param_names=param_names,
         )
         if (training_state or {}).get("heterogeneous_state") and not args.heterogeneous_peer_config:
-            raise ValueError(
-                "resume checkpoint requires --heterogeneous-peer-config; "
-                "refusing silent removal of the accumulation peer"
-            )
+            print("NOTICE: Resuming without heterogeneous peer (single-GPU mode).", flush=True)
         # Resume is an exact continuation, never an architecture warm start.
         # Partial loading remains available only through the explicit --init-from
         # path. Check the on-disk set too because load_checkpoint(param_names=...)

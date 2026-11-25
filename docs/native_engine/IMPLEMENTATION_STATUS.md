@@ -1,6 +1,6 @@
 # Native engine implementation status
 
-Updated 2026-11-23. The user-supplied WP0–WP11 specification is authoritative. Existing Python Qwen and Model B/C infrastructure are unchanged. No production backend selection changed. Synthetic transport is not model inference.
+Updated 2026-11-24. The user-supplied WP0–WP11 specification is authoritative. Existing Python Qwen and Model B/C infrastructure are unchanged by native-engine work. No production backend selection changed. The experimental engine now executes the full native model, but strict whole-model numerical acceptance remains OPEN. All current GPU validation uses physical GPU 1 only, exposed as device 0 through `CUDA_VISIBLE_DEVICES=GPU-e961516f-d77d-813c-98e9-2f5403f71631`; GPU 0 and running training jobs must not be used or stopped.
 
 ## Work packages
 
@@ -8,13 +8,13 @@ Updated 2026-11-23. The user-supplied WP0–WP11 specification is authoritative.
 |---|---|---|
 | WP0 Reference baseline | in progress | `native_reference_manifest.json`, `REUSE_AND_BASELINE.md`, `WP0_QSA_reference_run.json`; bounded CPU QSA reference tests 11 passed/11 deselected. Full checkpoint payload hashes completed in `WP0_CHECKPOINT_HASHES.json` (83,617,662,656 bytes, stable file identities). Matched model fixtures, effective baseline configs and new throughput/resource runs remain outstanding. Authoritative checkpoint revision and shipped Strata build provenance are external dependencies. |
 | WP1 Runtime foundation | completed | `mini_llm/native_cpp/{CMakeLists.txt,runtime.h,runtime.cpp,README.md}`, `mini_llm/native/__init__.py`, `tests/test_native_engine_runtime.py`; C++20 CUDA-runtime library builds; all 8 foundation tests pass within latest combined run. Synthetic token copies only. Allocation accounting covers requested session buffers, not CUDA context/allocator overhead; no claim of leak-detector validation. |
-| WP2 Model loading | in progress | `mini_llm/native_cpp/gguf_loader.{h,cpp}`, `tests/test_native_engine_gguf.py`, `WP2_GGUF_DESCRIPTORS.md`, `WP2_IQ_INVENTORY.md`, `WP2_GGUF_INVENTORY.json`; read-only mmap/header descriptors validated for all 1,224 tensors and 13 formats of actual two-shard checkpoint. Required-tensor/layer binding now passes using the existing Python architecture authority over native descriptors plus native exact-schema validation (`WP2_QWEN_CONTRACT.json`). Standalone C++ metadata interpretation is deliberately not duplicated. Payload leases and budgeted exact-storage CUDA uploads now pass lifetime, storage-format, budget and device-1 tests (`WP2_PAYLOAD_LEASES.md`, `WP2_WEIGHT_UPLOADS.md`). Explicit arithmetic conversion and whole-model weight binding/composition remain. |
+| WP2 Model loading | completed | All 1,224 descriptors/13 checkpoint formats match Python; immutable mmap leases, exact payload hashes, bounded dense uploads, packed expert sources, architecture/schema validation and whole-model binding are implemented. `native/decoder.py` binds every layer with budget preflight; the actual 48-layer model has executed and reset/replayed. This closes the loader/descriptor/resource gate only, NOT strict whole-model numerical parity (WP7). Standalone C++ metadata interpretation is not duplicated. |
 | WP3 Native FP32 QSA | completed | Native complete-layer hidden->projections/norm/RoPE/pool->GPU token selection->GQA/gate->output->transactional state commit. Both policies; synthetic boundary/state tests through16K; all12checkpoint layers×2policies×9steps pass. 14 actual layer3 long-context benchmark cases validated vs unchanged CuPy. Details `WP3_COMPLETE_QSA_VALIDATION.md` and JSON; component acceptance, not full-model throughput. |
 | WP4 Recurrent/HC/PLE | completed | Native HC, recurrent/GDN and sparse leased-table PLE ownership/math/reset/checkpoint validation; direct HC read->QSA/GDN->HCwrite chaining and PLE-first order pass. CUDA memcheck clean for these focused suites. See `WP4_HC_INTEGRATION.md`, `WP4_RECURRENT.md`, `WP4_PLE.md`, `WP4_NATIVE_CHAINING.md`. FFN/MoE and full decoder remainWP5/WP7. |
-| WP5 Native MoE | in progress | Native caller reuses existing GGML registered CPU rowpool, retains leased expert descriptors/library ownership, explicitggml_q8policy; full native suite505pass3optional skips. Standalone CUDA router/routed/shared primitives validate all7routed triples/8shared combinations,451comparisons;315under memcheck0errors. Native mixed CPU/GPU scheduler, static placement and actual-checkpoint MoE integration next. |
-| WP6 Paged/quantized KV | pending | Depends on validated native QSA. |
-| WP7 Complete decoder | pending | Depends on computational integration. |
-| WP8 Generation/serving | pending | No serving behavior changed. |
+| WP5 Native MoE | completed | Native mixed-placement owner, full routing/shared branch, ordered CPU/GPU combination and HC FFN chaining pass synthetic and actual-checkpoint CPU/GPU/mixed checks. Explicit `cpu_ggml_q8_gpu_reference_fp32` policy, leased mmap sources and static placement; no Python expert dispatch. See `WP5_MOE.md`, chaining validation/benchmark JSON. Current GGML unload/reload abort fixed at native loader with explicit process-resident GGML mapping; worker arithmetic unchanged (`WP5_GGML_LIBRARY_LIFETIME.md`). |
+| WP6 Paged/quantized KV | in progress | GPU page tables, bounded host backing, stable GPU slots/generations, native compact misses, chunked selected gather and explicit FP32/INT8 policies integrated into complete QSA. Populated single-layer 64K/128K/262K gates now pass both formats and selection policies; snapshot fixtures use actual layer-3 weights, NOT a 262K-token model trajectory. Quantized model quality, full-model long conversations and fault-injection acceptance remain open. See `WP6_FULL_CAPACITY.md` and evidence JSON. |
+| WP7 Complete decoder | blocked | Implemented native 48-layer execution, embedding, PLE, HC, GDN/QSA, MoE and vocabulary projection, retained ownership, failed-session quarantine and reset/replay. Strict synthetic and actual full-model comparisons FAIL. Identical-input diagnostics show correct MoE/GDN execution but upstream FP32 roundoff crosses CPU Q8 thresholds, amplifying into recurrent histories. No supported production-equation defect or accepted quality envelope has been established; no tolerances changed. See `WP7_DECODER.md`, `WP7_DIVERGENCE.md`, `WP7_FULL_MODEL_DIAGNOSTICS.json`. |
+| WP8 Generation/serving | in progress | Experimental native greedy/stochastic sampler, resident-logit path, C++ generation worker, bounded token queue/backpressure, cancellation and drain/join are implemented and independently tested. Native replay is not Python-model parity. Production HTTP integration, prefix caching and acceptance remain gated on WP7; no serving behavior changed. See `WP8_SAMPLER.md`, `WP8_SAMPLER_OPTIMIZATION.md`, `WP8_GENERATION.md`. |
 | WP9 Production validation | pending | No new native model throughput claim. |
 | WP10 Native prefill | pending | Existing prefill components retained, not completion of new engine gate. |
 | WP11 Speculation | pending | No speculative arithmetic introduced. |
@@ -53,7 +53,7 @@ Actual checkpoint probe: **passed in 0.459s**, 1,224 required tensors, width 256
 
 ## Next actionable task
 
-Integrate validated WP5 CUDA routing/routed/shared kernels and existing native CPU pool under one native mixed-placement MoE owner; retain explicit arithmetic policy and immutable mapped sources/staticGPUplacement. Validate actual checkpoint MoE including mixedbranch ownership/completion and direct HC FFN chaining. Then proceed nativeKVpaging(WP6) and full decoder(WP7) along dependencies. Production dispatch stays unchanged pending full-model gates. User explicitly removed the old one-correction/retest stop limit: continue evidence-supported localized debugging rather than stopping at that count.
+WP6 populated-capacity gate is now verified; preserve its current results and extend only remaining quality/full-model long-context gates. WP7 strict acceptance is the critical blocker: inspect the recorded full-model identical-input/Q8-threshold evidence before any production numerical edit; do not rederive it or relax tolerances solely to make tests pass. A reference-arithmetic compatibility change needs a specific supported incorrect operation, or an explicitly accepted measured quality envelope for the documented mixed arithmetic. HTTP production integration and accepted performance benchmarks stay gated. Native sampler/worker can be exercised independently without claiming model acceptance. User explicitly removed the old one-correction/retest stop limit; continue evidence-supported localized debugging, not speculative rewrites.
 
 ## Continued execution results
 
@@ -84,6 +84,43 @@ WP4 HC integration **52focusedpassed**, full **448passed,3skipped** withQSAcheck
 WP5 CPU caller: existingbridge declarations extracted tosharedheader withoutworkerarithmeticchange; cache digest includesheader. Explicitdynamiclibrariesandtraitsvalidated. Caller+0256/0259/0271regressions **60passed,3skipped**; full native latest **505passed,3skipped** withQSAcheckpoint/PLECUDAflags. NativeCPUarithmetic is explicitlyggml_q8,notrefFP32. See `WP5_CPU_POOL.md`. GPUstandaloneprimitives **451comparisons**, **315memcheckcomparisons0errors**, all7routedtriples/8sharedcombinations; routedterm/orderedcombine bitwiseequalexistingPythonwarporacle. See `WP5_GPU_PRIMITIVES.md`; runtimeintegrationnotyetaccepted.
 
 All optional benchmark/checkpoint executions and raw artifact limitations are described in their milestone documents. Earlier failure paragraphs are historical evidence, superseded by the passing gates above. WP3/WP4 component acceptance does not certify full decoder or production performance.
+
+## Latest GPU1 continuation — 2026-11-24
+
+### WP6 populated-capacity verification
+
+`tests/test_native_engine_qsa_full_capacity.py`: **6 passed in 22.61s**. Four cases cover FP32/INT8 × ggml_cpu/strata, each progressively populated to 65,536, 131,072 and 262,144 positions. All execute the final legal step and reject overflow without changing state. History is a controlled prepared snapshot using actual layer-3 projection weights, not 262K sequential checkpoint tokens. Full-capacity tracked layer device bytes: 85,186,704 FP32 / 78,960,784 INT8; final host backing+metadata: 1,073,776,728 / 276,858,968 bytes. One physical cache slot safely handles 3–6 selected historical pages per measured step. INT8 decoded-oracle errors (~1e-7) are separate from its measured ~1e-3 FP32 storage-policy difference. Raw evidence: `logs/wp6_full_capacity_gpu1/`; summary `WP6_FULL_CAPACITY.md` and `WP6_FULL_CAPACITY_EVIDENCE.json`. Reduced-capacity memcheck: **6 passed, zero errors**. Capture hashes identify that build, not subsequent rebuilds.
+
+### WP8 independent sampler and generation
+
+Sampler: **64 focused tests passed**, including original47 unchanged; optimization pre/post IDs, probabilities, CDF and metadata compare bitwise. Top-k=50 measured sampler wall median improved 197.598 -> 2.303ms on GPU1 under concurrent training; not a model speedup. Full-vocabulary stochastic CDF order remains unchanged; no approximation. Sampler memcheck: **8 passed, zero errors**. `WP8_SAMPLER_OPTIMIZATION.md` contains raw before/after and bitwise evidence.
+
+Native generation worker: **12 focused tests passed**; bounded native queue, backpressure, atomic cancellation independent of the registry/GPU lock, exclusive session ownership, EOS/capacity/max termination and drain/join lifecycle. Events distinguish committed position from pending unconsumed sampled token. Native manual-loop replay is bitwise, NOT Python-model parity. Focused memcheck **4 passed, zero errors**. No production server enablement (`WP8_GENERATION.md`).
+
+### Correctness fixes found by combined regressions
+
+1. MoE checkpoint memory test counted unused CuPy blocks retained by earlier tests. Added synchronize/GC/free-unused-pool at the bounded test boundary; no runtime budget or tolerance change. Same WP4/WP5 combined command: initially9 memory-assertion failures/153 passes, then **162 passed in39.41s**.
+2. Real native library lifetime defect: last-owner GGML `dlclose` followed by reload aborted in its process-global terminate-handler initializer. Native loader now requests explicit `RTLD_NODELETE` for GGML only, with balanced per-owner `dlclose`; worker, weights, jobs, streams and engine cleanup unchanged. Original subprocess: exit134 -> exit0. Four new fresh-child regressions cover native reopen, CDLL reload, Python pools and MoE owners. GGML code/library dependencies remain mapped until process exit; this deliberate exception is documented in `WP5_GGML_LIBRARY_LIFETIME.md`.
+
+### Latest split regression results
+
+All commands use the physical-GPU1 UUID mask, one visible CUDA device, BLAS/OMP threads1 and disabled pytest plugin autoload. Build and `git diff --check` passed.
+
+| Group | Backend oracle | Result |
+|---|---|---|
+| Runtime/GGUF/schema/payload/upload/CPU experts, after loader fix | CuPy | **123 passed, 1 skipped** (two-device restoration cannot run with GPU0 hidden) |
+| HC/GDN/PLE/chaining/MoE, checkpoint + PLE opt-ins | CuPy | **162 passed** |
+| QSA selection/attention/frontend/projection/hidden frontend, all opt-ins | CuPy | **246 passed** |
+| QSA layer/paged layer/GPU pages/host-INT8 pages, checkpoint opt-in | NumPy; native computations still CUDA GPU1 | **93 passed in64.10s** |
+| QSA all12 checkpoint layers × both policies, additional separate run | CuPy | **24 passed,19 deselected** |
+| Sampler/optimization/generation/divergence/decoder safety, after loader fix | CuPy | **87 passed,2 explicitly deselected** |
+| Fully populated QSA gate, separate run | NumPy; native CUDA GPU1 | **6 passed** |
+
+The two explicitly deselected strict tests are `test_synthetic_all48_reference_replay_lifetime` and `test_actual_all48_two_steps_reset`; their recorded failures are NOT fixed/hidden/xfail or counted as passes. There is no green complete-suite or WP7 acceptance claim. The CuPy long-history group timed out at120s during Python-oracle preparation; the subsequent NumPy-oracle93-case command and separate24-case CuPy checkpoint command passed. Earlier broad/sanitizer timeout attempts remain incomplete, not passes. JUnit outputs for parent split runs are `/tmp/native-gpu1-*-final.xml` (ephemeral).
+
+### Remaining critical blocker
+
+Strict full-model gate remains unchanged and failing. Retained two-token actual full-model diagnostics (`WP7_FULL_MODEL_DIAGNOSTICS.json`) show final-logit relative L2 errors1.16%/3.78%, maxabs0.15479/0.41911; top1 agrees and top10 overlap10/10 for these two samples only. Same-input CPU experts are bit-identical, dense HC starts with4.768e-7 roundoff, Q8_K crosses a28->29 threshold, and later recurrent-state differences follow prior input history. No specific incorrect production equation was established. These measurements do not establish model quality. Do not enable HTTP production or declare WP7/WP9 accepted; further arithmetic-compatibility work requires a supported defect or explicit quality acceptance policy, not speculative precision changes. GPU1 currently also hosts training; full-model 10GiB+headroom tests must preflight available memory and must not borrow GPU0.
 
 ## Preservation
 

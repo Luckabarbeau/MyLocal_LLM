@@ -1,0 +1,216 @@
+{
+  "date": "2026-11-24",
+  "cuda_visible_devices": "GPU-e961516f-d77d-813c-98e9-2f5403f71631",
+  "vocab": 248320,
+  "input_sha256": "23cc4afdb446acad5b0f9ac71c5cf3ff6cbb91a83a5963909682852785701a96",
+  "warmups": 2,
+  "repeats": 7,
+  "workspace_bytes_before": 7980799,
+  "workspace_bytes_after": 7980799,
+  "benchmark_results": {
+    "greedy": {
+      "before_median_host_ms": 2.298592,
+      "after_median_host_ms": 2.243857,
+      "before_over_after": 1.024393265702761
+    },
+    "topk50_nucleus": {
+      "before_median_host_ms": 197.598367,
+      "after_median_host_ms": 2.303404,
+      "before_over_after": 85.78537112898996
+    },
+    "full_stochastic": {
+      "before_median_host_ms": 104.251559,
+      "after_median_host_ms": 52.125156,
+      "before_over_after": 2.0000239231897936
+    }
+  },
+  "raw_benchmark_files": [
+    "WP8_SAMPLER_OPTIMIZATION_BEFORE.json",
+    "WP8_SAMPLER_OPTIMIZATION_AFTER.json"
+  ],
+  "tied_snapshots_bitwise_identical": true,
+  "seeded_metadata_bitwise_identical": true,
+  "benchmark_token_sequences_identical": true,
+  "random_and_full_vocab_bitwise_file": "WP8_SAMPLER_OPTIMIZATION_BITWISE.json",
+  "regression_groups": [
+    {
+      "group": "transport",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 1.269,
+      "files": [
+        "tests/test_native_engine_cpu_experts.py",
+        "tests/test_native_engine_gguf.py",
+        "tests/test_native_engine_payload.py",
+        "tests/test_native_engine_qwen_contract.py",
+        "tests/test_native_engine_runtime.py",
+        "tests/test_native_engine_upload.py"
+      ],
+      "tests": 120,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "passed": 119
+    },
+    {
+      "group": "blocks",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 18.282,
+      "files": [
+        "tests/test_native_engine_chaining.py",
+        "tests/test_native_engine_hc.py",
+        "tests/test_native_engine_ple.py",
+        "tests/test_native_engine_ple_primitives.py",
+        "tests/test_native_engine_recurrent.py"
+      ],
+      "tests": 99,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "passed": 98
+    },
+    {
+      "group": "moe-decoder",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 6.794,
+      "files": [
+        "tests/test_native_engine_decoder.py",
+        "tests/test_native_engine_divergence.py",
+        "tests/test_native_engine_moe.py",
+        "tests/test_native_engine_moe_chaining.py"
+      ],
+      "tests": 75,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 23,
+      "passed": 52
+    },
+    {
+      "group": "qsa-primitives",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 7.775,
+      "files": [
+        "tests/test_native_engine_qsa.py",
+        "tests/test_native_engine_qsa_attention.py",
+        "tests/test_native_engine_qsa_frontend.py",
+        "tests/test_native_engine_qsa_projection.py"
+      ],
+      "tests": 229,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 227
+    },
+    {
+      "group": "qsa-hidden",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 8.239,
+      "files": [
+        "tests/test_native_engine_qsa_hidden_frontend.py"
+      ],
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "passed": 16
+    },
+    {
+      "group": "kv",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 6.335,
+      "files": [
+        "tests/test_native_engine_kv_pages.py",
+        "tests/test_native_engine_kv_streamed.py"
+      ],
+      "tests": 29,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 29
+    },
+    {
+      "group": "qsa-full-capacity",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 0.956,
+      "files": [
+        "tests/test_native_engine_qsa_full_capacity.py"
+      ],
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 4,
+      "passed": 2
+    },
+    {
+      "group": "sampler",
+      "status": "completed",
+      "timeout_seconds": 120,
+      "seconds": 7.174,
+      "files": [
+        "tests/test_native_engine_sampler.py",
+        "tests/test_native_engine_sampler_optimization.py"
+      ],
+      "tests": 64,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 64
+    }
+  ],
+  "completed_group_totals": {
+    "passed": 607,
+    "skipped": 32,
+    "failures": 0,
+    "errors": 0
+  },
+  "timeout_attempts": [
+    {
+      "group": "qsa-layers",
+      "limit_seconds": 120,
+      "completed_progress_dots": 10,
+      "files": [
+        "tests/test_native_engine_qsa_layer.py",
+        "tests/test_native_engine_qsa_paged.py",
+        "tests/test_native_engine_qsa_full_capacity.py"
+      ],
+      "final_summary": false
+    },
+    {
+      "group": "qsa-pages",
+      "limit_seconds": 120,
+      "completed_progress_dots": 11,
+      "files": [
+        "tests/test_native_engine_qsa_paged.py",
+        "tests/test_native_engine_qsa_full_capacity.py"
+      ],
+      "final_summary": false
+    }
+  ],
+  "remaining_incomplete_files": [
+    "tests/test_native_engine_qsa_layer.py",
+    "tests/test_native_engine_qsa_paged.py"
+  ],
+  "memcheck": {
+    "passed": 8,
+    "error_summary": 0,
+    "limit_seconds": 120,
+    "seconds": 0.95,
+    "selection": [
+      "tests/test_native_engine_sampler_optimization.py::test_bitwise_before_snapshot[0.9-50]",
+      "tests/test_native_engine_sampler_optimization.py::test_bitwise_before_snapshot[1.0-50]",
+      "tests/test_native_engine_sampler_optimization.py::test_argmax_all_equal_and_tail_invalid",
+      "tests/test_native_engine_sampler.py::test_nonfinite_and_recovery"
+    ]
+  },
+  "deselected_known_strict_test": "tests/test_native_engine_decoder.py::test_synthetic_all48_reference_replay_lifetime",
+  "WP7_strict_acceptance": "OPEN; known unresolved failure, unchanged",
+  "WP8_completed": false,
+  "parent_status_updated": false,
+  "full_suite_green": false
+}

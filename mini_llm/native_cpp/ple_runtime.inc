@@ -142,19 +142,18 @@ int ml_ple_reset(ml_handle id) noexcept {
         w->position=0; w->predecessors[0]=w->predecessors[1]=-1; std::fill_n(w->rows,16,0); w->poisoned=false;
     });
 }
-int ml_ple_step(ml_handle id,ml_handle input,int32_t token,uint64_t position,int hc) noexcept {
-    return boundary([&] {
-        auto w=lookup(ple_states,id); w->valid=false;
+void ple_step_device(const std::shared_ptr<PLEState>& w, ml_handle input, int32_t token, uint64_t position, int hc, std::shared_ptr<HCState> owner={}) {
+        w->valid=false;
         if (w->poisoned) fail(ML_INVALID,"PLE CUDA failure; reset required");
         if (position!=w->position) fail(ML_INVALID,"PLE position mismatch");
         if (position>=w->capacity) fail(ML_CAPACITY,"PLE capacity exhausted");
         auto weights=w->weights; auto e=weights->engine;
         uint64_t rows[16]; int32_t next[2];
         if (!ml_ple_hash_rows(weights->hash,token,w->predecessors,rows,next)) fail(ML_INVALID,"invalid PLE token");
-        std::shared_ptr<UploadedTensor> upload; std::shared_ptr<HCState> owner;
+        std::shared_ptr<UploadedTensor> upload;
         const float* streams=nullptr;
         if (hc==1) {
-            owner=lookup(hc_states,input);
+            if (!owner) owner=lookup(hc_states,input);
             if (owner->engine!=e || owner->d!=2560 || owner->pending || owner->invalid)
                 fail(ML_INVALID,"PLE HC engine/width/transaction mismatch");
             owner->ready(); streams=owner->streams;
@@ -196,7 +195,9 @@ int ml_ple_step(ml_handle id,ml_handle input,int32_t token,uint64_t position,int
         std::swap(w->output,w->staged);
         std::swap(w->history,w->next_history);
         std::copy_n(next,2,w->predecessors); std::copy_n(rows,16,w->rows); ++w->position; w->valid=true;
-    });
+}
+int ml_ple_step(ml_handle id,ml_handle input,int32_t token,uint64_t position,int hc) noexcept {
+    return boundary([&] { ple_step_device(lookup(ple_states,id),input,token,position,hc); });
 }
 int ml_ple_metadata(ml_handle id,int32_t* predecessors,uint64_t* rows,uint64_t* position) noexcept {
     return boundary([&] {

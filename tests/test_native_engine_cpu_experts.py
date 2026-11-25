@@ -1,7 +1,11 @@
 """WP5 native caller gate: synthetic packed banks only, no model allocations."""
 import ctypes as C
 import gc
+import os
 from pathlib import Path
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -31,6 +35,70 @@ def runtime():
 @pytest.fixture
 def libraries(selected_library):
     return dict(bridge_library=_load_bridge()._name, ggml_library=selected_library)
+
+
+@pytest.mark.parametrize('next_owner', ['ctypes', 'native', 'python_pool', 'moe'])
+def test_ggml_process_residency_without_retainer(libraries, tmp_path, next_owner):
+    # A new interpreter is essential: an oracle/fixture CDLL in this pytest
+    # process can hide the native last-owner unload/reload bug.
+    code = textwrap.dedent('''
+        import ctypes as C
+        import gc
+        import resource
+        import sys
+        from contextlib import ExitStack
+        from pathlib import Path
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        sys.path.insert(0, str(Path.cwd() / 'tests'))
+        from mini_llm.native import Runtime
+        bridge, ggml, next_owner, directory = sys.argv[1:]
+        libraries = dict(bridge_library=bridge, ggml_library=ggml)
+        r = Runtime()
+        def cycle():
+            with r.engine() as e:
+                with e.cpu_experts(d_model=256, d_ff=320, threads=1, **libraries) as p:
+                    stale = p._handle
+            gc.collect()
+            assert r._lib.ml_cpu_experts_destroy(stale) == 1
+        cycle()
+        print('native last owner closed; next=' + next_owner, flush=True)
+        if next_owner == 'ctypes':
+            import _ctypes
+            for _ in range(3):
+                lib = C.CDLL(ggml)
+                lib.ggml_cpu_init()
+                _ctypes.dlclose(lib._handle)
+                del lib
+                cycle()
+        elif next_owner == 'native':
+            for _ in range(3):
+                cycle()
+        elif next_owner == 'python_pool':
+            from mini_llm.ops.ggml_packed_cpu import GGMLPackedCPUExecutor, GGMLPackedCPURowPool
+            executor = GGMLPackedCPUExecutor(ggml)
+            for _ in range(3):
+                pool = GGMLPackedCPURowPool(executor, 256, 320, 1)
+                pool.close()
+                cycle()
+        elif next_owner == 'moe':
+            from test_native_engine_moe import fixture, native_setup
+            path = Path(directory) / 'moe.gguf'
+            data = fixture(path)
+            for _ in range(2):
+                with ExitStack() as stack:
+                    native_setup(stack, path, data, libraries, ())
+                cycle()
+            assert str(path) not in Path('/proc/self/maps').read_text()
+        assert ggml in Path('/proc/self/maps').read_text()
+        print('residency and owner transitions passed', flush=True)
+    ''')
+    result = subprocess.run(
+        [sys.executable, '-u', '-c', code, libraries['bridge_library'],
+         libraries['ggml_library'], next_owner, str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[1], env=os.environ.copy(),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr[:4000])
+    assert 'residency and owner transitions passed' in result.stdout
 
 
 def bank(tmp_path, formats=ACTUAL_TRIPLES[0]):

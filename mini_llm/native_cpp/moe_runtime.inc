@@ -253,6 +253,38 @@ extern "C" int ml_moe_input_readback_for_test(ml_handle id,float* output,uint64_
         cuda_check(cudaStreamSynchronize(p->engine->stream));
     });
 }
+// Read-only diagnostics of the latest completed owner epoch. No arithmetic or
+// allocation is added to submit/finish; decoder use additionally requires trace.
+void moe_diagnostic_copy(const std::shared_ptr<MoeOwner>& p,int which,void* out,uint64_t count) {
+    if(p->busy || p->invalid || !p->result_valid || !out)
+        fail(ML_INVALID,"MoE diagnostic unavailable");
+    const void* source=nullptr; uint64_t n=0;
+    switch(which) {
+        case 0: source=p->ids; n=10; break; // int32, all other cases float32
+        case 1: source=p->route_weights; n=10; break;
+        case 2: source=p->logits; n=512; break;
+        case 3: source=p->probabilities; n=512; break;
+        case 4: source=p->cpu_rows; n=10*p->d; break; // unweighted, route-slot order
+        case 5: source=p->terms; n=10*p->d; break; // weighted, route-slot order
+        case 6: source=p->routed; n=p->d; break;
+        case 7: source=p->shared_out; n=p->d; break;
+        case 8: source=p->output; n=p->d; break;
+        case 9: source=p->x; n=p->d; break;
+        case 10: source=p->sg; n=p->sf; break;
+        case 11: source=p->su; n=p->sf; break;
+        case 12: source=p->sh; n=p->sf; break;
+        case 13: source=p->score; n=1; break;
+        case 14: source=p->raw; n=p->d; break;
+        default: fail(ML_INVALID,"invalid MoE diagnostic kind");
+    }
+    if(count<n) fail(ML_INVALID,"MoE diagnostic capacity");
+    DeviceGuard guard(p->engine->device);
+    cuda_check(cudaMemcpyAsync(out,source,n*4,cudaMemcpyDeviceToHost,p->engine->stream));
+    cuda_check(cudaStreamSynchronize(p->engine->stream));
+}
+extern "C" int ml_moe_diagnostic_for_test(ml_handle id,int which,void* out,uint64_t count) noexcept {
+    return boundary([&] { moe_diagnostic_copy(lookup(moe_owners,id),which,out,count); });
+}
 extern "C" int ml_moe_job_wait(ml_handle id) noexcept {
     return boundary([&] { lookup(moe_jobs,id)->finish(); });
 }

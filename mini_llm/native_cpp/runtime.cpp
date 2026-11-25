@@ -1,7 +1,16 @@
 #include "runtime.h"
+#include "sampling.h"
+#include "generation.h"
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <thread>
 #include "gguf_loader.h"
 #include "qsa_selection.h"
 #include "qsa_attention.h"
+#include "kv_pages.h"
+#include "kv_streamed.h"
+#include "qsa_paged.h"
 #include "qsa_projection.h"
 #include "qsa_frontend.h"
 #include "hyperconnection.h"
@@ -26,6 +35,7 @@
 #include <unordered_set>
 
 cudaError_t ml_qsa_layer_finite(cudaStream_t, const float*, uint64_t, int*);
+cudaError_t ml_vocab_projection_launch(cudaStream_t,const void*,uint32_t,uint64_t,uint64_t,uint64_t,const float*,float*,int*);
 
 namespace {
 thread_local char error_text[512]{};
@@ -266,13 +276,20 @@ template<class F> int boundary(F&& fn) noexcept {
     catch (const std::exception& e) { std::snprintf(error_text, sizeof(error_text), "%s", e.what()); return ML_INTERNAL; }
     catch (...) { std::snprintf(error_text, sizeof(error_text), "unknown native exception"); return ML_INTERNAL; }
 }
+#include "qsa_paged_runtime.inc"
 #include "qsa_layer_runtime.inc"
+#include "qsa_paged_import_runtime.inc"
+#include "kv_pages_runtime.inc"
+#include "kv_streamed_runtime.inc"
 #include "hyperconnection_runtime.inc"
 #include "recurrent_runtime.inc"
 #include "ple_runtime.inc"
 #include "cpu_expert_runtime.inc"
 #include "moe_runtime.inc"
 #include "chaining_runtime.inc"
+#include "decoder_runtime.inc"
+#include "sampler_runtime.inc"
+#include "generation_runtime.inc"
 }
 extern "C" {
 const char* ml_last_error() noexcept { return error_text; }

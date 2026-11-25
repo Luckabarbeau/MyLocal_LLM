@@ -247,6 +247,11 @@ def test_failed_device_job_is_not_consumable_and_can_close(cp,libraries,tmp_path
 @pytest.mark.parametrize('layer',(0,1,47))
 @pytest.mark.parametrize('mode',('cpu','gpu','mixed'))
 def test_actual_checkpoint(cp,libraries,tmp_path,monkeypatch,layer,mode):
+    # Bound this oracle's allocation, not unused blocks retained by earlier tests.
+    import gc
+    cp.cuda.get_current_stream().synchronize()
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
     inventory=json.loads(Path('docs/native_engine/WP2_GGUF_INVENTORY.json').read_text())
     r=Runtime(); prefix=f'blk.{layer}.'
     names=('ffn_gate_inp.weight','ffn_gate_shexp.weight','ffn_up_shexp.weight',

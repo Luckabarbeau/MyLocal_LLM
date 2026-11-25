@@ -2,9 +2,19 @@
 // Private native caller only. All worker arithmetic remains in the supplied bridge.
 struct CPUSharedLibrary {
     void* handle=nullptr;
-    explicit CPUSharedLibrary(const char* path) {
+    explicit CPUSharedLibrary(const char* path,bool process_resident=false) {
         if (!path || !*path) fail(ML_INVALID,"explicit CPU library path required");
-        handle=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+        int flags=RTLD_NOW|RTLD_LOCAL;
+        if(process_resident) {
+            // GGML installs a process-global C++ terminate handler. Unmapping it
+            // leaves that handler dangling; reloading can assert in its initializer.
+#ifdef RTLD_NODELETE
+            flags|=RTLD_NODELETE;
+#else
+            fail(ML_INVALID,"GGML process residency requires RTLD_NODELETE");
+#endif
+        }
+        handle=dlopen(path,flags);
         if (!handle) fail(ML_INVALID,dlerror());
     }
     ~CPUSharedLibrary() { if(handle) dlclose(handle); }
@@ -32,7 +42,7 @@ struct CPUExpertPool {
     bool pending=false, closed=false;
     CPUExpertPool(std::shared_ptr<Engine> e,int width,int ff,int threads,int cap,
                   const char* bp,const char* gp)
-        : engine(std::move(e)),bridge(bp),ggml(gp),d(width),f(ff),capacity(cap) {
+        : engine(std::move(e)),bridge(bp),ggml(gp,true),d(width),f(ff),capacity(cap) {
         create=bridge.symbol<decltype(create)>("mylocal_ggml_pool_create");
         reg=bridge.symbol<decltype(reg)>("mylocal_ggml_pool_register");
         submit=bridge.symbol<decltype(submit)>("mylocal_ggml_pool_submit_registered");
